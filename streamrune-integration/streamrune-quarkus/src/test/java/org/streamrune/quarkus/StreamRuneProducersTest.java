@@ -929,7 +929,10 @@ class StreamRuneProducersTest {
   void aNoopOpenTelemetryBeanGivesTheNoopTracing() {
     var producers = new StreamRuneProducers();
     var tracing =
-        producers.streamRuneTracing(satisfied(OpenTelemetry.noop()), TestProperties.defaults());
+        producers.streamRuneTracing(
+            satisfied(OpenTelemetry.noop()),
+            TestProperties.defaults(),
+            satisfied(TestProperties.config(Map.of())));
     assertSame(org.streamrune.core.tracing.StreamRuneTracing.NOOP, tracing);
   }
 

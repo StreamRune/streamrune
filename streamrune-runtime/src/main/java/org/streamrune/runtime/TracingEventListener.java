@@ -23,8 +23,14 @@ import org.streamrune.core.types.SubscriptionName;
  * <p>When the first event's {@link EventMetadata} carries the span of the command that appended it
  * ({@link EventMetadata#spanContext()}, which the command bus writes from its own command span),
  * the span links back to that command ({@link SpanLink#of(EventMetadata)}). The caller-supplied
- * {@code traceId} of the metadata never builds a link. The first event's baggage is the current
- * baggage while the delegate runs.
+ * {@code traceId} of the metadata never builds a link.
+ *
+ * <p>The delegate runs with no baggage: the span clears the current OpenTelemetry baggage and takes
+ * none from the events. A batch holds events of many callers, and the baggage of one of them (the
+ * allow-listed W3C entries and, in the trusted-gateway mode, the caller's {@code role}) would
+ * otherwise travel, in the {@code baggage} header of every instrumented call the delegate makes, on
+ * behalf of all the others. A delegate that needs an event's baggage reads it from that event's
+ * {@link EventMetadata#baggage()}.
  *
  * <p>The subscription builders wrap their listener through {@link #traced} when they are given a
  * tracing. An application can also wrap a listener itself, with {@link #traced} or the constructor.
@@ -34,7 +40,7 @@ import org.streamrune.core.types.SubscriptionName;
  */
 public final class TracingEventListener implements EventListener {
 
-  /** The baggage of an empty delivery: none, replacing the current baggage. */
+  /** The baggage of every delivery: none, replacing the current baggage. */
   private static final SpanBaggage NO_BAGGAGE = SpanBaggage.replace(Map.of());
 
   private final EventListener delegate;
@@ -104,13 +110,7 @@ public final class TracingEventListener implements EventListener {
             .put(TraceAttributes.SUBSCRIPTION_NAME, subscriptionName.value())
             .put(TraceAttributes.BATCH_SIZE, (long) events.size())
             .build();
-    SpanLink link = SpanLink.NONE;
-    SpanBaggage baggage = NO_BAGGAGE;
-    if (!events.isEmpty()) {
-      EventMetadata metadata = events.getFirst().metadata();
-      link = SpanLink.of(metadata);
-      baggage = SpanBaggage.replace(metadata.baggage());
-    }
+    SpanLink link = events.isEmpty() ? SpanLink.NONE : SpanLink.of(events.getFirst().metadata());
     TraceScope scope =
         tracing.start(
             TracingArea.SUBSCRIPTION,
@@ -118,7 +118,7 @@ public final class TracingEventListener implements EventListener {
             SpanKind.CONSUMER,
             attributes,
             link,
-            baggage);
+            NO_BAGGAGE);
     try {
       delegate.onEvents(events);
     } catch (Throwable t) {

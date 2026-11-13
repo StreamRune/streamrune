@@ -46,6 +46,8 @@ dependencies {
     testImplementation(libs.spring.boot.starter.web)
     testImplementation(libs.jakarta.servlet.api)
     testImplementation(libs.opentelemetry.sdk.testing)
+    // OpenTelemetryAutoConfigurationTest runs Spring Boot's own OpenTelemetry SDK auto-configuration.
+    testImplementation(libs.spring.boot.opentelemetry)
     testImplementation(libs.jakarta.validation.api)
     testImplementation(libs.postgresql)
     testImplementation(libs.bundles.testcontainers.pg)

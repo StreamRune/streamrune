@@ -26,7 +26,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
-class OpenTelemetryCommandInterceptorTest {
+class TracingCommandInterceptorTest {
 
   private static final AggregateType TYPE = AggregateType.of("orders");
 
@@ -66,7 +66,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void shouldCreateSpanForSuccessfulCommand() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
@@ -100,7 +100,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void spanNameAndAttributeKeysMatchThePublishedContract() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     interceptor.before(ctx("PlaceOrder"));
@@ -141,7 +141,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void shouldSetErrorStatusOnException() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
@@ -165,9 +165,69 @@ class OpenTelemetryCommandInterceptorTest {
   }
 
   @Test
+  void aRejection_isTheCommandsAnswer_withNoErrorStatus_noEvent_andItsTypeOnly() {
+    var interceptor =
+        new TracingCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
+    List<RuntimeException> rejections =
+        List.of(
+            new org.streamrune.core.DomainException("Customer already registered: cust-alice"),
+            new org.streamrune.core.ValidationException("quantity must be positive", List.of()),
+            new org.streamrune.core.AuthorizationException("not the owner of cust-alice"));
+
+    for (RuntimeException rejection : rejections) {
+      otelTesting.clearSpans();
+      var ctx = ctx("RegisterCustomer");
+      interceptor.before(ctx);
+      interceptor.onError(ctx, rejection);
+
+      SpanData span = otelTesting.getSpans().getFirst();
+      assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode(), rejection::toString);
+      assertTrue(span.getEvents().isEmpty(), rejection::toString);
+      assertEquals(
+          rejection.getClass().getName(),
+          span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+      assertFalse(span.toString().contains("cust-alice"), span::toString);
+    }
+
+    otelTesting.clearSpans();
+    var ctx = ctx("RegisterCustomer");
+    interceptor.before(ctx);
+    interceptor.onError(ctx, new IllegalStateException("the store is down"));
+    SpanData failed = otelTesting.getSpans().getFirst();
+    assertEquals(StatusCode.ERROR, failed.getStatus().getStatusCode());
+    assertNull(
+        failed.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+  }
+
+  @Test
+  void aFencedForwardCommand_isTheOutcomeFenced_withNoErrorStatus_andNoEvent() {
+    var interceptor =
+        new TracingCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
+    var ctx = ctx("Ship");
+    interceptor.before(ctx);
+    interceptor.onError(
+        ctx,
+        new org.streamrune.core.saga.SagaForwardFencedException(
+            org.streamrune.core.saga.SagaOrigin.dispatchedBy(
+                org.streamrune.core.types.SagaType.of("orders.Fulfillment"),
+                org.streamrune.core.saga.SagaId.of("saga-1"))));
+
+    SpanData span = otelTesting.getSpans().getFirst();
+    assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+    assertTrue(span.getEvents().isEmpty());
+    assertEquals(
+        "FENCED",
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_OUTCOME)));
+    assertNull(
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+  }
+
+  @Test
   void aContextWithoutAStream_carriesNeitherTypeNorStreamAttribute() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     var ctx =
         new CommandInterceptor.CommandContext(
@@ -191,7 +251,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void beforeShouldReturnTrue() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     boolean result = interceptor.before(ctx("PlaceOrder"));
     assertTrue(result);

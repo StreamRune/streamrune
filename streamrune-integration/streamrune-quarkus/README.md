@@ -401,9 +401,9 @@ authorization) and runs innermost without one. The bus reads the annotation from
 interceptor's class, so a `@Priority` on a `@Produces` method does not position it. An application bean of a framework interceptor's type — a
 `@Produces AuditCommandInterceptor` — replaces that framework interceptor, as
 `@ConditionalOnMissingBean` does on Spring and `@Requires(missingBeans = …)` on Micronaut; the
-replacement is logged at startup. The bus adds the OpenTelemetry interceptor itself, first in the
+replacement is logged at startup. The bus adds the tracing interceptor itself, first in the
 chain, from the `StreamRuneTracing` bean (see [Tracing](../../docs/guide/production.md#tracing)),
-unless the application produces an `OpenTelemetryCommandInterceptor` of its own.
+unless the application produces a `TracingCommandInterceptor` of its own.
 
 The beans are collected through the `BeanManager`, not by iterating an
 `Instance<CommandInterceptor>`: Arc resolves an `Instance` iteration (and an `@All List`) with

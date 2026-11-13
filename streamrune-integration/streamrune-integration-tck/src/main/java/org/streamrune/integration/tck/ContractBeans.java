@@ -54,9 +54,9 @@ import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.LocalStripedLocker;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryCryptoEngine;
@@ -398,15 +398,15 @@ public final class ContractBeans {
   }
 
   /**
-   * The application's own {@code OpenTelemetryCommandInterceptor}, over {@link OpenTelemetryBean}'s
-   * SDK with every area on: the integration's command bus runs it in the place of the interceptor
-   * it adds itself.
+   * The application's own {@code TracingCommandInterceptor}, over {@link OpenTelemetryBean}'s SDK
+   * with every area on: the integration's command bus runs it in the place of the interceptor it
+   * adds itself.
    */
   public static final class ApplicationCommandInterceptor
-      implements Supplier<OpenTelemetryCommandInterceptor> {
+      implements Supplier<TracingCommandInterceptor> {
     @Override
-    public OpenTelemetryCommandInterceptor get() {
-      return new OpenTelemetryCommandInterceptor(
+    public TracingCommandInterceptor get() {
+      return new TracingCommandInterceptor(
           OpenTelemetryTracing.of(OpenTelemetryBean.view(), TracingSettings.allEnabled()));
     }
   }

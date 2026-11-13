@@ -240,11 +240,20 @@ class SagaTracingTest {
     SagaFixture<OrderState> fixture =
         fixture(tracing())
             .failing(ReserveStock.class, () -> new DomainException("no stock"))
-            .failing(CancelOrder.class, () -> new DomainException("cannot cancel"));
+            .failing(CancelOrder.class, () -> new DomainException("cannot cancel order-o-1"));
 
     fixture.when(ORDER_1, new OrderPlaced("o-1"));
 
-    EventStoreTracingTest.assertFailed(only(TraceAttributes.sagaCompensateSpanName(TYPE)));
+    SpanData compensate = only(TraceAttributes.sagaCompensateSpanName(TYPE));
+    EventStoreTracingTest.assertFailed(compensate);
+    // A rejected compensation is recorded by its type alone, as its command span records it.
+    assertThat(EventStoreTracingTest.string(compensate, TraceAttributes.COMMAND_REJECTION_TYPE))
+        .isEqualTo(DomainException.class.getName());
+    assertThat(compensate.getStatus().getDescription()).isEmpty();
+    assertThat(compensate.toString()).doesNotContain("cannot cancel");
+    assertThat(compensate.getEvents().getFirst().getAttributes().toString())
+        .contains(CompensationRejectedException.class.getName())
+        .contains("Caused by: " + DomainException.class.getName());
     assertThat(
             EventStoreTracingTest.string(
                 only(TraceAttributes.sagaStepSpanName(TYPE)), TraceAttributes.SAGA_STEP_OUTCOME))

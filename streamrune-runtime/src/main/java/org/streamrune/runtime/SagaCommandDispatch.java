@@ -572,6 +572,21 @@ final class SagaCommandDispatch {
   }
 
   /**
+   * Records a failed compensation on its span. A refused compensation is a failure of the saga, so
+   * the span is ERROR either way; a {@link DomainException} is recorded by its type alone ({@link
+   * TraceAttributes#COMMAND_REJECTION_TYPE} and a {@link CompensationRejectedException} with no
+   * message around it), as the command span records it, so its message is not exported.
+   */
+  private static void recordCompensationFailure(TraceScope scope, Exception failure) {
+    if (failure instanceof DomainException rejection) {
+      scope.setAttribute(TraceAttributes.COMMAND_REJECTION_TYPE, rejection.getClass().getName());
+      scope.recordError(new CompensationRejectedException(rejection));
+    } else {
+      scope.recordError(failure);
+    }
+  }
+
+  /**
    * {@link #compensateAndClassify(List, CommandBus, SagaOrigin, EventId, IntFunction, Logger)},
    * with each compensation command dispatched inside the span {@code saga/{SagaType}/compensate}
    * when {@code tracing} records the saga area. A command that fails records its exception there.
@@ -604,7 +619,7 @@ final class SagaCommandDispatch {
             /* forwardFenced= */ false);
         scope.recordSuccess();
       } catch (Exception e) {
-        scope.recordError(e);
+        recordCompensationFailure(scope, e);
         // Reuse the bus's DLQ-eligibility split: a business rejection
         // (DomainException/IllegalArgumentException) is deterministic and can never succeed on
         // retry, so it terminalizes FAILED; everything else (EventStoreException, a connection/pool

@@ -3,6 +3,8 @@ package org.streamrune.runtime;
 import java.util.ArrayDeque;
 import java.util.Objects;
 import org.streamrune.core.CommandInterceptor;
+import org.streamrune.core.DomainException;
+import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
@@ -21,7 +23,7 @@ import org.streamrune.core.types.LogSanitizer;
  *
  * <pre>{@code
  * StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled());
- * var interceptor = new OpenTelemetryCommandInterceptor(tracing);
+ * var interceptor = new TracingCommandInterceptor(tracing);
  * var bus = VirtualThreadCommandBus.builder()
  *     .interceptors(interceptor)
  *     .build();
@@ -35,10 +37,19 @@ import org.streamrune.core.types.LogSanitizer;
  * <p>The span name and attribute keys are those of {@link TraceAttributes}. The command id, the
  * aggregate id and the stream id pass {@link LogSanitizer#sanitizeForTrace(String)}.
  *
- * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread, where no
- * caller context is current — the span would become an orphaned root. Configure {@code
- * asyncTaskWrapper(task -> Context.current().wrap(task))} on the bus builder so the submitting
- * thread's context is captured and made current around the async execution.
+ * <p>A command that succeeds ends its span with the OK status. A command that a {@link
+ * DomainException} rejects — its decider, or a gate such as authorization or validation — ends it
+ * with the unset status and {@link TraceAttributes#COMMAND_REJECTION_TYPE}: a rejection is the
+ * command's answer, as a client error is an HTTP server's, and an operator who alerts on failed
+ * spans is not paged for it. A saga's forward command that the saga forward fence refuses ({@link
+ * SagaForwardFencedException}) ends it the same way, with {@link TraceAttributes#COMMAND_OUTCOME}
+ * {@code FENCED}, the outcome its append span records. Any other failure records the exception and
+ * the ERROR status.
+ *
+ * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread. The bus
+ * wraps the command's task with {@link StreamRuneTracing#propagating(Runnable)} of this
+ * interceptor's tracing on the submitting thread, so the caller's trace context is current there
+ * and the span is a child of the caller's span.
  *
  * <p><b>Re-entrancy:</b> the span scopes are held on a per-thread STACK. The bus runs {@code
  * after()} in reverse registration order, so {@code InlineProjectionInterceptor} executes user
@@ -49,7 +60,10 @@ import org.streamrune.core.types.LogSanitizer;
  * platform thread would carry a stale current context. The stack ends each span exactly once and
  * closes the scopes in LIFO order, which the OpenTelemetry context contract requires.
  */
-public final class OpenTelemetryCommandInterceptor implements CommandInterceptor {
+public final class TracingCommandInterceptor implements CommandInterceptor {
+
+  /** The {@link TraceAttributes#COMMAND_OUTCOME} of a command the saga forward fence refused. */
+  private static final String FENCED = "FENCED";
 
   private final StreamRuneTracing tracing;
 
@@ -68,7 +82,7 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
    * @param tracing the tracing
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
-  public OpenTelemetryCommandInterceptor(StreamRuneTracing tracing) {
+  public TracingCommandInterceptor(StreamRuneTracing tracing) {
     this.tracing = Objects.requireNonNull(tracing, "tracing is required");
     this.traced = tracing.enabled(TracingArea.COMMAND);
   }
@@ -126,7 +140,13 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
       return; // no matching before() — nothing to end or close
     }
     try {
-      if (error != null) {
+      if (error instanceof DomainException rejection) {
+        // The domain's answer, not a failure: no ERROR status, no exception event, no message.
+        scope.setAttribute(TraceAttributes.COMMAND_REJECTION_TYPE, rejection.getClass().getName());
+      } else if (error instanceof SagaForwardFencedException) {
+        // The forward fence's answer, which the append span records as its FENCED outcome.
+        scope.setAttribute(TraceAttributes.COMMAND_OUTCOME, FENCED);
+      } else if (error != null) {
         scope.recordError(error);
       } else {
         scope.recordSuccess();
@@ -162,6 +182,11 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
       // fails the command.
       return SpanLink.NONE;
     }
+  }
+
+  /** The tracing this interceptor starts its spans through. */
+  StreamRuneTracing tracing() {
+    return tracing;
   }
 
   /** Whether this interceptor starts command spans: its tracing's command area is on. */

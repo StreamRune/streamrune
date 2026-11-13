@@ -68,11 +68,11 @@ import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.MultiProjectionRunner;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingProjectionDecorator;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -110,6 +110,8 @@ final class ReferenceApplication implements Application {
     ONE_COMMAND_INTERCEPTOR,
     GLOBAL_OPENTELEMETRY,
     NOOP_WITHOUT_OPENTELEMETRY,
+    OPENTELEMETRY_SWITCHED_OFF,
+    ASYNC_CONTINUES_TRACE,
     APPLICATION_LOCKER_TRACED,
     READABLE_VALUES,
     MISSPELLED_NAMES,
@@ -345,6 +347,12 @@ final class ReferenceApplication implements Application {
     if (keeps(Rule.MASTER_SWITCH) && !settings.enabled()) {
       return StreamRuneTracing.NOOP;
     }
+    if (keeps(Rule.OPENTELEMETRY_SWITCHED_OFF)
+        && org.streamrune.integration.OpenTelemetrySwitches.switchedOffBy(
+                org.streamrune.integration.OpenTelemetrySwitches.SDK, properties::get)
+            .isPresent()) {
+      return StreamRuneTracing.NOOP;
+    }
     List<OpenTelemetry> beansOfOpenTelemetry = beansOf(OpenTelemetry.class);
     OpenTelemetry source =
         !beansOfOpenTelemetry.isEmpty()
@@ -356,6 +364,27 @@ final class ReferenceApplication implements Application {
     }
     return OpenTelemetryTracing.of(
         source, keeps(Rule.MASTER_SWITCH) ? settings : settings(keeps(Rule.AREA_SWITCHES), true));
+  }
+
+  /** {@code tracing} with the seam's default propagation, which carries no trace context. */
+  private static StreamRuneTracing withoutPropagation(StreamRuneTracing tracing) {
+    return new StreamRuneTracing() {
+      @Override
+      public boolean enabled(TracingArea area) {
+        return tracing.enabled(area);
+      }
+
+      @Override
+      public org.streamrune.core.tracing.TraceScope start(
+          TracingArea area,
+          String spanName,
+          org.streamrune.core.tracing.SpanKind kind,
+          org.streamrune.core.tracing.SpanAttributes attributes,
+          org.streamrune.core.tracing.SpanLink link,
+          org.streamrune.core.tracing.SpanBaggage baggage) {
+        return tracing.start(area, spanName, kind, attributes, link, baggage);
+      }
+    };
   }
 
   private TracingSettings settings(boolean areas) {
@@ -407,7 +436,10 @@ final class ReferenceApplication implements Application {
    * application declared one.
    */
   private VirtualThreadCommandBus.Builder commandBusBuilder() {
-    var bus = VirtualThreadCommandBus.builder().eventStore(eventStore).tracing(tracing);
+    var bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(eventStore)
+            .tracing(keeps(Rule.ASYNC_CONTINUES_TRACE) ? tracing : withoutPropagation(tracing));
     for (AggregateLocker locker : beansOf(AggregateLocker.class)) {
       // The application's locker replaces the default; the integration traces a framework one.
       bus.locker(
@@ -420,7 +452,7 @@ final class ReferenceApplication implements Application {
     }
     List<CommandInterceptor> interceptors = new ArrayList<>(beansOf(CommandInterceptor.class));
     if (!keeps(Rule.ONE_COMMAND_INTERCEPTOR) && !interceptors.isEmpty()) {
-      interceptors.addFirst(new OpenTelemetryCommandInterceptor(tracing));
+      interceptors.addFirst(new TracingCommandInterceptor(tracing));
     }
     for (ContractInlineProjection inline : beansOf(ContractInlineProjection.class)) {
       ProjectionName name = ProjectionName.of(ContractInlineProjection.NAME);

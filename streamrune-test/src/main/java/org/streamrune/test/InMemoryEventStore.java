@@ -121,9 +121,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * with {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} and {@value
  * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE}, {@value
  * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}, and {@value TraceAttributes#EVENT_STORE_READ} for a
- * read that returns events. Its outbox entry count is always {@code 0}: this store writes no
- * outbox. In by-reference mode it starts no span: it neither serializes nor does any I/O, so a span
- * would time nothing a deployment has.
+ * read that returns events under a span current on its thread. Its outbox entry count is always
+ * {@code 0}: this store writes no outbox. In by-reference mode it starts no span: it neither
+ * serializes nor does any I/O, so a span would time nothing a deployment has.
  *
  * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists.
  */
@@ -428,7 +428,7 @@ public final class InMemoryEventStore implements EventStore {
       return List.of();
     }
     TraceScope scope =
-        tracing.start(
+        tracing.startChild(
             TracingArea.EVENT_STORE,
             TraceAttributes.EVENT_STORE_READ,
             SpanKind.INTERNAL,

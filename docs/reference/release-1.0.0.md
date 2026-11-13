@@ -264,7 +264,7 @@ license.
   `after()` runs with a `VETOED` result on every interceptor ahead of it. Shipped interceptors:
   `AuditCommandInterceptor`, `AuthorizationCommandInterceptor`, `AnnotationAuthorizationInterceptor`,
   `CircuitBreakerCommandInterceptor`, `BeanValidationInterceptor` (Jakarta Validation →
-  `ValidationException`), `OpenTelemetryCommandInterceptor`, `InlineProjectionInterceptor`.
+  `ValidationException`), `TracingCommandInterceptor`, `InlineProjectionInterceptor`.
 - A bus decorator forwards every `CommandBus` method to the bus it wraps, the `default` ones
   included: both `execute` methods with the command instance and the idempotency key it received,
   on the calling thread, and the wiring probes `supportsIdempotentExecution()` and
@@ -1195,8 +1195,8 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   `LeaseBasedLeadership` + `JdbcProjectionRepository`, saga runners with `PostgresSagaStore` /
   `PostgresSagaDeadLetterStore` and a `SagaCompensationRetrySweeper` per saga runner, the retention
   sweepers, the outbox poller when `streamrune.outbox.enabled=true`, health, Micrometer metrics
-  (`streamrune.metrics.enabled`, `streamrune.metrics.prefix`), OpenTelemetry command spans when an
-  `OpenTelemetry` bean exists, the query cache, SSE, and the request filter that binds
+  (`streamrune.metrics.enabled`, `streamrune.metrics.prefix`), the tracing of every area through the
+  `OpenTelemetry` bean or the global OpenTelemetry (see below), the query cache, SSE, and the request filter that binds
   `StreamRuneContext` from `X-Trace-Id`, `X-Correlation-Id`, the resolved identity and allow-listed
   baggage.
 - `streamrune.saga.forward-fence` (`auto` / `on` / `off`, default `auto`) sets the forward fence of
@@ -1334,8 +1334,12 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   `/timeout`. Attributes are `streamrune.`-prefixed; ids pass `LogSanitizer.sanitizeForTrace` (cut
   at 256 characters followed by `...`). Expected outcomes are attributes, not errors
   (`streamrune.append.outcome` `APPENDED`/`CONFLICT`/`DUPLICATE`/`FENCED`, a lock `TIMEOUT`, a saga
-  step `DEFERRED`), background work with nothing to do emits no span, and a recorded error carries
-  the exception's type and its own message only, never the messages of its causes.
+  step `DEFERRED`, a command its domain rejected: `streamrune.command.rejection.type`, no error
+  status, a saga forward command the fence refused: `streamrune.command.outcome` `FENCED`), background work with nothing to do emits no span, a consumer's poll is one trace (the
+  `eventstore/read` span starts only under a current span), and a recorded error carries the
+  exception's type and its own message, sanitized and cut at 256 characters, never the messages of
+  its causes. A subscription's delivery span clears the baggage while its listener runs. An
+  `executeAsync` command continues the caller's trace (`StreamRuneTracing.propagating`).
 - Tracing goes through the `org.streamrune.core.tracing.StreamRuneTracing` seam, `NOOP` by default,
   which takes no `null` (`SpanLink.NONE`, `SpanBaggage.KEEP`, `SpanAttributes.empty()`).
   `OpenTelemetryTracing.of(OpenTelemetry, TracingSettings)` is the only method that takes an
@@ -1346,15 +1350,19 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   costs about 0.2 µs; switching its area off removes that.
 - The integrations wire the tracing themselves: a `StreamRuneTracing` bean built from the
   application's `OpenTelemetry` bean, or, without one, from `GlobalOpenTelemetry` (so the
-  OpenTelemetry Java agent works out of the box), `NOOP` when neither exists; an application's own
+  OpenTelemetry Java agent works out of the box), `NOOP` when neither exists or when the SDK is
+  switched off by its own settings (`otel.sdk.disabled=true`, `management.opentelemetry.enabled=false`,
+  `quarkus.otel.sdk.disabled=true`, …); an application's own
   `StreamRuneTracing` bean wins. Every component an integration builds takes it, and the command bus
   adds the command interceptor itself, never twice. `streamrune.tracing.enabled` and
   `streamrune.tracing.<area>.enabled` (`command`, `subscription`, `projection`, `event-store`,
   `lock`, `outbox`, `saga`; all `true` by default) switch tracing off as a whole or per area. Saga
   and timeout runners, subscriptions, buses and projection runners an application builds itself
   take the bean on their builders. Spring and Micronaut start without `opentelemetry-api`.
-- The command bus writes the span of each command into `EventMetadata.spanContext`, from nothing a
-  client sends (`traceId` is the caller's `X-Trace-Id`, correlation data only); the subscription,
+- The command bus writes the span of each command into `EventMetadata.spanContext`, from its own
+  command span, never from a StreamRune header, the request context or baggage (`traceId` is the
+  caller's `X-Trace-Id`, correlation data only); its trace id is the request's, which a
+  `traceparent` header chooses; the subscription,
   saga step and outbox publish spans link to it. An `OutboxEntry` carries the command's link in
   `traceLink()` (columns `trace_id`, `span_id` of `outbox_events`). A malformed stored span context
   reads as no link, and `SpanLink.NONE` is left out of JSON.

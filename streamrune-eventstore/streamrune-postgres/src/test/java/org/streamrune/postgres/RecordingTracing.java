@@ -82,6 +82,32 @@ final class RecordingTracing implements StreamRuneTracing {
     return record(area, spanName, kind, attributes, SpanLink.NONE, startTime);
   }
 
+  /** As OpenTelemetry's tracing does: a span only when a span of this tracing is open here. */
+  @Override
+  public TraceScope startChild(
+      TracingArea area,
+      String spanName,
+      SpanKind kind,
+      SpanAttributes attributes,
+      Instant startTime) {
+    if (open.get().peek() == null) {
+      return TraceScope.NOOP;
+    }
+    return record(area, spanName, kind, attributes, SpanLink.NONE, startTime);
+  }
+
+  /** Runs {@code work} inside a span named {@code name} and returns that span. */
+  RecordedSpan inside(String name, Runnable work) {
+    RecordedSpan span =
+        (RecordedSpan) start(TracingArea.COMMAND, name, SpanKind.INTERNAL, SpanAttributes.empty());
+    try {
+      work.run();
+    } finally {
+      span.close();
+    }
+    return span;
+  }
+
   private TraceScope record(
       TracingArea area,
       String spanName,

@@ -22,7 +22,7 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.runtime.DeciderRegistration;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -73,7 +73,7 @@ class OpenTelemetryAbsentTest {
       assertSame(StreamRuneTracing.NOOP, context.getBean(StreamRuneTracing.class));
       VirtualThreadCommandBus bus = context.getBean(VirtualThreadCommandBus.class);
       assertTrue(
-          bus.interceptors().stream().noneMatch(OpenTelemetryCommandInterceptor.class::isInstance));
+          bus.interceptors().stream().noneMatch(TracingCommandInterceptor.class::isInstance));
       assertNotNull(bus.execute(new Probe("absent-1")));
     }
   }

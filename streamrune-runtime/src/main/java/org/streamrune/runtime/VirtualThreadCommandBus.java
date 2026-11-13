@@ -169,11 +169,19 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * The interceptor whose {@code command/{CommandType}} span the events of a command link to, the
-   * first traced {@link OpenTelemetryCommandInterceptor} of the chain, whether {@link
-   * Builder#tracing} added it or the application registered it; {@code null} when the chain holds
-   * none. {@link #buildMetadata} reads the span of the executing command from it.
+   * first traced {@link TracingCommandInterceptor} of the chain, whether {@link Builder#tracing}
+   * added it or the application registered it; {@code null} when the chain holds none. {@link
+   * #buildMetadata} reads the span of the executing command from it.
    */
-  private final OpenTelemetryCommandInterceptor commandSpans;
+  private final TracingCommandInterceptor commandSpans;
+
+  /**
+   * The tracing whose {@link StreamRuneTracing#propagating(Runnable)} carries the caller's trace
+   * context to an {@code executeAsync} command: the tracing of {@link #commandSpans} when the chain
+   * holds one, else the tracing the bus was built with, so the store's and the locker's spans of
+   * the command join the caller's trace too.
+   */
+  private final StreamRuneTracing asyncTracing;
 
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
@@ -212,6 +220,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       DeadLetterQueue deadLetterQueue,
       StreamRuneMetrics metrics,
       List<CommandInterceptor> interceptors,
+      StreamRuneTracing tracing,
       UnaryOperator<Runnable> asyncTaskWrapper,
       Supplier<StreamRuneContext.RequestContext> unboundRequestContext,
       Clock clock,
@@ -235,6 +244,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.interceptors = List.copyOf(interceptors);
     this.commandSpans = commandSpansOf(this.interceptors);
+    this.asyncTracing = commandSpans != null ? commandSpans.tracing() : tracing;
     this.asyncTaskWrapper = asyncTaskWrapper;
     this.unboundRequestContext = unboundRequestContext;
     this.clock = clock != null ? clock : Clock.systemUTC();
@@ -834,10 +844,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
    * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and {@link
-   * StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
-   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
-   * such as the current OpenTelemetry context. When {@code CURRENT} is not bound at submission, the
-   * {@link Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
+   * StreamRuneContext#CAUSE} are re-bound on the new thread, the trace context is carried by the
+   * {@link Builder#tracing tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, so the
+   * command's span is a child of the caller's, and the configured {@link
+   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state.
+   * When {@code CURRENT} is not bound at submission, the {@link
+   * Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
    * submitting thread, and the command runs under its answer.
    */
   @Override
@@ -936,9 +948,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
    * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
    * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
-   * carrier, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
-   * asyncTaskWrapper} is applied here so it can capture thread-bound caller state such as the
-   * current OpenTelemetry context.
+   * carrier, the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
+   * asyncTaskWrapper} is applied around them so it can capture other thread-bound caller state, and
+   * the tracing's {@link StreamRuneTracing#propagating(Runnable)} wraps the result: the wrapper
+   * runs under the caller's trace context, so a span it opens nests under the caller's span, and a
+   * context it makes current itself (a fresh root) is the one the command runs under.
    */
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
@@ -997,7 +1011,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         throw new IllegalStateException("asyncTaskWrapper returned null");
       }
     }
-    return task;
+    // The caller's trace context, captured here on the submitting thread and made current around
+    // the wrapper: the command's span is a child of the caller's span, as a synchronous command's
+    // is, unless the wrapper makes another context current.
+    return asyncTracing.propagating(task);
   }
 
   private <C extends Command> CommandResult executeInternal(
@@ -1996,16 +2013,17 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
    * under one bound context, receive distinct, monotonically-sensible timestamps. The caller's
    * trace id and the user identity are taken from the bound context; the span context from this
-   * command's own {@code command/{CommandType}} span, which the {@link
-   * OpenTelemetryCommandInterceptor} of the chain started on this thread; the saga origin, the
-   * causation id and the correlation id from {@code provenance}. The command's own id is recorded
-   * separately in {@link EventMetadata#commandId()}.
+   * command's own {@code command/{CommandType}} span, which the {@link TracingCommandInterceptor}
+   * of the chain started on this thread; the saga origin, the causation id and the correlation id
+   * from {@code provenance}. The command's own id is recorded separately in {@link
+   * EventMetadata#commandId()}.
    */
   private EventMetadata buildMetadata(EventProvenance provenance, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
-    // The span of this command, from the interceptor that started it, and from nothing a client
-    // sends: the bound context's traceId below is caller-supplied correlation data.
+    // The span of this command, from the interceptor that started it, never from a header, the
+    // request context or baggage: the bound context's traceId below is caller-supplied correlation
+    // data. Its trace id is the request's, which a traceparent header chooses.
     SpanLink spanContext = commandSpans == null ? SpanLink.NONE : commandSpans.currentLink();
 
     // capture(): a context bound to null is no context.
@@ -2037,13 +2055,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * The first traced {@link OpenTelemetryCommandInterceptor} of {@code chain} (its command area
-   * on), or {@code null}.
+   * The first traced {@link TracingCommandInterceptor} of {@code chain} (its command area on), or
+   * {@code null}.
    */
-  private static OpenTelemetryCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
+  private static TracingCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
     for (CommandInterceptor interceptor : chain) {
-      if (interceptor instanceof OpenTelemetryCommandInterceptor commandSpans
-          && commandSpans.traced()) {
+      if (interceptor instanceof TracingCommandInterceptor commandSpans && commandSpans.traced()) {
         return commandSpans;
       }
     }
@@ -2173,7 +2190,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Returns the interceptor chain this bus runs, in {@code before()} order: the interceptors handed
    * to {@link Builder#interceptors}, in the order they were added, with the command span's {@link
-   * OpenTelemetryCommandInterceptor} in its slot when {@link Builder#tracing} added it. Startup
+   * TracingCommandInterceptor} in its slot when {@link Builder#tracing} added it. Startup
    * validators read it to check the chain a bus actually runs, which for a bus built by hand need
    * not match the interceptor beans of the container.
    *
@@ -2458,14 +2475,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * The tracing the bus starts the span {@code command/{CommandType}} through (default {@link
      * StreamRuneTracing#NOOP}, which traces nothing). When its {@link TracingArea#COMMAND} area is
-     * on, {@link #build()} adds an {@link OpenTelemetryCommandInterceptor} over it to the chain, in
-     * the slot {@link CommandInterceptorOrdering#ORDER_OPEN_TELEMETRY} reserves: before the first
-     * interceptor whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so
-     * ahead of every framework interceptor. A chain that already holds an {@code
-     * OpenTelemetryCommandInterceptor} the application added keeps that one alone. The default
-     * {@link LocalStripedLocker} the bus builds when no {@link #locker} is set traces its
-     * acquisitions through it too ({@link LocalStripedLocker#traced}); a locker the application
-     * sets takes the tracing on its own.
+     * on, {@link #build()} adds a {@link TracingCommandInterceptor} over it to the chain, in the
+     * slot {@link CommandInterceptorOrdering#ORDER_TRACING} reserves: before the first interceptor
+     * whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so ahead of every
+     * framework interceptor. A chain that already holds an {@code TracingCommandInterceptor} the
+     * application added keeps that one alone. The default {@link LocalStripedLocker} the bus builds
+     * when no {@link #locker} is set traces its acquisitions through it too ({@link
+     * LocalStripedLocker#traced}); a locker the application sets takes the tracing on its own.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -2478,15 +2494,23 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * Sets a wrapper applied to the task that {@link #executeAsync} runs on its new virtual thread.
      * The wrapper is invoked on the submitting thread for each async command, so it can capture
-     * thread-bound caller context that does not cross {@code Thread.start()} — for example the
-     * current OpenTelemetry context, which {@link OpenTelemetryCommandInterceptor} needs to parent
-     * the command span instead of starting an orphaned root span:
+     * thread-bound caller context that does not cross {@code Thread.start()}, a logging MDC for
+     * example:
      *
      * <pre>{@code
      * VirtualThreadCommandBus.builder()
-     *     .asyncTaskWrapper(task -> Context.current().wrap(task))
+     *     .asyncTaskWrapper(task -> {
+     *       Map<String, String> mdc = MDC.getCopyOfContextMap();
+     *       return () -> { MDC.setContextMap(mdc); try { task.run(); } finally { MDC.clear(); } };
+     *     })
      *     ...
      * }</pre>
+     *
+     * <p>The trace context needs no wrapper: the bus carries it through its {@link #tracing
+     * tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, around the wrapper, so the span
+     * of an async command is a child of the caller's span, and so is a span the wrapper opens. A
+     * wrapper that wants the command in a trace of its own makes another context current around the
+     * task, a root one for example.
      *
      * <p>Not applied to synchronous {@link #execute}, which runs on the caller's thread where the
      * context is already present. The returned runnable must run the task on the thread it is run
@@ -2621,7 +2645,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         return interceptors;
       }
       for (CommandInterceptor interceptor : interceptors) {
-        if (interceptor instanceof OpenTelemetryCommandInterceptor) {
+        if (interceptor instanceof TracingCommandInterceptor) {
           return interceptors;
         }
       }
@@ -2630,12 +2654,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int slot = chain.size();
       for (int i = 0; i < chain.size(); i++) {
         if (CommandInterceptorOrdering.orderOf(chain.get(i))
-            > CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY) {
+            > CommandInterceptorOrdering.ORDER_TRACING) {
           slot = i;
           break;
         }
       }
-      chain.add(slot, new OpenTelemetryCommandInterceptor(tracing));
+      chain.add(slot, new TracingCommandInterceptor(tracing));
       return chain;
     }
 
@@ -2697,6 +2721,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           deadLetterQueue,
           metrics,
           tracedInterceptors(),
+          tracing,
           asyncTaskWrapper,
           unboundRequestContext,
           clock,

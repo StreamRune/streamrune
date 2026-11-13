@@ -30,8 +30,8 @@ import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.postgres.PgAdvisoryLocker;
 import org.streamrune.runtime.DeciderRegistration;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStoreFactory;
@@ -116,6 +116,73 @@ class OpenTelemetryAutoConfigurationTest {
   }
 
   @Test
+  void anOpenTelemetrySwitchedOffByItsOwnSettingGivesTheNoopTracing() {
+    for (String off :
+        java.util.List.of("management.opentelemetry.enabled=false", "otel.sdk.disabled=true")) {
+      runner
+          .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
+          .withPropertyValues(off)
+          .run(
+              ctx ->
+                  assertThat(ctx.getBean(StreamRuneTracing.class))
+                      .as(off)
+                      .isSameAs(StreamRuneTracing.NOOP));
+    }
+    runner
+        .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
+        // Without an exporter the SDK still runs, and a span processor still receives the spans.
+        .withPropertyValues("management.tracing.export.enabled=false", "otel.traces.exporter=none")
+        .run(
+            ctx ->
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .isNotSameAs(StreamRuneTracing.NOOP));
+  }
+
+  /**
+   * Spring Boot's own OpenTelemetry SDK auto-configuration, not a stub bean: with {@code
+   * management.opentelemetry.enabled=false}, or any other value Spring Boot reads as not {@code
+   * true}, it builds an SDK with no span processor, and StreamRune's tracing is {@code NOOP}; by
+   * default, and with Spring Boot 3's export switch {@code management.tracing.enabled=false}, which
+   * Spring Boot 4 does not read, StreamRune traces through it.
+   */
+  @Test
+  void springBootsOwnOpenTelemetrySwitch_turnsStreamRunesTracingOff() {
+    ApplicationContextRunner withBootsSdk =
+        runner.withConfiguration(
+            AutoConfigurations.of(
+                org.springframework.boot.opentelemetry.autoconfigure
+                    .OpenTelemetrySdkAutoConfiguration.class));
+    for (String off :
+        java.util.List.of(
+            "management.opentelemetry.enabled=false", "management.opentelemetry.enabled=off")) {
+      withBootsSdk
+          .withPropertyValues(off)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasSingleBean(OpenTelemetry.class);
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .as(off)
+                    .isSameAs(StreamRuneTracing.NOOP);
+              });
+    }
+    for (String[] on :
+        java.util.List.of(
+            new String[0],
+            new String[] {"management.opentelemetry.enabled=true"},
+            new String[] {"management.tracing.enabled=false"})) {
+      withBootsSdk
+          .withPropertyValues(on)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasSingleBean(OpenTelemetry.class);
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .as(java.util.Arrays.toString(on))
+                    .isNotSameAs(StreamRuneTracing.NOOP);
+              });
+    }
+  }
+
+  @Test
   void anOpenTelemetryWithoutATracerProviderGivesTheNoopTracing() {
     runner
         .withBean(OpenTelemetry.class, OpenTelemetry::noop)
@@ -140,16 +207,16 @@ class OpenTelemetryAutoConfigurationTest {
   @Test
   void theCommandBusRunsTheApplicationsInterceptorAlone() {
     var own =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(openTelemetry(), TracingSettings.allEnabled()));
     runner
         .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
-        .withBean(OpenTelemetryCommandInterceptor.class, () -> own)
+        .withBean(TracingCommandInterceptor.class, () -> own)
         .run(
             ctx -> {
               List<CommandInterceptor> chain =
                   ctx.getBean(VirtualThreadCommandBus.class).interceptors();
-              assertThat(chain.stream().filter(OpenTelemetryCommandInterceptor.class::isInstance))
+              assertThat(chain.stream().filter(TracingCommandInterceptor.class::isInstance))
                   .containsExactly(own);
             });
   }
@@ -163,7 +230,7 @@ class OpenTelemetryAutoConfigurationTest {
             ctx -> {
               VirtualThreadCommandBus bus = ctx.getBean(VirtualThreadCommandBus.class);
               assertThat(bus.interceptors().getFirst())
-                  .isInstanceOf(OpenTelemetryCommandInterceptor.class);
+                  .isInstanceOf(TracingCommandInterceptor.class);
               bus.execute(new Probe("bus-1"));
               assertThat(otelTesting.getSpans())
                   .extracting(SpanData::getName)

@@ -391,7 +391,7 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 
 | Emitter | Span name | Kind | Attributes |
 | --- | --- | --- | --- |
-| `OpenTelemetryCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id` |
+| `TracingCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id`, `streamrune.command.rejection.type`, `streamrune.command.outcome` |
 | `TracingEventListener` | `subscription/{name}/deliver` | `CONSUMER` | `streamrune.subscription.name`, `streamrune.batch.size` |
 | `TracingProjectionDecorator` | `projection/{name}/process` | `INTERNAL` | `streamrune.projection.name`, `streamrune.batch.size` |
 | `PostgresEventStore`, `InMemoryEventStore` | `eventstore/append` | `INTERNAL` | `streamrune.stream.id`, `streamrune.aggregate.type`, `streamrune.event.count`, `streamrune.expected.version`, `streamrune.outbox.entry.count`, `streamrune.append.outcome` |
@@ -405,7 +405,7 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 | `OutboxPoller` | `outbox/relay` | `INTERNAL` | `streamrune.batch.size`, `streamrune.outbox.published`, `streamrune.outbox.failed` |
 | `OutboxPoller` | `outbox/publish` | `PRODUCER` | `streamrune.outbox.entry.id`, `streamrune.outbox.payload.type` |
 | `SagaRunner` | `saga/{SagaType}/step` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.step.outcome` |
-| `SagaRunner`, `SagaTimeoutRunner` | `saga/{SagaType}/compensate` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.compensation.index` |
+| `SagaRunner`, `SagaTimeoutRunner` | `saga/{SagaType}/compensate` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id`, `streamrune.saga.compensation.index`, `streamrune.command.rejection.type` |
 | `SagaTimeoutRunner` | `saga/{SagaType}/timeout` | `INTERNAL` | `streamrune.saga.type`, `streamrune.saga.id` |
 
 - `streamrune.stream.id` (`<type>:<id>`, for example `order:ord-42`) is set when the span starts,
@@ -415,6 +415,28 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 - An attribute that holds an id passes `LogSanitizer.sanitizeForTrace`, which removes control,
   separator and format characters and cuts a longer value to its first 256 characters followed by
   `...`, 259 characters in all; an ordinary id is unchanged.
+- **What a span carries, and what it does not.** No attribute is taken from an event payload, a
+  metadata value, baggage, an `@Encrypted` value, a crypto subject id, a user id, a role or SQL.
+  The ids in the table are exported as they are, so an id that names a person is in every trace
+  of its aggregate: where the aggregate's id is the crypto subject (`@Encrypted(subjectId = …)`)
+  or the caller's user id, `streamrune.aggregate.id` and `streamrune.stream.id` carry it, and a
+  `ForgetSubjectService.forget` does not reach the trace backend. Choose ids that are not personal
+  data, as the event store, which keeps them in plaintext columns, needs anyway. A failure exports
+  the exception's own message, sanitized as free text and cut at 256 characters (`...` after it),
+  with its type and its stack trace (the messages of its causes are left out); a message of yours
+  must not quote personal data. A command its domain rejects exports the rejection's type only,
+  never its message: its `command/…` span keeps the unset status, and when it is a saga's
+  compensation command its `saga/{SagaType}/compensate` span is `ERROR` (a refused compensation
+  is a failure of the saga) and records it by type too, as a `CompensationRejectedException`
+  without a message around the rejection, with `streamrune.command.rejection.type`. A subscription's delivery span clears the OpenTelemetry baggage while its
+  listener runs, so no caller's baggage, `role` included, travels with the listener's outbound
+  calls; the listener reads an event's baggage from that event's metadata.
+- **Which process emitted a span.** StreamRune's attributes name types and ids, never the process.
+  With several replicas sending to one backend, give each its own resource attribute
+  `service.instance.id`: `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$HOSTNAME` for the SDK
+  and the Java agent, `management.opentelemetry.resource-attributes` on Spring Boot,
+  `quarkus.otel.resource.attributes` on Quarkus. A saga step or a projection batch then shows the
+  replica that led it.
 - The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
   store for another database, emits the standard spans with these constants through
   `StreamRuneTracing`, and adds attributes of its own under a prefix of its own. The seam takes no
@@ -440,18 +462,35 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   The JDBC spans of an instrumentation such as the OpenTelemetry Java agent nest under
   `eventstore/append` and `eventstore/load`, a broker client's spans under `outbox/publish`. A
   command a saga step or a compensation dispatches runs on the saga's thread, so its `command/…`
-  span nests under the saga's.
+  span nests under the saga's. A command run through `executeAsync` runs on a virtual thread of
+  its own: the bus carries the caller's trace context to it through its tracing's
+  `StreamRuneTracing.propagating(Runnable)`, so its span nests under the caller's span as a
+  synchronous command's does, on a bus an integration builds too. It is made current around the
+  bus's `asyncTaskWrapper`, so a span the wrapper opens nests there too, and a wrapper that makes
+  another context current around the task (a root one) puts the command in that context's trace.
+  An implementation of the seam
+  whose context is bound to a thread overrides `propagating`; its default returns the task as it is.
 - `eventstore/read` covers a read from the start of its query to the end of its events'
-  deserialization. `eventstore/snapshot/load` covers turning the stored snapshot into the state
+  deserialization, as a child of the span current on the reading thread: a read a request
+  handler or a listener makes nests under their span. A read with no span current starts none:
+  the poll of a subscription or a projection runner, whose `subscription/{name}/deliver` or
+  `projection/{name}/process` span is the poll's one trace. The seam method is
+  `StreamRuneTracing.startChild`; its default starts the span whether a span is current or not,
+  and `OpenTelemetryTracing` starts it only under a valid current span. `eventstore/snapshot/load` covers turning the stored snapshot into the state
   the load starts from (deserialize, decrypt, migrate), after the snapshot's row was read in the
   load's own query; a stream without a stored snapshot starts none, and its load span carries
   `streamrune.snapshot.used` `false`.
-- Background work with nothing to do starts no span: an `eventstore/read` that returns no event
-  (an idle subscription's poll), an outbox poll that claims no entry, a saga timeout poll that
+- Background work with nothing to do starts no span: a poll that reads no event (an idle
+  subscription or projection runner), an outbox poll that claims no entry, a saga timeout poll that
   finds no saga past its deadline and a timeout claim deferred while a step of the saga is in
   flight add no trace. `outbox/relay` covers one batch that claimed entries, and
   `saga/{SagaType}/timeout` one saga the timeout runner acts on.
-- An expected outcome is an attribute value, and the span is not marked as failed: a lock held
+- An expected outcome is an attribute value, and the span is not marked as failed: a command a
+  `DomainException` rejected — its decider, or authorization or validation in front of it
+  (`streamrune.command.rejection.type`, the exception's class name; its message is not exported,
+  and the span records no exception, as an HTTP server span does for a `4xx`), a saga's forward
+  command the saga forward fence refused (`streamrune.command.outcome` `FENCED` on its
+  `command/…` span, as on its `eventstore/append` span), a lock held
   past the timeout (`streamrune.lock.outcome` `TIMEOUT`, or `INTERRUPTED`), an append that lost
   its optimistic-lock check (`streamrune.append.outcome` `CONFLICT`; `DUPLICATE` for a keyed
   append whose key was already recorded; `FENCED` for a saga's forward command the saga forward
@@ -515,22 +554,37 @@ a deployment switches an area without a rebuild.
   register it before the context starts.
 - **Without OpenTelemetry the tracing is `StreamRuneTracing.NOOP`.** That is the bean when the
   OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
-  globally), when `streamrune.tracing.enabled` is `false`, and, on Spring and Micronaut, when
-  `opentelemetry-api` is not on the classpath at all: those two do not depend on it (it is a
-  compile-only dependency), and an application without it starts and runs. The Quarkus integration
-  depends on
-  `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, and the cost is one
-  branch per traced call.
+  globally); when `streamrune.tracing.enabled` is `false`; on Spring and Micronaut, when
+  `opentelemetry-api` is not on the classpath at all (those two do not depend on it — it is a
+  compile-only dependency — and an application without it starts and runs; the Quarkus
+  integration depends on it); and when the SDK is switched off by one of its own settings:
+  `otel.sdk.disabled=true` (system property, environment variable or configuration key) on every
+  integration, `management.opentelemetry.enabled=false` on Spring Boot, `quarkus.otel.enabled=false`,
+  `quarkus.otel.sdk.disabled=true` or `quarkus.otel.traces.enabled=false` on Quarkus. The
+  integration logs which setting switched it off at `INFO`. A value is read as the component that
+  owns the key reads it: Spring Boot switches its SDK off for any value of
+  `management.opentelemetry.enabled` but `true`, and SmallRye Config reads `yes`, `on` and `1` as
+  `true` for the Quarkus keys. Spring Boot maps the environment variable `OTEL_SDK_DISABLED` onto
+  `management.opentelemetry.enabled`; `otel.sdk.disabled` is the switch of an SDK Spring Boot does
+  not build, the OpenTelemetry Java agent's. `management.tracing.enabled`, Spring Boot 3's
+  spelling of the export switch, is not one.
+  With `NOOP` nothing is traced, the keys do nothing, no event carries a
+  span context, and the cost is one branch per traced call. Any other SDK makes StreamRune start
+  its spans and write their span context into every event's metadata and every outbox row: one
+  without an exporter (`otel.traces.exporter=none`, `management.tracing.export.enabled=false`,
+  `quarkus.otel.traces.exporter=none`), whose span processors still receive the spans, and one
+  whose sampler drops every trace. `streamrune.tracing.enabled=false` stops that whatever the
+  SDK.
 - **What the integration hands it to.** The event store it builds on the application's
   `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
   bus, the outbox poller, the continuous and scheduled projection runners, and each inline
   projection, which its interceptor runs decorated with `TracingProjectionDecorator`. The command
-  bus adds the `OpenTelemetryCommandInterceptor` in its slot ahead of every framework interceptor,
+  bus adds the `TracingCommandInterceptor` in its slot ahead of every framework interceptor,
   so no interceptor bean is needed. An `AggregateLocker` bean of the application that is a
   `PgAdvisoryLocker` or a `LocalStripedLocker` is traced too: the bus takes the locker its
   `traced(tracing)` returns, on the same locks.
 - **What the application keeps.** A `StreamRuneTracing` bean of the application replaces the
-  integration's everywhere. An `OpenTelemetryCommandInterceptor` bean of the application is the
+  integration's everywhere. A `TracingCommandInterceptor` bean of the application is the
   one the integration's bus runs, never beside a second. A component the application builds
   itself takes the bean on its builder:
   - a `SagaRunner` and a `SagaTimeoutRunner` (`tracing(tracing)`);

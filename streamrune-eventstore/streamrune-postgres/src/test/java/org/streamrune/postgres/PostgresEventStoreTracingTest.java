@@ -382,8 +382,11 @@ class PostgresEventStoreTracingTest {
         .doesNotContainKeys(TraceAttributes.EVENT_COUNT, TraceAttributes.SNAPSHOT_USED);
     tracing.clear();
 
-    assertThatThrownBy(() -> store.readGlobalStream(GlobalOffset.initial(), 10))
-        .isInstanceOf(EventDeserializationException.class);
+    tracing.inside(
+        "request",
+        () ->
+            assertThatThrownBy(() -> store.readGlobalStream(GlobalOffset.initial(), 10))
+                .isInstanceOf(EventDeserializationException.class));
     assertFailed(tracing.only(TraceAttributes.EVENT_STORE_READ));
   }
 
@@ -439,19 +442,31 @@ class PostgresEventStoreTracingTest {
   record OtherState() implements AggregateState {}
 
   @Test
-  void aReadThatReturnsEvents_startsTheReadSpan_andAnEmptyReadStartsNone() {
+  void aReadThatReturnsEvents_startsTheReadSpanUnderTheCurrentSpan_andAnEmptyReadStartsNone() {
     var tracing = new RecordingTracing();
     PostgresEventStore store = store(tracing);
     store.append(STREAM, List.of(switched(), switched()), Version.initial());
     tracing.clear();
 
-    assertThat(store.readGlobalStream(GlobalOffset.of(2), 10)).isEmpty();
-    assertThat(store.readStream(STREAM, new Version(2), 10)).isEmpty();
+    tracing.inside(
+        "request",
+        () -> {
+          assertThat(store.readGlobalStream(GlobalOffset.of(2), 10)).isEmpty();
+          assertThat(store.readStream(STREAM, new Version(2), 10)).isEmpty();
+        });
+    assertThat(tracing.names()).containsExactly("request");
+    tracing.clear();
+
+    // A read with no span current, the poll of a subscription or a projection runner: no span.
+    assertThat(store.readGlobalStream(GlobalOffset.initial(), 10)).hasSize(2);
+    assertThat(store.readStream(STREAM, new Version(1), 10)).hasSize(1);
     assertThat(tracing.names()).isEmpty();
 
     Instant before = Instant.now();
-    store.readGlobalStream(GlobalOffset.initial(), 10);
+    var request =
+        tracing.inside("request", () -> store.readGlobalStream(GlobalOffset.initial(), 10));
     var global = tracing.only(TraceAttributes.EVENT_STORE_READ);
+    assertThat(global.parent).isSameAs(request);
     // The span starts when the query started, before the events were known to exist.
     assertThat(global.startTime)
         .isNotNull()
@@ -463,7 +478,7 @@ class PostgresEventStoreTracingTest {
             Map.of(TraceAttributes.EVENT_COUNT, 2L, TraceAttributes.READ_KIND, "GLOBAL"));
     tracing.clear();
 
-    store.readStream(STREAM, new Version(1), 10);
+    tracing.inside("request", () -> store.readStream(STREAM, new Version(1), 10));
     assertThat(tracing.only(TraceAttributes.EVENT_STORE_READ).startTime).isNotNull();
     assertThat(tracing.only(TraceAttributes.EVENT_STORE_READ).attributes())
         .containsExactlyInAnyOrderEntriesOf(

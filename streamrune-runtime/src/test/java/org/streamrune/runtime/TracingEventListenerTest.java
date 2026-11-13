@@ -2,7 +2,6 @@ package org.streamrune.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
@@ -197,48 +196,60 @@ class TracingEventListenerTest {
     verify(delegate, times(1)).onEvents(events);
   }
 
+  private static EventEnvelope envelopeOf(String customer, Map<String, String> baggage) {
+    return new EventEnvelope(
+        GlobalOffset.of(1),
+        StreamId.of(TYPE, AggregateId.of(customer)),
+        new Version(1),
+        new EventType("TestEvent"),
+        new org.streamrune.core.DomainEvent() {},
+        new EventMetadata(
+            EventId.of("evt-" + customer),
+            CommandId.of("cmd-" + customer),
+            null,
+            CorrelationId.of("corr-" + customer),
+            null,
+            null,
+            Instant.now(),
+            baggage));
+  }
+
   @Test
-  void shouldRestoreBaggageFromEventMetadata() {
+  void aBatchOfSeveralCallers_runsWithNoBaggage_neitherTheFirstEventsNorTheThreads() {
     EventListener delegate = mock(EventListener.class);
     var listener =
         new TracingEventListener(
             delegate,
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()),
             SubscriptionName.of("orders"));
+    List<EventEnvelope> batch =
+        List.of(
+            envelopeOf("customer-1", Map.of("role", "ADMIN", "tenant", "acme")),
+            envelopeOf("customer-7", Map.of("role", "CUSTOMER", "tenant", "globex")));
 
-    var envelope =
-        new EventEnvelope(
-            GlobalOffset.of(1),
-            StreamId.of(TYPE, AggregateId.of("stream-1")),
-            new Version(1),
-            new EventType("TestEvent"),
-            new org.streamrune.core.DomainEvent() {},
-            new EventMetadata(
-                EventId.of("evt-1"),
-                CommandId.of("cmd-1"),
-                null,
-                CorrelationId.of("corr-1"),
-                null,
-                null,
-                Instant.now(),
-                Map.of("tenant", "acme", "feature-flag", "enabled")));
-
-    var capturedBaggage = new java.util.concurrent.atomic.AtomicReference<Map<String, String>>();
+    var seen = new java.util.ArrayList<Map<String, String>>();
     doAnswer(
             invocation -> {
-              var baggage = io.opentelemetry.api.baggage.Baggage.current();
               var entries = new java.util.HashMap<String, String>();
-              baggage.forEach((key, entry) -> entries.put(key, entry.getValue()));
-              capturedBaggage.set(entries);
+              io.opentelemetry.api.baggage.Baggage.current()
+                  .forEach((key, entry) -> entries.put(key, entry.getValue()));
+              seen.add(entries);
               return null;
             })
         .when(delegate)
         .onEvents(any());
 
-    listener.onEvents(List.of(envelope));
+    try (var ambient =
+        io.opentelemetry.api.baggage.Baggage.builder()
+            .put("role", "OPERATOR")
+            .build()
+            .makeCurrent()) {
+      listener.onEvents(batch);
+      listener.onEvents(List.of());
+      assertEquals(
+          "OPERATOR", io.opentelemetry.api.baggage.Baggage.current().getEntryValue("role"));
+    }
 
-    assertNotNull(capturedBaggage.get());
-    assertEquals("acme", capturedBaggage.get().get("tenant"));
-    assertEquals("enabled", capturedBaggage.get().get("feature-flag"));
+    assertEquals(List.of(Map.of(), Map.of()), seen);
   }
 }

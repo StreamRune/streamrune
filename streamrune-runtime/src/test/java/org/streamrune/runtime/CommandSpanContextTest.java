@@ -186,7 +186,7 @@ class CommandSpanContextTest {
         VirtualThreadCommandBus.builder()
             .eventStore(store)
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
-            .interceptors(new OpenTelemetryCommandInterceptor(tracing))
+            .interceptors(new TracingCommandInterceptor(tracing))
             .build()) {
       bus.execute(new Switch("l-registered"));
     }

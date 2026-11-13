@@ -62,7 +62,7 @@ class TracingWithoutOpenTelemetryTest {
       Object noop = tracingType.getField("NOOP").get(null);
 
       // The emitters initialize, so their verification links no OpenTelemetry type either.
-      load(loader, "org.streamrune.runtime.OpenTelemetryCommandInterceptor");
+      load(loader, "org.streamrune.runtime.TracingCommandInterceptor");
       Class<?> listenerDecorator = load(loader, "org.streamrune.runtime.TracingEventListener");
       Class<?> projectionDecorator =
           load(loader, "org.streamrune.runtime.TracingProjectionDecorator");
@@ -285,14 +285,14 @@ class TracingWithoutOpenTelemetryTest {
         import org.streamrune.core.tracing.StreamRuneTracing;
         import org.streamrune.core.types.ProjectionName;
         import org.streamrune.core.types.SubscriptionName;
-        import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+        import org.streamrune.runtime.TracingCommandInterceptor;
         import org.streamrune.runtime.TracingEventListener;
         import org.streamrune.runtime.TracingProjectionDecorator;
         import org.streamrune.runtime.VirtualThreadCommandBus;
 
         class Emitters {
           static void create(StreamRuneTracing tracing) {
-            new OpenTelemetryCommandInterceptor(tracing);
+            new TracingCommandInterceptor(tracing);
             new TracingEventListener(events -> {}, tracing, SubscriptionName.of("s"));
             new TracingProjectionDecorator(ProjectionName.of("p"), batch -> {}, tracing);
             TracingEventListener.traced(events -> {}, tracing, SubscriptionName.of("s"));

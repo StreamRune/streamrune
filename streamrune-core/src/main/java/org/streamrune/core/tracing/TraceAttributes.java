@@ -28,24 +28,33 @@ import org.streamrune.core.types.SubscriptionName;
  * stream id, a saga id, an outbox entry id) passes {@link LogSanitizer#sanitizeForTrace(String)}:
  * control, separator and format characters are removed, and a longer value is cut to its first
  * {@value LogSanitizer#MAX_TRACE_LENGTH} characters followed by {@code ...}, 259 characters in all.
- * An ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
- * baggage, encrypted values, crypto subject ids, user ids, roles or SQL.
+ * An ordinary identifier is unchanged.
+ *
+ * <p><b>What a span carries.</b> No attribute is taken from an event payload, a metadata value,
+ * baggage, an encrypted value, a crypto subject id, a user id, a role or SQL. An aggregate, stream
+ * or saga id is exported as it is: where such an id names a person — the aggregate's id is the
+ * crypto subject or the caller's user id — every trace of that aggregate carries it, and a forget
+ * does not reach the trace backend. A failure's own message, sanitized and bounded, is exported
+ * with the exception's type, so a message must not quote personal data; a command its domain
+ * rejected exports the rejection's type alone ({@link #COMMAND_REJECTION_TYPE}). A subscription's
+ * delivery span clears the baggage while the listener runs.
  *
  * <p><b>Span names</b> are path-shaped ({@code command/PlaceOrder}, {@code
  * subscription/orders/deliver}, {@code projection/orders/process}) and hold types and configured
  * names, never ids. A constant whose value holds a {@code /} is a span name; every other constant
  * is an attribute key.
  *
- * <p><b>Outcomes.</b> An expected outcome — a lock not acquired in time, an append that lost its
- * optimistic-lock check or that the saga forward fence refused, a saga event held for later, a saga
- * step that waits for another step of its saga — is an attribute value, and the span keeps an unset
- * or OK status. A failure records the exception type and message and the ERROR status.
+ * <p><b>Outcomes.</b> An expected outcome — a command its domain rejected, a saga's forward command
+ * the forward fence refused, a lock not acquired in time, an append that lost its optimistic-lock
+ * check or that the saga forward fence refused, a saga event held for later, a saga step that waits
+ * for another step of its saga — is an attribute value, and the span keeps an unset or OK status. A
+ * failure records the exception type and message and the ERROR status.
  */
 public final class TraceAttributes {
 
   private TraceAttributes() {}
 
-  // ==================== Command span (OpenTelemetryCommandInterceptor) ====================
+  // ==================== Command span (TracingCommandInterceptor) ====================
 
   /** Simple class name of the executing command. */
   public static final String COMMAND_TYPE = "streamrune.command.type";
@@ -64,6 +73,26 @@ public final class TraceAttributes {
    * when the span starts: the command bus composes the stream before any interceptor runs.
    */
   public static final String STREAM_ID = "streamrune.stream.id";
+
+  /**
+   * The class name of the {@link org.streamrune.core.DomainException} that rejected the command,
+   * its subtypes {@code ValidationException} and {@code AuthorizationException} included. Present
+   * on a rejected command only: a rejection is the command's answer, not a failure, so its span
+   * keeps the unset status and records no exception, as an HTTP server span does for a client
+   * error. The rejection's message is not exported. The span {@code saga/{SagaType}/compensate}
+   * carries it too when its compensation command was rejected; that span is ERROR, since a refused
+   * compensation is a failure of the saga, and records the rejection by its type alone.
+   */
+  public static final String COMMAND_REJECTION_TYPE = "streamrune.command.rejection.type";
+
+  /**
+   * How a command ended when it ended in an expected outcome other than success or a rejection:
+   * {@code FENCED}, a saga's forward command the saga forward fence refused because the saga has
+   * left its forward phase, the outcome its {@link #EVENT_STORE_APPEND} span records as {@link
+   * #APPEND_OUTCOME} {@code FENCED}. The span keeps the unset status and records no exception.
+   * Absent otherwise.
+   */
+  public static final String COMMAND_OUTCOME = "streamrune.command.outcome";
 
   /**
    * Span name for one command execution.
@@ -136,7 +165,10 @@ public final class TraceAttributes {
 
   /**
    * Span name for one global or stream read that returns at least one event, from the start of its
-   * query to the end of its deserialization; a read that returns none starts no span.
+   * query to the end of its deserialization, as a child of the span current on the reading thread.
+   * A read that returns none starts no span, and neither does a read with no span current: the poll
+   * of a subscription or a projection runner, whose delivery or processing span is the poll's one
+   * trace.
    */
   public static final String EVENT_STORE_READ = "eventstore/read";
 

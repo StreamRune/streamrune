@@ -67,7 +67,7 @@ import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.GraalJitGuard;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -784,6 +784,36 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * A command the integration's bus runs through {@code executeAsync} continues the caller's trace,
+   * with no bean and no setting: its {@code command/…} span is a child of the span current on the
+   * submitting thread, as a synchronous command's is.
+   */
+  @Test
+  public void anAsyncCommandContinuesTheCallersTrace() throws Exception {
+    OpenTelemetryBean.reset();
+    try (Application application =
+        start(null, Map.of(), Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+      assertStarted(application);
+      io.opentelemetry.api.trace.Span caller =
+          OpenTelemetryBean.view().getTracer("caller").spanBuilder("caller").startSpan();
+      try (io.opentelemetry.context.Scope ignored = caller.makeCurrent()) {
+        application
+            .bean(VirtualThreadCommandBus.class)
+            .executeAsync(new ContractCommand("async-1"))
+            .get(30, java.util.concurrent.TimeUnit.SECONDS);
+      } finally {
+        caller.end();
+      }
+
+      List<SpanData> spans = OpenTelemetryBean.spans();
+      SpanData callerSpan = onlySpan(spans, s -> s.getName().equals("caller"));
+      SpanData command = onlySpan(spans, s -> s.getName().startsWith("command/"));
+      assertEquals(callerSpan.getTraceId(), command.getTraceId(), "the caller's trace");
+      assertEquals(callerSpan.getSpanId(), command.getParentSpanId(), "a child of the caller");
+    }
+  }
+
+  /**
    * {@code streamrune.tracing.event-store.enabled=false} removes every {@code eventstore/…} span of
    * the integration's PostgreSQL event store, and the command and its lock are still traced.
    */
@@ -912,6 +942,35 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * An OpenTelemetry SDK that is present but switched off by the SDK's own setting ({@code
+   * otel.sdk.disabled=true}) is no OpenTelemetry to StreamRune: the tracing bean is {@code
+   * StreamRuneTracing.NOOP}, so no span starts and the command bus, which then holds no
+   * command-span interceptor, writes no span context into an event.
+   */
+  @Test
+  public void anOpenTelemetrySwitchedOffBySdkSettingsStartsNoSpan() {
+    for (Map.Entry<String, String> off :
+        List.of(Map.entry("otel.sdk.disabled", "true"), Map.entry("otel.sdk.disabled", "TRUE"))) {
+      OpenTelemetryBean.reset();
+      try (Application application =
+          start(
+              null,
+              Map.ofEntries(off),
+              Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+        assertStarted(application);
+        assertSame(
+            StreamRuneTracing.NOOP, application.bean(StreamRuneTracing.class), off::toString);
+        VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+        assertTrue(
+            bus.interceptors().stream().noneMatch(TracingCommandInterceptor.class::isInstance),
+            off::toString);
+        bus.execute(new ContractCommand("switched-off-1"));
+        assertEquals(List.of(), spanNames(), off::toString);
+      }
+    }
+  }
+
+  /**
    * The application's own {@code StreamRuneTracing} bean wins over the one the integration would
    * build from the {@code OpenTelemetry} bean: the integration's components trace through it.
    */
@@ -938,8 +997,8 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
-   * An {@code OpenTelemetryCommandInterceptor} the application declares is the one the command bus
-   * runs: one command is one {@code command/…} span, never two.
+   * A {@code TracingCommandInterceptor} the application declares is the one the command bus runs:
+   * one command is one {@code command/…} span, never two.
    */
   @Test
   public void theApplicationsCommandInterceptorIsNotDoubled() {
@@ -955,11 +1014,9 @@ public abstract class IntegrationWiringContract {
       assertStarted(application);
       VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
       List<CommandInterceptor> tracingInterceptors =
-          bus.interceptors().stream()
-              .filter(OpenTelemetryCommandInterceptor.class::isInstance)
-              .toList();
+          bus.interceptors().stream().filter(TracingCommandInterceptor.class::isInstance).toList();
       assertEquals(
-          List.of(application.bean(OpenTelemetryCommandInterceptor.class)),
+          List.of(application.bean(TracingCommandInterceptor.class)),
           tracingInterceptors,
           "the bus runs the application's interceptor, and no other");
       bus.execute(new ContractCommand("once-1"));

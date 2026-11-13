@@ -36,6 +36,13 @@ final class TestProperties {
         .getConfigMapping(StreamRuneQuarkusCryptoProperties.class);
   }
 
+  /** The configuration of {@code values}, for a producer that reads keys of other extensions. */
+  static org.eclipse.microprofile.config.Config config(Map<String, String> values) {
+    return new SmallRyeConfigBuilder()
+        .withSources(new PropertiesConfigSource(values, "test-overrides", 1000))
+        .build();
+  }
+
   private static SmallRyeConfig build(Map<String, String> overrides) {
     return new SmallRyeConfigBuilder()
         .withMapping(StreamRuneQuarkusProperties.class)
