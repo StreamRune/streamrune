@@ -47,7 +47,8 @@ public static final record org.streamrune.runtime.BackgroundRelayHealthContribut
   public java.lang.String name()
   public org.streamrune.runtime.BackgroundRelayHealthContributor$Status status()
 
-public static final enum org.streamrune.runtime.BackgroundRelayHealthContributor$Status
+public static enum org.streamrune.runtime.BackgroundRelayHealthContributor$Status
+  constants UP, DEGRADED, DOWN
   public static final org.streamrune.runtime.BackgroundRelayHealthContributor$Status DEGRADED
   public static final org.streamrune.runtime.BackgroundRelayHealthContributor$Status DOWN
   public static final org.streamrune.runtime.BackgroundRelayHealthContributor$Status UP
@@ -110,7 +111,8 @@ public final class org.streamrune.runtime.CommandDeadLetteredException extends o
   public org.streamrune.core.types.IdempotencyKey idempotencyKey()
   public org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome pendingOutcome()
 
-public static final enum org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome
+public static enum org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome
+  constants QUEUED_FOR_REPLAY, AWAITING_OPERATOR
   public static final org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome AWAITING_OPERATOR
   public static final org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome QUEUED_FOR_REPLAY
   public static org.streamrune.runtime.CommandDeadLetteredException$PendingOutcome valueOf(java.lang.String)
@@ -210,7 +212,8 @@ public static final class org.streamrune.runtime.DeadLetterRetryRunner$Builder
   public org.streamrune.runtime.DeadLetterRetryRunner$Builder pollInterval(java.time.Duration)
   public org.streamrune.runtime.DeadLetterRetryRunner$Builder registerCommand(java.lang.Class<?>)
 
-public static final enum org.streamrune.runtime.DeadLetterRetryRunner$RetryOutcome
+public static enum org.streamrune.runtime.DeadLetterRetryRunner$RetryOutcome
+  constants REPLAYED, FAILED, ADMISSION_REFUSED, READER_BEHIND, STALE_REPLAY_BLOCKED, NOT_DEDUPLICATED, NOT_FOUND
   public static final org.streamrune.runtime.DeadLetterRetryRunner$RetryOutcome ADMISSION_REFUSED
   public static final org.streamrune.runtime.DeadLetterRetryRunner$RetryOutcome FAILED
   public static final org.streamrune.runtime.DeadLetterRetryRunner$RetryOutcome NOT_DEDUPLICATED
@@ -325,14 +328,16 @@ public final class org.streamrune.runtime.OutboxFailedReplayer
   public org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome replay(org.streamrune.core.outbox.OutboxEntryId)
   public org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome skip(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
 
-public static final enum org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome
+public static enum org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome
+  constants REPLAYED, NOT_FAILED, NOT_FOUND
   public static final org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome NOT_FAILED
   public static final org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome NOT_FOUND
   public static final org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome REPLAYED
   public static org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome valueOf(java.lang.String)
   public static org.streamrune.runtime.OutboxFailedReplayer$ReplayOutcome[] values()
 
-public static final enum org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome
+public static enum org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome
+  constants SKIPPED, NOT_FAILED, NOT_FOUND
   public static final org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome NOT_FAILED
   public static final org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome NOT_FOUND
   public static final org.streamrune.runtime.OutboxFailedReplayer$SkipOutcome SKIPPED
@@ -427,7 +432,8 @@ public static final record org.streamrune.runtime.ProjectionDeadLetterReplayer$R
 public final class org.streamrune.runtime.ProjectionReadPoisonException extends java.lang.RuntimeException
   public <init>(java.lang.String, int, java.lang.Throwable)
 
-public final enum org.streamrune.runtime.ProjectionState
+public enum org.streamrune.runtime.ProjectionState
+  constants PENDING, CATCHING_UP, LIVE, STANDBY, ERROR, STOPPED
   public static final org.streamrune.runtime.ProjectionState CATCHING_UP
   public static final org.streamrune.runtime.ProjectionState ERROR
   public static final org.streamrune.runtime.ProjectionState LIVE
@@ -450,7 +456,8 @@ public final record org.streamrune.runtime.ProjectionStatus
 public interface org.streamrune.runtime.PushHealthAware
   public abstract org.streamrune.runtime.PushHealthAware$PushPathStatus pushPathStatus()
 
-public static final enum org.streamrune.runtime.PushHealthAware$PushPathStatus
+public static enum org.streamrune.runtime.PushHealthAware$PushPathStatus
+  constants NOT_CONFIGURED, LIVE, DEAD
   public static final org.streamrune.runtime.PushHealthAware$PushPathStatus DEAD
   public static final org.streamrune.runtime.PushHealthAware$PushPathStatus LIVE
   public static final org.streamrune.runtime.PushHealthAware$PushPathStatus NOT_CONFIGURED
@@ -522,7 +529,8 @@ public static final class org.streamrune.runtime.SagaDeadLetterReplayer$Builder
   public org.streamrune.runtime.SagaDeadLetterReplayer$Builder sagaRunner(org.streamrune.runtime.SagaRunner<?>)
   public org.streamrune.runtime.SagaDeadLetterReplayer$Builder sagaStore(org.streamrune.core.saga.SagaStore)
 
-public static final enum org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome
+public static enum org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome
+  constants TERMINAL, COMPENSATING, POISON, CLAIM_LOST, SAGA_NOT_FOUND, NOT_FAULTED, COMPENSATION_FAULT, ENTRIES_PENDING
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome CLAIM_LOST
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome COMPENSATING
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome COMPENSATION_FAULT
@@ -534,7 +542,8 @@ public static final enum org.streamrune.runtime.SagaDeadLetterReplayer$Compensat
   public static org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome valueOf(java.lang.String)
   public static org.streamrune.runtime.SagaDeadLetterReplayer$CompensateOutcome[] values()
 
-public static final enum org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome
+public static enum org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome
+  constants REPLAYED, STILL_POISON, ENTRY_NOT_FOUND, EVENT_NOT_FOUND, STALE_REDRIVE_BLOCKED, STALE_COMPENSATION_BLOCKED, TARGET_PENDING, SAGA_ROW_PENDING, OLDER_ENTRY_PENDING
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome ENTRY_NOT_FOUND
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome EVENT_NOT_FOUND
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome OLDER_ENTRY_PENDING
@@ -547,7 +556,8 @@ public static final enum org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOut
   public static org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome valueOf(java.lang.String)
   public static org.streamrune.runtime.SagaDeadLetterReplayer$ReplayOutcome[] values()
 
-public static final enum org.streamrune.runtime.SagaDeadLetterReplayer$ResumeOutcome
+public static enum org.streamrune.runtime.SagaDeadLetterReplayer$ResumeOutcome
+  constants RESUMED, STILL_POISON, NO_PROGRESS, STALE_COMPENSATION_BLOCKED, SAGA_NOT_FOUND, NOT_FAULTED, FORWARD_FAULT, ENTRIES_PENDING
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ResumeOutcome ENTRIES_PENDING
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ResumeOutcome FORWARD_FAULT
   public static final org.streamrune.runtime.SagaDeadLetterReplayer$ResumeOutcome NOT_FAULTED
@@ -663,7 +673,8 @@ public static final class org.streamrune.runtime.ScheduledProjectionRunner$Build
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, java.lang.String, org.streamrune.core.projection.ProjectionErrorStrategy, org.streamrune.core.projection.ProjectionDeliveryMode)
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
 
-public final enum org.streamrune.runtime.ScheduledProjectionState
+public enum org.streamrune.runtime.ScheduledProjectionState
+  constants PENDING, SLEEPING, RUNNING, STOPPED, ERROR
   public static final org.streamrune.runtime.ScheduledProjectionState ERROR
   public static final org.streamrune.runtime.ScheduledProjectionState PENDING
   public static final org.streamrune.runtime.ScheduledProjectionState RUNNING

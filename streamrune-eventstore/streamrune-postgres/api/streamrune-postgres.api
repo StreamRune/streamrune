@@ -316,7 +316,8 @@ public final record org.streamrune.postgres.SchemaIssue
   public java.lang.String table()
   public org.streamrune.postgres.SchemaIssue$Severity severity()
 
-public static final enum org.streamrune.postgres.SchemaIssue$Severity
+public static enum org.streamrune.postgres.SchemaIssue$Severity
+  constants WARNING, ERROR
   public static final org.streamrune.postgres.SchemaIssue$Severity ERROR
   public static final org.streamrune.postgres.SchemaIssue$Severity WARNING
   public static org.streamrune.postgres.SchemaIssue$Severity valueOf(java.lang.String)

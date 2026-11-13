@@ -63,7 +63,7 @@ public class org.streamrune.quarkus.StreamRuneAuthorizationValidator
   public <init>(jakarta.enterprise.inject.Instance<org.streamrune.runtime.VirtualThreadCommandBus>)
   public void validate(io.quarkus.runtime.StartupEvent)
 
-public @interface org.streamrune.quarkus.StreamRuneComponent
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.quarkus.StreamRuneComponent
 
 public class org.streamrune.quarkus.StreamRuneConfigValidator
   protected <init>()

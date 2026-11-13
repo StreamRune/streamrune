@@ -60,7 +60,7 @@ public class org.streamrune.micronaut.StreamRuneAuthorizationValidator implement
   public int getOrder()
   public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
 
-public @interface org.streamrune.micronaut.StreamRuneComponent
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.micronaut.StreamRuneComponent
 
 public class org.streamrune.micronaut.StreamRuneConfigValidator implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
   public <init>(org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.ApplicationContext)

@@ -121,14 +121,16 @@ public final class org.streamrune.integration.RequestIdentityPolicy
 public static interface org.streamrune.integration.RequestIdentityPolicy$MismatchListener
   public abstract void onMismatch(org.streamrune.core.types.UserId, org.streamrune.core.types.UserId)
 
-public static final enum org.streamrune.integration.RequestIdentityPolicy$Mode
+public static enum org.streamrune.integration.RequestIdentityPolicy$Mode
+  constants AUTHENTICATED_PRINCIPAL, TRUSTED_GATEWAY, ANONYMOUS
   public static final org.streamrune.integration.RequestIdentityPolicy$Mode ANONYMOUS
   public static final org.streamrune.integration.RequestIdentityPolicy$Mode AUTHENTICATED_PRINCIPAL
   public static final org.streamrune.integration.RequestIdentityPolicy$Mode TRUSTED_GATEWAY
   public static org.streamrune.integration.RequestIdentityPolicy$Mode valueOf(java.lang.String)
   public static org.streamrune.integration.RequestIdentityPolicy$Mode[] values()
 
-public final enum org.streamrune.integration.SagaForwardFenceSetting
+public enum org.streamrune.integration.SagaForwardFenceSetting
+  constants AUTO, ON, OFF
   public boolean enabled(boolean)
   public static final java.lang.String PROPERTY = "streamrune.saga.forward-fence"
   public static final org.streamrune.integration.SagaForwardFenceSetting AUTO
@@ -142,7 +144,8 @@ public final class org.streamrune.integration.SingleActiveConsumerSetting
   public static boolean enabled(java.lang.String)
   public static final java.lang.String PROPERTY = "streamrune.subscription.single-active-consumer.enabled"
 
-public final enum org.streamrune.integration.SnapshotPurgeSetting
+public enum org.streamrune.integration.SnapshotPurgeSetting
+  constants REQUIRED, NONE
   public boolean withoutSnapshotPurge(java.util.List<? extends org.streamrune.core.gdpr.SubjectDataPurger>)
   public static final java.lang.String PROPERTY = "streamrune.gdpr.snapshot-purge"
   public static final org.streamrune.integration.SnapshotPurgeSetting NONE

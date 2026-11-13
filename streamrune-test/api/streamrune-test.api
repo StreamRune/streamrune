@@ -110,7 +110,7 @@ public final class org.streamrune.test.EventStoreFixture
   public static org.streamrune.test.EventStoreFixture store(org.streamrune.core.EventStore)
 
 public final class org.streamrune.test.EventStoreFixture$GivenStage
-  public <init>(org.streamrune.test.EventStoreFixture)
+  public <init>()
   public org.streamrune.test.EventStoreFixture$GivenStage append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>)
   public org.streamrune.test.EventStoreFixture$WhenStage when()
 
@@ -123,7 +123,7 @@ public final class org.streamrune.test.EventStoreFixture$ThenStage
   public org.streamrune.test.EventStoreFixture$ThenStage expectOptimisticLockException()
 
 public final class org.streamrune.test.EventStoreFixture$WhenStage
-  public <init>(org.streamrune.test.EventStoreFixture)
+  public <init>()
   public org.streamrune.test.EventStoreFixture$ThenStage append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
   public org.streamrune.test.EventStoreFixture$ThenStage load(org.streamrune.core.types.StreamId)
 
@@ -555,17 +555,17 @@ public final class org.streamrune.test.ProjectionFixture<S>
   public static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent, org.streamrune.core.types.Version)
 
 public final class org.streamrune.test.ProjectionFixture$GivenStage
-  public <init>(org.streamrune.test.ProjectionFixture)
+  public <init>()
   public org.streamrune.test.ProjectionFixture<S>$WhenStage when()
 
 public final class org.streamrune.test.ProjectionFixture$ThenStage
-  public <init>(org.streamrune.test.ProjectionFixture)
+  public <init>()
   public java.util.List<org.streamrune.core.EventEnvelope> getEvents()
   public org.streamrune.test.ProjectionFixture<S>$ThenStage expectEventCount(int)
   public org.streamrune.test.ProjectionFixture<S>$ThenStage state(java.util.function.Consumer<S>)
 
 public final class org.streamrune.test.ProjectionFixture$WhenStage
-  public <init>(org.streamrune.test.ProjectionFixture)
+  public <init>()
   public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(java.util.List<org.streamrune.core.EventEnvelope>)
   public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope)
   public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope...)

@@ -157,7 +157,7 @@ public class org.streamrune.spring.StreamRuneAutoConfiguration
   public org.streamrune.spring.StreamRuneStartupLogger streamRuneStartupLogger(org.springframework.context.ApplicationContext)
   public static final int SCOPED_VALUE_FILTER_ORDER = -90
 
-public @interface org.streamrune.spring.StreamRuneComponent
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.spring.StreamRuneComponent
 
 public class org.streamrune.spring.StreamRuneConfigValidator implements org.springframework.beans.factory.SmartInitializingSingleton
   public <init>(org.streamrune.spring.StreamRuneProperties, org.springframework.context.ApplicationContext, org.springframework.core.env.Environment)

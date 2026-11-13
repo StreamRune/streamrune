@@ -31,13 +31,14 @@ public final class org.streamrune.core.Authorization
 public class org.streamrune.core.AuthorizationException extends org.streamrune.core.DomainException
   public <init>(java.lang.String)
 
-public @interface org.streamrune.core.Cacheable
-  public abstract java.lang.Class<?>[] invalidateOn()
-  public abstract long maxEntries()
-  public abstract long ttlSeconds()
-  public abstract org.streamrune.core.Cacheable$Scope scope()
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.Cacheable
+  public abstract java.lang.Class<?>[] invalidateOn() default {}
+  public abstract long maxEntries() default 1000
+  public abstract long ttlSeconds() default 60
+  public abstract org.streamrune.core.Cacheable$Scope scope() default org.streamrune.core.Cacheable$Scope.USER
 
-public static final enum org.streamrune.core.Cacheable$Scope
+public static enum org.streamrune.core.Cacheable$Scope
+  constants USER, GLOBAL
   public static final org.streamrune.core.Cacheable$Scope GLOBAL
   public static final org.streamrune.core.Cacheable$Scope USER
   public static org.streamrune.core.Cacheable$Scope valueOf(java.lang.String)
@@ -77,7 +78,8 @@ public static final record org.streamrune.core.CommandBus$CommandResult
   public org.streamrune.core.types.StreamId streamId()
   public org.streamrune.core.types.Version finalVersion()
 
-public static final enum org.streamrune.core.CommandBus$ShortCircuitReason
+public static enum org.streamrune.core.CommandBus$ShortCircuitReason
+  constants NONE, VETOED, IDEMPOTENT_REPLAY
   public static final org.streamrune.core.CommandBus$ShortCircuitReason IDEMPOTENT_REPLAY
   public static final org.streamrune.core.CommandBus$ShortCircuitReason NONE
   public static final org.streamrune.core.CommandBus$ShortCircuitReason VETOED
@@ -202,7 +204,8 @@ public final record org.streamrune.core.DeadLetterRetryPolicy
   public org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay unkeyedReplay()
   public static final org.streamrune.core.DeadLetterRetryPolicy DEFAULT
 
-public static final enum org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay
+public static enum org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay
+  constants OPERATOR_ONLY, AUTOMATIC
   public static final org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay AUTOMATIC
   public static final org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay OPERATOR_ONLY
   public static org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay valueOf(java.lang.String)
@@ -314,13 +317,14 @@ public final class org.streamrune.core.IdGenerator
   public static org.streamrune.core.types.CorrelationId generateCorrelationId()
   public static org.streamrune.core.types.EventId generateEventId()
 
-public @interface org.streamrune.core.Internal
+@Retention(java.lang.annotation.RetentionPolicy.CLASS) @Target({java.lang.annotation.ElementType.TYPE, java.lang.annotation.ElementType.METHOD, java.lang.annotation.ElementType.FIELD, java.lang.annotation.ElementType.CONSTRUCTOR}) public @interface org.streamrune.core.Internal
 
 public class org.streamrune.core.LockException extends java.lang.RuntimeException
   public <init>(java.lang.String)
   public <init>(java.lang.String, java.lang.Throwable)
 
-public final enum org.streamrune.core.LockMode
+public enum org.streamrune.core.LockMode
+  constants OPTIMISTIC, PESSIMISTIC
   public static final org.streamrune.core.LockMode OPTIMISTIC
   public static final org.streamrune.core.LockMode PESSIMISTIC
   public static org.streamrune.core.LockMode valueOf(java.lang.String)
@@ -362,16 +366,17 @@ public final record org.streamrune.core.PageRequest
   public static org.streamrune.core.PageRequest of(int, int)
   public static org.streamrune.core.PageRequest of(int, int, org.streamrune.core.Sort)
 
-public @interface org.streamrune.core.ProjectionConfig
-  public abstract int batchSize()
-  public abstract int fetchSize()
-  public abstract java.lang.String cron()
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.ProjectionConfig
+  public abstract int batchSize() default -1
+  public abstract int fetchSize() default -1
+  public abstract java.lang.String cron() default ""
   public abstract java.lang.String name()
-  public abstract org.streamrune.core.ProjectionConfig$Mode mode()
+  public abstract org.streamrune.core.ProjectionConfig$Mode mode() default org.streamrune.core.ProjectionConfig$Mode.CONTINUOUS
   public abstract org.streamrune.core.projection.ProjectionDeliveryMode deliveryMode()
-  public abstract org.streamrune.core.projection.ProjectionErrorStrategy errorStrategy()
+  public abstract org.streamrune.core.projection.ProjectionErrorStrategy errorStrategy() default org.streamrune.core.projection.ProjectionErrorStrategy.HALT
 
-public static final enum org.streamrune.core.ProjectionConfig$Mode
+public static enum org.streamrune.core.ProjectionConfig$Mode
+  constants CONTINUOUS, SCHEDULED, INLINE
   public static final org.streamrune.core.ProjectionConfig$Mode CONTINUOUS
   public static final org.streamrune.core.ProjectionConfig$Mode INLINE
   public static final org.streamrune.core.ProjectionConfig$Mode SCHEDULED
@@ -390,10 +395,10 @@ public interface org.streamrune.core.QueryBus
 public interface org.streamrune.core.QueryHandler<Q extends org.streamrune.core.Query<R>, R>
   public abstract R handle(Q)
 
-public @interface org.streamrune.core.RequirePermission
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.RequirePermission
   public abstract java.lang.String[] value()
 
-public @interface org.streamrune.core.RequireRole
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.RequireRole
   public abstract java.lang.String[] value()
 
 public final class org.streamrune.core.ReservedCorrelationIdException extends java.lang.RuntimeException
@@ -468,7 +473,8 @@ public static final record org.streamrune.core.Sort$Order
   public java.lang.String field()
   public org.streamrune.core.SortDirection direction()
 
-public final enum org.streamrune.core.SortDirection
+public enum org.streamrune.core.SortDirection
+  constants ASC, DESC
   public static final org.streamrune.core.SortDirection ASC
   public static final org.streamrune.core.SortDirection DESC
   public static org.streamrune.core.SortDirection valueOf(java.lang.String)
@@ -636,7 +642,7 @@ public class org.streamrune.core.ValidationException extends org.streamrune.core
   public <init>(java.util.List<org.streamrune.core.ValidationError>)
   public java.util.List<org.streamrune.core.ValidationError> errors()
 
-public @interface org.streamrune.core.ValidationGroups
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.ValidationGroups
   public abstract java.lang.Class<?>[] value()
 
 public final record org.streamrune.core.Versioned<T>
@@ -663,7 +669,8 @@ public final record org.streamrune.core.audit.AuditEntry
   public org.streamrune.core.types.CorrelationId correlationId()
   public org.streamrune.core.types.UserId userId()
 
-public final enum org.streamrune.core.audit.AuditOutcome
+public enum org.streamrune.core.audit.AuditOutcome
+  constants SUCCESS, FAILURE, VETOED
   public static final org.streamrune.core.audit.AuditOutcome FAILURE
   public static final org.streamrune.core.audit.AuditOutcome SUCCESS
   public static final org.streamrune.core.audit.AuditOutcome VETOED
@@ -673,7 +680,7 @@ public final enum org.streamrune.core.audit.AuditOutcome
 public interface org.streamrune.core.audit.AuditStore
   public abstract void save(org.streamrune.core.audit.AuditEntry)
 
-public @interface org.streamrune.core.audit.Auditable
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.TYPE}) public @interface org.streamrune.core.audit.Auditable
 
 public interface org.streamrune.core.audit.CommandAuditQuery
   public abstract java.util.Optional<org.streamrune.core.audit.AuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
@@ -747,7 +754,7 @@ public class org.streamrune.core.crypto.CryptoOperationException extends java.la
   public <init>(java.lang.String)
   public <init>(java.lang.String, java.lang.Throwable)
 
-public @interface org.streamrune.core.crypto.Encrypted
+@Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @Target({java.lang.annotation.ElementType.RECORD_COMPONENT}) public @interface org.streamrune.core.crypto.Encrypted
   public abstract java.lang.String subjectId()
 
 public class org.streamrune.core.crypto.KeyNotFoundException extends java.lang.RuntimeException
@@ -758,7 +765,8 @@ public class org.streamrune.core.crypto.SubjectForgottenException extends java.l
   public <init>(java.lang.String)
   public <init>(java.lang.String, java.lang.Throwable)
 
-public final enum org.streamrune.core.gdpr.GdprAction
+public enum org.streamrune.core.gdpr.GdprAction
+  constants FORGET, EXPORT, REINSTATE
   public static final org.streamrune.core.gdpr.GdprAction EXPORT
   public static final org.streamrune.core.gdpr.GdprAction FORGET
   public static final org.streamrune.core.gdpr.GdprAction REINSTATE
@@ -921,7 +929,8 @@ public interface org.streamrune.core.outbox.OutboxEntrySpans
 public interface org.streamrune.core.outbox.OutboxEventMapper
   public abstract java.util.List<org.streamrune.core.outbox.OutboxEntry> toOutbox(org.streamrune.core.EventEnvelope)
 
-public final enum org.streamrune.core.outbox.OutboxOrderingMode
+public enum org.streamrune.core.outbox.OutboxOrderingMode
+  constants STRICT_PER_AGGREGATE, AVAILABILITY_FIRST
   public static final org.streamrune.core.outbox.OutboxOrderingMode AVAILABILITY_FIRST
   public static final org.streamrune.core.outbox.OutboxOrderingMode STRICT_PER_AGGREGATE
   public static org.streamrune.core.outbox.OutboxOrderingMode valueOf(java.lang.String)
@@ -946,14 +955,16 @@ public static final record org.streamrune.core.outbox.OutboxPublisher$BatchResul
   public java.util.Map<org.streamrune.core.outbox.OutboxEntryId, java.lang.Exception> failed()
   public java.util.Set<org.streamrune.core.outbox.OutboxEntryId> confirmed()
 
-public static final enum org.streamrune.core.outbox.OutboxPublisher$FailureKind
+public static enum org.streamrune.core.outbox.OutboxPublisher$FailureKind
+  constants TRANSPORT, IN_FLIGHT, ENTRY
   public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind ENTRY
   public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind IN_FLIGHT
   public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind TRANSPORT
   public static org.streamrune.core.outbox.OutboxPublisher$FailureKind valueOf(java.lang.String)
   public static org.streamrune.core.outbox.OutboxPublisher$FailureKind[] values()
 
-public final enum org.streamrune.core.outbox.OutboxStatus
+public enum org.streamrune.core.outbox.OutboxStatus
+  constants PENDING, IN_PROGRESS, DELIVERED, FAILED, SKIPPED
   public static final org.streamrune.core.outbox.OutboxStatus DELIVERED
   public static final org.streamrune.core.outbox.OutboxStatus FAILED
   public static final org.streamrune.core.outbox.OutboxStatus IN_PROGRESS
@@ -1018,7 +1029,8 @@ public abstract class org.streamrune.core.projection.BaseProjection implements o
   public final void process(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
   public java.util.Optional<org.streamrune.core.projection.ProjectionRepository> writeTarget()
 
-public final enum org.streamrune.core.projection.LateDataPolicy
+public enum org.streamrune.core.projection.LateDataPolicy
+  constants DROP, REOPEN
   public static final org.streamrune.core.projection.LateDataPolicy DROP
   public static final org.streamrune.core.projection.LateDataPolicy REOPEN
   public static org.streamrune.core.projection.LateDataPolicy valueOf(java.lang.String)
@@ -1045,7 +1057,8 @@ public class org.streamrune.core.projection.ProjectionCommitFencedException exte
   public <init>(org.streamrune.core.projection.ProjectionCommitFencedException$Guard, java.lang.String)
   public org.streamrune.core.projection.ProjectionCommitFencedException$Guard guard()
 
-public static final enum org.streamrune.core.projection.ProjectionCommitFencedException$Guard
+public static enum org.streamrune.core.projection.ProjectionCommitFencedException$Guard
+  constants EPOCH_FENCE, OVERLAP, MONOTONIC
   public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard EPOCH_FENCE
   public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard MONOTONIC
   public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard OVERLAP
@@ -1073,7 +1086,8 @@ public interface org.streamrune.core.projection.ProjectionDeadLetterStore
   public abstract void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
   public default long countPending()
 
-public final enum org.streamrune.core.projection.ProjectionDeliveryMode
+public enum org.streamrune.core.projection.ProjectionDeliveryMode
+  constants TRANSACTIONAL_LOCAL, AT_LEAST_ONCE_IDEMPOTENT, EXTERNAL_EFFECT
   public boolean writesInCheckpointTransaction()
   public static final org.streamrune.core.projection.ProjectionDeliveryMode AT_LEAST_ONCE_IDEMPOTENT
   public static final org.streamrune.core.projection.ProjectionDeliveryMode EXTERNAL_EFFECT
@@ -1087,7 +1101,8 @@ public class org.streamrune.core.projection.ProjectionEpochRegressionException e
   public long storedEpoch()
   public org.streamrune.core.types.ProjectionName projectionName()
 
-public final enum org.streamrune.core.projection.ProjectionErrorClass
+public enum org.streamrune.core.projection.ProjectionErrorClass
+  constants TRANSIENT, POISON
   public static final org.streamrune.core.projection.ProjectionErrorClass POISON
   public static final org.streamrune.core.projection.ProjectionErrorClass TRANSIENT
   public static org.streamrune.core.projection.ProjectionErrorClass valueOf(java.lang.String)
@@ -1097,7 +1112,8 @@ public interface org.streamrune.core.projection.ProjectionErrorClassifier
   public abstract org.streamrune.core.projection.ProjectionErrorClass classify(java.lang.Throwable)
   public static final org.streamrune.core.projection.ProjectionErrorClassifier DEFAULT
 
-public final enum org.streamrune.core.projection.ProjectionErrorStrategy
+public enum org.streamrune.core.projection.ProjectionErrorStrategy
+  constants HALT, SKIP, DLQ
   public static final org.streamrune.core.projection.ProjectionErrorStrategy DLQ
   public static final org.streamrune.core.projection.ProjectionErrorStrategy HALT
   public static final org.streamrune.core.projection.ProjectionErrorStrategy SKIP
@@ -1251,7 +1267,8 @@ public class org.streamrune.core.saga.SagaStateSerializationException extends ja
   public <init>(java.lang.String, org.streamrune.core.saga.SagaId, java.lang.Throwable)
   public org.streamrune.core.saga.SagaId sagaId()
 
-public final enum org.streamrune.core.saga.SagaStatus
+public enum org.streamrune.core.saga.SagaStatus
+  constants STARTED, RUNNING, COMPLETED, COMPENSATING, COMPENSATED, FAILED, FAULTED
   public boolean isHalted()
   public boolean isTerminal()
   public static final org.streamrune.core.saga.SagaStatus COMPENSATED
@@ -1331,7 +1348,8 @@ public interface org.streamrune.core.subscription.EventSubscription extends java
   public abstract void close()
   public abstract void start()
 
-public final enum org.streamrune.core.subscription.LeaseRole
+public enum org.streamrune.core.subscription.LeaseRole
+  constants NOT_REPORTED, UNGATED, LEADING, STANDBY
   public static final org.streamrune.core.subscription.LeaseRole LEADING
   public static final org.streamrune.core.subscription.LeaseRole NOT_REPORTED
   public static final org.streamrune.core.subscription.LeaseRole STANDBY
@@ -1368,7 +1386,8 @@ public final record org.streamrune.core.subscription.SubscriptionHealth
   public org.streamrune.core.subscription.SubscriptionLifecycleState state()
   public org.streamrune.core.types.SubscriptionName name()
 
-public static final enum org.streamrune.core.subscription.SubscriptionHealth$Status
+public static enum org.streamrune.core.subscription.SubscriptionHealth$Status
+  constants UP, DOWN, DEGRADED
   public static final org.streamrune.core.subscription.SubscriptionHealth$Status DEGRADED
   public static final org.streamrune.core.subscription.SubscriptionHealth$Status DOWN
   public static final org.streamrune.core.subscription.SubscriptionHealth$Status UP
@@ -1394,7 +1413,8 @@ public interface org.streamrune.core.subscription.SubscriptionLifecycle extends 
   public abstract void pause()
   public abstract void resume()
 
-public final enum org.streamrune.core.subscription.SubscriptionLifecycleState
+public enum org.streamrune.core.subscription.SubscriptionLifecycleState
+  constants CREATED, RUNNING, PAUSED, STOPPED
   public static final org.streamrune.core.subscription.SubscriptionLifecycleState CREATED
   public static final org.streamrune.core.subscription.SubscriptionLifecycleState PAUSED
   public static final org.streamrune.core.subscription.SubscriptionLifecycleState RUNNING
@@ -1428,7 +1448,8 @@ public final class org.streamrune.core.tracing.SpanBaggage
   public static final org.streamrune.core.tracing.SpanBaggage KEEP
   public static org.streamrune.core.tracing.SpanBaggage replace(java.util.Map<java.lang.String, java.lang.String>)
 
-public final enum org.streamrune.core.tracing.SpanKind
+public enum org.streamrune.core.tracing.SpanKind
+  constants INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER
   public static final org.streamrune.core.tracing.SpanKind CLIENT
   public static final org.streamrune.core.tracing.SpanKind CONSUMER
   public static final org.streamrune.core.tracing.SpanKind INTERNAL
@@ -1511,7 +1532,8 @@ public interface org.streamrune.core.tracing.TraceScope extends java.lang.AutoCl
   public default org.streamrune.core.tracing.SpanLink link()
   public static final org.streamrune.core.tracing.TraceScope NOOP
 
-public final enum org.streamrune.core.tracing.TracingArea
+public enum org.streamrune.core.tracing.TracingArea
+  constants COMMAND, SUBSCRIPTION, PROJECTION, EVENT_STORE, LOCK, OUTBOX, SAGA
   public static final org.streamrune.core.tracing.TracingArea COMMAND
   public static final org.streamrune.core.tracing.TracingArea EVENT_STORE
   public static final org.streamrune.core.tracing.TracingArea LOCK

@@ -2037,6 +2037,38 @@ configure<com.diffplug.gradle.spotless.SpotlessExtension> {
     }
 }
 
+// ── The test of the public API checker ─────────────────────────────────────────────────────
+//
+// gradle/api-check/ApiSurfaceCheckTest.java compiles small fixtures and runs ApiSurfaceCheck on
+// them: the exposure rule, the @hidden rule, the baseline difference and what the baseline records.
+// Without it a change to the checker could silence a rule while every verifyApiSurface stays green.
+// Part of `check` and `quickCheck`; it runs with the source launcher of the Java 25 toolchain.
+val testApiSurfaceCheck =
+    tasks.register<Exec>("testApiSurfaceCheck") {
+        group = "verification"
+        description = "Tests the public API checker (gradle/api-check) on compiled fixtures."
+        val checkerDir = file("gradle/api-check")
+        val scratch = layout.buildDirectory.dir("api-check-test")
+        val marker = layout.buildDirectory.file("reports/api-check-test.txt")
+        val launcher =
+            javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+        inputs.files(fileTree(checkerDir) { include("*.java") }).withPropertyName("checker")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        outputs.file(marker).withPropertyName("marker")
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                listOf(
+                    checkerDir.resolve("ApiSurfaceCheckTest.java").absolutePath,
+                    scratch.get().asFile.absolutePath)
+            })
+        doFirst { executable = launcher.get().executablePath.asFile.absolutePath }
+        doLast {
+            marker.get().asFile.parentFile.mkdirs()
+            marker.get().asFile.writeText("ApiSurfaceCheckTest passed\n")
+        }
+    }
+tasks.named("check") { dependsOn(testApiSurfaceCheck) }
+
 // ── testSummary and quickCheck ──────────────────────────────────────────────────────────────
 //
 // The summary files of the test tasks in this build's task graph, by task path. The map is set once
@@ -2096,6 +2128,7 @@ tasks.register("quickCheck") {
     dependsOn(dockerFreeModules.map { "$it:test" })
     dependsOn(docLintModules.map { "$it:docLintTest" })
     dependsOn(subprojects.map { p -> p.tasks.matching { it.name == "verifyApiSurface" } })
+    dependsOn(testApiSurfaceCheck)
     finalizedBy(testSummary)
 }
 
