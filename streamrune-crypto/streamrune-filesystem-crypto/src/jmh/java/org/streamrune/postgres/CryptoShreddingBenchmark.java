@@ -1,4 +1,4 @@
-package org.streamrune.crypto.filesystem;
+package org.streamrune.postgres;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -24,7 +24,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.Encrypted;
-import org.streamrune.postgres.PostgresEventStore;
+import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 
 /**
  * Crypto-shredding on the event serialization path: an event with {@code @Encrypted} fields
@@ -33,6 +33,11 @@ import org.streamrune.postgres.PostgresEventStore;
  * PostgresEventStore#createObjectMapper}, which registers {@code CryptoShreddingModule} on the
  * engine), on a real AES-256-GCM engine: {@link FileSystemCryptoEngine} with its keys in a
  * temporary directory. No network, no database.
+ *
+ * <p>The benchmark is declared in {@code org.streamrune.postgres} because {@code
+ * createObjectMapper} is package-private. JMH and {@code jmhSmokeTest} run it on the class path,
+ * where a package that spans two jars is one package for the class loader; neither jar is a named
+ * module.
  *
  * <p>The engine is used bare, as the event store calls it, without the decrypt cache an integration
  * can put in front of it ({@code CachedCryptoEngine}): a cached decryption measures the cache, not
