@@ -24,6 +24,32 @@ import org.streamrune.core.types.Version;
  * <p>{@code ForwardingEventStore} in {@code streamrune-test} forwards all of them and is a base
  * class for such a decorator. A new method added to this interface comes with a {@code default}; a
  * decorator forwards it as well once it wants the wrapped store's answer.
+ *
+ * <h2>Transactional outbox</h2>
+ *
+ * <p>No method of this interface accepts outbox entries, and {@link
+ * org.streamrune.core.outbox.OutboxStore} reads entries, records their delivery and has only a
+ * standalone {@code save}: the transactional outbox is not reachable through the SPI. A store that
+ * offers it does so in its own implementation, as {@code PostgresEventStore} does with its {@code
+ * append(StreamId, List, Version, List)} overload and with the entries its configured {@link
+ * org.streamrune.core.outbox.OutboxEventMapper} derives from the events of every append. Such a
+ * store provides all of the following:
+ *
+ * <ul>
+ *   <li>The entries are written in the same atomic step as the events (for {@link #appendWithKey},
+ *       as the inbox row too), into the storage the relay's {@code OutboxStore} reads: every entry
+ *       is committed with the events or none is. An append that is refused or fails (a version
+ *       conflict, a fence refusal, any error) stores no entry.
+ *   <li>Entries given with an empty events list are rejected with {@link IllegalArgumentException},
+ *       never dropped: they commit with the events, and there are none to commit them with (see
+ *       Empty appends on {@link #append}).
+ *   <li>Each entry carries, as its {@link org.streamrune.core.outbox.OutboxEntry#traceLink()
+ *       traceLink}, the link to the span of the command that wrote its source event, {@link
+ *       org.streamrune.core.tracing.SpanLink#of(EventMetadata)} of that event's metadata ({@link
+ *       org.streamrune.core.tracing.SpanLink#NONE} when the command was not traced), replacing any
+ *       link set before, so the relay's publish span links to that command. The entries given to
+ *       one append all take the link of its first event: one append's events come from one command.
+ * </ul>
  */
 public interface EventStore {
 
@@ -69,9 +95,10 @@ public interface EventStore {
    *       licenses silently skipping another side effect the same call was asked to perform. {@link
    *       #appendWithKey} still claims the idempotency key for a zero-event command, and an
    *       implementation overload that additionally accepts outbox entries (see {@code
-   *       PostgresEventStore.append(StreamId, List, Version, List)}) must REJECT non-empty entries
-   *       with {@link IllegalArgumentException} rather than discard them: those entries commit
-   *       atomically with the events, so with no events there is nothing to commit them with.
+   *       PostgresEventStore.append(StreamId, List, Version, List)}, and Transactional outbox in
+   *       the class javadoc) must REJECT non-empty entries with {@link IllegalArgumentException}
+   *       rather than discard them: those entries commit atomically with the events, so with no
+   *       events there is nothing to commit them with.
    *   <li><b>Atomicity.</b> A multi-event append is all-or-nothing: either every event is persisted
    *       or none is.
    *   <li><b>No idempotence by default.</b> {@code metadata().eventId()} uniqueness is not
