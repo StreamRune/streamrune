@@ -26,7 +26,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
-class OpenTelemetryCommandInterceptorTest {
+class TracingCommandInterceptorTest {
 
   private static final AggregateType TYPE = AggregateType.of("orders");
 
@@ -66,7 +66,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void shouldCreateSpanForSuccessfulCommand() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
@@ -100,7 +100,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void spanNameAndAttributeKeysMatchThePublishedContract() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     interceptor.before(ctx("PlaceOrder"));
@@ -141,7 +141,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void shouldSetErrorStatusOnException() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     var ctx = ctx("PlaceOrder");
@@ -167,7 +167,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void aContextWithoutAStream_carriesNeitherTypeNorStreamAttribute() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     var ctx =
         new CommandInterceptor.CommandContext(
@@ -191,7 +191,7 @@ class OpenTelemetryCommandInterceptorTest {
   @Test
   void beforeShouldReturnTrue() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     boolean result = interceptor.before(ctx("PlaceOrder"));
     assertTrue(result);

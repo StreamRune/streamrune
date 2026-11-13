@@ -67,7 +67,7 @@ import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.GraalJitGuard;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -938,8 +938,8 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
-   * An {@code OpenTelemetryCommandInterceptor} the application declares is the one the command bus
-   * runs: one command is one {@code command/…} span, never two.
+   * A {@code TracingCommandInterceptor} the application declares is the one the command bus runs:
+   * one command is one {@code command/…} span, never two.
    */
   @Test
   public void theApplicationsCommandInterceptorIsNotDoubled() {
@@ -955,11 +955,9 @@ public abstract class IntegrationWiringContract {
       assertStarted(application);
       VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
       List<CommandInterceptor> tracingInterceptors =
-          bus.interceptors().stream()
-              .filter(OpenTelemetryCommandInterceptor.class::isInstance)
-              .toList();
+          bus.interceptors().stream().filter(TracingCommandInterceptor.class::isInstance).toList();
       assertEquals(
-          List.of(application.bean(OpenTelemetryCommandInterceptor.class)),
+          List.of(application.bean(TracingCommandInterceptor.class)),
           tracingInterceptors,
           "the bus runs the application's interceptor, and no other");
       bus.execute(new ContractCommand("once-1"));

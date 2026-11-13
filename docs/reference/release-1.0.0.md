@@ -264,7 +264,7 @@ license.
   `after()` runs with a `VETOED` result on every interceptor ahead of it. Shipped interceptors:
   `AuditCommandInterceptor`, `AuthorizationCommandInterceptor`, `AnnotationAuthorizationInterceptor`,
   `CircuitBreakerCommandInterceptor`, `BeanValidationInterceptor` (Jakarta Validation →
-  `ValidationException`), `OpenTelemetryCommandInterceptor`, `InlineProjectionInterceptor`.
+  `ValidationException`), `TracingCommandInterceptor`, `InlineProjectionInterceptor`.
 - A bus decorator forwards every `CommandBus` method to the bus it wraps, the `default` ones
   included: both `execute` methods with the command instance and the idempotency key it received,
   on the calling thread, and the wiring probes `supportsIdempotentExecution()` and

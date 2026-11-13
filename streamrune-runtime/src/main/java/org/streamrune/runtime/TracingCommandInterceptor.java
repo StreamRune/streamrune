@@ -21,7 +21,7 @@ import org.streamrune.core.types.LogSanitizer;
  *
  * <pre>{@code
  * StreamRuneTracing tracing = OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled());
- * var interceptor = new OpenTelemetryCommandInterceptor(tracing);
+ * var interceptor = new TracingCommandInterceptor(tracing);
  * var bus = VirtualThreadCommandBus.builder()
  *     .interceptors(interceptor)
  *     .build();
@@ -49,7 +49,7 @@ import org.streamrune.core.types.LogSanitizer;
  * platform thread would carry a stale current context. The stack ends each span exactly once and
  * closes the scopes in LIFO order, which the OpenTelemetry context contract requires.
  */
-public final class OpenTelemetryCommandInterceptor implements CommandInterceptor {
+public final class TracingCommandInterceptor implements CommandInterceptor {
 
   private final StreamRuneTracing tracing;
 
@@ -68,7 +68,7 @@ public final class OpenTelemetryCommandInterceptor implements CommandInterceptor
    * @param tracing the tracing
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
-  public OpenTelemetryCommandInterceptor(StreamRuneTracing tracing) {
+  public TracingCommandInterceptor(StreamRuneTracing tracing) {
     this.tracing = Objects.requireNonNull(tracing, "tracing is required");
     this.traced = tracing.enabled(TracingArea.COMMAND);
   }

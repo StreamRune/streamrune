@@ -45,7 +45,7 @@ public final class TraceAttributes {
 
   private TraceAttributes() {}
 
-  // ==================== Command span (OpenTelemetryCommandInterceptor) ====================
+  // ==================== Command span (TracingCommandInterceptor) ====================
 
   /** Simple class name of the executing command. */
   public static final String COMMAND_TYPE = "streamrune.command.type";

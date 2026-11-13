@@ -32,7 +32,7 @@ class CommandSpanIdSanitizationTest {
 
   private SpanData spanFor(CommandId commandId, AggregateId aggregateId) {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     var ctx =
         new CommandInterceptor.CommandContext(

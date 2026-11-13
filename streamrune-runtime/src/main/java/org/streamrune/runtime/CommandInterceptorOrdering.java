@@ -45,8 +45,8 @@ public final class CommandInterceptorOrdering {
 
   private CommandInterceptorOrdering() {}
 
-  /** Outermost interceptor: the OTel span covers the whole pipeline, including rejections. */
-  public static final int ORDER_OPEN_TELEMETRY = 1000;
+  /** Outermost interceptor: the command span covers the whole pipeline, including rejections. */
+  public static final int ORDER_TRACING = 1000;
 
   /** Audits every command attempt, including ones later rejected by authorization/validation. */
   public static final int ORDER_AUDIT = 2000;
@@ -78,7 +78,7 @@ public final class CommandInterceptorOrdering {
   // looks through container-generated (synthetic) subclasses first; see frameworkLookupClass.
   private static final Map<Class<?>, Integer> ORDERS =
       Map.of(
-          OpenTelemetryCommandInterceptor.class, ORDER_OPEN_TELEMETRY,
+          TracingCommandInterceptor.class, ORDER_TRACING,
           AuditCommandInterceptor.class, ORDER_AUDIT,
           AuthorizationCommandInterceptor.class, ORDER_AUTHORIZATION,
           AnnotationAuthorizationInterceptor.class, ORDER_ANNOTATION_AUTHORIZATION,

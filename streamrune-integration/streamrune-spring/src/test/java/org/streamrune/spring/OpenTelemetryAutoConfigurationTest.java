@@ -30,8 +30,8 @@ import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.postgres.PgAdvisoryLocker;
 import org.streamrune.runtime.DeciderRegistration;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.test.InMemoryEventStoreFactory;
@@ -140,16 +140,16 @@ class OpenTelemetryAutoConfigurationTest {
   @Test
   void theCommandBusRunsTheApplicationsInterceptorAlone() {
     var own =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(openTelemetry(), TracingSettings.allEnabled()));
     runner
         .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
-        .withBean(OpenTelemetryCommandInterceptor.class, () -> own)
+        .withBean(TracingCommandInterceptor.class, () -> own)
         .run(
             ctx -> {
               List<CommandInterceptor> chain =
                   ctx.getBean(VirtualThreadCommandBus.class).interceptors();
-              assertThat(chain.stream().filter(OpenTelemetryCommandInterceptor.class::isInstance))
+              assertThat(chain.stream().filter(TracingCommandInterceptor.class::isInstance))
                   .containsExactly(own);
             });
   }
@@ -163,7 +163,7 @@ class OpenTelemetryAutoConfigurationTest {
             ctx -> {
               VirtualThreadCommandBus bus = ctx.getBean(VirtualThreadCommandBus.class);
               assertThat(bus.interceptors().getFirst())
-                  .isInstanceOf(OpenTelemetryCommandInterceptor.class);
+                  .isInstanceOf(TracingCommandInterceptor.class);
               bus.execute(new Probe("bus-1"));
               assertThat(otelTesting.getSpans())
                   .extracting(SpanData::getName)

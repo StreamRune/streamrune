@@ -21,7 +21,7 @@ import org.streamrune.runtime.AuthorizationCommandInterceptor;
 import org.streamrune.runtime.BeanValidationInterceptor;
 import org.streamrune.runtime.CircuitBreakerCommandInterceptor;
 import org.streamrune.runtime.InlineProjectionInterceptor;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /**
@@ -31,8 +31,8 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * Audit → Authorization → AnnotationAuthorization → BeanValidation → CircuitBreaker →
  * InlineProjection, and {@code after()}/{@code onError()} run in reverse. Without explicit
  * ordering, e.g. the circuit breaker could count validation rejections as failures, or audit could
- * miss rejected commands. The OpenTelemetry interceptor is no bean: the command bus adds it in its
- * slot from the {@code StreamRuneTracing} bean.
+ * miss rejected commands. The tracing interceptor is no bean: the command bus adds it in its slot
+ * from the {@code StreamRuneTracing} bean.
  */
 class CommandInterceptorOrderingTest {
 
@@ -76,7 +76,7 @@ class CommandInterceptorOrderingTest {
                   .toList();
           assertThat(busChain)
               .containsExactly(
-                  OpenTelemetryCommandInterceptor.class,
+                  TracingCommandInterceptor.class,
                   AuditCommandInterceptor.class,
                   AuthorizationCommandInterceptor.class,
                   AnnotationAuthorizationInterceptor.class,

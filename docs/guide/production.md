@@ -391,7 +391,7 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 
 | Emitter | Span name | Kind | Attributes |
 | --- | --- | --- | --- |
-| `OpenTelemetryCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id` |
+| `TracingCommandInterceptor` | `command/{CommandType}` | `INTERNAL` | `streamrune.command.type`, `streamrune.command.id`, `streamrune.aggregate.type`, `streamrune.aggregate.id`, `streamrune.stream.id` |
 | `TracingEventListener` | `subscription/{name}/deliver` | `CONSUMER` | `streamrune.subscription.name`, `streamrune.batch.size` |
 | `TracingProjectionDecorator` | `projection/{name}/process` | `INTERNAL` | `streamrune.projection.name`, `streamrune.batch.size` |
 | `PostgresEventStore`, `InMemoryEventStore` | `eventstore/append` | `INTERNAL` | `streamrune.stream.id`, `streamrune.aggregate.type`, `streamrune.event.count`, `streamrune.expected.version`, `streamrune.outbox.entry.count`, `streamrune.append.outcome` |
@@ -525,12 +525,12 @@ a deployment switches an area without a rebuild.
   `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
   bus, the outbox poller, the continuous and scheduled projection runners, and each inline
   projection, which its interceptor runs decorated with `TracingProjectionDecorator`. The command
-  bus adds the `OpenTelemetryCommandInterceptor` in its slot ahead of every framework interceptor,
+  bus adds the `TracingCommandInterceptor` in its slot ahead of every framework interceptor,
   so no interceptor bean is needed. An `AggregateLocker` bean of the application that is a
   `PgAdvisoryLocker` or a `LocalStripedLocker` is traced too: the bus takes the locker its
   `traced(tracing)` returns, on the same locks.
 - **What the application keeps.** A `StreamRuneTracing` bean of the application replaces the
-  integration's everywhere. An `OpenTelemetryCommandInterceptor` bean of the application is the
+  integration's everywhere. A `TracingCommandInterceptor` bean of the application is the
   one the integration's bus runs, never beside a second. A component the application builds
   itself takes the bean on its builder:
   - a `SagaRunner` and a `SagaTimeoutRunner` (`tracing(tracing)`);

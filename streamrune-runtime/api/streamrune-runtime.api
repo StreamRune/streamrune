@@ -131,7 +131,7 @@ public final class org.streamrune.runtime.CommandInterceptorOrdering
   public static final int ORDER_AUTHORIZATION = 3000
   public static final int ORDER_CIRCUIT_BREAKER = 5000
   public static final int ORDER_INLINE_PROJECTION = 6000
-  public static final int ORDER_OPEN_TELEMETRY = 1000
+  public static final int ORDER_TRACING = 1000
   public static final int ORDER_USER_DEFAULT = 2147483647
   public static final int ORDER_VALIDATION = 4000
   public static int orderOf(org.streamrune.core.CommandInterceptor)
@@ -307,12 +307,6 @@ public static final class org.streamrune.runtime.MultiProjectionRunner$Builder
   public org.streamrune.runtime.MultiProjectionRunner$Builder stopTimeout(java.time.Duration)
   public org.streamrune.runtime.MultiProjectionRunner$Builder subscriptionConfig(org.streamrune.core.subscription.SubscriptionConfig)
   public org.streamrune.runtime.MultiProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
-
-public final class org.streamrune.runtime.OpenTelemetryCommandInterceptor implements org.streamrune.core.CommandInterceptor
-  public <init>(org.streamrune.core.tracing.StreamRuneTracing)
-  public boolean before(org.streamrune.core.CommandInterceptor$CommandContext)
-  public void after(org.streamrune.core.CommandInterceptor$CommandContext)
-  public void onError(org.streamrune.core.CommandInterceptor$CommandContext, java.lang.Throwable)
 
 public final class org.streamrune.runtime.OpenTelemetryTracing implements org.streamrune.core.tracing.StreamRuneTracing
   public boolean enabled(org.streamrune.core.tracing.TracingArea)
@@ -850,6 +844,12 @@ public final class org.streamrune.runtime.SubscriptionLease$Anchor implements ja
   public boolean lead(java.time.Duration)
   public boolean stillLeads()
   public void close()
+
+public final class org.streamrune.runtime.TracingCommandInterceptor implements org.streamrune.core.CommandInterceptor
+  public <init>(org.streamrune.core.tracing.StreamRuneTracing)
+  public boolean before(org.streamrune.core.CommandInterceptor$CommandContext)
+  public void after(org.streamrune.core.CommandInterceptor$CommandContext)
+  public void onError(org.streamrune.core.CommandInterceptor$CommandContext, java.lang.Throwable)
 
 public final class org.streamrune.runtime.TracingEventListener implements org.streamrune.core.subscription.EventListener
   public <init>(org.streamrune.core.subscription.EventListener, org.streamrune.core.tracing.StreamRuneTracing, org.streamrune.core.types.SubscriptionName)

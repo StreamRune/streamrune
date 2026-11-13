@@ -68,11 +68,11 @@ import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.MultiProjectionRunner;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SagaLeaseWiring;
 import org.streamrune.runtime.SagaRunner;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingProjectionDecorator;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -420,7 +420,7 @@ final class ReferenceApplication implements Application {
     }
     List<CommandInterceptor> interceptors = new ArrayList<>(beansOf(CommandInterceptor.class));
     if (!keeps(Rule.ONE_COMMAND_INTERCEPTOR) && !interceptors.isEmpty()) {
-      interceptors.addFirst(new OpenTelemetryCommandInterceptor(tracing));
+      interceptors.addFirst(new TracingCommandInterceptor(tracing));
     }
     for (ContractInlineProjection inline : beansOf(ContractInlineProjection.class)) {
       ProjectionName name = ProjectionName.of(ContractInlineProjection.NAME);

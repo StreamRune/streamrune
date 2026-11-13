@@ -144,7 +144,7 @@ class TracingBuildersTest {
   @Test
   void commandBus_keepsAnInterceptorTheApplicationAdded_andTracesOnce() {
     var own =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
     try (var bus = bus(tracing()).interceptors(own).build()) {
       bus.execute(new Switch("l-1"));
@@ -160,7 +160,7 @@ class TracingBuildersTest {
     var user = CommandInterceptor.noop();
     try (var bus = bus(tracing()).interceptors(user).build()) {
       assertThat(bus.interceptors()).hasSize(2);
-      assertThat(bus.interceptors().getFirst()).isInstanceOf(OpenTelemetryCommandInterceptor.class);
+      assertThat(bus.interceptors().getFirst()).isInstanceOf(TracingCommandInterceptor.class);
       assertThat(bus.interceptors().get(1)).isSameAs(user);
     }
   }
@@ -175,7 +175,7 @@ class TracingBuildersTest {
     try (var bus = bus(tracing()).interceptors(outermost, user).build()) {
       assertThat(bus.interceptors()).hasSize(3);
       assertThat(bus.interceptors().get(0)).isSameAs(outermost);
-      assertThat(bus.interceptors().get(1)).isInstanceOf(OpenTelemetryCommandInterceptor.class);
+      assertThat(bus.interceptors().get(1)).isInstanceOf(TracingCommandInterceptor.class);
       assertThat(bus.interceptors().get(2)).isSameAs(user);
     }
   }
@@ -185,7 +185,7 @@ class TracingBuildersTest {
     var outermost = new OutermostInterceptor();
     try (var bus = bus(tracing()).interceptors(outermost).build()) {
       assertThat(bus.interceptors()).hasSize(2);
-      assertThat(bus.interceptors().get(1)).isInstanceOf(OpenTelemetryCommandInterceptor.class);
+      assertThat(bus.interceptors().get(1)).isInstanceOf(TracingCommandInterceptor.class);
     }
   }
 
@@ -566,7 +566,7 @@ class TracingBuildersTest {
     var projection =
         new TracingProjectionDecorator(
             ProjectionName.of("p"), counting, tracingWithout(TracingArea.PROJECTION));
-    var interceptor = new OpenTelemetryCommandInterceptor(StreamRuneTracing.NOOP);
+    var interceptor = new TracingCommandInterceptor(StreamRuneTracing.NOOP);
     var ctx =
         new CommandInterceptor.CommandContext(
             new Switch("l-9"),
@@ -591,7 +591,7 @@ class TracingBuildersTest {
 
   @Test
   void theCommandSpan_carriesNoAggregateAttributes_withoutAnAggregate() {
-    var interceptor = new OpenTelemetryCommandInterceptor(tracing());
+    var interceptor = new TracingCommandInterceptor(tracing());
     var ctx =
         new CommandInterceptor.CommandContext(
             new Switch("x"), "Switch", CommandId.of("cmd_2"), null, null, null, Instant.now());

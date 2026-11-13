@@ -450,7 +450,7 @@ class MicronautBeanWiringTest {
     // ProjectionFactory and is easy to overlook.
     assertMissingBeansGuard(
         ProjectionFactory.class, "inlineProjectionInterceptor", InlineProjectionInterceptor.class);
-    // The OpenTelemetry interceptor is no bean: the bus adds it from the tracing, which an
+    // The tracing interceptor is no bean: the bus adds it from the tracing, which an
     // application StreamRuneTracing bean replaces.
     assertMissingBeansGuard(
         StreamRuneMicronautModule.class,

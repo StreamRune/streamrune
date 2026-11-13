@@ -65,13 +65,13 @@ import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.InboxRetentionSweeper;
 import org.streamrune.runtime.LocalStripedLocker;
-import org.streamrune.runtime.OpenTelemetryCommandInterceptor;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SimpleQueryBus;
 import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.UnboundRequestContextQueryBus;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -513,11 +513,10 @@ public class StreamRuneAutoConfiguration {
    * framework interceptors); declare {@code @Order} on the bean to slot in between.
    *
    * <p><b>Tracing:</b> the bus traces through the {@link StreamRuneTracing} bean ({@link
-   * VirtualThreadCommandBus.Builder#tracing}): it adds the {@link OpenTelemetryCommandInterceptor}
-   * in its slot ahead of every framework interceptor, unless the chain already holds one the
-   * application declared. The {@link org.streamrune.core.AggregateLocker} bean traces its
-   * acquisitions through it too when it is a {@link LocalStripedLocker} or a {@code
-   * PgAdvisoryLocker}.
+   * VirtualThreadCommandBus.Builder#tracing}): it adds the {@link TracingCommandInterceptor} in its
+   * slot ahead of every framework interceptor, unless the chain already holds one the application
+   * declared. The {@link org.streamrune.core.AggregateLocker} bean traces its acquisitions through
+   * it too when it is a {@link LocalStripedLocker} or a {@code PgAdvisoryLocker}.
    *
    * <p><b>Dead letter queue:</b> when the application defines a {@link
    * org.streamrune.core.DeadLetterQueue} bean, it is wired into the bus so commands that exhaust

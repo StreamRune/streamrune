@@ -169,11 +169,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
 
   /**
    * The interceptor whose {@code command/{CommandType}} span the events of a command link to, the
-   * first traced {@link OpenTelemetryCommandInterceptor} of the chain, whether {@link
-   * Builder#tracing} added it or the application registered it; {@code null} when the chain holds
-   * none. {@link #buildMetadata} reads the span of the executing command from it.
+   * first traced {@link TracingCommandInterceptor} of the chain, whether {@link Builder#tracing}
+   * added it or the application registered it; {@code null} when the chain holds none. {@link
+   * #buildMetadata} reads the span of the executing command from it.
    */
-  private final OpenTelemetryCommandInterceptor commandSpans;
+  private final TracingCommandInterceptor commandSpans;
 
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
@@ -1996,10 +1996,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * ordering. Each call reads the clock afresh, so events of one command, and successive commands
    * under one bound context, receive distinct, monotonically-sensible timestamps. The caller's
    * trace id and the user identity are taken from the bound context; the span context from this
-   * command's own {@code command/{CommandType}} span, which the {@link
-   * OpenTelemetryCommandInterceptor} of the chain started on this thread; the saga origin, the
-   * causation id and the correlation id from {@code provenance}. The command's own id is recorded
-   * separately in {@link EventMetadata#commandId()}.
+   * command's own {@code command/{CommandType}} span, which the {@link TracingCommandInterceptor}
+   * of the chain started on this thread; the saga origin, the causation id and the correlation id
+   * from {@code provenance}. The command's own id is recorded separately in {@link
+   * EventMetadata#commandId()}.
    */
   private EventMetadata buildMetadata(EventProvenance provenance, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
@@ -2037,13 +2037,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   }
 
   /**
-   * The first traced {@link OpenTelemetryCommandInterceptor} of {@code chain} (its command area
-   * on), or {@code null}.
+   * The first traced {@link TracingCommandInterceptor} of {@code chain} (its command area on), or
+   * {@code null}.
    */
-  private static OpenTelemetryCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
+  private static TracingCommandInterceptor commandSpansOf(List<CommandInterceptor> chain) {
     for (CommandInterceptor interceptor : chain) {
-      if (interceptor instanceof OpenTelemetryCommandInterceptor commandSpans
-          && commandSpans.traced()) {
+      if (interceptor instanceof TracingCommandInterceptor commandSpans && commandSpans.traced()) {
         return commandSpans;
       }
     }
@@ -2173,7 +2172,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Returns the interceptor chain this bus runs, in {@code before()} order: the interceptors handed
    * to {@link Builder#interceptors}, in the order they were added, with the command span's {@link
-   * OpenTelemetryCommandInterceptor} in its slot when {@link Builder#tracing} added it. Startup
+   * TracingCommandInterceptor} in its slot when {@link Builder#tracing} added it. Startup
    * validators read it to check the chain a bus actually runs, which for a bus built by hand need
    * not match the interceptor beans of the container.
    *
@@ -2458,14 +2457,13 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * The tracing the bus starts the span {@code command/{CommandType}} through (default {@link
      * StreamRuneTracing#NOOP}, which traces nothing). When its {@link TracingArea#COMMAND} area is
-     * on, {@link #build()} adds an {@link OpenTelemetryCommandInterceptor} over it to the chain, in
-     * the slot {@link CommandInterceptorOrdering#ORDER_OPEN_TELEMETRY} reserves: before the first
-     * interceptor whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so
-     * ahead of every framework interceptor. A chain that already holds an {@code
-     * OpenTelemetryCommandInterceptor} the application added keeps that one alone. The default
-     * {@link LocalStripedLocker} the bus builds when no {@link #locker} is set traces its
-     * acquisitions through it too ({@link LocalStripedLocker#traced}); a locker the application
-     * sets takes the tracing on its own.
+     * on, {@link #build()} adds a {@link TracingCommandInterceptor} over it to the chain, in the
+     * slot {@link CommandInterceptorOrdering#ORDER_TRACING} reserves: before the first interceptor
+     * whose {@linkplain CommandInterceptorOrdering#orderOf order} comes after it, so ahead of every
+     * framework interceptor. A chain that already holds an {@code TracingCommandInterceptor} the
+     * application added keeps that one alone. The default {@link LocalStripedLocker} the bus builds
+     * when no {@link #locker} is set traces its acquisitions through it too ({@link
+     * LocalStripedLocker#traced}); a locker the application sets takes the tracing on its own.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -2479,8 +2477,8 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * Sets a wrapper applied to the task that {@link #executeAsync} runs on its new virtual thread.
      * The wrapper is invoked on the submitting thread for each async command, so it can capture
      * thread-bound caller context that does not cross {@code Thread.start()} — for example the
-     * current OpenTelemetry context, which {@link OpenTelemetryCommandInterceptor} needs to parent
-     * the command span instead of starting an orphaned root span:
+     * current OpenTelemetry context, which {@link TracingCommandInterceptor} needs to parent the
+     * command span instead of starting an orphaned root span:
      *
      * <pre>{@code
      * VirtualThreadCommandBus.builder()
@@ -2621,7 +2619,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         return interceptors;
       }
       for (CommandInterceptor interceptor : interceptors) {
-        if (interceptor instanceof OpenTelemetryCommandInterceptor) {
+        if (interceptor instanceof TracingCommandInterceptor) {
           return interceptors;
         }
       }
@@ -2630,12 +2628,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       int slot = chain.size();
       for (int i = 0; i < chain.size(); i++) {
         if (CommandInterceptorOrdering.orderOf(chain.get(i))
-            > CommandInterceptorOrdering.ORDER_OPEN_TELEMETRY) {
+            > CommandInterceptorOrdering.ORDER_TRACING) {
           slot = i;
           break;
         }
       }
-      chain.add(slot, new OpenTelemetryCommandInterceptor(tracing));
+      chain.add(slot, new TracingCommandInterceptor(tracing));
       return chain;
     }
 

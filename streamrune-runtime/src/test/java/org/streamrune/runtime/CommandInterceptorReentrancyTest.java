@@ -238,7 +238,7 @@ class CommandInterceptorReentrancyTest {
   @Test
   void openTelemetryInterceptor_nestedExecution_endsBothSpansAndClosesBothScopes() {
     var interceptor =
-        new OpenTelemetryCommandInterceptor(
+        new TracingCommandInterceptor(
             OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
 
     interceptor.before(ctx("outer"));
