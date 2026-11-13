@@ -20,9 +20,10 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>The stand-in {@code gradlew} lists the modules of {@code FAKE_MODULES} in its dry run and
  * answers each module upload with the next line of {@code outcomes}: {@code ok}, {@code 429} (the
- * snapshot repository's rate limit, in the words Gradle prints), {@code 503} or {@code fail} (a
- * failure that is not the server's); with no line left, the upload succeeds. Every upload is
- * appended to {@code uploads}, every wait to {@code sleeps}.
+ * snapshot repository's rate limit, in the words Gradle prints), {@code 503}, {@code net} (a read
+ * timeout) or {@code fail} (a failure that is neither the server's nor the network's); with no line
+ * left, the upload succeeds. The stand-in {@code git} fails its first {@code FAKE_LS_REMOTE_FAIL}
+ * reads of the tags. Every upload is appended to {@code uploads}, every wait to {@code sleeps}.
  */
 class PublishSnapshotScriptTest {
 
@@ -57,6 +58,7 @@ class PublishSnapshotScriptTest {
             case "$outcome" in
               429) echo "> Could not PUT 'https://central.sonatype.com/x.jar'. Received status code 429 from server: Too Many Requests"; exit 1 ;;
               503) echo "> Could not GET 'https://central.sonatype.com/x.xml'. Received status code 503 from server: Service Unavailable"; exit 1 ;;
+              net) echo "> Could not PUT 'https://central.sonatype.com/x.jar'."; echo "   > java.net.SocketTimeoutException: Read timed out"; exit 1 ;;
               fail) echo "> Compilation failed; see the compiler error output for details."; exit 1 ;;
             esac
             exit 0
@@ -68,7 +70,12 @@ class PublishSnapshotScriptTest {
             """
             case "$1" in
               rev-parse) echo 0123456789abcdef0123456789abcdef01234567 ;;
-              ls-remote) [ -n "${FAKE_LS_REMOTE_FAIL:-}" ] && exit 128; cat "$FAKE_DIR/tags" 2> /dev/null || true ;;
+              ls-remote)
+                failed=$(cat "$FAKE_DIR/ls-remote-failures" 2> /dev/null || echo 0)
+                if [ "$failed" -lt "${FAKE_LS_REMOTE_FAIL:-0}" ]; then
+                  echo $((failed + 1)) > "$FAKE_DIR/ls-remote-failures"; exit 128
+                fi
+                cat "$FAKE_DIR/tags" 2> /dev/null || true ;;
             esac
             """);
     Path sleep =
@@ -80,6 +87,7 @@ class PublishSnapshotScriptTest {
     env.put("FAKE_VERSION", "1.0.1-SNAPSHOT");
     env.put("FAKE_MODULES", ":core :runtime :spring :starter");
     env.put("SNAPSHOT_RETRY_DELAYS", "600 900 1200 1800");
+    env.put("SNAPSHOT_NETWORK_DELAYS", "90 180");
     env.put("SNAPSHOT_WAIT_BUDGET", "5400");
   }
 
@@ -169,7 +177,9 @@ class PublishSnapshotScriptTest {
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(lines("uploads")).containsExactly(":core", ":runtime");
     assertThat(lines("sleeps")).isEmpty();
-    assertThat(result.output()).contains("Publishing :runtime failed, and not on the snapshot");
+    assertThat(result.output())
+        .contains(
+            "Publishing :runtime failed, neither on the snapshot repository's rate limit nor");
   }
 
   @Test
@@ -182,7 +192,7 @@ class PublishSnapshotScriptTest {
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(lines("uploads")).isEmpty();
     assertThat(result.output())
-        .contains("1.0.0-alpha-SNAPSHOT sorts below the release 1.0.0")
+        .contains("1.0.0-alpha-SNAPSHOT sorts below 1.0.0 (tag v1.0.0)")
         .contains("Move the default version");
   }
 
@@ -220,14 +230,68 @@ class PublishSnapshotScriptTest {
   }
 
   @Test
-  void unreadableTagsRefuseTheRun() throws IOException {
-    env.put("FAKE_LS_REMOTE_FAIL", "yes");
+  void aNetworkFailureIsRepeatedAfterAShortWait() throws IOException {
+    outcomes("ok", "net", "net");
+
+    RepositoryScripts.Result result = run();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(lines("uploads"))
+        .containsExactly(":core", ":runtime", ":runtime", ":runtime", ":spring", ":starter");
+    assertThat(lines("sleeps")).containsExactly("90", "180");
+  }
+
+  @Test
+  void theRunGivesUpWhenTheNetworkKeepsBreakingTheSameUpload() throws IOException {
+    outcomes("net", "net", "net");
+
+    RepositoryScripts.Result result = run();
+
+    assertThat(result.exitCode()).isEqualTo(1);
+    assertThat(lines("uploads")).containsExactly(":core", ":core", ":core");
+    assertThat(lines("sleeps")).containsExactly("90", "180");
+    assertThat(result.output()).contains("The network broke the upload of :core 3 times in a row");
+  }
+
+  @Test
+  void aFailedReadOfTheTagsIsTriedAgain() throws IOException {
+    env.put("FAKE_LS_REMOTE_FAIL", "2");
+
+    RepositoryScripts.Result result = run();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(lines("sleeps")).containsExactly("30", "30");
+    assertThat(lines("uploads")).hasSize(4);
+  }
+
+  @Test
+  void tagsUnreadableThreeTimesRefuseTheRun() throws IOException {
+    env.put("FAKE_LS_REMOTE_FAIL", "3");
 
     RepositoryScripts.Result result = run();
 
     assertThat(result.exitCode()).isEqualTo(1);
     assertThat(lines("uploads")).isEmpty();
-    assertThat(result.output()).contains("Could not read the tags of origin");
+    assertThat(result.output()).contains("Could not read the tags of origin (three attempts)");
+  }
+
+  @Test
+  void aPreReleaseTagOfTheSameVersionRefusesAPreviewItsQualifierDoesNotPass() throws IOException {
+    env.put("FAKE_VERSION", "1.0.0-alpha-SNAPSHOT");
+    tags("v1.0.0-rc.1");
+    RepositoryScripts.Result alpha = run();
+    assertThat(alpha.exitCode()).isEqualTo(1);
+    assertThat(alpha.output()).contains("sorts below 1.0.0-rc.1");
+
+    env.put("FAKE_VERSION", "1.0.0-rc.1-SNAPSHOT");
+    assertThat(run().exitCode()).isEqualTo(1);
+    assertThat(lines("uploads")).isEmpty();
+
+    env.put("FAKE_VERSION", "1.0.0-rc.2-SNAPSHOT");
+    assertThat(run().exitCode()).isZero();
+    env.put("FAKE_VERSION", "1.0.0-SNAPSHOT");
+    assertThat(run().exitCode()).isZero();
+    assertThat(lines("uploads")).hasSize(8);
   }
 
   @Test

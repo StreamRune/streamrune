@@ -64,10 +64,11 @@ jobs:
           cache-disabled: true
 
       # The snapshot repository answers 429 Too Many Requests when uploads come too fast. The script
-      # refuses a development version below a tagged release, then uploads one module at a time and
-      # repeats a refused upload from the module it stopped at, after a wait that grows with every
-      # refusal in a row (.github/scripts/publish-snapshot.sh says how long and why). A run that
-      # gives up fails and names the modules that still serve an earlier commit's snapshot.
+      # refuses a development version below a tagged version, then uploads one module at a time and
+      # repeats a refused upload, or one the network broke, from the module it stopped at, after a
+      # wait that grows with every failure in a row (.github/scripts/publish-snapshot.sh says how
+      # long and why). A run that gives up fails and names the modules that still serve an earlier
+      # commit's snapshot.
       - name: Publish the snapshot to the Central Portal snapshot repository
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
