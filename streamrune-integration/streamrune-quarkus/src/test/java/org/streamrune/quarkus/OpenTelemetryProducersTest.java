@@ -42,7 +42,9 @@ class OpenTelemetryProducersTest {
     StreamRuneTracing tracing =
         new StreamRuneProducers()
             .streamRuneTracing(
-                satisfied(SDK), TestProperties.defaults(), TestProperties.config(Map.of()));
+                satisfied(SDK),
+                TestProperties.defaults(),
+                satisfied(TestProperties.config(Map.of())));
 
     assertNotSame(StreamRuneTracing.NOOP, tracing);
     for (TracingArea area : TracingArea.values()) {
@@ -61,7 +63,7 @@ class OpenTelemetryProducersTest {
                         "streamrune.tracing.subscription.enabled", "false",
                         "streamrune.tracing.event-store.enabled", "false",
                         "streamrune.tracing.saga.enabled", "false")),
-                TestProperties.config(Map.of()));
+                satisfied(TestProperties.config(Map.of())));
 
     assertFalse(tracing.enabled(TracingArea.SUBSCRIPTION));
     assertFalse(tracing.enabled(TracingArea.EVENT_STORE));
@@ -79,7 +81,7 @@ class OpenTelemetryProducersTest {
             .streamRuneTracing(
                 satisfied(SDK),
                 TestProperties.of(Map.of("streamrune.tracing.enabled", "false")),
-                TestProperties.config(Map.of()));
+                satisfied(TestProperties.config(Map.of())));
 
     assertSame(StreamRuneTracing.NOOP, tracing);
   }
@@ -91,7 +93,9 @@ class OpenTelemetryProducersTest {
     StreamRuneTracing tracing =
         new StreamRuneProducers()
             .streamRuneTracing(
-                unsatisfied(), TestProperties.defaults(), TestProperties.config(Map.of()));
+                unsatisfied(),
+                TestProperties.defaults(),
+                satisfied(TestProperties.config(Map.of())));
 
     assertNotSame(StreamRuneTracing.NOOP, tracing);
     assertTrue(tracing.enabled(TracingArea.COMMAND));
@@ -102,7 +106,9 @@ class OpenTelemetryProducersTest {
     StreamRuneTracing tracing =
         new StreamRuneProducers()
             .streamRuneTracing(
-                unsatisfied(), TestProperties.defaults(), TestProperties.config(Map.of()));
+                unsatisfied(),
+                TestProperties.defaults(),
+                satisfied(TestProperties.config(Map.of())));
 
     assertSame(StreamRuneTracing.NOOP, tracing);
   }
@@ -113,7 +119,7 @@ class OpenTelemetryProducersTest {
         .streamRuneTracing(
             unsatisfied(),
             TestProperties.of(Map.of("streamrune.tracing.enabled", "false")),
-            TestProperties.config(Map.of()));
+            satisfied(TestProperties.config(Map.of())));
 
     // OpenTelemetry fixes the global instance on its first read; unread, it can still be set.
     GlobalOpenTelemetry.set(SDK);
@@ -134,13 +140,13 @@ class OpenTelemetryProducersTest {
           StreamRuneTracing.NOOP,
           new StreamRuneProducers()
               .streamRuneTracing(
-                  satisfied(SDK), TestProperties.defaults(), TestProperties.config(off)),
+                  satisfied(SDK), TestProperties.defaults(), satisfied(TestProperties.config(off))),
           off::toString);
       assertSame(
           StreamRuneTracing.NOOP,
           new StreamRuneProducers()
               .streamRuneTracing(
-                  unsatisfied(), TestProperties.defaults(), TestProperties.config(off)),
+                  unsatisfied(), TestProperties.defaults(), satisfied(TestProperties.config(off))),
           off::toString);
     }
     assertNotSame(
@@ -149,17 +155,40 @@ class OpenTelemetryProducersTest {
             .streamRuneTracing(
                 satisfied(SDK),
                 TestProperties.defaults(),
-                TestProperties.config(
-                    Map.of(
-                        "quarkus.otel.sdk.disabled",
-                        "false",
-                        "quarkus.otel.traces.exporter",
-                        "none"))));
+                satisfied(
+                    TestProperties.config(
+                        Map.of(
+                            "quarkus.otel.sdk.disabled",
+                            "false",
+                            "quarkus.otel.traces.exporter",
+                            "none")))));
 
     GlobalOpenTelemetry.set(SDK);
     assertEquals(
         SDK.getTracerProvider().getClass(),
         GlobalOpenTelemetry.get().getTracerProvider().getClass());
+  }
+
+  @Test
+  void withoutAConfigBeanTheSwitchesAreReadFromTheDefaultConfiguration() {
+    String key = "otel.sdk.disabled";
+    assertNotSame(
+        StreamRuneTracing.NOOP,
+        new StreamRuneProducers()
+            .streamRuneTracing(satisfied(SDK), TestProperties.defaults(), unsatisfied()));
+    System.setProperty(key, "true");
+    try {
+      org.eclipse.microprofile.config.spi.ConfigProviderResolver.instance()
+          .releaseConfig(org.eclipse.microprofile.config.ConfigProvider.getConfig());
+      assertSame(
+          StreamRuneTracing.NOOP,
+          new StreamRuneProducers()
+              .streamRuneTracing(satisfied(SDK), TestProperties.defaults(), unsatisfied()));
+    } finally {
+      System.clearProperty(key);
+      org.eclipse.microprofile.config.spi.ConfigProviderResolver.instance()
+          .releaseConfig(org.eclipse.microprofile.config.ConfigProvider.getConfig());
+    }
   }
 
   @SuppressWarnings("unchecked")

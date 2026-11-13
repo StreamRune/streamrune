@@ -932,7 +932,7 @@ class StreamRuneProducersTest {
         producers.streamRuneTracing(
             satisfied(OpenTelemetry.noop()),
             TestProperties.defaults(),
-            TestProperties.config(Map.of()));
+            satisfied(TestProperties.config(Map.of())));
     assertSame(org.streamrune.core.tracing.StreamRuneTracing.NOOP, tracing);
   }
 
