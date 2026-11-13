@@ -37,9 +37,9 @@ names the property and the value:
   are refused, because the frameworks read them differently and a bean condition can read a
   spelling one way while the bound setting reads it the other. That holds for a value that reaches
   the integration as text: a properties file, an environment variable, a system property or quoted
-  YAML. Spring's and Micronaut's YAML parser reads an unquoted `yes`, `on`, `no` or `off` as a YAML
-  boolean before StreamRune sees it, so there it arrives as `true` or `false` and is accepted;
-  Quarkus's YAML parser keeps it as text and refuses it. Spring and Micronaut refuse an empty switch
+  YAML. The YAML parser of all three integrations reads an unquoted `yes`, `on`, `no`, `off` or
+  `TRUE` as a YAML boolean before StreamRune sees it, so it arrives as `true` or `false` and is
+  accepted; quoted (`'yes'`), it stays text and is refused. Spring and Micronaut refuse an empty switch
   too; Quarkus reads it as not set. The per-projection switches
   (`streamrune.projections.<name>.enabled`, `streamrune.projections.auto-discovery.enabled`) and
   `streamrune.subscription.single-active-consumer.enabled` are read by one parser on all three,
