@@ -1397,7 +1397,9 @@ it, so always write the unit):
 - Duration properties: a window or interval that can be switched off treats zero and negative as
   "off" (retention windows); a wait treats zero as "do not wait" and rejects negative
   (`streamrune.lock-timeout`); a period with no meaningful "off" rejects both (lease TTL, sweep
-  intervals). A positive value below one millisecond is rejected wherever zero is a sentinel.
+  intervals). A positive value below one millisecond is rejected wherever zero is a sentinel, and
+  for the projection subscriptions' `streamrune.polling-interval` and `streamrune.polling-jitter`,
+  which are slept in whole milliseconds.
 - Background relays stop cleanly: `OutboxPoller`, `SagaTimeoutRunner`, `SagaCompensationRetrySweeper`
   and `DeadLetterRetryRunner` are `AutoCloseable`, and `close()` interrupts the poll thread, waits
   a bounded time for it, resets the started guard so `start()` may run again, and serves one caller

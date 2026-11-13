@@ -80,4 +80,44 @@ class SubscriptionConfigTest {
     var config = new SubscriptionConfig(false, Duration.ofSeconds(5), Duration.ZERO);
     assertEquals(Duration.ZERO, config.pollingJitter());
   }
+
+  /**
+   * A subscription sleeps whole milliseconds, so half a millisecond would be no pause between two
+   * reads of the event store: the interval is refused, and the refusal names the property.
+   */
+  @Test
+  void rejectsAPollingIntervalBelowOneMillisecond() {
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new SubscriptionConfig(false, Duration.ofNanos(500_000), Duration.ZERO));
+    assertTrue(refused.getMessage().contains("streamrune.polling-interval"), refused::getMessage);
+    assertTrue(refused.getMessage().contains("at least 1ms"), refused::getMessage);
+  }
+
+  /** A positive jitter below one millisecond would be slept as no jitter: it is refused. */
+  @Test
+  void rejectsAPositivePollingJitterBelowOneMillisecond() {
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new SubscriptionConfig(false, Duration.ofSeconds(5), Duration.ofNanos(500_000)));
+    assertTrue(refused.getMessage().contains("streamrune.polling-jitter"), refused::getMessage);
+  }
+
+  @Test
+  void acceptsOneMillisecondForIntervalAndJitter() {
+    var config = new SubscriptionConfig(false, Duration.ofMillis(1), Duration.ofMillis(1));
+    assertEquals(Duration.ofMillis(1), config.pollingInterval());
+    assertEquals(Duration.ofMillis(1), config.pollingJitter());
+  }
+
+  /** The derived jitter is whole milliseconds, so a short interval still builds a valid config. */
+  @Test
+  void pollingOnlyRoundsTheJitterDownToWholeMilliseconds() {
+    assertEquals(
+        Duration.ZERO, SubscriptionConfig.pollingOnly(Duration.ofMillis(3)).pollingJitter());
+    assertEquals(
+        Duration.ofMillis(1), SubscriptionConfig.pollingOnly(Duration.ofMillis(7)).pollingJitter());
+  }
 }

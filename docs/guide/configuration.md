@@ -46,8 +46,8 @@ integration does not bind.
 |---|---|---|
 | `streamrune.event-store.schema.auto-initialize` | `true` | Whether the framework's Flyway migrations run at startup. |
 | `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0` sets none of its own. |
-| `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions. |
-| `streamrune.polling-jitter` | `1s` | Random jitter added to that interval. |
+| `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions; at least `1ms`. |
+| `streamrune.polling-jitter` | `1s` | Random jitter added to that interval; `0s` disables it, a positive value below `1ms` fails the start. |
 | `streamrune.projections.auto-discovery.enabled` | `true` | Whether the integration builds and starts the runners of the `@ProjectionConfig` projections. |
 | `streamrune.projections.<name>.enabled` | `true` | Whether the projection of that name is discovered. |
 | `streamrune.projections.<name>.error-strategy` | — | The error strategy of that projection; unset, the one its `@ProjectionConfig` names. |
