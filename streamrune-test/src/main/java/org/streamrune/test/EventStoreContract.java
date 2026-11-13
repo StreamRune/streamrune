@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -13,28 +14,38 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStore.AppendResult;
 import org.streamrune.core.EventStore.IdempotentAppendResult;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.SnapshotMigration;
+import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.crypto.CryptoMappingException;
+import org.streamrune.core.crypto.CryptoOperationException;
+import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.AggregateId;
@@ -43,6 +54,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 
@@ -84,6 +96,15 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       EventStore#readGlobalStream} every stream strictly after a global offset, in append order;
  *       both return at most {@code maxCount} events. The same id value under another aggregate type
  *       is another stream.
+ *   <li><b>Read path.</b> On all three reads: an append stores each event at the current version of
+ *       the writing store's upcaster for its type ({@code 1} without one), whatever its payload; a
+ *       store reads an event stored below its upcaster's version through each step up to it, and
+ *       refuses one stored above the version it reaches with {@link EventSchemaAheadException}. A
+ *       read that cannot turn a stored event into its envelope fails as a whole, with {@link
+ *       UnknownEventTypeException} for a type the registry does not resolve, {@link
+ *       EventDeserializationException} for an upcaster that throws or returns data the class cannot
+ *       bind and for a tombstone the class rejects, and a plain {@link EventStoreException} for a
+ *       key-store outage.
  *   <li><b>The global head.</b> {@link EventStore#lastGlobalOffset()} is {@link
  *       GlobalOffset#initial()} for an empty store and the offset of the last stored event after;
  *       nothing becomes readable at or below a head once it was returned, also while appends run
@@ -97,6 +118,16 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       generation. For a store with a purge record ({@link #purgeSnapshot(StreamId)}): a purge
  *       removes the snapshot and raises the generation, and a save from a load before the purge
  *       writes nothing.
+ *   <li><b>Using a stored snapshot.</b> On a schema-version mismatch a complete chain of {@link
+ *       SnapshotMigration}s migrates the snapshot, which is used with only the later events. It is
+ *       discarded, and every event returned, when no complete chain reaches the expected version, a
+ *       step throws, returns {@code null} or another class than its {@code toType()}, its state
+ *       does not deserialize, or its stored type does not resolve. A crypto failure while
+ *       deserializing or migrating a snapshot the store would use fails the load (a plain {@link
+ *       EventStoreException} for a key-store outage, {@link EventDeserializationException} for a
+ *       {@link CryptoMappingException}); a snapshot discarded for its type or version is not
+ *       deserialized, so it raises none. A save whose state type name does not resolve to the
+ *       state's own class is refused with {@link EventStoreException} and stores nothing.
  *   <li><b>Idempotent append.</b> {@link EventStore#appendWithKey(StreamId, List, Version,
  *       IdempotencyKey, String)} stores the events once: a replay of the key returns the recorded
  *       offsets and version with {@code alreadyApplied()} and stores nothing, whatever it carries;
@@ -118,7 +149,8 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Durability across a restart.</b> A store reopened over the same data ({@link
  *       #reopen(EventStore, Setup)}) reads the events, snapshots, purge records and recorded keys
  *       stored before, under the same offsets and versions, and continues every stream and the
- *       global order.
+ *       global order. It reads them with its own setup: its upcasters, migrations, registry and
+ *       crypto engine.
  * </ol>
  *
  * <p>The contract appends {@link ContractEvent}s under {@link #EVENT_TYPE} and saves {@link
@@ -1432,5 +1464,759 @@ public abstract class EventStoreContract {
             1,
             beforePurge.snapshotPurgeGeneration()),
         "a save from a load before the purge writes nothing after the reopen either");
+  }
+
+  // ── Read-path fixtures ──────────────────────────────────────────────────────────────────────
+
+  /** An event with an {@code @Encrypted} field. */
+  private record SecretEvent(String subject, @Encrypted(subjectId = "subject") String value)
+      implements DomainEvent {
+    @JsonCreator
+    SecretEvent(@JsonProperty("subject") String subject, @JsonProperty("value") String value) {
+      this.subject = subject;
+      this.value = value;
+    }
+  }
+
+  /**
+   * An event with an {@code @Encrypted} field its constructor validates, so it rejects the
+   * tombstone the field of an erased subject reads as.
+   */
+  private record ValidatedEvent(String subject, @Encrypted(subjectId = "subject") String email)
+      implements DomainEvent {
+    @JsonCreator
+    ValidatedEvent(@JsonProperty("subject") String subject, @JsonProperty("email") String email) {
+      if (email != null && !email.contains("@")) {
+        throw new IllegalArgumentException("not an email address");
+      }
+      this.subject = subject;
+      this.email = email;
+    }
+  }
+
+  /** An event of a type a later deployment does not register. */
+  private record RetiredEvent(String value) implements DomainEvent {
+    @JsonCreator
+    RetiredEvent(@JsonProperty("value") String value) {
+      this.value = value;
+    }
+  }
+
+  /** A snapshot state with an {@code @Encrypted} field. */
+  private record SecretState(String subject, @Encrypted(subjectId = "subject") String value)
+      implements AggregateState {
+    @JsonCreator
+    SecretState(@JsonProperty("subject") String subject, @JsonProperty("value") String value) {
+      this.subject = subject;
+      this.value = value;
+    }
+  }
+
+  /**
+   * A snapshot state with an {@code @Encrypted} field its constructor validates, so it rejects the
+   * tombstone the field of an erased subject reads as.
+   */
+  private record ValidatedState(String subject, @Encrypted(subjectId = "subject") String email)
+      implements AggregateState {
+    @JsonCreator
+    ValidatedState(@JsonProperty("subject") String subject, @JsonProperty("email") String email) {
+      if (email != null && !email.contains("@")) {
+        throw new IllegalArgumentException("not an email address");
+      }
+      this.subject = subject;
+      this.email = email;
+    }
+  }
+
+  /** A snapshot state of a class a later deployment does not register. */
+  private record RetiredState(String marker) implements AggregateState {
+    @JsonCreator
+    RetiredState(@JsonProperty("marker") String marker) {
+      this.marker = marker;
+    }
+  }
+
+  /**
+   * {@link ContractState} with its field renamed: registered under {@code ContractState}'s name, a
+   * stored {@code ContractState} does not deserialize as it.
+   */
+  private record RenamedFieldState(String label) implements AggregateState {
+    @JsonCreator
+    RenamedFieldState(@JsonProperty("label") String label) {
+      this.label = label;
+    }
+  }
+
+  /** A state class the registry does not know. */
+  private record UnregisteredState(String marker) implements AggregateState {}
+
+  /**
+   * Holds a state class whose simple name is the name {@link ContractState} is registered under.
+   */
+  private static final class Shadowing {
+    private record ContractState(String marker) implements AggregateState {}
+  }
+
+  /** Encrypts to the plaintext and fails every decrypt as a key-store outage would. */
+  private static final class UnavailableKeyStore implements CryptoEngine {
+    @Override
+    public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
+      return plaintext.clone();
+    }
+
+    @Override
+    public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
+      throw new CryptoOperationException("key store unavailable");
+    }
+
+    @Override
+    public void deleteKey(SubjectId subjectId) {}
+
+    @Override
+    public boolean isKeyAvailable(SubjectId subjectId) {
+      return true;
+    }
+  }
+
+  private static final EventType SECRET_EVENT = new EventType("ContractSecretEvent");
+  private static final EventType VALIDATED_EVENT = new EventType("ContractValidatedEvent");
+  private static final EventType RETIRED_EVENT = new EventType("ContractRetiredEvent");
+  private static final EventType OTHER_EVENT = new EventType("ContractOtherEvent");
+  private static final String SUBJECT = "contract-subject-1";
+
+  /** The types of {@link Setup#defaults()}, to register more on. */
+  private static SimpleEventTypeRegistry.Builder contractTypes() {
+    return SimpleEventTypeRegistry.builder()
+        .registerEvent(EVENT_TYPE, ContractEvent.class)
+        .registerState(ContractState.class.getSimpleName(), ContractState.class);
+  }
+
+  /**
+   * The default setup with the types holding {@code @Encrypted} fields registered too; a store may
+   * refuse such a registry without a crypto engine, so it is always given one.
+   */
+  private static Setup secretTypes(CryptoEngine crypto) {
+    return Setup.defaults()
+        .withRegistry(
+            contractTypes()
+                .registerEvent(SECRET_EVENT, SecretEvent.class)
+                .registerEvent(VALIDATED_EVENT, ValidatedEvent.class)
+                .registerState(SecretState.class.getSimpleName(), SecretState.class)
+                .registerState(ValidatedState.class.getSimpleName(), ValidatedState.class)
+                .build())
+        .withCrypto(crypto);
+  }
+
+  /**
+   * The default setup with {@link RetiredEvent} and {@link RetiredState} registered too; {@link
+   * Setup#defaults()} is the setup of a later deployment that retired them.
+   */
+  private static Setup retiredTypes() {
+    return Setup.defaults()
+        .withRegistry(
+            contractTypes()
+                .registerEvent(RETIRED_EVENT, RetiredEvent.class)
+                .registerState(RetiredState.class.getSimpleName(), RetiredState.class)
+                .build());
+  }
+
+  /**
+   * An upcaster of {@code type} at {@code currentVersion} whose step from version {@code n} appends
+   * {@code "+v(n+1)"} to the {@code value} field.
+   */
+  private static EventUpcaster tagging(EventType type, int currentVersion) {
+    return upcaster(
+        type,
+        currentVersion,
+        (data, from) -> {
+          data.put("value", data.get("value") + "+v" + (from + 1));
+          return data;
+        });
+  }
+
+  private interface Step {
+    Map<String, Object> apply(Map<String, Object> data, int fromVersion);
+  }
+
+  private static EventUpcaster upcaster(EventType type, int currentVersion, Step step) {
+    return new EventUpcaster() {
+      @Override
+      public EventType eventType() {
+        return type;
+      }
+
+      @Override
+      public int currentVersion() {
+        return currentVersion;
+      }
+
+      @Override
+      public Map<String, Object> upcast(Map<String, Object> eventData, int fromVersion) {
+        return step.apply(eventData, fromVersion);
+      }
+    };
+  }
+
+  private static SnapshotMigration migration(
+      int from,
+      int to,
+      UnaryOperator<AggregateState> migrate,
+      Class<? extends AggregateState> toType) {
+    return new SnapshotMigration() {
+      @Override
+      public int fromVersion() {
+        return from;
+      }
+
+      @Override
+      public int toVersion() {
+        return to;
+      }
+
+      @Override
+      public AggregateState migrate(AggregateState state) {
+        return migrate.apply(state);
+      }
+
+      @Override
+      public Class<? extends AggregateState> toType() {
+        return toType;
+      }
+    };
+  }
+
+  /** A step that appends {@code ">to"} to a {@link ContractState}'s marker. */
+  private static SnapshotMigration marking(int from, int to) {
+    return migration(
+        from,
+        to,
+        state -> new ContractState(((ContractState) state).marker() + ">" + to),
+        ContractState.class);
+  }
+
+  /** A step that fails with {@code failure}. */
+  private static SnapshotMigration failing(int from, int to, RuntimeException failure) {
+    return migration(
+        from,
+        to,
+        state -> {
+          throw failure;
+        },
+        null);
+  }
+
+  /** Three events on {@link #A} and a snapshot of {@code state} at version 2, schema {@code 1}. */
+  private void threeEventsAndASnapshotAtTwo(AggregateState state) {
+    store.append(A, events(A, 1, 3), Version.initial());
+    store.saveSnapshot(A, new Version(2), state, 1);
+  }
+
+  /** The snapshot was discarded: no state, and every event of the three-event stream. */
+  private static void assertDiscarded(AggregateHistory history) {
+    assertNull(history.snapshotState(), "the snapshot is discarded");
+    assertEquals(Version.initial(), history.lastSnapshotVersion());
+    assertEquals(List.of(1L, 2L, 3L), versions(history.events()), "every event is replayed");
+    assertEquals(new Version(3), history.version());
+  }
+
+  /** The snapshot at version 2 was used, as {@code state}, with only the third event. */
+  private static void assertUsed(AggregateHistory history, AggregateState state) {
+    assertEquals(state, history.snapshotState());
+    assertEquals(new Version(2), history.lastSnapshotVersion());
+    assertEquals(List.of(3L), versions(history.events()), "only the events after it");
+    assertEquals(new Version(3), history.version());
+  }
+
+  /** {@code load}, {@code readStream} and {@code readGlobalStream} over {@link #A} all read. */
+  private static List<List<EventEnvelope>> everyReadOfA(EventStore reader) {
+    return List.of(
+        reader.load(A).events(),
+        reader.readStream(A, Version.initial(), 100),
+        reader.readGlobalStream(GlobalOffset.initial(), 100));
+  }
+
+  /** {@code load}, {@code readStream} and {@code readGlobalStream} over {@link #A} all fail. */
+  private static <T extends EventStoreException> List<T> everyReadOfAFails(
+      EventStore reader, Class<T> type) {
+    return List.of(
+        assertThrows(type, () -> reader.load(A), "load"),
+        assertThrows(type, () -> reader.readStream(A, Version.initial(), 100), "readStream"),
+        assertThrows(
+            type, () -> reader.readGlobalStream(GlobalOffset.initial(), 100), "readGlobalStream"));
+  }
+
+  private static void assertPlainEventStoreException(EventStoreException thrown) {
+    assertSame(
+        EventStoreException.class,
+        thrown.getClass(),
+        "a failure a retry may heal is a plain EventStoreException, none of its subtypes: "
+            + thrown);
+  }
+
+  private static EventEnvelope secret(StreamId streamId, String value) {
+    return EventStoreFixture.event(
+        streamId, new Version(1), SECRET_EVENT, new SecretEvent(SUBJECT, value));
+  }
+
+  // ── Read path: schema version and upcasting ────────────────────────────────────────────────
+
+  @Test
+  public void anEventStoredBelowTheCurrentVersionIsUpcastOnEveryReadPath() {
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    EventStore upcasting =
+        reopen(store, Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 2))));
+
+    for (List<EventEnvelope> read : everyReadOfA(upcasting)) {
+      assertEquals(List.of("order-A@1+v2", "order-A@2+v2"), values(read));
+    }
+  }
+
+  @Test
+  public void anEventIsUpcastOneVersionAtATimeUpToTheCurrentVersion() {
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    EventStore upcasting =
+        reopen(store, Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 4))));
+
+    for (List<EventEnvelope> read : everyReadOfA(upcasting)) {
+      assertEquals(List.of("order-A@1+v2+v3+v4"), values(read));
+    }
+  }
+
+  @Test
+  public void anEventAppendedBeforeItsUpcasterExistedIsStoredAtVersionOneWhateverItsPayload() {
+    store.append(A, events(A, 1, 1), Version.initial());
+    List<Integer> fromVersions = new ArrayList<>();
+    EventUpcaster recording =
+        upcaster(
+            EVENT_TYPE,
+            2,
+            (data, from) -> {
+              fromVersions.add(from);
+              return data;
+            });
+
+    EventStore upcasting = reopen(store, Setup.defaults().withUpcasters(List.of(recording)));
+
+    assertEquals(List.of("order-A@1"), values(upcasting.readStream(A, Version.initial(), 100)));
+    assertEquals(List.of(1), fromVersions, "the payload already binds, and is still upcast from 1");
+  }
+
+  @Test
+  public void anEventIsStoredAtTheVersionOfTheWritersUpcaster() {
+    store = newStore(Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 2))));
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    for (List<EventEnvelope> read : everyReadOfA(store)) {
+      assertEquals(List.of("order-A@1"), values(read), "stored at 2, read as stored");
+    }
+    EventStore later =
+        reopen(store, Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 3))));
+    for (List<EventEnvelope> read : everyReadOfA(later)) {
+      assertEquals(List.of("order-A@1+v3"), values(read), "upcast from 2, not from 1");
+    }
+  }
+
+  @Test
+  public void anEventStoredAboveAReaderWithoutAnUpcasterIsRefusedAsSchemaAhead() {
+    store = newStore(Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 2))));
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    EventStore older = reopen(store, Setup.defaults());
+
+    everyReadOfAFails(older, EventSchemaAheadException.class);
+  }
+
+  @Test
+  public void anEventStoredAboveTheReadersUpcasterIsRefusedAsSchemaAhead() {
+    store = newStore(Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 3))));
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    EventStore older =
+        reopen(store, Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 2))));
+
+    everyReadOfAFails(older, EventSchemaAheadException.class);
+  }
+
+  @Test
+  public void upcastersForOtherTypesDoNotRaiseTheVersionAReaderReaches() {
+    store = newStore(Setup.defaults().withUpcasters(List.of(tagging(EVENT_TYPE, 2))));
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    EventStore older =
+        reopen(store, Setup.defaults().withUpcasters(List.of(tagging(OTHER_EVENT, 5))));
+
+    everyReadOfAFails(older, EventSchemaAheadException.class);
+  }
+
+  // ── Read path: read failures ───────────────────────────────────────────────────────────────
+
+  @Test
+  public void anUpcasterThatThrowsFailsTheReadWithAnEventDeserializationException() {
+    store.append(A, events(A, 1, 1), Version.initial());
+    EventUpcaster throwing =
+        upcaster(
+            EVENT_TYPE,
+            2,
+            (data, from) -> {
+              throw new IllegalStateException("upcaster bug");
+            });
+
+    EventStore upcasting = reopen(store, Setup.defaults().withUpcasters(List.of(throwing)));
+
+    everyReadOfAFails(upcasting, EventDeserializationException.class);
+  }
+
+  @Test
+  public void anUpcasterReturningDataTheClassCannotBindFailsWithAnEventDeserializationException() {
+    store.append(A, events(A, 1, 1), Version.initial());
+    EventUpcaster garbling =
+        upcaster(
+            EVENT_TYPE,
+            2,
+            (data, from) -> {
+              Map<String, Object> garbage = new HashMap<>();
+              garbage.put("value", Map.of("nested", List.of(1, 2, 3)));
+              return garbage;
+            });
+
+    EventStore upcasting = reopen(store, Setup.defaults().withUpcasters(List.of(garbling)));
+
+    everyReadOfAFails(upcasting, EventDeserializationException.class);
+  }
+
+  @Test
+  public void aKeyStoreOutageOnReadIsAPlainEventStoreException() {
+    store = newStore(secretTypes(new InMemoryCryptoEngine()));
+    store.append(A, List.of(secret(A, "top-secret")), Version.initial());
+
+    EventStore outage = reopen(store, secretTypes(new UnavailableKeyStore()));
+
+    everyReadOfAFails(outage, EventStoreException.class)
+        .forEach(EventStoreContract::assertPlainEventStoreException);
+  }
+
+  @Test
+  public void anErasedSubjectsTombstoneTheClassRejectsIsAnEventDeserializationException() {
+    var crypto = new InMemoryCryptoEngine();
+    store = newStore(secretTypes(crypto));
+    store.append(
+        A,
+        List.of(
+            EventStoreFixture.event(
+                A, new Version(1), VALIDATED_EVENT, new ValidatedEvent(SUBJECT, "a@example.com"))),
+        Version.initial());
+
+    crypto.deleteKey(SubjectId.of(SUBJECT));
+
+    everyReadOfAFails(store, EventDeserializationException.class);
+  }
+
+  @Test
+  public void anEventOfATypeTheRegistryDoesNotResolveIsAnUnknownEventTypeException() {
+    store = newStore(retiredTypes());
+    store.append(
+        A,
+        List.of(
+            EventStoreFixture.event(A, new Version(1), RETIRED_EVENT, new RetiredEvent("retired"))),
+        Version.initial());
+
+    EventStore later = reopen(store, Setup.defaults());
+
+    everyReadOfAFails(later, UnknownEventTypeException.class);
+  }
+
+  @Test
+  public void aReadThatCannotReadAnEventFailsAsAWholeAndSkipsNothing() {
+    store = newStore(retiredTypes());
+    store.append(A, events(A, 1, 1), Version.initial());
+    store.append(
+        A,
+        List.of(EventStoreFixture.event(A, new Version(2), RETIRED_EVENT, new RetiredEvent("bad"))),
+        new Version(1));
+    store.append(A, events(A, 3, 1), new Version(2));
+
+    EventStore later = reopen(store, Setup.defaults());
+
+    everyReadOfAFails(later, UnknownEventTypeException.class);
+    assertThrows(
+        UnknownEventTypeException.class,
+        () -> later.readStream(A, new Version(1), 100),
+        "a read starting right before the bad event fails too");
+  }
+
+  // ── Snapshot use, migration and discard ────────────────────────────────────────────────────
+
+  @Test
+  public void aMismatchedSnapshotWithACompleteMigrationChainIsMigratedAndUsed() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating = reopen(store, Setup.defaults().withMigrations(List.of(marking(1, 2))));
+
+    assertUsed(migrating.load(A, 2), new ContractState("m>2"));
+  }
+
+  @Test
+  public void aSnapshotIsMigratedThroughEveryStepOfTheChain() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating =
+        reopen(
+            store,
+            Setup.defaults().withMigrations(List.of(marking(1, 2), marking(2, 3), marking(3, 4))));
+
+    assertUsed(migrating.load(A, 4), new ContractState("m>2>3>4"));
+    assertUsed(migrating.load(A, 3), new ContractState("m>2>3"));
+  }
+
+  @Test
+  public void aSnapshotWithAGapInItsMigrationChainIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating =
+        reopen(store, Setup.defaults().withMigrations(List.of(marking(1, 2), marking(3, 4))));
+
+    assertDiscarded(migrating.load(A, 4));
+  }
+
+  @Test
+  public void aSnapshotWhoseMigrationStepGoesPastTheExpectedVersionIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating = reopen(store, Setup.defaults().withMigrations(List.of(marking(1, 3))));
+
+    assertDiscarded(migrating.load(A, 2));
+  }
+
+  @Test
+  public void aSnapshotStoredAboveTheExpectedVersionIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    store.append(A, events(A, 1, 3), Version.initial());
+    store.saveSnapshot(A, new Version(2), new ContractState("m"), 3);
+
+    EventStore migrating =
+        reopen(store, Setup.defaults().withMigrations(List.of(marking(1, 2), marking(2, 3))));
+
+    assertDiscarded(migrating.load(A, 2));
+  }
+
+  @Test
+  public void aMismatchedSnapshotOfAStoreWithoutMigrationsIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore withoutMigrations = reopen(store, Setup.defaults());
+
+    assertDiscarded(withoutMigrations.load(A, 2));
+  }
+
+  @Test
+  public void aSnapshotWhoseMigrationStepThrowsIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating =
+        reopen(
+            store,
+            Setup.defaults()
+                .withMigrations(List.of(failing(1, 2, new IllegalStateException("step bug")))));
+
+    assertDiscarded(migrating.load(A, 2));
+  }
+
+  @Test
+  public void aSnapshotWhoseMigrationStepReturnsNullIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating =
+        reopen(
+            store,
+            Setup.defaults()
+                .withMigrations(List.of(marking(1, 2), migration(2, 3, state -> null, null))));
+
+    assertDiscarded(migrating.load(A, 3));
+  }
+
+  @Test
+  public void aSnapshotWhoseMigrationStepReturnsAnotherClassThanItsToTypeIsDiscarded() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+
+    EventStore migrating =
+        reopen(
+            store,
+            Setup.defaults()
+                .withMigrations(List.of(migration(1, 2, state -> state, RenamedFieldState.class))));
+
+    assertDiscarded(migrating.load(A, 2));
+  }
+
+  @Test
+  public void aSnapshotWhoseStateDoesNotDeserializeIsDiscarded() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+    Setup renamed =
+        Setup.defaults()
+            .withRegistry(
+                SimpleEventTypeRegistry.builder()
+                    .registerEvent(EVENT_TYPE, ContractEvent.class)
+                    .registerState(ContractState.class.getSimpleName(), RenamedFieldState.class)
+                    .build());
+
+    EventStore later = reopen(store, renamed);
+
+    assertDiscarded(later.load(A));
+    if (supportsSnapshotSchemaVersions()) {
+      assertDiscarded(later.load(A, 1));
+      assertDiscarded(reopen(later, renamed.withMigrations(List.of(marking(1, 2)))).load(A, 2));
+    }
+  }
+
+  @Test
+  public void aSnapshotOfARetiredStateTypeIsDiscarded() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store = newStore(retiredTypes());
+    threeEventsAndASnapshotAtTwo(new RetiredState("m"));
+
+    EventStore later = reopen(store, Setup.defaults());
+
+    assertDiscarded(later.load(A));
+    if (supportsSnapshotSchemaVersions()) {
+      assertDiscarded(later.load(A, 1));
+      assertDiscarded(
+          reopen(later, Setup.defaults().withMigrations(List.of(marking(1, 2)))).load(A, 2));
+    }
+  }
+
+  // ── Snapshot crypto failures ───────────────────────────────────────────────────────────────
+
+  @Test
+  public void aKeyStoreOutageWhileDeserializingAUsableSnapshotFailsTheLoadPlainly() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store = newStore(secretTypes(new InMemoryCryptoEngine()));
+    threeEventsAndASnapshotAtTwo(new SecretState(SUBJECT, "top-secret"));
+
+    EventStore outage = reopen(store, secretTypes(new UnavailableKeyStore()));
+
+    assertPlainEventStoreException(assertThrows(EventStoreException.class, () -> outage.load(A)));
+    if (supportsSnapshotSchemaVersions()) {
+      assertPlainEventStoreException(
+          assertThrows(EventStoreException.class, () -> outage.load(A, 1)));
+      EventStore migrating =
+          reopen(
+              outage,
+              secretTypes(new UnavailableKeyStore())
+                  .withMigrations(List.of(migration(1, 2, state -> state, null))));
+      assertPlainEventStoreException(
+          assertThrows(EventStoreException.class, () -> migrating.load(A, 2)));
+    }
+  }
+
+  @Test
+  public void anErasedSubjectsTombstoneAUsableSnapshotRejectsFailsTheLoad() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    var crypto = new InMemoryCryptoEngine();
+    store = newStore(secretTypes(crypto));
+    threeEventsAndASnapshotAtTwo(new ValidatedState(SUBJECT, "a@example.com"));
+
+    crypto.deleteKey(SubjectId.of(SUBJECT));
+
+    assertThrows(EventDeserializationException.class, () -> store.load(A));
+  }
+
+  @Test
+  public void aKeyStoreOutageInAMigrationStepFailsTheLoadPlainly() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+    var outage =
+        new IllegalStateException(
+            "step failed", new CryptoOperationException("key store unavailable"));
+
+    EventStore migrating =
+        reopen(store, Setup.defaults().withMigrations(List.of(failing(1, 2, outage))));
+
+    assertPlainEventStoreException(
+        assertThrows(EventStoreException.class, () -> migrating.load(A, 2)));
+  }
+
+  @Test
+  public void aCryptoMappingFailureInAMigrationStepIsAnEventDeserializationException() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    threeEventsAndASnapshotAtTwo(new ContractState("m"));
+    var refusal = new CryptoMappingException("the step cannot read the erased subject's field");
+
+    EventStore migrating =
+        reopen(store, Setup.defaults().withMigrations(List.of(failing(1, 2, refusal))));
+
+    assertThrows(EventDeserializationException.class, () -> migrating.load(A, 2));
+  }
+
+  @Test
+  public void aSnapshotDiscardedForItsVersionIsNotDeserialized() {
+    assumeTrue(supportsSnapshotSchemaVersions(), "the store has no snapshot schema versions");
+    store = newStore(secretTypes(new InMemoryCryptoEngine()));
+    threeEventsAndASnapshotAtTwo(new SecretState(SUBJECT, "top-secret"));
+
+    EventStore outage = reopen(store, secretTypes(new UnavailableKeyStore()));
+
+    assertDiscarded(outage.load(A, 2));
+    EventStore gapped =
+        reopen(
+            outage,
+            secretTypes(new UnavailableKeyStore())
+                .withMigrations(List.of(migration(1, 2, state -> state, null))));
+    assertDiscarded(gapped.load(A, 3));
+  }
+
+  @Test
+  public void aSnapshotDiscardedForItsTypeIsNotDeserialized() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store = newStore(secretTypes(new InMemoryCryptoEngine()));
+    threeEventsAndASnapshotAtTwo(new SecretState(SUBJECT, "top-secret"));
+    Setup secretStateRetired = Setup.defaults().withCrypto(new UnavailableKeyStore());
+
+    EventStore later = reopen(store, secretStateRetired);
+
+    assertDiscarded(later.load(A));
+    if (supportsSnapshotSchemaVersions()) {
+      assertDiscarded(later.load(A, 1));
+      EventStore migrating =
+          reopen(
+              later,
+              secretStateRetired.withMigrations(List.of(migration(1, 2, state -> state, null))));
+      assertDiscarded(migrating.load(A, 2));
+    }
+  }
+
+  // ── Snapshot state type ────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void aSnapshotOfAStateTypeTheRegistryDoesNotResolveIsRefused() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(
+        EventStoreException.class,
+        () -> store.saveSnapshot(A, new Version(2), new UnregisteredState("x"), 1, 0));
+
+    assertNull(store.load(A).snapshotState(), "nothing is stored");
+  }
+
+  @Test
+  public void aSnapshotWhoseTypeNameResolvesToAnotherClassIsRefused() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertThrows(
+        EventStoreException.class,
+        () -> store.saveSnapshot(A, new Version(2), new Shadowing.ContractState("x"), 1, 0));
+
+    assertNull(store.load(A).snapshotState(), "nothing is stored");
   }
 }
