@@ -150,7 +150,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(jakarta.enterprise.inject.Instance<javax.sql.DataSource>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
-  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(jakarta.enterprise.inject.Instance<io.opentelemetry.api.OpenTelemetry>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
+  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(jakarta.enterprise.inject.Instance<io.opentelemetry.api.OpenTelemetry>, org.streamrune.quarkus.StreamRuneQuarkusProperties, org.eclipse.microprofile.config.Config)
   public org.streamrune.integration.AuthenticatedUserResolver quarkusAuthenticatedUserResolver(jakarta.enterprise.inject.Instance<io.quarkus.security.identity.SecurityIdentity>)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.integration.AuthenticatedUserResolver>)
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()

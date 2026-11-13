@@ -1,0 +1,61 @@
+package org.streamrune.integration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.streamrune.integration.OpenTelemetrySwitches.Switch;
+
+class OpenTelemetrySwitchesTest {
+
+  @Test
+  void aSwitchAtItsOffValue_switchesTracingOff_ignoringCaseAndSurroundingWhitespace() {
+    assertThat(
+            OpenTelemetrySwitches.switchedOffBy(
+                OpenTelemetrySwitches.SPRING,
+                Map.of("management.tracing.export.enabled", " False ")::get))
+        .contains(new Switch("management.tracing.export.enabled", "false"));
+    assertThat(
+            OpenTelemetrySwitches.switchedOffBy(
+                OpenTelemetrySwitches.QUARKUS, Map.of("quarkus.otel.sdk.disabled", "TRUE")::get))
+        .map(Switch::toString)
+        .contains("quarkus.otel.sdk.disabled=true");
+    assertThat(
+            OpenTelemetrySwitches.switchedOffBy(
+                OpenTelemetrySwitches.MICRONAUT, Map.of("otel.traces.exporter", "none")::get))
+        .isPresent();
+  }
+
+  @Test
+  void anUnsetKey_anotherValue_orAnotherFrameworksKey_leavesTracingOn() {
+    assertThat(OpenTelemetrySwitches.switchedOffBy(OpenTelemetrySwitches.SPRING, key -> null))
+        .isEmpty();
+    assertThat(
+            OpenTelemetrySwitches.switchedOffBy(
+                OpenTelemetrySwitches.SPRING,
+                Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "otlp,none")::get))
+        .isEmpty();
+    assertThat(
+            OpenTelemetrySwitches.switchedOffBy(
+                OpenTelemetrySwitches.MICRONAUT, Map.of("quarkus.otel.sdk.disabled", "true")::get))
+        .isEmpty();
+  }
+
+  @Test
+  void everyFrameworkReadsTheSdksOwnSwitches() {
+    assertThat(OpenTelemetrySwitches.SPRING).containsAll(OpenTelemetrySwitches.SDK);
+    assertThat(OpenTelemetrySwitches.QUARKUS).containsAll(OpenTelemetrySwitches.SDK);
+    assertThat(OpenTelemetrySwitches.MICRONAUT).containsAll(OpenTelemetrySwitches.SDK);
+  }
+
+  @Test
+  void nothingIsNull() {
+    assertThatThrownBy(() -> new Switch(null, "true")).isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> new Switch("k", null)).isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> OpenTelemetrySwitches.switchedOffBy(null, key -> null))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> OpenTelemetrySwitches.switchedOffBy(OpenTelemetrySwitches.SDK, null))
+        .isInstanceOf(NullPointerException.class);
+  }
+}

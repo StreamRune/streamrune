@@ -143,7 +143,14 @@ names the property and the value:
 
 The switches of the spans StreamRune starts. They take effect when the application has
 OpenTelemetry: an `OpenTelemetry` bean, or else a registered global OpenTelemetry, such as the
-OpenTelemetry Java agent's. Without it nothing is traced and the switches do nothing. See
+OpenTelemetry Java agent's. Without it nothing is traced and the switches do nothing. An SDK that
+is present but switched off counts as no OpenTelemetry when one of its own settings says so:
+`otel.sdk.disabled=true` or `otel.traces.exporter=none` on every integration,
+`management.tracing.enabled=false` or `management.tracing.export.enabled=false` on Spring Boot,
+`quarkus.otel.enabled=false`, `quarkus.otel.sdk.disabled=true`, `quarkus.otel.traces.enabled=false`
+or `quarkus.otel.traces.exporter=none` on Quarkus. Any other SDK, exporting or not, sampling or
+not, makes StreamRune start spans and write their span context into events and outbox rows;
+`streamrune.tracing.enabled=false` is the switch that stops it whatever the SDK. See
 [Tracing](production.md#tracing).
 
 | Property | Default | Meaning |

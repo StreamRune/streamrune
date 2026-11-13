@@ -325,19 +325,34 @@ public class StreamRuneMicronautModule {
    * application starts; see {@link OpenTelemetryTracingResolution}. It is {@link
    * StreamRuneTracing#NOOP} without {@code opentelemetry-api}, when the master switch is off, and
    * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
-   * application without OpenTelemetry pays nothing. An application {@code StreamRuneTracing} bean
-   * replaces it.
+   * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
+   * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#MICRONAUT switches}
+   * that turn OpenTelemetry tracing off ({@code otel.sdk.disabled=true}, {@code
+   * otel.traces.exporter=none}). An application {@code StreamRuneTracing} bean replaces it.
    *
    * @param beanContext the context the {@code OpenTelemetry} bean is looked up in
    * @param properties the StreamRune configuration properties
+   * @param environment the environment the OpenTelemetry switches are read from
    * @return the tracing
    */
   @Singleton
   @Requires(missingBeans = StreamRuneTracing.class)
   public StreamRuneTracing streamRuneTracing(
-      io.micronaut.context.BeanContext beanContext, StreamRuneMicronautProperties properties) {
+      io.micronaut.context.BeanContext beanContext,
+      StreamRuneMicronautProperties properties,
+      io.micronaut.context.env.Environment environment) {
     TracingSettings settings = tracingSettings(properties);
     if (!settings.enabled() || !openTelemetryOnTheClasspath()) {
+      return StreamRuneTracing.NOOP;
+    }
+    var switchedOff =
+        org.streamrune.integration.OpenTelemetrySwitches.switchedOffBy(
+            org.streamrune.integration.OpenTelemetrySwitches.MICRONAUT,
+            key -> environment.getProperty(key, String.class).orElse(null));
+    if (switchedOff.isPresent()) {
+      LOG.info(
+          "StreamRune starts no span: OpenTelemetry tracing is switched off ({})",
+          switchedOff.get());
       return StreamRuneTracing.NOOP;
     }
     // The resolution names OpenTelemetry types, so its class is loaded only when they are present.

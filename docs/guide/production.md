@@ -527,12 +527,21 @@ a deployment switches an area without a rebuild.
   register it before the context starts.
 - **Without OpenTelemetry the tracing is `StreamRuneTracing.NOOP`.** That is the bean when the
   OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
-  globally), when `streamrune.tracing.enabled` is `false`, and, on Spring and Micronaut, when
+  globally), when `streamrune.tracing.enabled` is `false`, when the SDK is switched off by one of
+  its own settings — `otel.sdk.disabled=true` or `otel.traces.exporter=none` (system property,
+  environment variable or configuration key) on every integration,
+  `management.tracing.enabled=false` or `management.tracing.export.enabled=false` on Spring Boot,
+  `quarkus.otel.enabled=false`, `quarkus.otel.sdk.disabled=true`,
+  `quarkus.otel.traces.enabled=false` or `quarkus.otel.traces.exporter=none` on Quarkus; the
+  integration logs which one at `INFO` — and, on Spring and Micronaut, when
   `opentelemetry-api` is not on the classpath at all: those two do not depend on it (it is a
   compile-only dependency), and an application without it starts and runs. The Quarkus integration
   depends on
-  `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, and the cost is one
-  branch per traced call.
+  `opentelemetry-api`. With `NOOP` nothing is traced, the keys do nothing, no event carries a
+  span context, and the cost is one branch per traced call. Any other SDK — one without an
+  exporter the integration cannot see, one whose sampler drops every trace — makes StreamRune
+  start its spans and write their span context into every event's metadata and every outbox row;
+  `streamrune.tracing.enabled=false` stops that whatever the SDK.
 - **What the integration hands it to.** The event store it builds on the application's
   `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
   bus, the outbox poller, the continuous and scheduled projection runners, and each inline

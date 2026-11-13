@@ -919,8 +919,10 @@ public class StreamRuneAutoConfiguration {
      * GlobalOpenTelemetry.get()}), which the OpenTelemetry Java agent registers before the
      * application starts. It is {@link StreamRuneTracing#NOOP} when the master switch is off, and
      * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
-     * application without OpenTelemetry pays nothing. An application {@code StreamRuneTracing} bean
-     * replaces it.
+     * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
+     * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#SPRING switches}
+     * that turn OpenTelemetry tracing off ({@code management.tracing.export.enabled=false}, {@code
+     * otel.sdk.disabled=true}, ...). An application {@code StreamRuneTracing} bean replaces it.
      *
      * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so
      * an SDK the application registers globally is registered before the context starts, or is an
@@ -930,17 +932,34 @@ public class StreamRuneAutoConfiguration {
     @ConditionalOnMissingBean(StreamRuneTracing.class)
     public StreamRuneTracing streamRuneTracing(
         ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry,
-        StreamRuneProperties properties) {
-      return tracingOf(openTelemetry.getIfAvailable(), properties.tracing().settings());
+        StreamRuneProperties properties,
+        org.springframework.core.env.Environment environment) {
+      return tracingOf(
+          openTelemetry.getIfAvailable(),
+          properties.tracing().settings(),
+          environment::getProperty);
     }
 
     /**
      * The tracing over {@code openTelemetry}, or over the global OpenTelemetry when it is {@code
-     * null}, under {@code settings}.
+     * null}, under {@code settings}; {@link StreamRuneTracing#NOOP} when {@code property} holds one
+     * of the {@link org.streamrune.integration.OpenTelemetrySwitches#SPRING switches} that turn
+     * OpenTelemetry tracing off.
      */
     static StreamRuneTracing tracingOf(
-        io.opentelemetry.api.OpenTelemetry openTelemetry, TracingSettings settings) {
+        io.opentelemetry.api.OpenTelemetry openTelemetry,
+        TracingSettings settings,
+        java.util.function.Function<String, String> property) {
       if (!settings.enabled()) {
+        return StreamRuneTracing.NOOP;
+      }
+      var switchedOff =
+          org.streamrune.integration.OpenTelemetrySwitches.switchedOffBy(
+              org.streamrune.integration.OpenTelemetrySwitches.SPRING, property);
+      if (switchedOff.isPresent()) {
+        LOG.info(
+            "StreamRune starts no span: OpenTelemetry tracing is switched off ({})",
+            switchedOff.get());
         return StreamRuneTracing.NOOP;
       }
       io.opentelemetry.api.OpenTelemetry source =

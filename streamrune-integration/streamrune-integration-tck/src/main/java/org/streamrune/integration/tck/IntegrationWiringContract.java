@@ -942,6 +942,36 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * An OpenTelemetry SDK that is present but switched off by the SDK's own settings ({@code
+   * otel.sdk.disabled=true}, {@code otel.traces.exporter=none}) is no OpenTelemetry to StreamRune:
+   * the tracing bean is {@code StreamRuneTracing.NOOP}, so no span starts and the command bus,
+   * which then holds no command-span interceptor, writes no span context into an event.
+   */
+  @Test
+  public void anOpenTelemetrySwitchedOffBySdkSettingsStartsNoSpan() {
+    for (Map.Entry<String, String> off :
+        List.of(
+            Map.entry("otel.sdk.disabled", "true"), Map.entry("otel.traces.exporter", "none"))) {
+      OpenTelemetryBean.reset();
+      try (Application application =
+          start(
+              null,
+              Map.ofEntries(off),
+              Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+        assertStarted(application);
+        assertSame(
+            StreamRuneTracing.NOOP, application.bean(StreamRuneTracing.class), off::toString);
+        VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+        assertTrue(
+            bus.interceptors().stream().noneMatch(TracingCommandInterceptor.class::isInstance),
+            off::toString);
+        bus.execute(new ContractCommand("switched-off-1"));
+        assertEquals(List.of(), spanNames(), off::toString);
+      }
+    }
+  }
+
+  /**
    * The application's own {@code StreamRuneTracing} bean wins over the one the integration would
    * build from the {@code OpenTelemetry} bean: the integration's components trace through it.
    */

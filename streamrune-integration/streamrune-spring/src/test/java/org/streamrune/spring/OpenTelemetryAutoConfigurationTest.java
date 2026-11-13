@@ -116,6 +116,32 @@ class OpenTelemetryAutoConfigurationTest {
   }
 
   @Test
+  void anOpenTelemetrySwitchedOffByItsOwnSettingGivesTheNoopTracing() {
+    for (String off :
+        java.util.List.of(
+            "management.tracing.enabled=false",
+            "management.tracing.export.enabled=false",
+            "otel.sdk.disabled=true",
+            "otel.traces.exporter=none")) {
+      runner
+          .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
+          .withPropertyValues(off)
+          .run(
+              ctx ->
+                  assertThat(ctx.getBean(StreamRuneTracing.class))
+                      .as(off)
+                      .isSameAs(StreamRuneTracing.NOOP));
+    }
+    runner
+        .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
+        .withPropertyValues("management.tracing.export.enabled=true", "otel.traces.exporter=otlp")
+        .run(
+            ctx ->
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .isNotSameAs(StreamRuneTracing.NOOP));
+  }
+
+  @Test
   void anOpenTelemetryWithoutATracerProviderGivesTheNoopTracing() {
     runner
         .withBean(OpenTelemetry.class, OpenTelemetry::noop)

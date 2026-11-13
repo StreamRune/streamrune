@@ -310,9 +310,11 @@ public static final class org.streamrune.runtime.MultiProjectionRunner$Builder
 
 public final class org.streamrune.runtime.OpenTelemetryTracing implements org.streamrune.core.tracing.StreamRuneTracing
   public boolean enabled(org.streamrune.core.tracing.TracingArea)
+  public java.lang.Runnable propagating(java.lang.Runnable)
   public java.lang.String toString()
   public org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
   public org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, org.streamrune.core.tracing.SpanLink, org.streamrune.core.tracing.SpanBaggage)
+  public org.streamrune.core.tracing.TraceScope startChild(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
   public static org.streamrune.core.tracing.StreamRuneTracing of(io.opentelemetry.api.OpenTelemetry, org.streamrune.runtime.TracingSettings)
 
 public final class org.streamrune.runtime.OutboxFailedReplayer
