@@ -1052,6 +1052,7 @@ public final class InMemoryEventStore implements EventStore {
       int snapshotVersion,
       long snapshotPurgeGeneration) {
     Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(version, "version is required");
     if (state == null) {
       throw new IllegalArgumentException("state must not be null");
     }
@@ -1066,7 +1067,7 @@ public final class InMemoryEventStore implements EventStore {
       snapshots.put(streamId, new Snapshot(version, snapshotVersion, state, null, null));
       return true;
     }
-    if (!traced() || version == null) {
+    if (!traced()) {
       return writeSnapshot(streamId, version, state, snapshotVersion);
     }
     return inSpan(
@@ -1343,6 +1344,7 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+    Objects.requireNonNull(afterOffset, "afterOffset is required");
     boolean traced = traced();
     Instant started = traced ? Instant.now() : null;
     return readEvents(
@@ -1357,6 +1359,8 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(afterVersion, "afterVersion is required");
     boolean traced = traced();
     Instant started = traced ? Instant.now() : null;
     return readEvents(
