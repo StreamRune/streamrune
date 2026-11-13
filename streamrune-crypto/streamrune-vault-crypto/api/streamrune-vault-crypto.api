@@ -1,0 +1,23 @@
+# The public API of :streamrune-crypto:streamrune-vault-crypto. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.vault.VaultCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public java.util.Set<java.lang.String> requiredCryptoTables()
+  public static org.streamrune.crypto.vault.VaultCryptoEngine$Builder builder()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.vault.VaultCryptoEngine$Builder
+  public <init>()
+  public org.streamrune.crypto.vault.VaultCryptoEngine build()
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder engineMount(java.lang.String)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder forgottenSubjectStore(org.streamrune.crypto.ForgottenSubjectStore)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder httpClient(java.net.http.HttpClient)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder maxRetries(int)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder requestTimeout(java.time.Duration)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder retryDelay(java.time.Duration)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder revivalIdentityMargin(java.time.Duration)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder token(java.lang.String)
+  public org.streamrune.crypto.vault.VaultCryptoEngine$Builder vaultAddress(java.lang.String)

@@ -1,0 +1,14 @@
+# The public API of :streamrune-outbox:streamrune-kafka-outbox. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.outbox.kafka.KafkaOutboxPublisher implements org.streamrune.core.outbox.OutboxPublisher
+  public java.time.Duration inFlightHorizon()
+  public org.streamrune.core.outbox.OutboxPublisher$FailureKind classifyFailure(java.lang.Exception)
+  public static org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder builder()
+  public void publish(org.streamrune.core.outbox.OutboxEntry) throws java.lang.Exception
+
+public static final class org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder
+  public org.streamrune.outbox.kafka.KafkaOutboxPublisher build()
+  public org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder producer(org.apache.kafka.clients.producer.KafkaProducer<java.lang.String, java.lang.String>)
+  public org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder producerConfig(java.util.Map<java.lang.String, ?>)
+  public org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder sendTimeout(java.time.Duration)
+  public org.streamrune.outbox.kafka.KafkaOutboxPublisher$Builder topic(java.lang.String)

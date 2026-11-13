@@ -1,0 +1,27 @@
+# The public API of :streamrune-crypto:streamrune-aws-kms-crypto. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.aws.AwsKmsCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public int dataKeyCacheMaximumSize()
+  public java.time.Duration dataKeyCacheExpireAfterWrite()
+  public java.util.Set<java.lang.String> requiredCryptoTables()
+  public static final int DEFAULT_DATA_KEY_CACHE_MAXIMUM_SIZE = 1000
+  public static final int MAX_PLAINTEXT_LENGTH
+  public static final java.time.Duration DEFAULT_DATA_KEY_CACHE_EXPIRE_AFTER_WRITE
+  public static final long MAX_ENCRYPTIONS_PER_DATA_KEY = 16777216
+  public static org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder builder()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder
+  public <init>()
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine build()
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder dataKeyCacheExpireAfterWrite(java.time.Duration)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder dataKeyCacheMaximumSize(int)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder forgottenSubjectStore(org.streamrune.crypto.ForgottenSubjectStore)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder kmsClient(software.amazon.awssdk.services.kms.KmsClient)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder kmsKeyId(java.lang.String)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.crypto.aws.AwsKmsCryptoEngine$Builder region(java.lang.String)

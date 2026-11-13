@@ -1,0 +1,1699 @@
+# The public API of :streamrune-core. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final record org.streamrune.core.AggregateHistory
+  public <init>(org.streamrune.core.AggregateState, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.Version)
+  public <init>(org.streamrune.core.AggregateState, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.Version, long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.core.EventEnvelope> events()
+  public long snapshotPurgeGeneration()
+  public org.streamrune.core.AggregateState snapshotState()
+  public org.streamrune.core.types.Version lastSnapshotVersion()
+  public org.streamrune.core.types.Version version()
+  public static org.streamrune.core.AggregateHistory empty()
+
+public interface org.streamrune.core.AggregateLocker
+  public abstract java.lang.AutoCloseable acquireLock(org.streamrune.core.types.StreamId, java.time.Duration)
+  public static final int MIN_TIMEOUT_MILLIS = 1
+  public static void requireValidTimeout(java.time.Duration, java.lang.String)
+
+public interface org.streamrune.core.AggregateState
+
+public interface org.streamrune.core.AsyncCommandBus
+  public abstract <C extends org.streamrune.core.Command> java.util.concurrent.CompletableFuture<org.streamrune.core.CommandBus$CommandResult> executeAsync(C)
+
+public final class org.streamrune.core.Authorization
+  public static org.streamrune.core.types.UserId currentUserId()
+  public static void requireOwner(org.streamrune.core.types.UserId)
+  public static void requireOwnerOrSaga(org.streamrune.core.types.UserId)
+
+public class org.streamrune.core.AuthorizationException extends org.streamrune.core.DomainException
+  public <init>(java.lang.String)
+
+public @interface org.streamrune.core.Cacheable
+  public abstract java.lang.Class<?>[] invalidateOn()
+  public abstract long maxEntries()
+  public abstract long ttlSeconds()
+  public abstract org.streamrune.core.Cacheable$Scope scope()
+
+public static final enum org.streamrune.core.Cacheable$Scope
+  public static final org.streamrune.core.Cacheable$Scope GLOBAL
+  public static final org.streamrune.core.Cacheable$Scope USER
+  public static org.streamrune.core.Cacheable$Scope valueOf(java.lang.String)
+  public static org.streamrune.core.Cacheable$Scope[] values()
+
+public class org.streamrune.core.CircuitBreakerOpenException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+
+public interface org.streamrune.core.Command
+
+public interface org.streamrune.core.CommandAuthorizationPolicy
+  public abstract void authorize(org.streamrune.core.types.UserId, org.streamrune.core.Command)
+  public static org.streamrune.core.CommandAuthorizationPolicy allowAll()
+  public static org.streamrune.core.CommandAuthorizationPolicy denyAll(java.lang.String)
+
+public interface org.streamrune.core.CommandBus
+  public abstract <C extends org.streamrune.core.Command> org.streamrune.core.CommandBus$CommandResult execute(C)
+  public default <C extends org.streamrune.core.Command> org.streamrune.core.CommandBus$CommandResult execute(C, org.streamrune.core.types.IdempotencyKey)
+  public default boolean supportsIdempotentExecution()
+  public default java.lang.Object sagaFenceStorageIdentity()
+
+public static final record org.streamrune.core.CommandBus$CommandResult
+  public <init>(java.util.List<? extends org.streamrune.core.DomainEvent>, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.types.GlobalOffset>)
+  public <init>(java.util.List<? extends org.streamrune.core.DomainEvent>, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.types.GlobalOffset>, java.util.List<org.streamrune.core.EventEnvelope>)
+  public <init>(java.util.List<? extends org.streamrune.core.DomainEvent>, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.types.GlobalOffset>, java.util.List<org.streamrune.core.EventEnvelope>, java.lang.String, org.streamrune.core.CommandBus$ShortCircuitReason)
+  public boolean idempotentReplay()
+  public boolean shortCircuited()
+  public boolean vetoed()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String shortCircuitedBy()
+  public java.util.List<? extends org.streamrune.core.DomainEvent> events()
+  public java.util.List<org.streamrune.core.EventEnvelope> envelopes()
+  public java.util.List<org.streamrune.core.types.GlobalOffset> globalOffsets()
+  public org.streamrune.core.CommandBus$ShortCircuitReason reason()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.Version finalVersion()
+
+public static final enum org.streamrune.core.CommandBus$ShortCircuitReason
+  public static final org.streamrune.core.CommandBus$ShortCircuitReason IDEMPOTENT_REPLAY
+  public static final org.streamrune.core.CommandBus$ShortCircuitReason NONE
+  public static final org.streamrune.core.CommandBus$ShortCircuitReason VETOED
+  public static org.streamrune.core.CommandBus$ShortCircuitReason valueOf(java.lang.String)
+  public static org.streamrune.core.CommandBus$ShortCircuitReason[] values()
+
+public class org.streamrune.core.CommandBusClosedException extends java.lang.IllegalStateException
+  public <init>(java.lang.String)
+
+public class org.streamrune.core.CommandBusOverloadedException extends java.lang.IllegalStateException
+  public <init>(java.lang.String)
+
+public final class org.streamrune.core.CommandFailureClassification
+  public static boolean hasSubjectForgottenCause(java.lang.Throwable)
+  public static boolean isDeterministicPerAggregate(java.lang.Throwable)
+  public static boolean isPermanentRejection(java.lang.Throwable)
+  public static boolean isReaderBehindStoredSchema(java.lang.Throwable)
+  public static final java.util.function.Predicate<java.lang.Throwable> BREAKER_ELIGIBLE
+  public static final java.util.function.Predicate<java.lang.Throwable> DLQ_ELIGIBLE
+  public static final java.util.function.Predicate<java.lang.Throwable> PERMANENT_REJECTION
+
+public interface org.streamrune.core.CommandInbox
+  public abstract int deleteProcessedBefore(java.time.Instant)
+  public abstract java.util.Optional<org.streamrune.core.CommandInbox$InboxResult> find(org.streamrune.core.types.IdempotencyKey)
+
+public static final record org.streamrune.core.CommandInbox$InboxResult
+  public <init>(org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.types.GlobalOffset>, java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String commandType()
+  public java.time.Instant processedAt()
+  public java.util.List<org.streamrune.core.types.GlobalOffset> globalOffsets()
+  public org.streamrune.core.types.IdempotencyKey key()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.Version finalVersion()
+
+public interface org.streamrune.core.CommandInterceptor
+  public default boolean before(org.streamrune.core.CommandInterceptor$CommandContext)
+  public default void after(org.streamrune.core.CommandInterceptor$CommandContext)
+  public default void onError(org.streamrune.core.CommandInterceptor$CommandContext, java.lang.Throwable)
+  public static org.streamrune.core.CommandInterceptor compose(org.streamrune.core.CommandInterceptor, org.streamrune.core.CommandInterceptor)
+  public static org.streamrune.core.CommandInterceptor noop()
+
+public static final record org.streamrune.core.CommandInterceptor$CommandContext
+  public <init>(org.streamrune.core.Command, java.lang.String, org.streamrune.core.types.CommandId, org.streamrune.core.types.AggregateType, org.streamrune.core.types.AggregateId, org.streamrune.core.CommandBus$CommandResult, java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String commandType()
+  public java.time.Instant timestamp()
+  public org.streamrune.core.Command command()
+  public org.streamrune.core.CommandBus$CommandResult result()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.AggregateType aggregateType()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.StreamId streamId()
+
+public interface org.streamrune.core.DeadLetterQueue
+  public abstract java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
+  public abstract void discard(org.streamrune.core.types.CommandId)
+  public abstract void publish(org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest)
+  public default int deleteOlderThan(java.time.Instant)
+  public default java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
+  public default java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public default java.util.Optional<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> find(org.streamrune.core.types.CommandId)
+  public default long countAwaitingOperator(int, boolean, java.time.Instant)
+  public default long countPending()
+  public default void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
+
+public static final record org.streamrune.core.DeadLetterQueue$DeadLetterEntry
+  public <init>(org.streamrune.core.types.CommandId, java.lang.String, java.lang.String, org.streamrune.core.types.StreamId, java.lang.String, java.lang.String, int, java.time.Instant, java.time.Instant, int, java.time.Instant, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.UserId, org.streamrune.core.types.TraceId, org.streamrune.core.types.IdempotencyKey)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int attempts()
+  public int dlqAttempts()
+  public java.lang.String commandPayload()
+  public java.lang.String commandType()
+  public java.lang.String errorMessage()
+  public java.lang.String errorType()
+  public java.time.Instant firstAttemptAt()
+  public java.time.Instant lastAttemptAt()
+  public java.time.Instant publishedAt()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.IdempotencyKey idempotencyKey()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.TraceId traceId()
+  public org.streamrune.core.types.UserId userId()
+
+public static final record org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest
+  public <init>(java.lang.String, java.lang.String, org.streamrune.core.types.CommandId, org.streamrune.core.types.StreamId, java.lang.String, java.lang.String, int, java.time.Instant, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.UserId, org.streamrune.core.types.TraceId, org.streamrune.core.types.IdempotencyKey)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int attempts()
+  public java.lang.String commandPayload()
+  public java.lang.String commandType()
+  public java.lang.String errorMessage()
+  public java.lang.String errorType()
+  public java.time.Instant timestamp()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.IdempotencyKey idempotencyKey()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.TraceId traceId()
+  public org.streamrune.core.types.UserId userId()
+
+public final record org.streamrune.core.DeadLetterRetryPolicy
+  public <init>(int, java.time.Duration, double, boolean, org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay)
+  public boolean discardAfterMaxRetries()
+  public double backoffMultiplier()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maxRetries()
+  public java.time.Duration delayForAttempt(int)
+  public java.time.Duration initialDelay()
+  public org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay unkeyedReplay()
+  public static final org.streamrune.core.DeadLetterRetryPolicy DEFAULT
+
+public static final enum org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay
+  public static final org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay AUTOMATIC
+  public static final org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay OPERATOR_ONLY
+  public static org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay valueOf(java.lang.String)
+  public static org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay[] values()
+
+public interface org.streamrune.core.Decider<C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent>
+  public abstract S evolve(S, E)
+  public abstract S initialState()
+  public abstract java.util.List<E> decide(C, S)
+  public default void guard(C, S)
+
+public final class org.streamrune.core.DeciderFactory
+  public static <C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent> org.streamrune.core.Decider<C, S, E> of(java.util.function.Supplier<S>, java.util.function.BiFunction<C, S, java.util.List<E>>, java.util.function.BiFunction<S, E, S>)
+  public static <C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent> org.streamrune.core.Decider<C, S, E> of(java.util.function.Supplier<S>, java.util.function.BiFunction<C, S, java.util.List<E>>, java.util.function.BiFunction<S, E, S>, java.util.function.BiConsumer<C, S>)
+
+public interface org.streamrune.core.DomainEvent
+
+public class org.streamrune.core.DomainException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+
+public class org.streamrune.core.EventDeserializationException extends org.streamrune.core.EventStoreException
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public final record org.streamrune.core.EventEnvelope
+  public <init>(org.streamrune.core.types.GlobalOffset, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent, org.streamrune.core.EventMetadata)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.DomainEvent event()
+  public org.streamrune.core.EventMetadata metadata()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.AggregateType aggregateType()
+  public org.streamrune.core.types.EventType eventType()
+  public org.streamrune.core.types.GlobalOffset globalOffset()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.Version version()
+
+public final record org.streamrune.core.EventMetadata
+  public <init>(org.streamrune.core.types.EventId, org.streamrune.core.types.CommandId, org.streamrune.core.types.TraceId, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.CausationId, org.streamrune.core.types.UserId, java.time.Instant)
+  public <init>(org.streamrune.core.types.EventId, org.streamrune.core.types.CommandId, org.streamrune.core.types.TraceId, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.CausationId, org.streamrune.core.types.UserId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>)
+  public <init>(org.streamrune.core.types.EventId, org.streamrune.core.types.CommandId, org.streamrune.core.types.TraceId, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.CausationId, org.streamrune.core.types.UserId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>, org.streamrune.core.saga.SagaOrigin)
+  public <init>(org.streamrune.core.types.EventId, org.streamrune.core.types.CommandId, org.streamrune.core.types.TraceId, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.CausationId, org.streamrune.core.types.UserId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>, org.streamrune.core.saga.SagaOrigin, org.streamrune.core.tracing.SpanLink)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant timestamp()
+  public java.util.Map<java.lang.String, java.lang.String> baggage()
+  public org.streamrune.core.saga.SagaOrigin sagaOrigin()
+  public org.streamrune.core.tracing.SpanLink spanContext()
+  public org.streamrune.core.types.CausationId causationId()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.EventId eventId()
+  public org.streamrune.core.types.TraceId traceId()
+  public org.streamrune.core.types.UserId userId()
+
+public final class org.streamrune.core.EventSchemaAheadException extends org.streamrune.core.EventStoreException
+  public <init>(java.lang.String, org.streamrune.core.types.EventType, int, int)
+  public int readerVersion()
+  public int storedVersion()
+  public org.streamrune.core.types.EventType eventType()
+
+public interface org.streamrune.core.EventStore
+  public abstract boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
+  public abstract java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
+  public abstract java.util.List<org.streamrune.core.EventEnvelope> readStream(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, int)
+  public abstract org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
+  public abstract org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public default java.lang.Object sagaFenceStorageIdentity()
+  public default org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
+  public default org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
+  public default org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.saga.SagaOrigin)
+  public default org.streamrune.core.types.GlobalOffset lastGlobalOffset()
+  public default void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState)
+  public default void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int)
+  public static final int IGNORE_SNAPSHOT = -1
+
+public static final record org.streamrune.core.EventStore$AppendResult
+  public <init>(java.util.List<org.streamrune.core.types.GlobalOffset>, org.streamrune.core.types.Version)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.core.types.GlobalOffset> globalOffsets()
+  public org.streamrune.core.types.Version finalVersion()
+
+public static final record org.streamrune.core.EventStore$IdempotentAppendResult
+  public <init>(java.util.List<org.streamrune.core.types.GlobalOffset>, org.streamrune.core.types.Version, boolean)
+  public boolean alreadyApplied()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.core.types.GlobalOffset> globalOffsets()
+  public org.streamrune.core.types.Version finalVersion()
+
+public class org.streamrune.core.EventStoreException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public interface org.streamrune.core.EventStoreFactory
+  public abstract org.streamrune.core.EventStore create()
+
+public interface org.streamrune.core.EventTypeRegistry
+  public abstract java.lang.Class<?> resolveEventType(org.streamrune.core.types.EventType)
+  public abstract java.lang.Class<?> resolveStateType(java.lang.String)
+  public default java.util.Collection<java.lang.Class<?>> registeredTypes()
+
+public final class org.streamrune.core.IdGenerator
+  public static org.streamrune.core.types.CommandId generateCommandId()
+  public static org.streamrune.core.types.CorrelationId generateCorrelationId()
+  public static org.streamrune.core.types.EventId generateEventId()
+
+public @interface org.streamrune.core.Internal
+
+public class org.streamrune.core.LockException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public final enum org.streamrune.core.LockMode
+  public static final org.streamrune.core.LockMode OPTIMISTIC
+  public static final org.streamrune.core.LockMode PESSIMISTIC
+  public static org.streamrune.core.LockMode valueOf(java.lang.String)
+  public static org.streamrune.core.LockMode[] values()
+
+public class org.streamrune.core.NoDeciderException extends java.lang.IllegalArgumentException
+  public <init>(java.lang.Class<?>, java.util.List<java.lang.Class<?>>)
+  public java.lang.Class<?> commandType()
+  public java.util.List<java.lang.Class<?>> availableCommands()
+
+public class org.streamrune.core.OptimisticLockException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+  public <init>(java.lang.String, long, long)
+
+public final record org.streamrune.core.Page<T>
+  public <init>(java.util.List<T>, long, int, int)
+  public boolean hasNext()
+  public boolean hasPrevious()
+  public boolean isEmpty()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int page()
+  public int size()
+  public int totalPages()
+  public java.util.List<T> content()
+  public long totalElements()
+
+public final record org.streamrune.core.PageRequest
+  public <init>(int, int, org.streamrune.core.Sort)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int offset()
+  public int page()
+  public int size()
+  public org.streamrune.core.Sort sort()
+  public static org.streamrune.core.PageRequest of(int, int)
+  public static org.streamrune.core.PageRequest of(int, int, org.streamrune.core.Sort)
+
+public @interface org.streamrune.core.ProjectionConfig
+  public abstract int batchSize()
+  public abstract int fetchSize()
+  public abstract java.lang.String cron()
+  public abstract java.lang.String name()
+  public abstract org.streamrune.core.ProjectionConfig$Mode mode()
+  public abstract org.streamrune.core.projection.ProjectionDeliveryMode deliveryMode()
+  public abstract org.streamrune.core.projection.ProjectionErrorStrategy errorStrategy()
+
+public static final enum org.streamrune.core.ProjectionConfig$Mode
+  public static final org.streamrune.core.ProjectionConfig$Mode CONTINUOUS
+  public static final org.streamrune.core.ProjectionConfig$Mode INLINE
+  public static final org.streamrune.core.ProjectionConfig$Mode SCHEDULED
+  public static org.streamrune.core.ProjectionConfig$Mode valueOf(java.lang.String)
+  public static org.streamrune.core.ProjectionConfig$Mode[] values()
+
+public interface org.streamrune.core.Query<R>
+
+public interface org.streamrune.core.QueryAuthorizer
+  public abstract void authorize(org.streamrune.core.types.UserId, org.streamrune.core.Query<?>)
+
+public interface org.streamrune.core.QueryBus
+  public abstract <Q extends org.streamrune.core.Query<R>, R> void register(java.lang.Class<Q>, org.streamrune.core.QueryHandler<Q, R>)
+  public abstract <R> R dispatch(org.streamrune.core.Query<R>)
+
+public interface org.streamrune.core.QueryHandler<Q extends org.streamrune.core.Query<R>, R>
+  public abstract R handle(Q)
+
+public @interface org.streamrune.core.RequirePermission
+  public abstract java.lang.String[] value()
+
+public @interface org.streamrune.core.RequireRole
+  public abstract java.lang.String[] value()
+
+public final class org.streamrune.core.ReservedCorrelationIdException extends java.lang.RuntimeException
+  public <init>()
+
+public final record org.streamrune.core.RetryPolicy
+  public <init>(int, java.time.Duration, double)
+  public <init>(int, java.time.Duration, double, boolean)
+  public boolean jitterEnabled()
+  public double backoffMultiplier()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maxAttempts()
+  public java.time.Duration delayForAttempt(int)
+  public java.time.Duration initialDelay()
+  public static final org.streamrune.core.RetryPolicy DEFAULT
+
+public final class org.streamrune.core.SimpleEventTypeRegistry implements org.streamrune.core.EventTypeRegistry
+  public java.lang.Class<?> resolveEventType(org.streamrune.core.types.EventType)
+  public java.lang.Class<?> resolveStateType(java.lang.String)
+  public java.util.Collection<java.lang.Class<?>> registeredTypes()
+  public static org.streamrune.core.SimpleEventTypeRegistry$Builder builder()
+
+public static final class org.streamrune.core.SimpleEventTypeRegistry$Builder
+  public org.streamrune.core.SimpleEventTypeRegistry build()
+  public org.streamrune.core.SimpleEventTypeRegistry$Builder registerEvent(java.lang.Class<?>)
+  public org.streamrune.core.SimpleEventTypeRegistry$Builder registerEvent(java.lang.String, java.lang.Class<?>)
+  public org.streamrune.core.SimpleEventTypeRegistry$Builder registerEvent(org.streamrune.core.types.EventType, java.lang.Class<?>)
+  public org.streamrune.core.SimpleEventTypeRegistry$Builder registerState(java.lang.String, java.lang.Class<?>)
+
+public interface org.streamrune.core.SnapshotMigration
+  public abstract int fromVersion()
+  public abstract int toVersion()
+  public abstract org.streamrune.core.AggregateState migrate(org.streamrune.core.AggregateState)
+  public default java.lang.Class<? extends org.streamrune.core.AggregateState> toType()
+
+public sealed interface org.streamrune.core.SnapshotPolicy permits org.streamrune.core.SnapshotPolicy$EveryNEvents, org.streamrune.core.SnapshotPolicy$Never
+  public static org.streamrune.core.SnapshotPolicy everyNEvents(int)
+  public static org.streamrune.core.SnapshotPolicy everyNEvents(int, int)
+  public static org.streamrune.core.SnapshotPolicy never()
+
+public static final record org.streamrune.core.SnapshotPolicy$EveryNEvents implements org.streamrune.core.SnapshotPolicy
+  public <init>(int, int)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int n()
+  public int snapshotVersion()
+
+public static final record org.streamrune.core.SnapshotPolicy$Never implements org.streamrune.core.SnapshotPolicy
+  public <init>()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+
+public final record org.streamrune.core.Sort
+  public <init>(java.util.List<org.streamrune.core.Sort$Order>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.core.Sort$Order> orders()
+  public static org.streamrune.core.Sort by(java.lang.String)
+  public static org.streamrune.core.Sort by(java.lang.String, org.streamrune.core.SortDirection)
+  public static org.streamrune.core.Sort unsorted()
+
+public static final record org.streamrune.core.Sort$Order
+  public <init>(java.lang.String, org.streamrune.core.SortDirection)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String field()
+  public org.streamrune.core.SortDirection direction()
+
+public final enum org.streamrune.core.SortDirection
+  public static final org.streamrune.core.SortDirection ASC
+  public static final org.streamrune.core.SortDirection DESC
+  public static org.streamrune.core.SortDirection valueOf(java.lang.String)
+  public static org.streamrune.core.SortDirection[] values()
+
+public final class org.streamrune.core.StreamRuneContext
+  public static <T> java.util.concurrent.Callable<T> wrap(java.util.concurrent.Callable<T>)
+  public static boolean isSagaDispatch()
+  public static final java.lang.ScopedValue<java.lang.Boolean> SAGA_OWNED
+  public static final java.lang.ScopedValue<org.streamrune.core.StreamRuneContext$DispatchCause> CAUSE
+  public static final java.lang.ScopedValue<org.streamrune.core.StreamRuneContext$RequestContext> CURRENT
+  public static java.lang.Runnable wrap(java.lang.Runnable)
+  public static java.lang.ScopedValue$Carrier continuing(org.streamrune.core.EventEnvelope)
+  public static org.streamrune.core.StreamRuneContext$DispatchCause cause()
+  public static org.streamrune.core.StreamRuneContext$RequestContext capture()
+  public static void requireNoForeignReservedCorrelationId()
+
+public static final record org.streamrune.core.StreamRuneContext$DispatchCause
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.saga.SagaOrigin sagaOrigin()
+  public org.streamrune.core.types.CausationId causationId()
+
+public static final record org.streamrune.core.StreamRuneContext$RequestContext
+  public <init>(org.streamrune.core.types.TraceId, org.streamrune.core.types.UserId, org.streamrune.core.types.CorrelationId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>)
+  public <init>(org.streamrune.core.types.TraceId, org.streamrune.core.types.UserId, org.streamrune.core.types.CorrelationId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>, org.streamrune.core.UserAuthority)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant timestamp()
+  public java.util.Map<java.lang.String, java.lang.String> baggage()
+  public org.streamrune.core.StreamRuneContext$RequestContext withAuthority(org.streamrune.core.UserAuthority)
+  public org.streamrune.core.UserAuthority authority()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.TraceId traceId()
+  public org.streamrune.core.types.UserId userId()
+  public static org.streamrune.core.StreamRuneContext$RequestContext fromRequest(org.streamrune.core.types.TraceId, org.streamrune.core.types.UserId, org.streamrune.core.types.CorrelationId, java.time.Instant, java.util.Map<java.lang.String, java.lang.String>)
+
+public interface org.streamrune.core.StreamRuneMetrics
+  public default void recordCommandAsyncRejected()
+  public default void recordCommandDispatched()
+  public default void recordCommandDispatched(java.lang.String)
+  public default void recordCommandDuration(java.lang.String, long)
+  public default void recordCommandDuration(long)
+  public default void recordCommandFailed()
+  public default void recordCommandFailed(java.lang.String)
+  public default void recordCommandRetried(java.lang.String)
+  public default void recordCommandShortCircuited(java.lang.String)
+  public default void recordCommandSucceeded()
+  public default void recordCommandSucceeded(java.lang.String)
+  public default void recordDeadLetterExhausted(java.lang.String)
+  public default void recordDeadLetterPublished(java.lang.String)
+  public default void recordDeadLetterReaderBehind(java.lang.String)
+  public default void recordDeadLetterStaleReplayBlocked(java.lang.String)
+  public default void recordDeadLetterSwept(long)
+  public default void recordDecryptRetried(java.lang.String)
+  public default void recordDlqAwaitingOperator(long)
+  public default void recordDlqBacklog(long)
+  public default void recordDlqRetryDegradation(long)
+  public default void recordEncryptSelfCheckFailed()
+  public default void recordEventAppendDuration(long)
+  public default void recordEventAppended()
+  public default void recordEventAppended(java.lang.String)
+  public default void recordEventReplayed()
+  public default void recordGdprPurgeFailed(java.lang.String)
+  public default void recordInboxReplayHit(java.lang.String)
+  public default void recordInboxSwept(long)
+  public default void recordListenerReconnect(java.lang.String)
+  public default void recordLockWait(long)
+  public default void recordOutboxBacklog(long)
+  public default void recordOutboxBlockageAge(long)
+  public default void recordOutboxBlockedAggregates(long)
+  public default void recordOutboxDeliveryFailed()
+  public default void recordOutboxInFlight(long)
+  public default void recordOutboxInFlightHorizonViolation()
+  public default void recordOutboxRelayDegradation(long)
+  public default void recordOutboxReplayed(long)
+  public default void recordOutboxSkipped()
+  public default void recordOutboxSkippedSwept(long)
+  public default void recordOutboxSwept(long)
+  public default void recordProjectionDeadLetterBacklog(long)
+  public default void recordProjectionDeadLettered()
+  public default void recordProjectionDeadLettered(org.streamrune.core.types.ProjectionName)
+  public default void recordProjectionDeliveryMode(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public default void recordProjectionDuration(long)
+  public default void recordProjectionDuration(org.streamrune.core.types.ProjectionName, long)
+  public default void recordProjectionFailed()
+  public default void recordProjectionFailed(org.streamrune.core.types.ProjectionName)
+  public default void recordProjectionProcessed()
+  public default void recordProjectionProcessed(org.streamrune.core.types.ProjectionName)
+  public default void recordQueryCacheHit(java.lang.String)
+  public default void recordQueryCacheMiss(java.lang.String)
+  public default void recordQueryDispatched(java.lang.String)
+  public default void recordQueryDuration(java.lang.String, long)
+  public default void recordSagaCasConflict(java.lang.String)
+  public default void recordSagaCompensateFaulted(java.lang.String, java.lang.String)
+  public default void recordSagaCompensatingBacklog(java.lang.String, long)
+  public default void recordSagaCompensation(java.lang.String, java.lang.String)
+  public default void recordSagaCompensationRetry(java.lang.String)
+  public default void recordSagaCompensationUnderForwardStep(java.lang.String)
+  public default void recordSagaDeadLetterSwept(long)
+  public default void recordSagaDeliveryRetried(java.lang.String)
+  public default void recordSagaEventHeld(java.lang.String, java.lang.String)
+  public default void recordSagaFaulted(java.lang.String)
+  public default void recordSagaFaultedBacklog(long)
+  public default void recordSagaFaultedRows(java.lang.String, long)
+  public default void recordSagaForcedStaleResume(java.lang.String)
+  public default void recordSagaForwardCommandFenced(java.lang.String)
+  public default void recordSagaQuarantined(java.lang.String)
+  public default void recordSagaReplayDeferred(java.lang.String)
+  public default void recordSagaReplayed(java.lang.String, java.lang.String)
+  public default void recordSagaResumeFaulted(java.lang.String, java.lang.String)
+  public default void recordSagaSkippedWhileFaulted(java.lang.String)
+  public default void recordSagaTimedOutBacklog(java.lang.String, long)
+  public default void recordSagaTimeoutClaimDeferred(java.lang.String)
+  public default void recordSnapshotCreated()
+  public default void recordSnapshotDiscarded(java.lang.String)
+  public default void recordSnapshotLoaded()
+  public default void recordSnapshotRefused()
+  public default void recordSubjectRedacted()
+  public default void recordSubscriptionDeliveryLatency(long)
+  public default void recordSubscriptionDeliveryLatency(org.streamrune.core.types.SubscriptionName, long)
+  public default void recordSubscriptionEventReceived()
+  public default void recordSubscriptionEventReceived(org.streamrune.core.types.SubscriptionName)
+  public default void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
+  public default void recordSystemicKeyStoreFailure()
+  public default void registerInFlightCommandsGauge(java.util.function.LongSupplier)
+  public default void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
+  public static final org.streamrune.core.StreamRuneMetrics NOOP
+
+public class org.streamrune.core.UnknownEventTypeException extends org.streamrune.core.EventStoreException
+  public <init>(java.lang.String, java.lang.String, java.util.Collection<java.lang.String>)
+  public java.lang.String typeName()
+  public java.util.List<java.lang.String> registeredTypes()
+
+public final record org.streamrune.core.UserAuthority
+  public <init>(java.util.Set<java.lang.String>, java.util.Set<java.lang.String>)
+  public boolean hasAnyPermission(java.lang.String...)
+  public boolean hasAnyRole(java.lang.String...)
+  public boolean hasPermission(java.lang.String)
+  public boolean hasRole(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.Set<java.lang.String> permissions()
+  public java.util.Set<java.lang.String> roles()
+  public static final org.streamrune.core.UserAuthority EMPTY
+
+public interface org.streamrune.core.UserRoleResolver
+  public abstract org.streamrune.core.UserAuthority resolve(org.streamrune.core.types.UserId)
+  public default boolean requiresRequestContext()
+
+public final record org.streamrune.core.ValidationError
+  public <init>(java.lang.String, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String code()
+  public java.lang.String field()
+  public java.lang.String message()
+
+public class org.streamrune.core.ValidationException extends org.streamrune.core.DomainException
+  public <init>(java.lang.String, java.util.List<org.streamrune.core.ValidationError>)
+  public <init>(java.util.List<org.streamrune.core.ValidationError>)
+  public java.util.List<org.streamrune.core.ValidationError> errors()
+
+public @interface org.streamrune.core.ValidationGroups
+  public abstract java.lang.Class<?>[] value()
+
+public final record org.streamrune.core.Versioned<T>
+  public <init>(T, long)
+  public T data()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public long version()
+
+public final record org.streamrune.core.audit.AuditEntry
+  public <init>(org.streamrune.core.types.CommandId, java.lang.String, org.streamrune.core.types.AggregateType, org.streamrune.core.types.AggregateId, org.streamrune.core.types.UserId, java.time.Instant, org.streamrune.core.audit.AuditOutcome, java.lang.String, int, org.streamrune.core.types.CorrelationId)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int eventCount()
+  public java.lang.String commandType()
+  public java.lang.String errorMessage()
+  public java.time.Instant occurredAt()
+  public org.streamrune.core.audit.AuditOutcome outcome()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.AggregateType aggregateType()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.UserId userId()
+
+public final enum org.streamrune.core.audit.AuditOutcome
+  public static final org.streamrune.core.audit.AuditOutcome FAILURE
+  public static final org.streamrune.core.audit.AuditOutcome SUCCESS
+  public static final org.streamrune.core.audit.AuditOutcome VETOED
+  public static org.streamrune.core.audit.AuditOutcome valueOf(java.lang.String)
+  public static org.streamrune.core.audit.AuditOutcome[] values()
+
+public interface org.streamrune.core.audit.AuditStore
+  public abstract void save(org.streamrune.core.audit.AuditEntry)
+
+public @interface org.streamrune.core.audit.Auditable
+
+public interface org.streamrune.core.audit.CommandAuditQuery
+  public abstract java.util.Optional<org.streamrune.core.audit.AuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
+  public abstract org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByCommandType(java.lang.String, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public abstract org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByOutcome(org.streamrune.core.audit.AuditOutcome, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public abstract org.streamrune.core.Page<org.streamrune.core.audit.AuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+
+public final record org.streamrune.core.audit.ComplianceReport
+  public <init>(java.time.Instant, java.time.Instant, long, long, long, java.util.Map<java.lang.String, java.lang.Long>, java.util.Map<java.lang.String, java.lang.Long>, java.util.Map<java.lang.String, java.lang.Long>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant from()
+  public java.time.Instant to()
+  public java.util.Map<java.lang.String, java.lang.Long> activityByUser()
+  public java.util.Map<java.lang.String, java.lang.Long> commandCountsByType()
+  public java.util.Map<java.lang.String, java.lang.Long> queryCountsByType()
+  public long totalCommands()
+  public long totalFailures()
+  public long totalQueries()
+
+public interface org.streamrune.core.audit.ComplianceReportQuery
+  public abstract org.streamrune.core.audit.ComplianceReport generate(java.time.Instant, java.time.Instant)
+  public abstract org.streamrune.core.audit.ComplianceReport generateForUser(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
+
+public final record org.streamrune.core.audit.EventAuditEntry
+  public <init>(org.streamrune.core.types.EventId, org.streamrune.core.types.EventType, org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.types.CommandId, org.streamrune.core.types.CorrelationId, org.streamrune.core.types.CausationId, org.streamrune.core.types.UserId, java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant occurredAt()
+  public org.streamrune.core.types.CausationId causationId()
+  public org.streamrune.core.types.CommandId commandId()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.EventId eventId()
+  public org.streamrune.core.types.EventType eventType()
+  public org.streamrune.core.types.StreamId streamId()
+  public org.streamrune.core.types.UserId userId()
+  public org.streamrune.core.types.Version version()
+
+public interface org.streamrune.core.audit.EventAuditQuery
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCausationId(org.streamrune.core.types.CausationId)
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> findByCorrelationId(org.streamrune.core.types.CorrelationId)
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> findByStreamId(org.streamrune.core.types.StreamId, java.time.Instant, java.time.Instant)
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
+  public abstract java.util.List<org.streamrune.core.audit.EventAuditEntry> traceFullCausationChain(org.streamrune.core.types.EventId)
+  public default org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCausationId(org.streamrune.core.types.CausationId, org.streamrune.core.PageRequest)
+  public default org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCommandId(org.streamrune.core.types.CommandId, org.streamrune.core.PageRequest)
+  public default org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCorrelationId(org.streamrune.core.types.CorrelationId, org.streamrune.core.PageRequest)
+  public default org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByStreamId(org.streamrune.core.types.StreamId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public default org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+
+public interface org.streamrune.core.audit.EventAuditStore
+  public abstract void save(org.streamrune.core.audit.EventAuditEntry)
+  public abstract void saveAll(java.util.List<org.streamrune.core.audit.EventAuditEntry>)
+
+public interface org.streamrune.core.crypto.CryptoEngine
+  public abstract boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public abstract byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public abstract byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public abstract void deleteKey(org.streamrune.core.types.SubjectId)
+  public default java.util.Set<java.lang.String> requiredCryptoTables()
+  public default void reinstate(org.streamrune.core.types.SubjectId)
+
+public class org.streamrune.core.crypto.CryptoMappingException extends org.streamrune.core.crypto.CryptoOperationException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public class org.streamrune.core.crypto.CryptoOperationException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public @interface org.streamrune.core.crypto.Encrypted
+  public abstract java.lang.String subjectId()
+
+public class org.streamrune.core.crypto.KeyNotFoundException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public class org.streamrune.core.crypto.SubjectForgottenException extends java.lang.RuntimeException
+  public <init>(java.lang.String)
+  public <init>(java.lang.String, java.lang.Throwable)
+
+public final enum org.streamrune.core.gdpr.GdprAction
+  public static final org.streamrune.core.gdpr.GdprAction EXPORT
+  public static final org.streamrune.core.gdpr.GdprAction FORGET
+  public static final org.streamrune.core.gdpr.GdprAction REINSTATE
+  public static org.streamrune.core.gdpr.GdprAction valueOf(java.lang.String)
+  public static org.streamrune.core.gdpr.GdprAction[] values()
+
+public interface org.streamrune.core.gdpr.SnapshotPurger extends org.streamrune.core.gdpr.SubjectDataPurger
+
+public interface org.streamrune.core.gdpr.SubjectDataCollector
+  public abstract com.fasterxml.jackson.databind.JsonNode collect(org.streamrune.core.types.SubjectId)
+  public abstract java.lang.String name()
+
+public interface org.streamrune.core.gdpr.SubjectDataPurger
+  public abstract java.lang.String name()
+  public abstract void purge(org.streamrune.core.types.SubjectId)
+
+public final record org.streamrune.core.gdpr.SubjectExport
+  public <init>(org.streamrune.core.types.SubjectId, java.time.Instant, java.util.Map<java.lang.String, com.fasterxml.jackson.databind.JsonNode>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant requestedAt()
+  public java.util.Map<java.lang.String, com.fasterxml.jackson.databind.JsonNode> sections()
+  public org.streamrune.core.types.SubjectId subjectId()
+
+public final class org.streamrune.core.metrics.MetricNames
+  public static final java.lang.String COMMANDS_ASYNC_REJECTED = "streamrune.commands.async.rejected"
+  public static final java.lang.String COMMANDS_DISPATCHED = "streamrune.commands.dispatched"
+  public static final java.lang.String COMMANDS_DURATION = "streamrune.commands.duration"
+  public static final java.lang.String COMMANDS_FAILED = "streamrune.commands.failed"
+  public static final java.lang.String COMMANDS_IN_FLIGHT = "streamrune.commands.in_flight"
+  public static final java.lang.String COMMANDS_RETRIED = "streamrune.commands.retried"
+  public static final java.lang.String COMMANDS_SHORT_CIRCUITED = "streamrune.commands.short.circuited"
+  public static final java.lang.String COMMANDS_SUCCEEDED = "streamrune.commands.succeeded"
+  public static final java.lang.String CRYPTO_DECRYPT_RETRIED = "streamrune.crypto.decrypt_retried"
+  public static final java.lang.String CRYPTO_ENCRYPT_SELF_CHECK_FAILED = "streamrune.crypto.encrypt_self_check_failed"
+  public static final java.lang.String CRYPTO_KEYSTORE_SYSTEMIC_FAILURE = "streamrune.crypto.keystore_systemic_failure"
+  public static final java.lang.String CRYPTO_SUBJECT_REDACTED = "streamrune.crypto.subject_redacted"
+  public static final java.lang.String DLQ_AWAITING_OPERATOR = "streamrune.dlq.awaiting_operator"
+  public static final java.lang.String DLQ_EXHAUSTED = "streamrune.dlq.exhausted"
+  public static final java.lang.String DLQ_PENDING = "streamrune.dlq.pending"
+  public static final java.lang.String DLQ_PUBLISHED = "streamrune.dlq.published"
+  public static final java.lang.String DLQ_READER_BEHIND = "streamrune.dlq.reader_behind"
+  public static final java.lang.String DLQ_RETRY_DEGRADED = "streamrune.dlq.retry.consecutive_failures"
+  public static final java.lang.String DLQ_STALE_REPLAY_BLOCKED = "streamrune.dlq.stale_replay_blocked"
+  public static final java.lang.String DLQ_SWEPT_ROWS = "streamrune.dlq.swept_rows"
+  public static final java.lang.String EVENTS_APPENDED = "streamrune.events.appended"
+  public static final java.lang.String EVENTS_DURATION = "streamrune.events.duration"
+  public static final java.lang.String EVENTS_REPLAYED = "streamrune.events.replayed"
+  public static final java.lang.String GDPR_PURGE_FAILED = "streamrune.gdpr.purge_failed"
+  public static final java.lang.String INBOX_REPLAY_HITS = "streamrune.inbox.replay_hits"
+  public static final java.lang.String INBOX_SWEPT_ROWS = "streamrune.inbox.swept_rows"
+  public static final java.lang.String LOCKS_WAIT = "streamrune.locks.wait"
+  public static final java.lang.String OUTBOX_BLOCKAGE_AGE_SECONDS = "streamrune.outbox.blockage_age_seconds"
+  public static final java.lang.String OUTBOX_BLOCKED_AGGREGATES = "streamrune.outbox.blocked_aggregates"
+  public static final java.lang.String OUTBOX_DELIVERY_FAILED = "streamrune.outbox.delivery_failed"
+  public static final java.lang.String OUTBOX_IN_FLIGHT = "streamrune.outbox.in_flight"
+  public static final java.lang.String OUTBOX_IN_FLIGHT_HORIZON_VIOLATION = "streamrune.outbox.in_flight_horizon_violation"
+  public static final java.lang.String OUTBOX_PENDING = "streamrune.outbox.pending"
+  public static final java.lang.String OUTBOX_RELAY_DEGRADED = "streamrune.outbox.relay.consecutive_failures"
+  public static final java.lang.String OUTBOX_REPLAYED = "streamrune.outbox.replayed"
+  public static final java.lang.String OUTBOX_SKIPPED = "streamrune.outbox.skipped"
+  public static final java.lang.String OUTBOX_SKIPPED_SWEPT = "streamrune.outbox.skipped_swept"
+  public static final java.lang.String OUTBOX_SWEPT_ROWS = "streamrune.outbox.swept_rows"
+  public static final java.lang.String PROJECTIONS_DEAD_LETTERED = "streamrune.projections.dead_lettered"
+  public static final java.lang.String PROJECTIONS_DEAD_LETTER_BACKLOG = "streamrune.projections.dead_letter_backlog"
+  public static final java.lang.String PROJECTIONS_DELIVERY_MODE = "streamrune.projections.delivery_mode"
+  public static final java.lang.String PROJECTIONS_DURATION = "streamrune.projections.duration"
+  public static final java.lang.String PROJECTIONS_FAILED = "streamrune.projections.failed"
+  public static final java.lang.String PROJECTIONS_PROCESSED = "streamrune.projections.processed"
+  public static final java.lang.String QUERIES_CACHE_HITS = "streamrune.queries.cache.hits"
+  public static final java.lang.String QUERIES_CACHE_MISSES = "streamrune.queries.cache.misses"
+  public static final java.lang.String QUERIES_DISPATCHED = "streamrune.queries.dispatched"
+  public static final java.lang.String QUERIES_DURATION = "streamrune.queries.duration"
+  public static final java.lang.String SAGA_CAS_CONFLICTS = "streamrune.saga.cas_conflicts"
+  public static final java.lang.String SAGA_COMPENSATE_FAULTED = "streamrune.saga.compensate_faulted"
+  public static final java.lang.String SAGA_COMPENSATING = "streamrune.saga.compensating"
+  public static final java.lang.String SAGA_COMPENSATION = "streamrune.saga.compensation"
+  public static final java.lang.String SAGA_COMPENSATION_RETRIES = "streamrune.saga.compensation_retries"
+  public static final java.lang.String SAGA_COMPENSATION_UNDER_FORWARD_STEP = "streamrune.saga.compensation_under_forward_step"
+  public static final java.lang.String SAGA_DEAD_LETTERS_SWEPT = "streamrune.saga.dead_letters_swept"
+  public static final java.lang.String SAGA_DELIVERY_RETRIED = "streamrune.saga.delivery_retried"
+  public static final java.lang.String SAGA_EVENT_HELD = "streamrune.saga.event_held"
+  public static final java.lang.String SAGA_FAULTED = "streamrune.saga.faulted"
+  public static final java.lang.String SAGA_FAULTED_BACKLOG = "streamrune.saga.faulted_backlog"
+  public static final java.lang.String SAGA_FAULTED_ROWS = "streamrune.saga.faulted_rows"
+  public static final java.lang.String SAGA_FORCED_STALE_RESUME = "streamrune.saga.forced_stale_resume"
+  public static final java.lang.String SAGA_FORWARD_COMMANDS_FENCED = "streamrune.saga.forward_commands_fenced"
+  public static final java.lang.String SAGA_QUARANTINED = "streamrune.saga.quarantined"
+  public static final java.lang.String SAGA_REPLAYED = "streamrune.saga.replayed"
+  public static final java.lang.String SAGA_REPLAY_DEFERRED = "streamrune.saga.replay_deferred"
+  public static final java.lang.String SAGA_RESUME_FAULTED = "streamrune.saga.resume_faulted"
+  public static final java.lang.String SAGA_SKIPPED_WHILE_FAULTED = "streamrune.saga.skipped_while_faulted"
+  public static final java.lang.String SAGA_TIMED_OUT = "streamrune.saga.timed_out"
+  public static final java.lang.String SAGA_TIMEOUT_CLAIMS_DEFERRED = "streamrune.saga.timeout_claims_deferred"
+  public static final java.lang.String SNAPSHOTS_CREATED = "streamrune.snapshots.created"
+  public static final java.lang.String SNAPSHOTS_DISCARDED = "streamrune.snapshots.discarded"
+  public static final java.lang.String SNAPSHOTS_LOADED = "streamrune.snapshots.loaded"
+  public static final java.lang.String SNAPSHOTS_REFUSED = "streamrune.snapshots.refused"
+  public static final java.lang.String SUBSCRIPTIONS_DELIVERY_LATENCY = "streamrune.subscriptions.delivery.latency"
+  public static final java.lang.String SUBSCRIPTIONS_EVENTS_RECEIVED = "streamrune.subscriptions.events.received"
+  public static final java.lang.String SUBSCRIPTIONS_LAG = "streamrune.subscriptions.lag"
+  public static final java.lang.String SUBSCRIPTIONS_LISTENER_RECONNECTS = "streamrune.subscriptions.listener.reconnects"
+  public static final java.lang.String TAG_CHANNEL = "channel"
+  public static final java.lang.String TAG_COMMAND_TYPE = "command.type"
+  public static final java.lang.String TAG_DELIVERY_MODE = "delivery.mode"
+  public static final java.lang.String TAG_EVENT_TYPE = "event.type"
+  public static final java.lang.String TAG_HOLD_REASON = "hold.reason"
+  public static final java.lang.String TAG_OUTCOME = "outcome"
+  public static final java.lang.String TAG_PROJECTION_NAME = "projection.name"
+  public static final java.lang.String TAG_PURGER = "purger"
+  public static final java.lang.String TAG_QUERY_TYPE = "query.type"
+  public static final java.lang.String TAG_REASON = "reason"
+  public static final java.lang.String TAG_SAGA_TYPE = "saga.type"
+  public static final java.lang.String TAG_STREAM_ID = "stream.id"
+  public static final java.lang.String TAG_SUBSCRIPTION_NAME = "subscription.name"
+
+public final record org.streamrune.core.outbox.OutboxEntry
+  public <init>(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String, org.streamrune.core.types.StreamId, org.streamrune.core.outbox.OutboxStatus, int, java.lang.String, java.time.Instant, java.time.Instant, java.time.Instant, org.streamrune.core.outbox.OutboxEntry$SkipRecord, org.streamrune.core.tracing.SpanLink)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int attempts()
+  public java.lang.String lastError()
+  public java.lang.String payload()
+  public java.lang.String payloadType()
+  public java.time.Instant createdAt()
+  public java.time.Instant nextRetryAt()
+  public java.time.Instant processedAt()
+  public org.streamrune.core.outbox.OutboxEntry withTraceLink(org.streamrune.core.tracing.SpanLink)
+  public org.streamrune.core.outbox.OutboxEntry$SkipRecord skip()
+  public org.streamrune.core.outbox.OutboxEntryId id()
+  public org.streamrune.core.outbox.OutboxStatus status()
+  public org.streamrune.core.tracing.SpanLink traceLink()
+  public org.streamrune.core.types.StreamId streamId()
+  public static org.streamrune.core.outbox.OutboxEntry pending(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
+  public static org.streamrune.core.outbox.OutboxEntry pending(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String, org.streamrune.core.types.StreamId)
+
+public static final record org.streamrune.core.outbox.OutboxEntry$SkipRecord
+  public <init>(java.time.Instant, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String reason()
+  public java.lang.String skippedBy()
+  public java.time.Instant skippedAt()
+
+public final record org.streamrune.core.outbox.OutboxEntryId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.outbox.OutboxEntryId of(java.lang.String)
+
+public interface org.streamrune.core.outbox.OutboxEntrySpans
+  public abstract org.streamrune.core.tracing.TraceScope start(org.streamrune.core.outbox.OutboxEntry)
+  public static final org.streamrune.core.outbox.OutboxEntrySpans NONE
+
+public interface org.streamrune.core.outbox.OutboxEventMapper
+  public abstract java.util.List<org.streamrune.core.outbox.OutboxEntry> toOutbox(org.streamrune.core.EventEnvelope)
+
+public final enum org.streamrune.core.outbox.OutboxOrderingMode
+  public static final org.streamrune.core.outbox.OutboxOrderingMode AVAILABILITY_FIRST
+  public static final org.streamrune.core.outbox.OutboxOrderingMode STRICT_PER_AGGREGATE
+  public static org.streamrune.core.outbox.OutboxOrderingMode valueOf(java.lang.String)
+  public static org.streamrune.core.outbox.OutboxOrderingMode[] values()
+
+public final class org.streamrune.core.outbox.OutboxOrderingViolationException extends java.lang.IllegalArgumentException
+  public <init>(org.streamrune.core.outbox.OutboxEntryId, java.lang.String)
+  public java.lang.String payloadType()
+  public org.streamrune.core.outbox.OutboxEntryId entryId()
+
+public interface org.streamrune.core.outbox.OutboxPublisher
+  public abstract void publish(org.streamrune.core.outbox.OutboxEntry) throws java.lang.Exception
+  public default java.time.Duration inFlightHorizon()
+  public default org.streamrune.core.outbox.OutboxPublisher$BatchResult publishBatch(java.util.List<org.streamrune.core.outbox.OutboxEntry>, java.time.Instant, org.streamrune.core.outbox.OutboxEntrySpans)
+  public default org.streamrune.core.outbox.OutboxPublisher$FailureKind classifyFailure(java.lang.Exception)
+
+public static final record org.streamrune.core.outbox.OutboxPublisher$BatchResult
+  public <init>(java.util.Set<org.streamrune.core.outbox.OutboxEntryId>, java.util.Map<org.streamrune.core.outbox.OutboxEntryId, java.lang.Exception>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.Map<org.streamrune.core.outbox.OutboxEntryId, java.lang.Exception> failed()
+  public java.util.Set<org.streamrune.core.outbox.OutboxEntryId> confirmed()
+
+public static final enum org.streamrune.core.outbox.OutboxPublisher$FailureKind
+  public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind ENTRY
+  public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind IN_FLIGHT
+  public static final org.streamrune.core.outbox.OutboxPublisher$FailureKind TRANSPORT
+  public static org.streamrune.core.outbox.OutboxPublisher$FailureKind valueOf(java.lang.String)
+  public static org.streamrune.core.outbox.OutboxPublisher$FailureKind[] values()
+
+public final enum org.streamrune.core.outbox.OutboxStatus
+  public static final org.streamrune.core.outbox.OutboxStatus DELIVERED
+  public static final org.streamrune.core.outbox.OutboxStatus FAILED
+  public static final org.streamrune.core.outbox.OutboxStatus IN_PROGRESS
+  public static final org.streamrune.core.outbox.OutboxStatus PENDING
+  public static final org.streamrune.core.outbox.OutboxStatus SKIPPED
+  public static org.streamrune.core.outbox.OutboxStatus valueOf(java.lang.String)
+  public static org.streamrune.core.outbox.OutboxStatus[] values()
+
+public interface org.streamrune.core.outbox.OutboxStore
+  public abstract boolean markDelivered(org.streamrune.core.outbox.OutboxEntryId, java.lang.String)
+  public abstract boolean markFailed(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.lang.String)
+  public abstract boolean markRetry(org.streamrune.core.outbox.OutboxEntryId, int, java.lang.String, java.time.Duration, java.lang.String)
+  public abstract boolean resetFailedToPending(org.streamrune.core.outbox.OutboxEntryId)
+  public abstract boolean skipFailed(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
+  public abstract java.lang.String claimedBy()
+  public abstract java.util.List<org.streamrune.core.outbox.OutboxEntry> findByStatus(org.streamrune.core.outbox.OutboxStatus, int)
+  public abstract java.util.List<org.streamrune.core.outbox.OutboxEntry> loadPending(int)
+  public abstract java.util.Optional<org.streamrune.core.outbox.OutboxEntry> findById(org.streamrune.core.outbox.OutboxEntryId)
+  public abstract void delete(org.streamrune.core.outbox.OutboxEntryId)
+  public abstract void save(org.streamrune.core.outbox.OutboxEntry)
+  public default int deleteDelivered(java.time.Instant)
+  public default int deleteSkipped(java.time.Instant)
+  public default int markDeliveredAll(java.util.Collection<org.streamrune.core.outbox.OutboxEntryId>, java.lang.String)
+  public default int releaseClaims(java.util.Collection<org.streamrune.core.outbox.OutboxEntry>, java.lang.String)
+  public default java.time.Duration claimLease()
+  public default long countByStatus(org.streamrune.core.outbox.OutboxStatus)
+  public default org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
+  public default org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
+
+public static final record org.streamrune.core.outbox.OutboxStore$BlockageSample
+  public <init>(long, java.time.Instant, long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant oldestFailedAt()
+  public long failedAggregates()
+  public long nullAggregateFailed()
+
+public interface org.streamrune.core.projection.AtomicBatchProcessor
+  public abstract void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public default boolean serializesReplay()
+  public default boolean supportsFencing()
+  public default boolean writesTo(org.streamrune.core.projection.ProjectionRepository)
+  public default void checkProjectionName(org.streamrune.core.types.ProjectionName)
+  public default void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public default void prepareReadModel(org.streamrune.core.types.ProjectionName)
+  public default void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+  public static org.streamrune.core.projection.AtomicBatchProcessor nonAtomicAtLeastOnce()
+
+public static interface org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater
+  public abstract void update(org.streamrune.core.projection.ProjectionRepository)
+
+public abstract class org.streamrune.core.projection.BaseProjection implements org.streamrune.core.projection.Projection
+  protected <T> java.util.Optional<T> findById(java.lang.String, java.lang.Class<T>)
+  protected <T> void save(java.lang.String, T)
+  protected <init>(org.streamrune.core.projection.ProjectionRepository)
+  protected <init>(org.streamrune.core.projection.ProjectionRepository, java.lang.String)
+  protected final org.streamrune.core.projection.ProjectionRepository repository
+  protected org.streamrune.core.types.ProjectionName projectionName()
+  protected void delete(java.lang.String)
+  public boolean writesThroughRepository()
+  public final void process(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
+  public java.util.Optional<org.streamrune.core.projection.ProjectionRepository> writeTarget()
+
+public final enum org.streamrune.core.projection.LateDataPolicy
+  public static final org.streamrune.core.projection.LateDataPolicy DROP
+  public static final org.streamrune.core.projection.LateDataPolicy REOPEN
+  public static org.streamrune.core.projection.LateDataPolicy valueOf(java.lang.String)
+  public static org.streamrune.core.projection.LateDataPolicy[] values()
+
+public interface org.streamrune.core.projection.OffsetStore
+  public abstract org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public abstract void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public default void reset(org.streamrune.core.types.ProjectionName)
+
+public interface org.streamrune.core.projection.Projection
+  public abstract void process(java.util.List<org.streamrune.core.EventEnvelope>)
+  public default boolean processDeadLetterReplay(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
+  public default boolean writesThroughRepository()
+  public default java.util.Optional<org.streamrune.core.projection.ProjectionRepository> writeTarget()
+  public default void process(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
+
+public class org.streamrune.core.projection.ProjectionCheckpointSaveException extends java.lang.RuntimeException
+  public <init>(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset, java.lang.Throwable)
+  public org.streamrune.core.types.GlobalOffset offset()
+  public org.streamrune.core.types.ProjectionName projectionName()
+
+public class org.streamrune.core.projection.ProjectionCommitFencedException extends org.streamrune.core.OptimisticLockException
+  public <init>(org.streamrune.core.projection.ProjectionCommitFencedException$Guard, java.lang.String)
+  public org.streamrune.core.projection.ProjectionCommitFencedException$Guard guard()
+
+public static final enum org.streamrune.core.projection.ProjectionCommitFencedException$Guard
+  public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard EPOCH_FENCE
+  public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard MONOTONIC
+  public static final org.streamrune.core.projection.ProjectionCommitFencedException$Guard OVERLAP
+  public static org.streamrune.core.projection.ProjectionCommitFencedException$Guard valueOf(java.lang.String)
+  public static org.streamrune.core.projection.ProjectionCommitFencedException$Guard[] values()
+
+public final record org.streamrune.core.projection.ProjectionDeadLetterEntry
+  public <init>(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset, org.streamrune.core.types.GlobalOffset, int, java.lang.String, java.lang.String, int, java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int attempts()
+  public int batchSize()
+  public java.lang.String errorMessage()
+  public java.lang.String errorType()
+  public java.time.Instant failedAt()
+  public org.streamrune.core.types.GlobalOffset fromOffset()
+  public org.streamrune.core.types.GlobalOffset toOffset()
+  public org.streamrune.core.types.ProjectionName projectionName()
+
+public interface org.streamrune.core.projection.ProjectionDeadLetterStore
+  public abstract java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> read(org.streamrune.core.types.ProjectionName, int)
+  public abstract java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> readAll(int)
+  public abstract void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public abstract void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
+  public default long countPending()
+
+public final enum org.streamrune.core.projection.ProjectionDeliveryMode
+  public boolean writesInCheckpointTransaction()
+  public static final org.streamrune.core.projection.ProjectionDeliveryMode AT_LEAST_ONCE_IDEMPOTENT
+  public static final org.streamrune.core.projection.ProjectionDeliveryMode EXTERNAL_EFFECT
+  public static final org.streamrune.core.projection.ProjectionDeliveryMode TRANSACTIONAL_LOCAL
+  public static org.streamrune.core.projection.ProjectionDeliveryMode valueOf(java.lang.String)
+  public static org.streamrune.core.projection.ProjectionDeliveryMode[] values()
+
+public class org.streamrune.core.projection.ProjectionEpochRegressionException extends java.lang.RuntimeException
+  public <init>(org.streamrune.core.types.ProjectionName, long, long)
+  public long acquiredEpoch()
+  public long storedEpoch()
+  public org.streamrune.core.types.ProjectionName projectionName()
+
+public final enum org.streamrune.core.projection.ProjectionErrorClass
+  public static final org.streamrune.core.projection.ProjectionErrorClass POISON
+  public static final org.streamrune.core.projection.ProjectionErrorClass TRANSIENT
+  public static org.streamrune.core.projection.ProjectionErrorClass valueOf(java.lang.String)
+  public static org.streamrune.core.projection.ProjectionErrorClass[] values()
+
+public interface org.streamrune.core.projection.ProjectionErrorClassifier
+  public abstract org.streamrune.core.projection.ProjectionErrorClass classify(java.lang.Throwable)
+  public static final org.streamrune.core.projection.ProjectionErrorClassifier DEFAULT
+
+public final enum org.streamrune.core.projection.ProjectionErrorStrategy
+  public static final org.streamrune.core.projection.ProjectionErrorStrategy DLQ
+  public static final org.streamrune.core.projection.ProjectionErrorStrategy HALT
+  public static final org.streamrune.core.projection.ProjectionErrorStrategy SKIP
+  public static org.streamrune.core.projection.ProjectionErrorStrategy valueOf(java.lang.String)
+  public static org.streamrune.core.projection.ProjectionErrorStrategy[] values()
+
+public interface org.streamrune.core.projection.ProjectionRepository
+  public abstract <T> java.util.List<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>)
+  public abstract <T> java.util.Optional<T> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>)
+  public abstract <T> java.util.Optional<org.streamrune.core.Versioned<T>> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>, org.streamrune.core.LockMode)
+  public abstract <T> org.streamrune.core.Page<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.PageRequest)
+  public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
+  public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public abstract void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
+  public default java.lang.Object writeTargetIdentity()
+  public default void afterCommit(java.lang.Runnable)
+
+public interface org.streamrune.core.projection.ProjectionRunner
+  public abstract void reset(org.streamrune.core.types.ProjectionName)
+  public abstract void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+
+public final record org.streamrune.core.projection.Window
+  public <init>(java.time.Instant, java.time.Instant)
+  public boolean contains(java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant end()
+  public java.time.Instant start()
+
+public final record org.streamrune.core.projection.WindowResult<W>
+  public <init>(org.streamrune.core.projection.Window, W, boolean)
+  public W state()
+  public boolean isFinal()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.projection.Window window()
+
+public interface org.streamrune.core.projection.WindowSink<W>
+  public abstract void onWindow(org.streamrune.core.projection.WindowResult<W>)
+
+public final record org.streamrune.core.saga.LoadedSaga<S extends org.streamrune.core.saga.SagaState>
+  public <init>(S, org.streamrune.core.saga.SagaStatus, long, java.time.Instant, java.lang.Long, java.time.Instant, org.streamrune.core.types.EventId, boolean, org.streamrune.core.saga.SagaStatus, boolean, java.lang.Long, java.lang.Long)
+  public S state()
+  public boolean deadLetterPending()
+  public boolean genesisApplied()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.Long episodeVersion()
+  public java.lang.Long lastAppliedOffset()
+  public java.lang.Long lastReplayedOffset()
+  public java.time.Instant episodeClaimedAt()
+  public java.time.Instant updatedAt()
+  public long version()
+  public org.streamrune.core.saga.SagaStatus effectiveStatus()
+  public org.streamrune.core.saga.SagaStatus preFaultStatus()
+  public org.streamrune.core.saga.SagaStatus status()
+  public org.streamrune.core.types.EventId episodeCauseEventId()
+
+public final record org.streamrune.core.saga.SagaCommand
+  public <init>(org.streamrune.core.Command, org.streamrune.core.types.AggregateId)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.Command command()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public static org.streamrune.core.saga.SagaCommand of(org.streamrune.core.Command, org.streamrune.core.types.AggregateId)
+
+public interface org.streamrune.core.saga.SagaDeadLetterStore
+  public abstract boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public abstract boolean discard(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public abstract int deleteOlderThan(java.time.Instant)
+  public abstract java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findAll(int)
+  public abstract java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findBySaga(org.streamrune.core.saga.SagaId)
+  public abstract void establishFirstReplayAnchor(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, java.time.Instant)
+  public abstract void publish(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public abstract void publishShielded(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
+  public abstract void setResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.saga.SagaId)
+  public default java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntriesByResolvedTarget(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId)
+  public default java.util.Optional<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findNullSagaEntry(org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public default long countFaultedBacklog()
+
+public static final record org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry
+  public <init>(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.types.EventType, java.lang.String, java.lang.String, java.time.Instant)
+  public <init>(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.types.EventType, java.lang.String, java.lang.String, java.time.Instant, java.time.Instant)
+  public <init>(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset, org.streamrune.core.types.EventType, java.lang.String, java.lang.String, java.time.Instant, java.time.Instant, java.time.Instant, org.streamrune.core.saga.SagaId)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String errorMessage()
+  public java.lang.String errorType()
+  public java.time.Instant faultedAt()
+  public java.time.Instant firstFaultedAt()
+  public java.time.Instant firstReplayStartedAt()
+  public org.streamrune.core.saga.SagaId sagaId()
+  public org.streamrune.core.saga.SagaId targetSagaId()
+  public org.streamrune.core.types.EventType eventType()
+  public org.streamrune.core.types.GlobalOffset eventOffset()
+  public org.streamrune.core.types.SagaType sagaType()
+
+public interface org.streamrune.core.saga.SagaDecider<S extends org.streamrune.core.saga.SagaState>
+  public abstract S evolve(S, org.streamrune.core.EventEnvelope)
+  public abstract S initialState(org.streamrune.core.saga.SagaId)
+  public abstract java.lang.Class<S> stateType()
+  public abstract java.util.List<org.streamrune.core.saga.SagaCommand> handle(S, org.streamrune.core.EventEnvelope)
+  public default java.util.List<org.streamrune.core.saga.SagaCommand> compensate(S, java.lang.Throwable, org.streamrune.core.saga.SagaCommand)
+  public default java.util.Optional<java.time.Duration> timeout()
+
+public final class org.streamrune.core.saga.SagaForwardFencedException extends java.lang.RuntimeException
+  public <init>(org.streamrune.core.saga.SagaOrigin)
+  public org.streamrune.core.saga.SagaId sagaId()
+  public org.streamrune.core.types.SagaType sagaType()
+
+public final record org.streamrune.core.saga.SagaId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static final int MAX_LENGTH = 255
+  public static org.streamrune.core.saga.SagaId of(java.lang.String)
+
+public interface org.streamrune.core.saga.SagaOrchestrator<S extends org.streamrune.core.saga.SagaState>
+  public abstract S evolve(S, org.streamrune.core.EventEnvelope)
+  public abstract S initialState(org.streamrune.core.saga.SagaId)
+  public abstract boolean isStartEvent(org.streamrune.core.EventEnvelope)
+  public abstract java.lang.Class<S> stateType()
+  public abstract java.util.List<org.streamrune.core.saga.SagaCommand> compensate(S, java.lang.Throwable, org.streamrune.core.saga.SagaCommand)
+  public abstract java.util.List<org.streamrune.core.saga.SagaCommand> handle(S, org.streamrune.core.EventEnvelope)
+  public abstract org.streamrune.core.saga.SagaId extractSagaId(org.streamrune.core.EventEnvelope)
+  public default java.util.Optional<org.streamrune.core.saga.SagaId> correlateByEventData(org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent)
+
+public final record org.streamrune.core.saga.SagaOrigin
+  public <init>(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId, int)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int hop()
+  public org.streamrune.core.saga.SagaId sagaId()
+  public org.streamrune.core.saga.SagaOrigin nextHop()
+  public org.streamrune.core.types.CorrelationId correlationId()
+  public org.streamrune.core.types.SagaType sagaType()
+  public static org.streamrune.core.saga.SagaOrigin dispatchedBy(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaId)
+
+public interface org.streamrune.core.saga.SagaState extends org.streamrune.core.AggregateState
+  public abstract org.streamrune.core.saga.SagaStatus status()
+
+public class org.streamrune.core.saga.SagaStateSerializationException extends java.lang.RuntimeException
+  public <init>(java.lang.String, org.streamrune.core.saga.SagaId, java.lang.Throwable)
+  public org.streamrune.core.saga.SagaId sagaId()
+
+public final enum org.streamrune.core.saga.SagaStatus
+  public boolean isHalted()
+  public boolean isTerminal()
+  public static final org.streamrune.core.saga.SagaStatus COMPENSATED
+  public static final org.streamrune.core.saga.SagaStatus COMPENSATING
+  public static final org.streamrune.core.saga.SagaStatus COMPLETED
+  public static final org.streamrune.core.saga.SagaStatus FAILED
+  public static final org.streamrune.core.saga.SagaStatus FAULTED
+  public static final org.streamrune.core.saga.SagaStatus RUNNING
+  public static final org.streamrune.core.saga.SagaStatus STARTED
+  public static org.streamrune.core.saga.SagaStatus valueOf(java.lang.String)
+  public static org.streamrune.core.saga.SagaStatus[] values()
+
+public interface org.streamrune.core.saga.SagaStore
+  public abstract <S extends org.streamrune.core.saga.SagaState> java.util.Optional<org.streamrune.core.saga.LoadedSaga<S>> load(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, java.lang.Class<S>)
+  public abstract boolean markFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, long)
+  public abstract java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
+  public abstract java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public abstract void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)
+  public abstract void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long, org.streamrune.core.types.EventId)
+  public abstract void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+  public abstract void createFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState)
+  public abstract void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean, org.streamrune.core.types.EventId)
+  public abstract void delete(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
+  public abstract void setDeadLetterPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, boolean)
+  public abstract void update(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long)
+  public default java.lang.Object storageIdentity()
+  public default java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public default long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public default void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long)
+  public default void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus)
+  public default void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
+
+public static final record org.streamrune.core.saga.SagaStore$AppliedEvent
+  public <init>(org.streamrune.core.types.GlobalOffset, boolean, boolean, org.streamrune.core.types.EventId)
+  public boolean replayRedrive()
+  public boolean startPath()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.saga.SagaStore$AppliedEvent withEventId(org.streamrune.core.types.EventId)
+  public org.streamrune.core.types.EventId eventId()
+  public org.streamrune.core.types.GlobalOffset eventOffset()
+  public static org.streamrune.core.saga.SagaStore$AppliedEvent live(org.streamrune.core.types.GlobalOffset)
+  public static org.streamrune.core.saga.SagaStore$AppliedEvent liveStart(org.streamrune.core.types.GlobalOffset)
+  public static org.streamrune.core.saga.SagaStore$AppliedEvent replayed(org.streamrune.core.types.GlobalOffset)
+  public static org.streamrune.core.saga.SagaStore$AppliedEvent replayedStart(org.streamrune.core.types.GlobalOffset)
+
+public static final record org.streamrune.core.saga.SagaStore$CompensatingSaga
+  public <init>(org.streamrune.core.saga.SagaId, java.time.Instant, java.time.Instant)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Instant episodeClaimedAt()
+  public java.time.Instant updatedAt()
+  public org.streamrune.core.saga.SagaId sagaId()
+
+public final class org.streamrune.core.saga.SagaTimeoutException extends java.lang.RuntimeException
+  public <init>(org.streamrune.core.saga.SagaId, java.time.Duration)
+  public java.time.Duration timeout()
+  public org.streamrune.core.saga.SagaId sagaId()
+
+public final class org.streamrune.core.saga.SagaTypeCollisionException extends java.lang.IllegalStateException
+  public <init>(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.SagaType)
+  public org.streamrune.core.saga.SagaId sagaId()
+  public org.streamrune.core.types.SagaType attemptedType()
+  public org.streamrune.core.types.SagaType existingType()
+
+public final class org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException extends java.lang.IllegalStateException
+  public <init>(org.streamrune.core.saga.SagaId, java.lang.String)
+  public org.streamrune.core.saga.SagaId sagaId()
+
+public interface org.streamrune.core.subscription.EventListener
+  public abstract void onEvents(java.util.List<org.streamrune.core.EventEnvelope>)
+
+public interface org.streamrune.core.subscription.EventSubscription extends java.lang.AutoCloseable
+  public abstract boolean isRunning()
+  public abstract void close()
+  public abstract void start()
+
+public final enum org.streamrune.core.subscription.LeaseRole
+  public static final org.streamrune.core.subscription.LeaseRole LEADING
+  public static final org.streamrune.core.subscription.LeaseRole NOT_REPORTED
+  public static final org.streamrune.core.subscription.LeaseRole STANDBY
+  public static final org.streamrune.core.subscription.LeaseRole UNGATED
+  public static org.streamrune.core.subscription.LeaseRole valueOf(java.lang.String)
+  public static org.streamrune.core.subscription.LeaseRole[] values()
+
+public interface org.streamrune.core.subscription.StreamSubscription extends java.lang.AutoCloseable
+  public abstract boolean isRunning()
+  public abstract org.streamrune.core.types.StreamId streamId()
+  public abstract void close()
+  public abstract void start()
+
+public final record org.streamrune.core.subscription.SubscriptionConfig
+  public <init>(boolean, java.time.Duration, java.time.Duration)
+  public boolean listenNotifyEnabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration pollingInterval()
+  public java.time.Duration pollingJitter()
+  public static final org.streamrune.core.subscription.SubscriptionConfig DEFAULT
+  public static org.streamrune.core.subscription.SubscriptionConfig pollingOnly(java.time.Duration)
+
+public final record org.streamrune.core.subscription.SubscriptionHealth
+  public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int errorCount()
+  public long lag()
+  public org.streamrune.core.subscription.LeaseRole role()
+  public org.streamrune.core.subscription.SubscriptionHealth$Status status()
+  public org.streamrune.core.subscription.SubscriptionLifecycleState state()
+  public org.streamrune.core.types.SubscriptionName name()
+
+public static final enum org.streamrune.core.subscription.SubscriptionHealth$Status
+  public static final org.streamrune.core.subscription.SubscriptionHealth$Status DEGRADED
+  public static final org.streamrune.core.subscription.SubscriptionHealth$Status DOWN
+  public static final org.streamrune.core.subscription.SubscriptionHealth$Status UP
+  public static org.streamrune.core.subscription.SubscriptionHealth$Status valueOf(java.lang.String)
+  public static org.streamrune.core.subscription.SubscriptionHealth$Status[] values()
+
+public interface org.streamrune.core.subscription.SubscriptionLeadership extends java.lang.AutoCloseable
+  public abstract java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> current(org.streamrune.core.types.SubscriptionName)
+  public abstract java.util.Optional<org.streamrune.core.subscription.SubscriptionLeadership$Lease> tryAcquire(org.streamrune.core.types.SubscriptionName)
+  public abstract void close()
+  public abstract void resign(org.streamrune.core.types.SubscriptionName)
+  public static final org.streamrune.core.subscription.SubscriptionLeadership NOOP
+
+public static final record org.streamrune.core.subscription.SubscriptionLeadership$Lease
+  public <init>(long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public long epoch()
+
+public interface org.streamrune.core.subscription.SubscriptionLifecycle extends org.streamrune.core.subscription.EventSubscription
+  public abstract org.streamrune.core.subscription.SubscriptionLifecycleState state()
+  public abstract void pause()
+  public abstract void resume()
+
+public final enum org.streamrune.core.subscription.SubscriptionLifecycleState
+  public static final org.streamrune.core.subscription.SubscriptionLifecycleState CREATED
+  public static final org.streamrune.core.subscription.SubscriptionLifecycleState PAUSED
+  public static final org.streamrune.core.subscription.SubscriptionLifecycleState RUNNING
+  public static final org.streamrune.core.subscription.SubscriptionLifecycleState STOPPED
+  public static org.streamrune.core.subscription.SubscriptionLifecycleState valueOf(java.lang.String)
+  public static org.streamrune.core.subscription.SubscriptionLifecycleState[] values()
+
+public final class org.streamrune.core.tracing.SpanAttributes
+  public boolean equals(java.lang.Object)
+  public boolean isEmpty()
+  public int hashCode()
+  public int size()
+  public java.lang.String toString()
+  public java.util.Map<java.lang.String, java.lang.Object> asMap()
+  public static org.streamrune.core.tracing.SpanAttributes empty()
+  public static org.streamrune.core.tracing.SpanAttributes$Builder builder()
+  public void forEach(java.util.function.BiConsumer<java.lang.String, java.lang.Object>)
+
+public static final class org.streamrune.core.tracing.SpanAttributes$Builder
+  public org.streamrune.core.tracing.SpanAttributes build()
+  public org.streamrune.core.tracing.SpanAttributes$Builder put(java.lang.String, boolean)
+  public org.streamrune.core.tracing.SpanAttributes$Builder put(java.lang.String, java.lang.String)
+  public org.streamrune.core.tracing.SpanAttributes$Builder put(java.lang.String, long)
+
+public final class org.streamrune.core.tracing.SpanBaggage
+  public boolean equals(java.lang.Object)
+  public boolean keepsCurrent()
+  public int hashCode()
+  public java.lang.String toString()
+  public java.util.Map<java.lang.String, java.lang.String> entries()
+  public static final org.streamrune.core.tracing.SpanBaggage KEEP
+  public static org.streamrune.core.tracing.SpanBaggage replace(java.util.Map<java.lang.String, java.lang.String>)
+
+public final enum org.streamrune.core.tracing.SpanKind
+  public static final org.streamrune.core.tracing.SpanKind CLIENT
+  public static final org.streamrune.core.tracing.SpanKind CONSUMER
+  public static final org.streamrune.core.tracing.SpanKind INTERNAL
+  public static final org.streamrune.core.tracing.SpanKind PRODUCER
+  public static final org.streamrune.core.tracing.SpanKind SERVER
+  public static org.streamrune.core.tracing.SpanKind valueOf(java.lang.String)
+  public static org.streamrune.core.tracing.SpanKind[] values()
+
+public final record org.streamrune.core.tracing.SpanLink
+  public <init>(org.streamrune.core.types.TraceId, org.streamrune.core.types.SpanId)
+  public boolean isPresent()
+  public boolean isW3c()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.core.types.SpanId spanId()
+  public org.streamrune.core.types.TraceId traceId()
+  public static final org.streamrune.core.tracing.SpanLink NONE
+  public static org.streamrune.core.tracing.SpanLink of(org.streamrune.core.EventMetadata)
+  public static org.streamrune.core.tracing.SpanLink ofW3c(java.lang.String, java.lang.String)
+
+public interface org.streamrune.core.tracing.StreamRuneTracing
+  public abstract boolean enabled(org.streamrune.core.tracing.TracingArea)
+  public abstract org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, org.streamrune.core.tracing.SpanLink, org.streamrune.core.tracing.SpanBaggage)
+  public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes)
+  public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
+  public static final org.streamrune.core.tracing.StreamRuneTracing NOOP
+
+public final class org.streamrune.core.tracing.TraceAttributes
+  public static final java.lang.String AGGREGATE_ID = "streamrune.aggregate.id"
+  public static final java.lang.String AGGREGATE_TYPE = "streamrune.aggregate.type"
+  public static final java.lang.String APPEND_OUTCOME = "streamrune.append.outcome"
+  public static final java.lang.String BATCH_SIZE = "streamrune.batch.size"
+  public static final java.lang.String COMMAND_ID = "streamrune.command.id"
+  public static final java.lang.String COMMAND_TYPE = "streamrune.command.type"
+  public static final java.lang.String EVENT_COUNT = "streamrune.event.count"
+  public static final java.lang.String EVENT_STORE_APPEND = "eventstore/append"
+  public static final java.lang.String EVENT_STORE_APPEND_SERIALIZE = "eventstore/append/serialize"
+  public static final java.lang.String EVENT_STORE_LOAD = "eventstore/load"
+  public static final java.lang.String EVENT_STORE_LOAD_DESERIALIZE = "eventstore/load/deserialize"
+  public static final java.lang.String EVENT_STORE_READ = "eventstore/read"
+  public static final java.lang.String EVENT_STORE_SNAPSHOT_LOAD = "eventstore/snapshot/load"
+  public static final java.lang.String EVENT_STORE_SNAPSHOT_SAVE = "eventstore/snapshot/save"
+  public static final java.lang.String EXPECTED_VERSION = "streamrune.expected.version"
+  public static final java.lang.String LOCK_ACQUIRE = "lock/acquire"
+  public static final java.lang.String LOCK_OUTCOME = "streamrune.lock.outcome"
+  public static final java.lang.String OUTBOX_ENTRY_COUNT = "streamrune.outbox.entry.count"
+  public static final java.lang.String OUTBOX_ENTRY_ID = "streamrune.outbox.entry.id"
+  public static final java.lang.String OUTBOX_FAILED = "streamrune.outbox.failed"
+  public static final java.lang.String OUTBOX_PAYLOAD_TYPE = "streamrune.outbox.payload.type"
+  public static final java.lang.String OUTBOX_PUBLISH = "outbox/publish"
+  public static final java.lang.String OUTBOX_PUBLISHED = "streamrune.outbox.published"
+  public static final java.lang.String OUTBOX_RELAY = "outbox/relay"
+  public static final java.lang.String PROJECTION_NAME = "streamrune.projection.name"
+  public static final java.lang.String READ_KIND = "streamrune.read.kind"
+  public static final java.lang.String SAGA_COMPENSATION_INDEX = "streamrune.saga.compensation.index"
+  public static final java.lang.String SAGA_ID = "streamrune.saga.id"
+  public static final java.lang.String SAGA_STEP_OUTCOME = "streamrune.saga.step.outcome"
+  public static final java.lang.String SAGA_TYPE = "streamrune.saga.type"
+  public static final java.lang.String SNAPSHOT_OUTCOME = "streamrune.snapshot.outcome"
+  public static final java.lang.String SNAPSHOT_USED = "streamrune.snapshot.used"
+  public static final java.lang.String STREAM_ID = "streamrune.stream.id"
+  public static final java.lang.String STREAM_VERSION = "streamrune.stream.version"
+  public static final java.lang.String SUBSCRIPTION_NAME = "streamrune.subscription.name"
+  public static final java.lang.String UPCAST_COUNT = "streamrune.upcast.count"
+  public static java.lang.String commandSpanName(java.lang.String)
+  public static java.lang.String projectionProcessSpanName(org.streamrune.core.types.ProjectionName)
+  public static java.lang.String sagaCompensateSpanName(org.streamrune.core.types.SagaType)
+  public static java.lang.String sagaStepSpanName(org.streamrune.core.types.SagaType)
+  public static java.lang.String sagaTimeoutSpanName(org.streamrune.core.types.SagaType)
+  public static java.lang.String subscriptionDeliverSpanName(org.streamrune.core.types.SubscriptionName)
+
+public interface org.streamrune.core.tracing.TraceScope extends java.lang.AutoCloseable
+  public abstract void close()
+  public abstract void recordError(java.lang.Throwable)
+  public abstract void recordSuccess()
+  public abstract void setAttribute(java.lang.String, boolean)
+  public abstract void setAttribute(java.lang.String, java.lang.String)
+  public abstract void setAttribute(java.lang.String, long)
+  public default org.streamrune.core.tracing.SpanLink link()
+  public static final org.streamrune.core.tracing.TraceScope NOOP
+
+public final enum org.streamrune.core.tracing.TracingArea
+  public static final org.streamrune.core.tracing.TracingArea COMMAND
+  public static final org.streamrune.core.tracing.TracingArea EVENT_STORE
+  public static final org.streamrune.core.tracing.TracingArea LOCK
+  public static final org.streamrune.core.tracing.TracingArea OUTBOX
+  public static final org.streamrune.core.tracing.TracingArea PROJECTION
+  public static final org.streamrune.core.tracing.TracingArea SAGA
+  public static final org.streamrune.core.tracing.TracingArea SUBSCRIPTION
+  public static org.streamrune.core.tracing.TracingArea valueOf(java.lang.String)
+  public static org.streamrune.core.tracing.TracingArea[] values()
+
+public final record org.streamrune.core.types.AggregateId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.AggregateId of(java.lang.String)
+
+public final record org.streamrune.core.types.AggregateType
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static final int MAX_LENGTH = 32
+  public static final java.util.regex.Pattern SYNTAX
+  public static org.streamrune.core.types.AggregateType of(java.lang.String)
+
+public final record org.streamrune.core.types.CausationId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.CausationId of(java.lang.String)
+
+public final record org.streamrune.core.types.CommandId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.CommandId of(java.lang.String)
+
+public final record org.streamrune.core.types.CorrelationId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.CorrelationId of(java.lang.String)
+
+public final record org.streamrune.core.types.EventId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.EventId of(java.lang.String)
+
+public final record org.streamrune.core.types.EventType
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.EventType fromClass(java.lang.Class<?>)
+  public static org.streamrune.core.types.EventType of(java.lang.String)
+
+public final record org.streamrune.core.types.GlobalOffset
+  public <init>(long)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public long value()
+  public org.streamrune.core.types.GlobalOffset next()
+  public static org.streamrune.core.types.GlobalOffset initial()
+  public static org.streamrune.core.types.GlobalOffset of(long)
+
+public final class org.streamrune.core.types.IdConstraints
+  public static boolean isReserved(java.lang.String)
+  public static final int MAX_LENGTH = 255
+  public static final java.lang.String RESERVED_PREFIX = "streamrune:"
+  public static void requireBoundedAndPrintable(java.lang.String, java.lang.String)
+  public static void requireNoControlCharacters(java.lang.String, java.lang.String)
+
+public final record org.streamrune.core.types.IdempotencyKey
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.IdempotencyKey of(java.lang.String)
+  public static org.streamrune.core.types.IdempotencyKey scopedTo(java.lang.String, java.lang.String)
+
+public final class org.streamrune.core.types.LogSanitizer
+  public static final int MAX_TRACE_LENGTH = 256
+  public static java.lang.String sanitizeForLog(java.lang.String)
+  public static java.lang.String sanitizeForTrace(java.lang.String)
+  public static java.lang.String sanitizeFreeText(java.lang.String)
+
+public final record org.streamrune.core.types.ProjectionName
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.ProjectionName of(java.lang.String)
+
+public final record org.streamrune.core.types.SagaType
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.SagaType fromClass(java.lang.Class<?>)
+  public static org.streamrune.core.types.SagaType of(java.lang.String)
+
+public final record org.streamrune.core.types.SpanId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.SpanId of(java.lang.String)
+
+public final record org.streamrune.core.types.StreamId
+  public <init>(org.streamrune.core.types.AggregateType, org.streamrune.core.types.AggregateId)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public org.streamrune.core.types.AggregateId aggregateId()
+  public org.streamrune.core.types.AggregateType aggregateType()
+  public static final char SEPARATOR = 58
+  public static org.streamrune.core.types.StreamId of(org.streamrune.core.types.AggregateType, org.streamrune.core.types.AggregateId)
+  public static org.streamrune.core.types.StreamId parse(java.lang.String)
+
+public final record org.streamrune.core.types.SubjectId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String redacted()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.SubjectId of(java.lang.String)
+
+public final record org.streamrune.core.types.SubscriptionName
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.SubscriptionName of(java.lang.String)
+
+public final record org.streamrune.core.types.TraceId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.TraceId of(java.lang.String)
+
+public final record org.streamrune.core.types.UserId
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public java.lang.String toString()
+  public java.lang.String value()
+  public static org.streamrune.core.types.UserId of(java.lang.String)
+
+public final record org.streamrune.core.types.Version
+  public <init>(long)
+  public boolean isInitial()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public long value()
+  public org.streamrune.core.types.Version next()
+  public static org.streamrune.core.types.Version initial()
+
+public interface org.streamrune.core.upcasting.EventUpcaster
+  public abstract int currentVersion()
+  public abstract java.util.Map<java.lang.String, java.lang.Object> upcast(java.util.Map<java.lang.String, java.lang.Object>, int)
+  public abstract org.streamrune.core.types.EventType eventType()

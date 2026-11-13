@@ -1,0 +1,15 @@
+# The public API of :streamrune-crypto:streamrune-filesystem-crypto. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.filesystem.FileSystemCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public static org.streamrune.crypto.filesystem.FileSystemCryptoEngine$Builder builder()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.filesystem.FileSystemCryptoEngine$Builder
+  public <init>()
+  public org.streamrune.crypto.filesystem.FileSystemCryptoEngine build()
+  public org.streamrune.crypto.filesystem.FileSystemCryptoEngine$Builder keyDirectory(java.nio.file.Path)
+  public org.streamrune.crypto.filesystem.FileSystemCryptoEngine$Builder metrics(org.streamrune.core.StreamRuneMetrics)

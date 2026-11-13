@@ -1,0 +1,37 @@
+# The public API of :streamrune-crypto:streamrune-postgres-crypto. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.postgres.JdbcForgottenSubjectStore implements org.streamrune.crypto.ForgottenSubjectStore
+  public <init>(javax.sql.DataSource)
+  public boolean isForgotten(org.streamrune.core.types.SubjectId)
+  public boolean requiresDatabaseSchema()
+  public java.util.Optional<java.time.Instant> forgottenAt(org.streamrune.core.types.SubjectId)
+  public java.util.Optional<java.time.Instant> keyCreatedAt(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId, java.time.Instant)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public final class org.streamrune.crypto.postgres.PostgresCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public java.util.Set<java.lang.String> requiredCryptoTables()
+  public static final java.lang.String DEFAULT_TABLE_NAME = "encryption_keys"
+  public static org.streamrune.crypto.postgres.PostgresCryptoEngine$Builder builder()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.postgres.PostgresCryptoEngine$Builder
+  public <init>()
+  public org.streamrune.crypto.postgres.PostgresCryptoEngine build()
+  public org.streamrune.crypto.postgres.PostgresCryptoEngine$Builder dataSource(javax.sql.DataSource)
+  public org.streamrune.crypto.postgres.PostgresCryptoEngine$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.crypto.postgres.PostgresCryptoEngine$Builder tableName(java.lang.String)
+
+public final class org.streamrune.crypto.postgres.PostgresCryptoForgetSignal implements org.streamrune.crypto.CryptoForgetSignal
+  public <init>(javax.sql.DataSource)
+  public <init>(javax.sql.DataSource, java.util.function.Supplier<? extends javax.sql.DataSource>)
+  public boolean isListening()
+  public boolean isSubscribed()
+  public void close()
+  public void publish(java.lang.String)
+  public void subscribe(java.util.function.Consumer<java.lang.String>, java.lang.Runnable)

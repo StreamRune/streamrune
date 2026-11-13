@@ -1,0 +1,274 @@
+# The public API of :streamrune-integration:streamrune-micronaut. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public class org.streamrune.micronaut.CryptoForgetListenHealthRegistrar implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>
+  public <init>(java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.MicronautAuthenticatedUserResolver implements org.streamrune.integration.AuthenticatedUserResolver
+  public <init>(io.micronaut.security.utils.SecurityService)
+  public java.util.Optional<org.streamrune.core.types.UserId> currentUser()
+
+public class org.streamrune.micronaut.MicronautSecurityUserRoleResolver implements org.streamrune.core.UserRoleResolver
+  public <init>(io.micronaut.security.utils.SecurityService)
+  public boolean requiresRequestContext()
+  public org.streamrune.core.UserAuthority resolve(org.streamrune.core.types.UserId)
+
+public class org.streamrune.micronaut.ProjectionFactory
+  public <init>()
+  public org.streamrune.runtime.InlineProjectionInterceptor inlineProjectionInterceptor(java.util.List<org.streamrune.core.projection.Projection>, io.micronaut.context.env.Environment, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.runtime.MultiProjectionRunner multiProjectionRunner(java.util.List<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, java.util.List<org.streamrune.core.projection.ProjectionDeadLetterStore>, java.util.List<org.streamrune.core.projection.AtomicBatchProcessor>, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.projection.ProjectionErrorClassifier, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.env.Environment, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.runtime.ScheduledProjectionRunner scheduledProjectionRunner(java.util.List<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, java.util.List<org.streamrune.core.projection.ProjectionDeadLetterStore>, java.util.List<org.streamrune.core.projection.AtomicBatchProcessor>, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.projection.ProjectionErrorClassifier, org.streamrune.runtime.SubscriptionHealthContributor, io.micronaut.context.env.Environment, org.streamrune.core.tracing.StreamRuneTracing)
+
+public static final class org.streamrune.micronaut.ProjectionFactory$AutoDiscoveryEnabled implements io.micronaut.context.condition.Condition
+  public <init>()
+  public boolean matches(io.micronaut.context.condition.ConditionContext)
+
+public class org.streamrune.micronaut.SagaCompensationRetryLifecycle implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, java.lang.AutoCloseable, io.micronaut.core.order.Ordered
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.core.saga.SagaStore, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, boolean)
+  public int getOrder()
+  public void close()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.SagaEventPathRetentionConfigurer implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.subscription.SubscriptionLeadership)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.SagaStateCryptoValidator implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, java.util.List<org.streamrune.core.crypto.CryptoEngine>)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.SagaTimeoutRunnerHealthRegistrar implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>
+  public <init>(java.util.List<org.streamrune.runtime.SagaTimeoutRunner<?>>, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.SseController
+  public <init>(org.streamrune.runtime.SseEventPublisher, org.streamrune.integration.SseAuthorizer, org.streamrune.integration.RequestIdentityPolicy, org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public reactor.core.publisher.Flux<io.micronaut.http.sse.Event<?>> stream(java.lang.String, java.lang.String, io.micronaut.http.HttpRequest<?>)
+  public reactor.core.publisher.Flux<io.micronaut.http.sse.Event<?>> stream(java.lang.String, java.lang.String, java.util.List<java.lang.String>, org.streamrune.core.StreamRuneContext$RequestContext)
+
+public class org.streamrune.micronaut.SseEventFeedLifecycle implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, java.lang.AutoCloseable, io.micronaut.core.order.Ordered
+  public <init>(org.streamrune.runtime.SseEventFeed)
+  public boolean isRunning()
+  public int getOrder()
+  public void close()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.StreamRuneAuthorizationValidator implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(io.micronaut.context.BeanProvider<org.streamrune.runtime.VirtualThreadCommandBus>)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public @interface org.streamrune.micronaut.StreamRuneComponent
+
+public class org.streamrune.micronaut.StreamRuneConfigValidator implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.ApplicationContext)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.StreamRuneContextFilter implements io.micronaut.core.order.Ordered
+  public <init>()
+  public <init>(org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.integration.RequestIdentityPolicy, org.streamrune.core.UserRoleResolver)
+  public int getOrder()
+  public io.micronaut.http.MutableHttpResponse<?> filter(io.micronaut.http.HttpRequest<?>, io.micronaut.http.filter.FilterContinuation<io.micronaut.http.MutableHttpResponse<?>>)
+  public static final java.lang.String CONTEXT_ATTRIBUTE = "org.streamrune.micronaut.requestContext"
+
+public final class org.streamrune.micronaut.StreamRuneContextHelper
+  public static org.streamrune.core.StreamRuneContext$RequestContext get()
+  public static org.streamrune.core.StreamRuneContext$RequestContext ofCurrentRequest()
+
+public class org.streamrune.micronaut.StreamRuneCryptoFactory
+  public <init>()
+
+public class org.streamrune.micronaut.StreamRuneHealthIndicator implements io.micronaut.management.health.indicator.HealthIndicator
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor)
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.core.EventStore)
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.core.EventStore, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.reactivestreams.Publisher<io.micronaut.management.health.indicator.HealthResult> getResult()
+
+public class org.streamrune.micronaut.StreamRuneLifecycle implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, java.lang.AutoCloseable, io.micronaut.core.order.Ordered
+  public <init>(org.streamrune.runtime.MultiProjectionRunner, org.streamrune.runtime.ScheduledProjectionRunner, org.streamrune.runtime.OutboxPoller, org.streamrune.runtime.OutboxRetentionSweeper, org.streamrune.runtime.InboxRetentionSweeper, org.streamrune.runtime.SagaDeadLetterRetentionSweeper, org.streamrune.runtime.DeadLetterRetentionSweeper, org.streamrune.runtime.DeadLetterRetryRunner, org.streamrune.core.subscription.SubscriptionLeadership)
+  public int getOrder()
+  public void close()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties
+  public <init>(org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$CacheConfig, org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$FileSystemConfig, org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$PostgresConfig, org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$VaultConfig, org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig aws()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$CacheConfig cache()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$FileSystemConfig filesystem()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$PostgresConfig postgres()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$VaultConfig vault()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig
+  public <init>(java.lang.String, java.lang.String, org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig$DataKeyCacheConfig)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String kmsKeyId()
+  public java.lang.String region()
+  public org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig$DataKeyCacheConfig dataKeyCache()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$AwsConfig$DataKeyCacheConfig
+  public <init>(int, java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maximumSize()
+  public java.time.Duration expireAfterWrite()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$CacheConfig
+  public <init>(boolean, int, java.time.Duration, java.time.Duration)
+  public boolean enabled()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int maximumSize()
+  public java.time.Duration expireAfterAccess()
+  public java.time.Duration expireAfterWrite()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$FileSystemConfig
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String keyDirectory()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$PostgresConfig
+  public <init>(java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String tableName()
+
+public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoProperties$VaultConfig
+  public <init>(java.lang.String, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String address()
+  public java.lang.String engineMount()
+  public java.lang.String token()
+
+public class org.streamrune.micronaut.StreamRuneMicronautModule
+  public <init>()
+  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
+  public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
+  public org.streamrune.core.QueryBus queryBus(org.streamrune.runtime.SimpleQueryBus, org.streamrune.runtime.CachingQueryBus, org.streamrune.core.audit.AuditStore)
+  public org.streamrune.core.audit.AuditStore auditStore(javax.sql.DataSource)
+  public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(javax.sql.DataSource)
+  public org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery(javax.sql.DataSource)
+  public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
+  public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(javax.sql.DataSource, org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(io.micronaut.context.BeanContext, org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public org.streamrune.integration.MicrometerStreamRuneMetrics micrometerStreamRuneMetrics(io.micrometer.core.instrument.MeterRegistry, org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.integration.AuthenticatedUserResolver, boolean)
+  public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()
+  public org.streamrune.micronaut.MicronautAuthenticatedUserResolver micronautAuthenticatedUserResolver(io.micronaut.security.utils.SecurityService)
+  public org.streamrune.micronaut.MicronautSecurityUserRoleResolver micronautSecurityUserRoleResolver(io.micronaut.security.utils.SecurityService)
+  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresEventStoreFactory postgresEventStoreFactory(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.micronaut.StreamRuneMicronautProperties, java.util.List<org.streamrune.core.crypto.CryptoEngine>, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, org.streamrune.postgres.PostgresEventAuditStore, org.streamrune.core.outbox.OutboxEventMapper, org.streamrune.core.outbox.OutboxStore, org.streamrune.postgres.PostgresCommandInbox, org.streamrune.core.CommandInbox, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.postgres.PostgresProjectionDeadLetterStore postgresProjectionDeadLetterStore(javax.sql.DataSource)
+  public org.streamrune.postgres.PostgresSagaDeadLetterStore sagaDeadLetterStore(javax.sql.DataSource)
+  public org.streamrune.runtime.AnnotationAuthorizationInterceptor annotationAuthorizationInterceptor(org.streamrune.core.UserRoleResolver)
+  public org.streamrune.runtime.AuditCommandInterceptor auditCommandInterceptor(org.streamrune.core.audit.AuditStore)
+  public org.streamrune.runtime.AuthorizationCommandInterceptor authorizationCommandInterceptor(org.streamrune.core.CommandAuthorizationPolicy)
+  public org.streamrune.runtime.BackgroundRelayHealthContributor backgroundRelayHealthContributor()
+  public org.streamrune.runtime.BeanValidationInterceptor beanValidationInterceptor(jakarta.validation.Validator)
+  public org.streamrune.runtime.CacheInvalidator cacheInvalidator(org.streamrune.runtime.CachingQueryBus)
+  public org.streamrune.runtime.CachingQueryBus cachingQueryBus(org.streamrune.runtime.SimpleQueryBus, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.QueryAuthorizer)
+  public org.streamrune.runtime.CircuitBreakerCommandInterceptor circuitBreakerCommandInterceptor(org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public org.streamrune.runtime.DeadLetterRetentionSweeper deadLetterRetentionSweeper(org.streamrune.core.DeadLetterQueue, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.runtime.DeadLetterRetryRunner deadLetterRetryRunner(org.streamrune.core.DeadLetterQueue, org.streamrune.core.CommandBus, java.util.List<org.streamrune.core.crypto.CryptoEngine>, java.util.List<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor, org.streamrune.micronaut.StreamRuneMicronautProperties)
+  public org.streamrune.runtime.InboxRetentionSweeper inboxRetentionSweeper(org.streamrune.postgres.PostgresCommandInbox, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.runtime.OutboxFailedReplayer outboxFailedReplayer(org.streamrune.core.outbox.OutboxStore, org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.runtime.OutboxPoller outboxPoller(org.streamrune.core.outbox.OutboxStore, org.streamrune.core.outbox.OutboxPublisher, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.runtime.OutboxRetentionSweeper outboxRetentionSweeper(org.streamrune.core.outbox.OutboxStore, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.runtime.SagaDeadLetterRetentionSweeper sagaDeadLetterRetentionSweeper(org.streamrune.postgres.PostgresSagaDeadLetterStore, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.runtime.SimpleQueryBus simpleQueryBus(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.runtime.SseEventFeed sseEventFeed(org.streamrune.core.EventStore, org.streamrune.runtime.SseEventPublisher, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public org.streamrune.runtime.SseEventPublisher sseEventPublisher()
+  public org.streamrune.runtime.SubscriptionHealthContributor subscriptionHealthContributor(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.StreamRuneMetrics, long)
+  public org.streamrune.runtime.VirtualThreadCommandBus virtualThreadCommandBus(org.streamrune.core.EventStore, org.streamrune.core.AggregateLocker, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.SnapshotPolicy, java.util.List<org.streamrune.core.CommandInterceptor>, java.util.List<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.CommandInbox, org.streamrune.core.DeadLetterQueue, org.streamrune.core.StreamRuneMetrics, boolean, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.runtime.gdpr.ExportSubjectDataService exportSubjectDataService(java.util.List<org.streamrune.core.gdpr.SubjectDataCollector>, org.streamrune.core.audit.AuditStore)
+  public org.streamrune.runtime.gdpr.ForgetSubjectService forgetSubjectService(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.audit.AuditStore, java.util.List<org.streamrune.core.gdpr.SubjectDataPurger>, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.CachingQueryBus, org.streamrune.micronaut.StreamRuneMicronautProperties)
+
+public static final class org.streamrune.micronaut.StreamRuneMicronautModule$SingleActiveConsumerEnabled implements io.micronaut.context.condition.Condition
+  public <init>()
+  public boolean matches(io.micronaut.context.condition.ConditionContext)
+
+public final record org.streamrune.micronaut.StreamRuneMicronautProperties
+  public <init>(int, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, int, int, int, java.time.Duration, boolean, boolean, boolean, java.time.Duration, boolean, int, java.time.Duration, boolean, int, java.time.Duration, java.time.Duration, boolean, java.lang.String, boolean, boolean, boolean, java.time.Duration, java.time.Duration, java.util.List<java.lang.String>, java.time.Duration, java.lang.String, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.lang.String, java.lang.String, java.lang.String, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean)
+  public boolean autoInitializeSchema()
+  public boolean deadLetterEnabled()
+  public boolean eventAuditEnabled()
+  public boolean metricsEnabled()
+  public boolean outboxEnabled()
+  public boolean projectionDlqEnabled()
+  public boolean sagaEnabled()
+  public boolean startupLog()
+  public boolean tracingCommandEnabled()
+  public boolean tracingEnabled()
+  public boolean tracingEventStoreEnabled()
+  public boolean tracingLockEnabled()
+  public boolean tracingOutboxEnabled()
+  public boolean tracingProjectionEnabled()
+  public boolean tracingSagaEnabled()
+  public boolean tracingSubscriptionEnabled()
+  public boolean validationEnabled()
+  public double outboxRetryBackoffMultiplier()
+  public double retryBackoffMultiplier()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int circuitBreakerFailureThreshold()
+  public int deadLetterMaxRetries()
+  public int maxInFlightAsyncCommands()
+  public int outboxBatchSize()
+  public int outboxRetryMaxAttempts()
+  public int retryMaxAttempts()
+  public int snapshotEveryNEvents()
+  public int stripeCount()
+  public java.lang.String deadLetterUnkeyedReplay()
+  public java.lang.String gdprSnapshotPurge()
+  public java.lang.String metricsPrefix()
+  public java.lang.String sagaForwardFence()
+  public java.lang.String subscriptionSingleActiveConsumerEnabled()
+  public java.time.Duration circuitBreakerCooldown()
+  public java.time.Duration deadLetterRetentionMaxAge()
+  public java.time.Duration deadLetterRetryInterval()
+  public java.time.Duration eventStoreStatementTimeout()
+  public java.time.Duration inboxRetentionMaxAge()
+  public java.time.Duration lockTimeout()
+  public java.time.Duration outboxFlushInterval()
+  public java.time.Duration outboxRetentionMaxAge()
+  public java.time.Duration outboxRetryInitialDelay()
+  public java.time.Duration outboxSkippedRetentionMaxAge()
+  public java.time.Duration pollingInterval()
+  public java.time.Duration pollingJitter()
+  public java.time.Duration retryInitialDelay()
+  public java.time.Duration sagaDeadLetterRetentionMaxAge()
+  public java.time.Duration sseKeepAliveInterval()
+  public java.time.Duration ssePollingInterval()
+  public java.time.Duration sseTimeout()
+  public java.time.Duration subscriptionLeaseTtl()
+  public java.util.List<java.lang.String> metadataBaggageAllowlist()
+  public static org.streamrune.micronaut.StreamRuneMicronautProperties withDefaults()
+
+public class org.streamrune.micronaut.StreamRuneRequestIdentityValidator implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(org.streamrune.integration.RequestIdentityPolicy, io.micronaut.context.BeanProvider<org.streamrune.runtime.VirtualThreadCommandBus>, io.micronaut.context.BeanProvider<org.streamrune.micronaut.StreamRuneContextFilter>)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.StreamRuneStartupLogger implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>
+  public <init>(io.micronaut.context.ApplicationContext)
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
