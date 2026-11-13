@@ -125,7 +125,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * {@code 0}: this store writes no outbox. In by-reference mode it starts no span: it neither
  * serializes nor does any I/O, so a span would time nothing a deployment has.
  *
- * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists.
+ * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists,
+ * and an append publishes its events to each list in one step, so a read returns all of them or
+ * none.
  */
 public final class InMemoryEventStore implements EventStore {
 
@@ -644,7 +646,8 @@ public final class InMemoryEventStore implements EventStore {
 
     AppendResult result;
     // Serialize appends across ALL streams so events become visible in strict global_offset
-    // order, mirroring PostgresEventStore's transaction-scoped advisory lock.
+    // order, mirroring PostgresEventStore, whose appends serialize on the row lock of the
+    // single-row global_offset_sequence counter, held until the append commits.
     appendLock.lock();
     try {
       result = appendLocked(streamId, toAppend, expectedVersion);
@@ -710,11 +713,12 @@ public final class InMemoryEventStore implements EventStore {
     }
 
     List<GlobalOffset> globalOffsets = new ArrayList<>();
+    List<StoredEvent> batch = new ArrayList<>(toAppend.size());
     long version = expectedVersion.value();
     for (var template : toAppend) {
       version++;
       GlobalOffset offset = GlobalOffset.of(globalOffset.incrementAndGet());
-      var stored =
+      batch.add(
           new StoredEvent(
               offset,
               streamId,
@@ -724,11 +728,16 @@ public final class InMemoryEventStore implements EventStore {
               template.metadata(),
               template.payloadJson(),
               template.metadataJson(),
-              template.schemaVersion());
-      streamEvents.add(stored);
-      globalStream.add(stored);
+              template.schemaVersion()));
       globalOffsets.add(offset);
     }
+    // Publish the whole append in one step on each list, as a PostgreSQL commit makes all of an
+    // append's rows visible at once: a copy-on-write list replaces its array once per addAll, so a
+    // read (which iterates one array) sees every event of the append or none of them. Adding the
+    // events one at a time let a concurrent load, readStream or readGlobalStream return the first
+    // events of an append without the rest.
+    streamEvents.addAll(batch);
+    globalStream.addAll(batch);
 
     return new AppendResult(List.copyOf(globalOffsets), new Version(version));
   }
