@@ -635,10 +635,11 @@ subprojects {
     group = "org.streamrune"
     // The development default is the preview version that CI publishes to the Central Portal
     // snapshot repository on every push to main (.github/workflows/publish-snapshot.yml). A release
-    // passes -PreleaseVersion=<version>, which always wins. After a release this default moves to a
-    // -SNAPSHOT that sorts above it, together with the version the README's "Preview builds" names
-    // (ReleaseStatusTest holds the two equal; Publish Snapshot refuses a version below a tagged
-    // release); the header of .github/workflows/release.yml lists the step.
+    // passes -PreleaseVersion=<version>, which always wins. The pull request that prepares a release
+    // moves this default to a -SNAPSHOT that sorts above it, together with the version the README's
+    // "Preview builds" names (ReleaseStatusTest holds the two equal and the default above a dated
+    // release; Publish Snapshot refuses a version below a tagged release); the header of
+    // .github/workflows/release.yml lists the steps.
     version = (project.findProperty("releaseVersion") as String?) ?: "1.0.0-alpha-SNAPSHOT"
 
     java {

@@ -37,25 +37,30 @@ name: Release
 # git push origin v<version>): verify accepts a tag on the run's commit and the tag job leaves it as
 # it is. A tag pushed by hand starts Build and Broker E2E Tests on its commit; those runs are then
 # the newest, so start the release once both have finished green. The same holds for a Broker E2E
-# Tests run that starts on the commit while the release runs (the nightly one at 03:00 UTC): publish
-# refuses until it has finished green, then "Re-run failed jobs" continues the release.
+# Tests run that starts on the commit while the release runs: the nightly one is scheduled for 03:00
+# UTC and often starts hours later, so look at the Actions tab before starting the release. Publish
+# refuses until such a run has finished green; "Re-run failed jobs" then continues the release.
 #
-# Before the run, one pull request dates the `## [<version>]` heading of CHANGELOG.md and removes the
-# sentences that say the version is not on Maven Central yet (the Status section of the README and
-# the pages ReleaseStatusTest in streamrune-core lists; that test fails until they agree with the
-# heading). That commit is the one released.
+# Before the run, one pull request prepares the commit that is released. It
+#   - dates the `## [<version>]` heading of CHANGELOG.md;
+#   - rewrites the Status section of the README to name the version as released ("`1.0.0` is the
+#     first release of StreamRune", not "will be") and removes the sentences that say it is not on
+#     Maven Central yet, there and in the pages ReleaseStatusTest in streamrune-core lists;
+#   - moves the default `version` in the root build.gradle.kts to the next development version, a
+#     -SNAPSHOT that sorts above the release (after 1.0.0, for example 1.0.1-SNAPSHOT or
+#     1.1.0-SNAPSHOT; 1.0.0-alpha-SNAPSHOT sorts below 1.0.0, so Maven and Gradle would pick the
+#     release over it), together with the version the README's "Preview builds" section names, so
+#     the tagged README names the real next preview and Publish Snapshot, which refuses a version
+#     below a tagged release, never stops;
+#   - lists every Flyway migration the release ships, with its SHA-256, in
+#     gradle/released-migrations.txt (`shasum -a 256 <file>`); a released migration never changes.
+# ReleaseStatusTest and ReleasedMigrationsTest fail until the pull request does all of it.
 #
-# Three steps stay manual, on purpose:
+# Two steps stay manual, on purpose:
 #   - The upload is a user-managed deployment: Maven Central serves nothing until Publish is pressed
 #     on the validated deployment at https://central.sonatype.com/publishing/deployments. That makes
 #     the version public, and it cannot be undone: Maven Central never replaces or deletes a version.
 #   - The GitHub release is a draft. Publish it once Maven Central serves the version.
-#   - After the release, one pull request moves the default `version` in the root build.gradle.kts to
-#     the next development version, a -SNAPSHOT that sorts above the release (after 1.0.0, for
-#     example 1.0.1-SNAPSHOT or 1.1.0-SNAPSHOT; 1.0.0-alpha-SNAPSHOT sorts below 1.0.0, so Maven
-#     and Gradle would pick the release over it), together with the version the README's "Preview
-#     builds" section names. Publish Snapshot refuses a development version below a tagged release,
-#     so until that pull request is merged it fails on every push to main.
 #
 # A release tag is never moved or deleted once its version is on Maven Central: every POM of the
 # version names the licence at that tag. Protect refs/tags/v* with a tag ruleset that restricts

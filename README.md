@@ -57,11 +57,11 @@ leaves the modules it did not reach on an earlier commit until a later run compl
 newest [Publish Snapshot run](https://github.com/StreamRune/streamrune/actions/workflows/publish-snapshot.yml)
 on `main` is red, the preview may mix modules of different commits.
 
-The preview version moves after every release to one that sorts above that release, and this
-section on `main` names the current one. Depend on every StreamRune module at the preview version:
-Maven and Gradle resolve a module that a build also reaches at a release version (through a starter,
-a BOM or a platform) to the higher of the two versions, which is the release whenever the preview
-version sorts below it.
+The preview version moves with every release, in the commit that is released, to one that sorts
+above that release, and this section names the current one. Depend on every StreamRune module at the
+preview version: Maven and Gradle resolve a module that a build also reaches at a release version
+(through a starter, a BOM or a platform) to the higher of the two versions, which is the release
+whenever the preview version sorts below it.
 
 To try it, add the snapshot repository and depend on `org.streamrune:*:1.0.0-alpha-SNAPSHOT`.
 
