@@ -164,7 +164,6 @@ public final class org.streamrune.postgres.PostgresEventStore implements org.str
   public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
   public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String, org.streamrune.core.saga.SagaOrigin)
   public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
-  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
   public static org.streamrune.postgres.PostgresEventStore create(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine, java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
   public static org.streamrune.postgres.PostgresEventStore create(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, org.streamrune.core.StreamRuneMetrics)
   public static org.streamrune.postgres.PostgresEventStore$Builder builder()

@@ -35,6 +35,7 @@ import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.Internal;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.SnapshotMigrationChain;
@@ -686,13 +687,16 @@ public final class PostgresEventStore implements EventStore {
    * metrics fire on this store's decrypt path (event replay / projection rebuild is where a mass
    * redaction actually happens). Shared by {@link #create(DataSource, EventTypeRegistry,
    * CryptoEngine, List, StreamRuneMetrics)} and {@link Builder#build()}, so every production
-   * event-store construction path is metrics-aware.
+   * event-store construction path is metrics-aware. Public only for the crypto-shredding benchmark
+   * of {@code streamrune-filesystem-crypto}, which measures the store's own serialization path.
    *
+   * @hidden
    * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
    * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
    *     not {@code null}
    * @return a new {@link ObjectMapper}, independent from any other mapper instance
    */
+  @Internal
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
     Objects.requireNonNull(metrics, "metrics is required");

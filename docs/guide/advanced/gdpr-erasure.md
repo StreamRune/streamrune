@@ -844,10 +844,8 @@ touched. A custom `EventTypeRegistry` that does not implement `registeredTypes()
 too, because it cannot be checked. Each integration additionally validates its command types on
 boot.
 
-Two paths are not checked. The `PostgresEventStore` constructors that take a ready-made
-`ObjectMapper` use it as given: build it with `PostgresEventStore.createObjectMapper(cryptoEngine,
-metrics)` when a registered type carries `@Encrypted`. Command types registered with the plain-Java
-`StreamRune` builder are not scanned: a dead-lettered command's `@Encrypted` components are
+One path is not checked: command types registered with the plain-Java `StreamRune` builder are not
+scanned: a dead-lettered command's `@Encrypted` components are
 encrypted only when the bus's `.objectMapper(...)` is
 `DeadLetterRetryRunner.createObjectMapper(cryptoEngine)`.
 
