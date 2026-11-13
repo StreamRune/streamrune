@@ -487,6 +487,13 @@ public final class InMemoryEventStore implements EventStore {
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
     Objects.requireNonNull(streamId, "streamId is required");
+    if (expectedSnapshotVersion < EventStore.IGNORE_SNAPSHOT) {
+      throw new IllegalArgumentException(
+          "expectedSnapshotVersion must be >= "
+              + EventStore.IGNORE_SNAPSHOT
+              + " (IGNORE_SNAPSHOT skips reading any snapshot, 0 skips the version check), got "
+              + expectedSnapshotVersion);
+    }
     if (!traced()) {
       return loadHistory(streamId, expectedSnapshotVersion, false);
     }
