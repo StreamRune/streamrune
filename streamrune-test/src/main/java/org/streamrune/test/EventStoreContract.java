@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -56,7 +57,7 @@ import org.streamrune.core.types.Version;
  *       stream's head, behind it or beyond it, fails with {@link OptimisticLockException} and
  *       stores nothing, so a stream never has a version gap.
  *   <li><b>Empty appends.</b> An empty event list stores nothing and returns {@code new
- *       AppendResult(List.of(), expectedVersion)}.
+ *       AppendResult(List.of(), expectedVersion)} without consulting the head.
  *   <li><b>Atomicity.</b> A multi-event append stores all of its events or none, also when several
  *       race for one version.
  *   <li><b>No idempotence by default.</b> Appending an envelope twice stores two events.
@@ -74,18 +75,22 @@ import org.streamrune.core.types.Version;
  *       uses any with {@code 0}, never reads it with {@link EventStore#IGNORE_SNAPSHOT}, and
  *       rejects {@code n} below that with {@link IllegalArgumentException}; a schema version below
  *       {@code 1} and a negative purge generation are rejected; a save at generation {@code 0} of a
- *       stream never purged is stored. For a store with a purge record ({@link
- *       #purgeSnapshot(StreamId)}): a purge removes the snapshot and raises the generation, and a
- *       save from a load before the purge writes nothing.
+ *       stream never purged is stored, and a store without a purge record stores a save at any
+ *       generation. For a store with a purge record ({@link #purgeSnapshot(StreamId)}): a purge
+ *       removes the snapshot and raises the generation, and a save from a load before the purge
+ *       writes nothing.
  *   <li><b>Idempotent append.</b> {@link EventStore#appendWithKey(StreamId, List, Version,
  *       IdempotencyKey, String)} stores the events once: a replay of the key returns the recorded
  *       offsets and version with {@code alreadyApplied()} and stores nothing, whatever it carries;
- *       a zero-event command claims its key too; a key recorded for another command type or stream
- *       is refused with {@link IllegalArgumentException}; a keyed append refused for its version
- *       leaves the key unclaimed. With no saga origin the six-argument method is the same append; a
- *       store that cannot fence ({@link EventStore#sagaFenceStorageIdentity()} is {@code null})
- *       refuses an append that names one with {@link UnsupportedOperationException}. The fence
- *       itself is the contract of {@link SagaForwardFenceContract}.
+ *       a zero-event command claims its key too, whatever its expected version, and records that
+ *       version as its final version; concurrent executions of one key store once (one presented on
+ *       another stream is refused rather than answered with the winner's result); a key recorded
+ *       for another command type or stream is refused with {@link IllegalArgumentException}; a
+ *       keyed append refused for its version leaves the key unclaimed. With no saga origin the
+ *       six-argument method is the same append; a store that cannot fence ({@link
+ *       EventStore#sagaFenceStorageIdentity()} is {@code null}) refuses an append that names one
+ *       with {@link UnsupportedOperationException}. The fence itself is the contract of {@link
+ *       SagaForwardFenceContract}.
  *   <li><b>Capabilities.</b> The javadoc lets a store leave four capabilities out, each answered
  *       with {@link UnsupportedOperationException}: the idempotent append, snapshots, snapshot
  *       schema versions ({@code load(streamId, n)} with {@code n >= 1}) and the global head. Each
@@ -118,6 +123,12 @@ public abstract class EventStoreContract {
   /**
    * Whether the store honours a snapshot schema version ({@code load(streamId, n)} with {@code n >=
    * 1}); {@code true} by default.
+   *
+   * <p>A store that keeps snapshots overrides {@code load(StreamId, int)} even when it returns
+   * {@code false} here: the default of that method sends {@link EventStore#IGNORE_SNAPSHOT} to
+   * {@code load(StreamId)}, which returns the stored snapshot, and the javadoc of {@code
+   * IGNORE_SNAPSHOT} requires such a store never to read it. Without the override {@code
+   * loadIgnoringSnapshotsReadsEveryEvent} fails, as it should.
    */
   protected boolean supportsSnapshotSchemaVersions() {
     return true;
@@ -131,7 +142,9 @@ public abstract class EventStoreContract {
   /**
    * Purges the snapshot of {@code streamId} as the store's {@code SnapshotPurger} does, raising the
    * stream's purge generation, and returns {@code true}. The default returns {@code false}: the
-   * store keeps no purge record, and the purge cases are skipped.
+   * store keeps no purge record, so the purge cases are skipped and the case of a store without a
+   * purge record runs instead. The suite also calls it on a stream with no snapshot to learn which
+   * of the two the store is.
    */
   protected boolean purgeSnapshot(StreamId streamId) {
     return false;
@@ -598,7 +611,9 @@ public abstract class EventStoreContract {
   /**
    * Writers append to their own streams while a reader repeatedly reads the head and then every
    * readable event at or below it. Once all writers are done, the events at or below each head the
-   * reader saw must be exactly the ones it read right after: none became readable later.
+   * reader saw must be exactly the ones it read right after: none became readable later. A store
+   * fast enough to finish the appends before the first sample passes trivially; the case is
+   * meaningful for a store whose appends take long enough to overlap the reads.
    */
   @Test
   public void nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun() throws Exception {
@@ -623,8 +638,12 @@ public abstract class EventStoreContract {
       }
       record Sample(long head, List<Long> readable) {}
       List<Sample> samples = new ArrayList<>();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
       start.countDown();
       while (samples.isEmpty() || !done.stream().allMatch(Future::isDone)) {
+        if (System.nanoTime() > deadline) {
+          fail("the writers did not finish within 60 seconds");
+        }
         long head = store.lastGlobalOffset().value();
         List<Long> readable =
             global().stream().map(e -> e.globalOffset().value()).filter(o -> o <= head).toList();
@@ -719,6 +738,17 @@ public abstract class EventStoreContract {
     AggregateHistory history = store.load(A);
     assertEquals(new ContractState("gen-0"), history.snapshotState());
     assertEquals(0, history.snapshotPurgeGeneration());
+  }
+
+  @Test
+  public void aStoreWithoutAPurgeRecordStoresASaveAtAnyGeneration() {
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    assumeFalse(purgeSnapshot(B), "the store keeps a purge record");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    assertTrue(store.saveSnapshot(A, new Version(2), new ContractState("gen-7"), 1, 7));
+
+    assertEquals(new ContractState("gen-7"), store.load(A).snapshotState());
   }
 
   @Test
@@ -951,6 +981,36 @@ public abstract class EventStoreContract {
   }
 
   @Test
+  public void aZeroEventCommandRecordsTheExpectedVersionAsItsFinalVersion() {
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    store.append(A, events(A, 1, 2), Version.initial());
+    IdempotencyKey key = IdempotencyKey.of("key-zero-events-at-2");
+
+    var first = store.appendWithKey(A, List.of(), new Version(2), key, COMMAND_TYPE);
+    var replay = store.appendWithKey(A, List.of(), new Version(2), key, COMMAND_TYPE);
+
+    assertEquals(new Version(2), first.finalVersion());
+    assertTrue(first.globalOffsets().isEmpty());
+    assertTrue(replay.alreadyApplied());
+    assertEquals(new Version(2), replay.finalVersion());
+    assertEquals(2, stored(A).size());
+  }
+
+  @Test
+  public void aZeroEventCommandDoesNotConsultTheHead() {
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-zero-events-future");
+
+    var first = store.appendWithKey(A, List.of(), new Version(5), key, COMMAND_TYPE);
+
+    assertFalse(first.alreadyApplied(), "an empty list never fails with OptimisticLockException");
+    assertEquals(new Version(5), first.finalVersion());
+    assertTrue(
+        store.appendWithKey(A, List.of(), new Version(5), key, COMMAND_TYPE).alreadyApplied());
+    assertTrue(stored(A).isEmpty());
+  }
+
+  @Test
   public void aZeroEventCommandClaimsItsKey() {
     assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
     IdempotencyKey key = IdempotencyKey.of("key-zero-events");
@@ -1037,6 +1097,104 @@ public abstract class EventStoreContract {
     assertFalse(second.alreadyApplied());
     assertEquals(new Version(2), second.finalVersion());
     assertEquals(List.of(1L, 2L), versions(stored(A)));
+  }
+
+  /** One racer's outcome: its result, or the {@link IllegalArgumentException} that refused it. */
+  private record KeyedOutcome(
+      StreamId streamId, IdempotentAppendResult result, IllegalArgumentException refusal) {}
+
+  /**
+   * Runs {@code streams.size()} keyed appends of {@code key}, each of {@code events} events at
+   * version 0 of its stream, released together.
+   */
+  private List<KeyedOutcome> raceOneKey(IdempotencyKey key, List<StreamId> streams, int events)
+      throws Exception {
+    var start = new CountDownLatch(1);
+    ExecutorService pool = Executors.newFixedThreadPool(streams.size());
+    try {
+      List<Future<KeyedOutcome>> futures = new ArrayList<>();
+      for (StreamId stream : streams) {
+        futures.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  try {
+                    return new KeyedOutcome(
+                        stream, appendWithKey(stream, 0, events, key, COMMAND_TYPE), null);
+                  } catch (IllegalArgumentException e) {
+                    return new KeyedOutcome(stream, null, e);
+                  }
+                }));
+      }
+      start.countDown();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+      List<KeyedOutcome> outcomes = new ArrayList<>();
+      for (var future : futures) {
+        outcomes.add(future.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+      }
+      return outcomes;
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  /**
+   * Concurrent executions of one key all miss a caller's look-up of the inbox, so the store alone
+   * decides: exactly one stores its events; one presented on the winner's stream is answered with
+   * the winner's result, one presented on another stream is refused, and nothing is stored twice.
+   */
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream() throws Exception {
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    List<StreamId> streams = new ArrayList<>();
+    for (int r = 0; r < 8; r++) {
+      streams.add(r % 2 == 0 ? A : B);
+    }
+
+    List<KeyedOutcome> outcomes = raceOneKey(IdempotencyKey.of("key-raced"), streams, 2);
+
+    List<KeyedOutcome> winners =
+        outcomes.stream().filter(o -> o.result() != null && !o.result().alreadyApplied()).toList();
+    assertEquals(1, winners.size(), "exactly one execution of the key stores its events");
+    KeyedOutcome winner = winners.getFirst();
+    for (KeyedOutcome outcome : outcomes) {
+      if (outcome == winner) {
+        continue;
+      }
+      if (outcome.streamId().equals(winner.streamId())) {
+        assertTrue(
+            outcome.result() != null && outcome.result().alreadyApplied(),
+            "an execution on the winner's stream is a replay");
+        assertEquals(winner.result().globalOffsets(), outcome.result().globalOffsets());
+        assertEquals(winner.result().finalVersion(), outcome.result().finalVersion());
+      } else {
+        assertTrue(
+            outcome.refusal() != null,
+            "an execution on another stream is refused, never answered with the winner's result");
+      }
+    }
+    assertEquals(2, global().size(), "only the winner's events are stored");
+    assertEquals(winner.result().globalOffsets(), offsets(stored(winner.streamId())));
+  }
+
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce() throws Exception {
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+
+    List<KeyedOutcome> outcomes =
+        raceOneKey(IdempotencyKey.of("key-raced-one-stream"), List.of(A, A, A, A, A, A), 2);
+
+    assertTrue(outcomes.stream().allMatch(o -> o.result() != null), "no execution is refused");
+    assertEquals(
+        1,
+        outcomes.stream().filter(o -> !o.result().alreadyApplied()).count(),
+        "exactly one execution stores its events");
+    assertEquals(
+        1,
+        outcomes.stream().map(o -> o.result().globalOffsets()).distinct().count(),
+        "every execution reports the same offsets");
+    assertEquals(List.of(1L, 2L), versions(stored(A)));
+    assertEquals(2, global().size());
   }
 
   @Test

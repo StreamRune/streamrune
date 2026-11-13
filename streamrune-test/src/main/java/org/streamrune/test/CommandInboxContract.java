@@ -114,6 +114,7 @@ public abstract class CommandInboxContract {
     assertEquals(key, row.key());
     assertEquals(COMMAND_TYPE, row.commandType());
     assertEquals(STREAM, row.streamId());
+    assertNotEquals(STREAM_OTHER_TYPE, row.streamId(), "the aggregate type is part of the stream");
     assertEquals(new Version(2), row.finalVersion());
     assertEquals(result.finalVersion(), row.finalVersion());
     assertEquals(result.globalOffsets(), row.globalOffsets());
@@ -122,26 +123,16 @@ public abstract class CommandInboxContract {
   }
 
   @Test
-  public void theRecordedStreamKeepsItsAggregateType() {
-    IdempotencyKey key = IdempotencyKey.of("inbox-typed");
-
-    process(key, STREAM, 0, 1);
-
-    InboxResult row = inbox().find(key).orElseThrow();
-    assertEquals(STREAM, row.streamId());
-    assertEquals(PRODUCT, row.streamId().aggregateType());
-    assertNotEquals(STREAM_OTHER_TYPE, row.streamId());
-  }
-
-  @Test
   public void aZeroEventCommandIsRecordedWithNoOffsets() {
+    process(IdempotencyKey.of("inbox-before-zero-events"), STREAM, 0, 2);
     IdempotencyKey key = IdempotencyKey.of("inbox-zero-events");
 
-    eventStore().appendWithKey(STREAM, List.of(), Version.initial(), key, COMMAND_TYPE);
+    var result = eventStore().appendWithKey(STREAM, List.of(), new Version(2), key, COMMAND_TYPE);
 
     InboxResult row = inbox().find(key).orElseThrow();
     assertTrue(row.globalOffsets().isEmpty());
-    assertEquals(Version.initial(), row.finalVersion());
+    assertEquals(new Version(2), row.finalVersion(), "the expected version is the final version");
+    assertEquals(result.finalVersion(), row.finalVersion());
     assertEquals(STREAM, row.streamId());
   }
 

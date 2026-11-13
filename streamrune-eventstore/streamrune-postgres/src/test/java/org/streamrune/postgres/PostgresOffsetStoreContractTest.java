@@ -2,6 +2,7 @@ package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.sql.SQLException;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,7 @@ class PostgresOffsetStoreContractTest extends OffsetStoreContract {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM projection_offset");
-    } catch (Exception e) {
+    } catch (SQLException e) {
       throw new IllegalStateException(e);
     }
     return new PostgresOffsetStore(dataSource);

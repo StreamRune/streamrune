@@ -914,8 +914,11 @@ it from synthetic data only, and keep it in test resources.
 A backend that stores events in another database implements the storage interfaces of
 `streamrune-core`. For each of them `streamrune-test` holds an abstract JUnit suite with one test per
 promise the interface's javadoc makes: a test class of the backend extends the suite, implements its
-factory method, and inherits the tests. `InMemoryEventStore` and `PostgresEventStore`, and the other
-shipped stores, run the same suites, so a backend that passes behaves as they do.
+factory method, and inherits the tests. The shipped stores run the same suites, so a backend that
+passes behaves as they do: `InMemoryEventStore` (with and without a command inbox) and
+`PostgresEventStore` run `EventStoreContract`, `InMemoryCommandInbox` and `PostgresCommandInbox` run
+`CommandInboxContract`, and `InMemoryOffsetStore`, `InMemoryProjectionRepository` and
+`PostgresOffsetStore` run `OffsetStoreContract`.
 
 ```java
 @Testcontainers
@@ -951,7 +954,9 @@ class MyEventStoreContractTest extends EventStoreContract {
 
 `InMemoryEventStoreContractTest`, `InMemoryCommandInboxContractTest` and
 `InMemoryOffsetStoreContractTest` in `streamrune-test`, and their `Postgres…ContractTest`
-counterparts in `streamrune-postgres`, show the factory methods for the shipped stores.
+counterparts in `streamrune-postgres`, show the factory methods for the shipped stores. A store that
+keeps snapshots overrides `load(StreamId, int)` to honour `EventStore.IGNORE_SNAPSHOT`, also when it
+has no snapshot schema versions: the interface's default would read the snapshot.
 
 ---
 

@@ -19,7 +19,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 /** Validates {@link CommandInbox.InboxResult} null-guards and defensive copy semantics. */
-class CommandInboxContractTest {
+class InboxResultTest {
 
   private static final AggregateType TYPE = AggregateType.of("order");
 

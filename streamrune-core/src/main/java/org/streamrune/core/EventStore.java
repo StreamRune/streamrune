@@ -31,9 +31,10 @@ import org.streamrune.core.types.Version;
  * org.streamrune.core.outbox.OutboxStore} reads entries, records their delivery and has only a
  * standalone {@code save}: the transactional outbox is not reachable through the SPI. A store that
  * offers it does so in its own implementation, as {@code PostgresEventStore} does with its {@code
- * append(StreamId, List, Version, List)} overload and with the entries its configured {@link
- * org.streamrune.core.outbox.OutboxEventMapper} derives from the events of every append. Such a
- * store provides all of the following:
+ * append(StreamId, List, Version, List)} overload, which stores the entries it is given, and with
+ * the entries its configured {@link org.streamrune.core.outbox.OutboxEventMapper} derives from the
+ * events of every {@link #append} and {@link #appendWithKey}. Such a store provides all of the
+ * following:
  *
  * <ul>
  *   <li>The entries are written in the same atomic step as the events (for {@link #appendWithKey},
@@ -91,14 +92,17 @@ public interface EventStore {
    *       on {@link #load}, and MUST NOT renumber it automatically (reconstructing the intended
    *       history is a data-recovery decision outside this interface's scope).
    *   <li><b>Empty appends.</b> An empty {@code events} list is a no-op returning {@code new
-   *       AppendResult(List.of(), expectedVersion)}. The no-op covers the EVENTS only — it never
-   *       licenses silently skipping another side effect the same call was asked to perform. {@link
-   *       #appendWithKey} still claims the idempotency key for a zero-event command, and an
-   *       implementation overload that additionally accepts outbox entries (see {@code
-   *       PostgresEventStore.append(StreamId, List, Version, List)}, and Transactional outbox in
-   *       the class javadoc) must REJECT non-empty entries with {@link IllegalArgumentException}
-   *       rather than discard them: those entries commit atomically with the events, so with no
-   *       events there is nothing to commit them with.
+   *       AppendResult(List.of(), expectedVersion)}, without consulting the stream's head: it never
+   *       fails with {@link OptimisticLockException}, whatever {@code expectedVersion} is, because
+   *       it carries no events to order against the stream. The conflict detection above applies to
+   *       a non-empty list. The no-op covers the EVENTS only — it never licenses silently skipping
+   *       another side effect the same call was asked to perform. {@link #appendWithKey} still
+   *       claims the idempotency key for a zero-event command, and an implementation overload that
+   *       additionally accepts outbox entries (see {@code PostgresEventStore.append(StreamId, List,
+   *       Version, List)}, and Transactional outbox in the class javadoc) must REJECT non-empty
+   *       entries with {@link IllegalArgumentException} rather than discard them: those entries
+   *       commit atomically with the events, so with no events there is nothing to commit them
+   *       with.
    *   <li><b>Atomicity.</b> A multi-event append is all-or-nothing: either every event is persisted
    *       or none is.
    *   <li><b>No idempotence by default.</b> {@code metadata().eventId()} uniqueness is not
@@ -351,7 +355,8 @@ public interface EventStore {
    * in a single database transaction (claim → append → backfill offsets). If {@code key} was
    * already claimed by a prior call, nothing is appended and the recorded offsets and version are
    * returned with {@code alreadyApplied() == true}. An empty {@code events} list still claims the
-   * key so a zero-event command is not re-run on redelivery.
+   * key so a zero-event command is not re-run on redelivery; like an empty {@link #append} it does
+   * not consult the stream's head, and it records {@code expectedVersion} as its final version.
    *
    * <p>The atomicity guarantee is the foundation of effectively-once delivery for saga commands:
    * the inbox row and the command's events commit together, so either both are visible or neither

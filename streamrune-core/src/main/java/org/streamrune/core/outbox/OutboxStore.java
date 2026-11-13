@@ -11,14 +11,14 @@ import java.util.Optional;
  * <p>Implementations must guarantee idempotent saves: a second {@link #save} with the same {@link
  * OutboxEntryId} must be a no-op (duplicate detection).
  *
- * <p><b>Writing an entry with its events.</b> {@link #save} is a standalone write: it commits on
- * its own and is atomic with nothing else. Writing entries in the same atomic step as the events
- * that cause them is the event store's part, and it is not part of the {@link
- * org.streamrune.core.EventStore} SPI: see Transactional outbox in its class javadoc. A backend
- * that offers the transactional outbox therefore provides both halves: this store over its outbox
- * storage, and an event store that writes into that storage in its append, rejects entries given
- * with no events, and stamps each entry with the trace link of its source event, as {@code
- * PostgresEventStore} and {@code PostgresOutboxStore} do.
+ * <p><b>Writing an entry with its events.</b> The SPI offers no way to enlist {@link #save} in the
+ * event store's append: {@code PostgresOutboxStore} commits it on its own connection. Writing
+ * entries in the same atomic step as the events that cause them is the event store's part, and it
+ * is not part of the {@link org.streamrune.core.EventStore} SPI: see Transactional outbox in its
+ * class javadoc. A backend that offers the transactional outbox therefore provides both halves:
+ * this store over its outbox storage, and an event store that writes into that storage in its
+ * append, rejects entries given with no events, and stamps each entry with the trace link of its
+ * source event, as {@code PostgresEventStore} and {@code PostgresOutboxStore} do.
  */
 public interface OutboxStore {
 

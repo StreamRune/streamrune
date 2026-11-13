@@ -129,25 +129,18 @@ public abstract class OffsetStoreContract {
   }
 
   @Test
-  public void aBackwardSaveChangesNothing() {
+  public void aBackwardOrSidewaysSaveChangesNothing() {
     assumeTrue(guardsAgainstRegression(), "the store applies no monotonic guard");
     store.saveOffset(ORDERS, GlobalOffset.of(300));
 
     store.saveOffset(ORDERS, GlobalOffset.of(200));
 
     assertEquals(GlobalOffset.of(300), store.getLastOffset(ORDERS));
+    store.saveOffset(ORDERS, GlobalOffset.of(300));
+    assertEquals(
+        GlobalOffset.of(300), store.getLastOffset(ORDERS), "a sideways save throws nothing");
     store.saveOffset(ORDERS, GlobalOffset.of(301));
     assertEquals(GlobalOffset.of(301), store.getLastOffset(ORDERS), "forward saves still advance");
-  }
-
-  @Test
-  public void aSidewaysSaveChangesNothing() {
-    assumeTrue(guardsAgainstRegression(), "the store applies no monotonic guard");
-    store.saveOffset(ORDERS, GlobalOffset.of(300));
-
-    store.saveOffset(ORDERS, GlobalOffset.of(300));
-
-    assertEquals(GlobalOffset.of(300), store.getLastOffset(ORDERS));
   }
 
   @Test
