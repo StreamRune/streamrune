@@ -37,8 +37,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 /**
  * Integration tests proving that {@link PostgresEventStore}, when configured with an {@link
  * OutboxEventMapper} + {@link PostgresOutboxStore}, writes outbox entries in the SAME transaction
- * as the domain events — that a mapper without an outbox store is refused, and that an outbox store
- * without a mapper writes exactly the entries passed to the append.
+ * as the domain events — and that the builder enforces both-or-neither configuration.
  */
 @Testcontainers
 class PostgresEventStoreOutboxIT {
@@ -181,7 +180,7 @@ class PostgresEventStoreOutboxIT {
     assertTrue(pending.isEmpty(), "skipped event must produce no outbox entry");
   }
 
-  // ── (c) builder: a mapper without a store is refused, a store without a mapper is not ──
+  // ── (c) builder fail-fast: mapper without store, or store without mapper ──
 
   @Test
   void builder_throws_when_outboxEventMapper_set_without_outboxStore() {
@@ -198,13 +197,29 @@ class PostgresEventStoreOutboxIT {
   }
 
   @Test
-  void builder_with_outboxStore_and_no_mapper_writes_only_the_entries_passed_to_append() {
+  void builder_throws_when_outboxStore_set_without_outboxEventMapper() {
+    var outboxStore = new PostgresOutboxStore(dataSource, Duration.ofMinutes(1));
+    var builder =
+        PostgresEventStore.builder()
+            .dataSource(dataSource)
+            .typeRegistry(typeRegistry)
+            .outboxStore(outboxStore); // no mapper
+
+    assertThrows(
+        IllegalStateException.class,
+        builder::build,
+        "build() must throw when outboxStore is set without outboxEventMapper");
+  }
+
+  @Test
+  void mapper_that_derives_nothing_writes_only_the_entries_passed_to_append() {
     var outboxStore = new PostgresOutboxStore(dataSource, Duration.ofMinutes(1));
     var store =
         PostgresEventStore.builder()
             .dataSource(dataSource)
             .typeRegistry(typeRegistry)
-            .outboxStore(outboxStore) // no mapper: explicit entries only
+            .outboxStore(outboxStore)
+            .outboxEventMapper(event -> List.of()) // explicit entries only
             .build();
 
     var withEntry = TestStreams.stream("outbox-explicit-" + System.nanoTime());

@@ -145,6 +145,8 @@ abstract class E2ETestBase {
         .dataSource(source)
         .typeRegistry(TYPE_REGISTRY)
         .outboxStore(outboxStore)
+        // Derives nothing: the scenarios pass their outbox entries to append(...) themselves.
+        .outboxEventMapper(event -> List.of())
         .build();
   }
 
