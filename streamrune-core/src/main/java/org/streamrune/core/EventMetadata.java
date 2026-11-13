@@ -31,10 +31,12 @@ import org.streamrune.core.types.UserId;
  * @param sagaOrigin the saga whose dispatch caused the event, {@code null} for every other event;
  *     written by the command bus
  * @param spanContext the span of the command that appended the event, written by the command bus
- *     from its own {@code command/{CommandType}} span and from nothing a client sends; {@link
- *     SpanLink#NONE} when the command was not traced. The spans that later handle the event link to
- *     it ({@link SpanLink#of(EventMetadata)}). Never {@code null}: a {@code null} argument, and a
- *     JSON form without the key, read as {@code NONE}, and {@code NONE} is left out of the JSON
+ *     from its own {@code command/{CommandType}} span, never from a StreamRune header, the request
+ *     context or baggage; its trace id is the request's, which a {@code traceparent} header
+ *     chooses. {@link SpanLink#NONE} when the command was not traced. The spans that later handle
+ *     the event link to it ({@link SpanLink#of(EventMetadata)}). Never {@code null}: a {@code null}
+ *     argument, and a JSON form without the key, read as {@code NONE}, and {@code NONE} is left out
+ *     of the JSON
  */
 @JsonIgnoreProperties({"spanId"})
 public record EventMetadata(

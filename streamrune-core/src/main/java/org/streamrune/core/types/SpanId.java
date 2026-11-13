@@ -3,7 +3,11 @@ package org.streamrune.core.types;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
-/** OpenTelemetry span ID propagated from the incoming HTTP request. Nullable. */
+/**
+ * The span id of a {@link org.streamrune.core.tracing.SpanLink}: the id of the span another span
+ * links to, the command span a command bus started for the events it appended. No request header
+ * builds one.
+ */
 public record SpanId(@JsonValue String value) {
 
   @JsonCreator

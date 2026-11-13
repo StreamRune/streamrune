@@ -415,6 +415,25 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 - An attribute that holds an id passes `LogSanitizer.sanitizeForTrace`, which removes control,
   separator and format characters and cuts a longer value to its first 256 characters followed by
   `...`, 259 characters in all; an ordinary id is unchanged.
+- **What a span carries, and what it does not.** No attribute is taken from an event payload, a
+  metadata value, baggage, an `@Encrypted` value, a crypto subject id, a user id, a role or SQL.
+  The ids in the table are exported as they are, so an id that names a person is in every trace
+  of its aggregate: where the aggregate's id is the crypto subject (`@Encrypted(subjectId = …)`)
+  or the caller's user id, `streamrune.aggregate.id` and `streamrune.stream.id` carry it, and a
+  `ForgetSubjectService.forget` does not reach the trace backend. Choose ids that are not personal
+  data, as the event store, which keeps them in plaintext columns, needs anyway. A failure exports
+  the exception's own message, sanitized as free text and cut at 256 characters (`...` after it),
+  with its type and its stack trace (the messages of its causes are left out); a message of yours
+  must not quote personal data. A command its domain rejects exports the rejection's type only,
+  never its message. A subscription's delivery span clears the OpenTelemetry baggage while its
+  listener runs, so no caller's baggage, `role` included, travels with the listener's outbound
+  calls; the listener reads an event's baggage from that event's metadata.
+- **Which process emitted a span.** StreamRune's attributes name types and ids, never the process.
+  With several replicas sending to one backend, give each its own resource attribute
+  `service.instance.id`: `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$HOSTNAME` for the SDK
+  and the Java agent, `management.opentelemetry.resource-attributes` on Spring Boot,
+  `quarkus.otel.resource.attributes` on Quarkus. A saga step or a projection batch then shows the
+  replica that led it.
 - The `streamrune.` prefix is reserved for the framework. A module of your own, such as an event
   store for another database, emits the standard spans with these constants through
   `StreamRuneTracing`, and adds attributes of its own under a prefix of its own. The seam takes no

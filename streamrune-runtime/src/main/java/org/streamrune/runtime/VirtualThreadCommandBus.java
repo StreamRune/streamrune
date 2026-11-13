@@ -2020,8 +2020,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   private EventMetadata buildMetadata(EventProvenance provenance, CommandId commandId) {
     EventId eventId = IdGenerator.generateEventId();
     Instant now = clock.instant();
-    // The span of this command, from the interceptor that started it, and from nothing a client
-    // sends: the bound context's traceId below is caller-supplied correlation data.
+    // The span of this command, from the interceptor that started it, never from a header, the
+    // request context or baggage: the bound context's traceId below is caller-supplied correlation
+    // data. Its trace id is the request's, which a traceparent header chooses.
     SpanLink spanContext = commandSpans == null ? SpanLink.NONE : commandSpans.currentLink();
 
     // capture(): a context bound to null is no context.

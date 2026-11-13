@@ -69,7 +69,9 @@ jars. In brief:
   tracing is off. The integrations wire it from the application's `OpenTelemetry` bean or the
   OpenTelemetry Java agent, `streamrune.tracing.*` switches it off as a whole or per area, and the
   subscription, saga and outbox spans link to the span of the command that caused them, which the
-  command bus writes into `EventMetadata.spanContext` from nothing a client sends.
+  command bus writes into `EventMetadata.spanContext` from its own command span, never from a
+  StreamRune header, the request context or baggage; its trace id is the request's, which a
+  `traceparent` header chooses.
 
 ```kotlin
 repositories {

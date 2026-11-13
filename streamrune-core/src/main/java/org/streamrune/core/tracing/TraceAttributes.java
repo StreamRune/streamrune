@@ -28,8 +28,16 @@ import org.streamrune.core.types.SubscriptionName;
  * stream id, a saga id, an outbox entry id) passes {@link LogSanitizer#sanitizeForTrace(String)}:
  * control, separator and format characters are removed, and a longer value is cut to its first
  * {@value LogSanitizer#MAX_TRACE_LENGTH} characters followed by {@code ...}, 259 characters in all.
- * An ordinary identifier is unchanged. Attributes never carry event payloads, metadata values,
- * baggage, encrypted values, crypto subject ids, user ids, roles or SQL.
+ * An ordinary identifier is unchanged.
+ *
+ * <p><b>What a span carries.</b> No attribute is taken from an event payload, a metadata value,
+ * baggage, an encrypted value, a crypto subject id, a user id, a role or SQL. An aggregate, stream
+ * or saga id is exported as it is: where such an id names a person — the aggregate's id is the
+ * crypto subject or the caller's user id — every trace of that aggregate carries it, and a forget
+ * does not reach the trace backend. A failure's own message, sanitized and bounded, is exported
+ * with the exception's type, so a message must not quote personal data; a command its domain
+ * rejected exports the rejection's type alone ({@link #COMMAND_REJECTION_TYPE}). A subscription's
+ * delivery span clears the baggage while the listener runs.
  *
  * <p><b>Span names</b> are path-shaped ({@code command/PlaceOrder}, {@code
  * subscription/orders/deliver}, {@code projection/orders/process}) and hold types and configured
