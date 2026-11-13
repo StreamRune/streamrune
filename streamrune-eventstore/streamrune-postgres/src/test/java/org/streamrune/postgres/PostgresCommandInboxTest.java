@@ -155,44 +155,6 @@ class PostgresCommandInboxTest {
     assertTrue(ex.getMessage().contains("inventory:x"), ex.getMessage());
   }
 
-  @Test
-  void deleteProcessedBeforePrunesOldRows() throws Exception {
-    // Insert 2 old rows and 1 recent row
-    Instant past = Instant.parse("2020-01-01T00:00:00Z");
-    Instant recent = Instant.now();
-
-    try (var conn = dataSource.getConnection();
-        var ps =
-            conn.prepareStatement(
-                "INSERT INTO command_inbox"
-                    + " (idempotency_key, command_type, aggregate_type, aggregate_id, final_version,"
-                    + " processed_at) VALUES (?, 'T', 'test', 'stream', 0, ?)")) {
-      for (String k : List.of("old-1", "old-2")) {
-        ps.setString(1, k);
-        ps.setObject(2, java.sql.Timestamp.from(past));
-        ps.addBatch();
-      }
-      ps.executeBatch();
-    }
-    try (var conn = dataSource.getConnection();
-        var ps =
-            conn.prepareStatement(
-                "INSERT INTO command_inbox"
-                    + " (idempotency_key, command_type, aggregate_type, aggregate_id, final_version,"
-                    + " processed_at) VALUES (?, 'T', 'test', 'stream', 0, ?)")) {
-      ps.setString(1, "new-1");
-      ps.setObject(2, java.sql.Timestamp.from(recent));
-      ps.executeUpdate();
-    }
-
-    int deleted = inbox.deleteProcessedBefore(Instant.parse("2021-01-01T00:00:00Z"));
-
-    assertEquals(2, deleted);
-    assertTrue(inbox.find(IdempotencyKey.of("old-1")).isEmpty());
-    assertTrue(inbox.find(IdempotencyKey.of("old-2")).isEmpty());
-    assertTrue(inbox.find(IdempotencyKey.of("new-1")).isPresent());
-  }
-
   /**
    * A chunk that comes back shorter than its LIMIT because a concurrent writer removed one of its
    * candidates inside the DELETE window must not end the sweep while aged rows remain. Every

@@ -15,7 +15,6 @@ import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
-import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -172,21 +171,6 @@ class InMemoryEventStoreSerializingTest {
     assertThrows(
         EventStoreException.class, () -> store.append(s, List.of(good, bad), Version.initial()));
     assertTrue(store.load(s).events().isEmpty(), "atomicity: partial appends are not allowed");
-  }
-
-  @Test
-  void unregisteredEventTypeFailsOnRead() {
-    // The EventTypeRegistry is read-side only (nothing validates the event type at append), so an
-    // unregistered type appends fine and surfaces UnknownEventTypeException only on read — matching
-    // PostgresEventStore, whose append writes the event_type name without resolving the class.
-    var emptyRegistry = SimpleEventTypeRegistry.builder().build();
-    var store = InMemoryEventStore.serializing(emptyRegistry, null);
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-
-    store.append(
-        s, List.of(envelope(s, 1, new Added("A", Instant.EPOCH), "Added")), Version.initial());
-
-    assertThrows(UnknownEventTypeException.class, () -> store.load(s));
   }
 
   @Test

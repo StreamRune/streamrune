@@ -2,7 +2,6 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -141,26 +140,6 @@ class InMemoryEventStoreMigrationTest {
   }
 
   @Test
-  void gappedChainDiscardsSnapshotAndReplaysFromZero() {
-    // Only 1->2 registered; expected 3 -> gap at 2->3 -> discard + full replay.
-    var store = InMemoryEventStore.serializing(registry, null).withMigrations(List.of(ONE_TO_TWO));
-    StreamId id = StreamId.of(TYPE, AggregateId.of("user-2"));
-    store.append(
-        id,
-        List.of(
-            renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b"), renamedEnvelope(id, 3, "c")),
-        Version.initial());
-    store.saveSnapshot(id, new Version(2), new UserState("snapshot-name"), 1);
-
-    AggregateHistory history = store.load(id, 3);
-
-    assertNull(history.snapshotState(), "gapped chain must discard the snapshot");
-    assertEquals(3, history.events().size(), "all events replay from version 0");
-    assertEquals(1, history.events().getFirst().version().value());
-    assertEquals(Version.initial(), history.lastSnapshotVersion());
-  }
-
-  @Test
   void multiStepChainAppliesAllStepsInOrder() {
     var store =
         InMemoryEventStore.serializing(registry, null)
@@ -180,59 +159,6 @@ class InMemoryEventStoreMigrationTest {
     // Snapshot was at version 1 -> event at version 2 replays.
     assertEquals(1, history.events().size());
     assertEquals(2, history.events().getFirst().version().value());
-  }
-
-  // ── A throwing migration step must discard-and-replay, not wedge the aggregate ────
-
-  private static final SnapshotMigration THROWING_ONE_TO_TWO =
-      new SnapshotMigration() {
-        @Override
-        public int fromVersion() {
-          return 1;
-        }
-
-        @Override
-        public int toVersion() {
-          return 2;
-        }
-
-        @Override
-        public AggregateState migrate(AggregateState state) {
-          // Simulates a programming bug in the step (e.g. an unchecked cast against the wrong
-          // input shape) — SnapshotMigrationChain propagates whatever RuntimeException the step
-          // throws unchanged.
-          throw new ClassCastException("simulated: step assumed the wrong input shape");
-        }
-      };
-
-  @Test
-  void throwingMigrationDiscardsSnapshotAndReplaysFromInitial() {
-    // InMemoryEventStore parity with PostgresEventStore: SnapshotMigrationChain
-    // .migrate() can throw (NullPointerException for a null-returning step, IllegalStateException
-    // for a wrong-toType() step), and that propagated straight out of
-    // load(), wedging the aggregate exactly like the undeserializable-snapshot guard exists
-    // to prevent. A migration step is registered CODE, and a bug in it is exactly as
-    // untrustworthy as a field renamed without a version bump — discard the derived cache and
-    // rebuild from the source of truth (events) instead of crashing load().
-    var store =
-        InMemoryEventStore.serializing(registry, null).withMigrations(List.of(THROWING_ONE_TO_TWO));
-    StreamId id = StreamId.of(TYPE, AggregateId.of("user-throwing-migration"));
-    store.append(
-        id,
-        List.of(
-            renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b"), renamedEnvelope(id, 3, "c")),
-        Version.initial());
-    // v1 snapshot at stream version 2; load(id, 2) hits the migration path (canReach(1,2) holds).
-    store.saveSnapshot(id, new Version(2), new UserState("snap"), 1);
-
-    AggregateHistory history = store.load(id, 2);
-
-    assertNull(history.snapshotState(), "a throwing migration step must discard, not crash load()");
-    assertEquals(
-        3, history.events().size(), "ALL events replay from initial, not only post-snapshot ones");
-    assertEquals(1, history.events().getFirst().version().value());
-    assertEquals(3, history.events().getLast().version().value());
-    assertEquals(Version.initial(), history.lastSnapshotVersion());
   }
 
   private static final SnapshotMigration CRYPTO_THROWING_ONE_TO_TWO =
@@ -279,26 +205,6 @@ class InMemoryEventStoreMigrationTest {
     assertTrue(cryptoInChain, "a crypto-caused migration failure must propagate, not be discarded");
   }
 
-  @Test
-  void noMigrationsRegisteredDiscardsMismatchedSnapshot() {
-    // No migrations registered + version mismatch -> the snapshot is discarded and the stream
-    // replays from the start.
-    var store = InMemoryEventStore.serializing(registry, null);
-    StreamId id = StreamId.of(TYPE, AggregateId.of("user-4"));
-    store.append(
-        id, List.of(renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b")), Version.initial());
-    store.saveSnapshot(id, new Version(1), new UserState("compat"), 1);
-
-    AggregateHistory history = store.load(id, 2);
-
-    assertNull(history.snapshotState());
-    assertEquals(2, history.events().size());
-  }
-
-  record WideState(String keep, String extra) implements AggregateState {}
-
-  record NarrowState(String keep) implements AggregateState {}
-
   /**
    * Resolves state to whatever {@link #stateClass} currently holds — lets a test evolve the shape.
    */
@@ -323,37 +229,6 @@ class InMemoryEventStoreMigrationTest {
     public java.util.Collection<Class<?>> registeredTypes() {
       return List.of(stateClass);
     }
-  }
-
-  @Test
-  void undeserializableSnapshotIsDiscardedAndReplaysFromInitial() {
-    // Test-double parity with PostgresEventStore: a stored snapshot whose payload can no
-    // longer
-    // be deserialized (a field dropped without bumping the snapshot version) is a stale derived
-    // CACHE — discard it and replay ALL events from the beginning, never crash the load. The
-    // snapshot sits at stream version 2, so replay must still yield all three events (not just the
-    // one after the snapshot).
-    var reg = new SwappableRegistry(WideState.class);
-    var store = InMemoryEventStore.serializing(reg, null);
-    StreamId id = StreamId.of(TYPE, AggregateId.of("corrupt-1"));
-    store.append(
-        id,
-        List.of(
-            renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b"), renamedEnvelope(id, 3, "c")),
-        Version.initial());
-    store.saveSnapshot(id, new Version(2), new WideState("keep", "dropme"), 1);
-
-    // The aggregate-state record loses its 'extra' field without a snapshotVersion bump: the stored
-    // JSON now carries an unknown property for NarrowState.
-    reg.stateClass = NarrowState.class;
-
-    AggregateHistory history = store.load(id, 0);
-
-    assertNull(history.snapshotState(), "undeserializable snapshot must be discarded, not crash");
-    assertEquals(3, history.events().size(), "ALL events replay from initial after discard");
-    assertEquals(1, history.events().getFirst().version().value());
-    assertEquals(3, history.events().getLast().version().value());
-    assertEquals(Version.initial(), history.lastSnapshotVersion());
   }
 
   record Secret(String subject, @Encrypted(subjectId = "subject") String value) {

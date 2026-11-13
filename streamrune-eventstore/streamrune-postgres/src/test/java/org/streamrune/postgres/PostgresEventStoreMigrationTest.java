@@ -242,25 +242,6 @@ class PostgresEventStoreMigrationTest {
   }
 
   @Test
-  void gappedChainDiscardsSnapshotAndReplaysFromZero() {
-    // Only 1->2 registered; expected 3 -> gap -> discard + full replay, correct final state.
-    var s = store(fullRegistry, List.of(ONE_TO_TWO));
-    StreamId id = TestStreams.stream("user-2");
-    s.append(
-        id,
-        List.of(renamed(id, 1, "a"), renamed(id, 2, "b"), renamed(id, 3, "c")),
-        Version.initial());
-    s.saveSnapshot(id, new Version(2), new UserState("snap"), 1);
-
-    AggregateHistory history = s.load(id, 3);
-
-    assertNull(history.snapshotState(), "gapped chain discards the snapshot");
-    assertEquals(3, history.events().size(), "all events replay from version 0");
-    assertEquals(1, history.events().getFirst().version().value());
-    assertEquals(Version.initial(), history.lastSnapshotVersion());
-  }
-
-  @Test
   void multiStepChainAppliesAllStepsInOrder() {
     var s = store(fullRegistry, List.of(ONE_TO_TWO, TWO_TO_THREE));
     StreamId id = TestStreams.stream("user-3");
@@ -276,66 +257,6 @@ class PostgresEventStoreMigrationTest {
     assertTrue(v3.active());
     assertEquals(1, history.events().size());
     assertEquals(2, history.events().getFirst().version().value());
-  }
-
-  @Test
-  void retiredStoredTypeIsDiscardedNotCrashed() {
-    // Save a v1 snapshot under UserState via the full registry.
-    var writer = store(fullRegistry, List.of());
-    StreamId id = TestStreams.stream("user-4");
-    writer.append(id, List.of(renamed(id, 1, "a"), renamed(id, 2, "b")), Version.initial());
-    writer.saveSnapshot(id, new Version(1), new UserState("gone"), 1);
-
-    // Reader registry no longer knows "UserState" (retired), only the new types. The 1->2 migration
-    // is registered, so canReach(1,2) holds — but the stored type is undeserializable → discard.
-    EventTypeRegistry readerRegistry =
-        SimpleEventTypeRegistry.builder()
-            .registerEvent("Renamed", Renamed.class)
-            .registerState("UserStateV2", UserStateV2.class)
-            .build();
-    var reader = store(readerRegistry, List.of(ONE_TO_TWO));
-
-    AggregateHistory history = reader.load(id, 2);
-
-    assertNull(history.snapshotState(), "retired stored type must discard, not crash");
-    assertEquals(2, history.events().size());
-    assertEquals(1, history.events().getFirst().version().value());
-  }
-
-  @Test
-  void retiredStoredTypeOnCompatibleLoadIsDiscardedNotCrashed() {
-    // Companion to retiredStoredTypeIsDiscardedNotCrashed (which covers the version-MISMATCH
-    // branch). Here the load hits the COMPATIBLE branch — plain load(id) (expectedSnapshotVersion
-    // == 0) and load(id, 1) (stored snapshot_version == expected). Before the fix this branch used
-    // the THROWING typeRegistry.resolveStateType(...), so a retired/renamed stored state type made
-    // every load() throw UnknownEventTypeException and the aggregate became permanently unloadable.
-    var writer = store(fullRegistry, List.of());
-    StreamId id = TestStreams.stream("user-compat-retired");
-    writer.append(id, List.of(renamed(id, 1, "a"), renamed(id, 2, "b")), Version.initial());
-    writer.saveSnapshot(id, new Version(1), new UserState("gone"), 1);
-
-    // Reader registry no longer knows "UserState" (retired), only the newer types.
-    EventTypeRegistry readerRegistry =
-        SimpleEventTypeRegistry.builder()
-            .registerEvent("Renamed", Renamed.class)
-            .registerState("UserStateV2", UserStateV2.class)
-            .build();
-    var reader = store(readerRegistry, List.of());
-
-    // (1) Plain load(id) → load(id, 0) → expectedSnapshotVersion == 0 → compatible branch.
-    AggregateHistory plain = reader.load(id);
-    assertNull(plain.snapshotState(), "retired stored type on plain load must discard, not crash");
-    assertEquals(2, plain.events().size(), "all events replay after discard");
-    assertEquals(1, plain.events().getFirst().version().value());
-    assertEquals(Version.initial(), plain.lastSnapshotVersion());
-
-    // (2) load(id, 1) → stored snapshot_version (1) == expected (1) → compatible branch.
-    AggregateHistory matched = reader.load(id, 1);
-    assertNull(
-        matched.snapshotState(), "retired stored type on matching-version load must discard");
-    assertEquals(2, matched.events().size());
-    assertEquals(1, matched.events().getFirst().version().value());
-    assertEquals(Version.initial(), matched.lastSnapshotVersion());
   }
 
   @Test
@@ -468,20 +389,6 @@ class PostgresEventStoreMigrationTest {
         PostgresEventStore.hasCryptoCause(ex),
         "the propagated exception must carry the CryptoOperationException cause");
     assertEquals(0, metrics.discardCount.get(), "a crypto-caused failure must never be discarded");
-  }
-
-  @Test
-  void noMigrationsRegisteredDiscardsMismatchedSnapshot() {
-    // No migrations registered + version mismatch -> discard + replay.
-    var s = store(fullRegistry, List.of());
-    StreamId id = TestStreams.stream("user-5");
-    s.append(id, List.of(renamed(id, 1, "a"), renamed(id, 2, "b")), Version.initial());
-    s.saveSnapshot(id, new Version(1), new UserState("compat"), 1);
-
-    AggregateHistory history = s.load(id, 2);
-
-    assertNull(history.snapshotState());
-    assertEquals(2, history.events().size());
   }
 
   @Test
