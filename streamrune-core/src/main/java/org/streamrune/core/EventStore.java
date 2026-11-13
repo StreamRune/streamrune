@@ -11,6 +11,54 @@ import org.streamrune.core.types.Version;
 /**
  * Persistence abstraction for append-only event streams with optional snapshots.
  *
+ * <h2>Read path</h2>
+ *
+ * <p>{@link #load}, {@link #readStream} and {@link #readGlobalStream} turn a stored event into its
+ * {@link EventEnvelope} the same way, and every implementation provides the following on all three:
+ *
+ * <ul>
+ *   <li><b>Schema version.</b> An append stores each event with a schema version: the {@link
+ *       org.streamrune.core.upcasting.EventUpcaster#currentVersion() currentVersion()} of the
+ *       store's upcaster for the event's type at the time of the append, {@code 1} for a type
+ *       without one. It records the upcasters the writing store had, not the payload's shape (see
+ *       {@link org.streamrune.core.upcasting.EventUpcaster#upcast}).
+ *   <li><b>Upcasting.</b> A store built with event upcasters reads an event stored below its type's
+ *       current version by passing the stored payload through the type's upcaster one version at a
+ *       time, from the stored version up to the current one, and binding the result to the event
+ *       class. An event stored at the current version is bound as stored.
+ *   <li><b>Schema ahead.</b> An event stored above the version the store's upcasters reach for its
+ *       type ({@code 1} for a type without an upcaster, whatever upcasters the store has for other
+ *       types) is refused with {@link EventSchemaAheadException}: a store with upcasters this one
+ *       lacks wrote it, and reading it would bind a payload of a newer shape to this reader's
+ *       class.
+ *   <li><b>Read failures.</b> A read that cannot turn a stored event into its envelope fails as a
+ *       whole: it never skips the event, and never returns the events before it. The exception says
+ *       whether a retry can succeed:
+ *       <ul>
+ *         <li>{@link UnknownEventTypeException}: the event's type does not resolve in the store's
+ *             {@link EventTypeRegistry}.
+ *         <li>{@link EventDeserializationException}: no retry can read the stored event. Its
+ *             payload or metadata cannot be parsed or bound to the resolved class, an upcaster
+ *             threw or returned data the class cannot bind, or the crypto layer refused it with
+ *             {@link org.streamrune.core.crypto.CryptoMappingException}, for example for a class
+ *             whose constructor rejects the tombstone a field of an erased subject reads as.
+ *         <li>{@link EventSchemaAheadException}: see above; a store whose upcasters reach the
+ *             stored version reads the event.
+ *         <li>a plain {@link EventStoreException}, none of the subtypes above: the storage or a key
+ *             store failed, with a database error or with a {@link
+ *             org.streamrune.core.crypto.CryptoOperationException} that is not a {@code
+ *             CryptoMappingException} (a key-store outage, a disabled or inaccessible key). A retry
+ *             may succeed.
+ *       </ul>
+ *       Callers act on the split. The command bus dead-letters a command that fails with any of
+ *       them, and counts toward its circuit breaker only the plain one (see {@link
+ *       CommandFailureClassification}); the read-poison classifier of the subscriptions ({@code
+ *       ReadPoisonClassifier} in {@code streamrune-runtime}) quarantines the first two after a
+ *       bounded streak and retries the other two. A store that raised {@code
+ *       EventDeserializationException} for a key-store outage would quarantine readable events, and
+ *       one that raised a plain exception for a corrupt payload would retry it forever.
+ * </ul>
+ *
  * <h2>Decorators</h2>
  *
  * <p>A store that wraps another one (to observe, meter or fail its calls) forwards to the wrapped
@@ -56,7 +104,9 @@ public interface EventStore {
 
   /**
    * Loads the aggregate history. If a snapshot exists, returns the snapshot state together with
-   * only the events recorded after that snapshot.
+   * only the events recorded after that snapshot. The snapshot is used or discarded as {@link
+   * #load(StreamId, int)} with {@code 0} describes, and each event is read as Read path in the
+   * class javadoc describes.
    */
   AggregateHistory load(StreamId streamId);
 
@@ -149,7 +199,8 @@ public interface EventStore {
 
   /**
    * Loads the aggregate history, ignoring the snapshot if its stored schema version does not match
-   * {@code expectedSnapshotVersion}.
+   * {@code expectedSnapshotVersion} and the store cannot migrate it to that version. Each event is
+   * read as Read path in the class javadoc describes.
    *
    * <p>When {@code expectedSnapshotVersion} is {@code 0}, no version check is performed and any
    * stored snapshot is used (equivalent to {@link #load(StreamId)}). When it is {@link
@@ -173,11 +224,42 @@ public interface EventStore {
    * snapshot); see that constant's javadoc. Silently skipping the version check would hand
    * stale-schema snapshots to callers that explicitly asked for a version match.
    *
+   * <p><b>Using the stored snapshot.</b> A snapshot is a cache derived from the events, so a stored
+   * snapshot the store cannot use is discarded: {@code snapshotState} is {@code null}, {@code
+   * lastSnapshotVersion} is {@link Version#initial()} and every event of the stream is returned, as
+   * if it had no snapshot. A snapshot whose stored schema version matches (or with {@code
+   * expectedSnapshotVersion == 0}) is used when its stored state type resolves in the store's
+   * {@link EventTypeRegistry} and its state deserializes as that type. On a mismatch, a store built
+   * with {@link SnapshotMigration}s deserializes the state as its stored type and applies a
+   * complete chain of steps from the stored version to exactly {@code expectedSnapshotVersion} (see
+   * {@link SnapshotMigration}). A used snapshot, migrated or not, comes with only the events after
+   * its version. The snapshot is discarded when:
+   *
+   * <ul>
+   *   <li>its stored state type does not resolve in the registry (the state class was retired);
+   *   <li>its version mismatches and no complete chain reaches {@code expectedSnapshotVersion}: the
+   *       store has no migrations, a step is missing, a step goes past it, or the stored version is
+   *       above it;
+   *   <li>its state does not deserialize as its stored type;
+   *   <li>a migration step throws, returns {@code null}, or returns an instance of another class
+   *       than its declared {@link SnapshotMigration#toType()}.
+   * </ul>
+   *
+   * <p>A crypto failure is not discarded. When deserializing or migrating the state of a snapshot
+   * the store would use fails with a {@link org.streamrune.core.crypto.CryptoOperationException} in
+   * the cause chain, the load fails, because replaying the events would meet the same encrypted
+   * fields: with a plain {@link EventStoreException} when the chain carries a {@code
+   * CryptoOperationException} that is not a {@link
+   * org.streamrune.core.crypto.CryptoMappingException} (a key-store outage, a retry may succeed),
+   * with {@link EventDeserializationException} otherwise (no retry can read it), as on the read
+   * path. A snapshot discarded for its type or its version is not deserialized, so it raises no
+   * crypto failure.
+   *
    * @param streamId the stream to load
    * @param expectedSnapshotVersion the required snapshot schema version (>= 1), {@code 0} to skip
    *     the check, or {@link #IGNORE_SNAPSHOT} to never consult a snapshot at all
-   * @return aggregate history; if the snapshot version mismatches (or is ignored), {@code
-   *     snapshotState} is {@code null} and all events are returned
+   * @return aggregate history; if the snapshot is ignored or discarded, {@code snapshotState} is
+   *     {@code null} and all events are returned
    * @throws IllegalArgumentException if {@code expectedSnapshotVersion} is below {@link
    *     #IGNORE_SNAPSHOT}
    * @throws UnsupportedOperationException if {@code expectedSnapshotVersion >= 1} and the
@@ -257,6 +339,13 @@ public interface EventStore {
    * IllegalArgumentException}: {@code 0} is reserved by {@link #load(StreamId, int)} as the
    * skip-the-check value and must never be persisted as a schema version.
    *
+   * <p>A store that reads the state back through an {@link EventTypeRegistry} stores its type as
+   * the simple name of its class, and refuses with {@link EventStoreException}, storing nothing, a
+   * state whose simple name does not resolve with {@link EventTypeRegistry#resolveStateType} or
+   * resolves to another class: the snapshot could not be read back as the class it was saved from.
+   * A stored type that does not resolve when the stream is loaded discards the snapshot (see {@link
+   * #load(StreamId, int)}).
+   *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken
    * @param state the state to persist
@@ -266,6 +355,8 @@ public interface EventStore {
    *     purged since the load and nothing was written
    * @throws IllegalArgumentException if {@code snapshotVersion < 1} or {@code
    *     snapshotPurgeGeneration < 0}
+   * @throws EventStoreException if the state's type does not resolve in the store's registry as its
+   *     own class
    */
   boolean saveSnapshot(
       StreamId streamId,
@@ -312,7 +403,26 @@ public interface EventStore {
   }
 
   /**
-   * Reads events from the global stream starting after the given offset.
+   * Reads events from the global stream starting after the given offset. Each event is read as Read
+   * path in the class javadoc describes.
+   *
+   * <p><b>Offsets.</b> An append assigns each event a global offset. Offsets are distinct and
+   * increase in append order: within one append they follow the order of its events, and an append
+   * that starts after another has returned successfully assigns greater offsets than that one. They
+   * are not promised to be contiguous: an offset may be held by no readable event, permanently.
+   *
+   * <p><b>Contract: nothing appears behind a returned event.</b> Once this method has returned an
+   * event at offset {@code X}, no event with an offset in ({@code afterOffset}, {@code X}] becomes
+   * readable later. An offset that is assigned and not readable yet (an append in progress, a
+   * transaction that has not committed) therefore bounds what a call returns: a store whose offsets
+   * can become readable out of order returns no event above an offset that may still become
+   * readable, as {@link #lastGlobalOffset()} reports no head above one.
+   *
+   * <p>A reader that keeps the offset of the last event it received as its checkpoint and reads on
+   * after it therefore misses no event, whatever the holes. A polling subscription ({@code
+   * PollingEventSubscription} in {@code streamrune-runtime}) relies on it: it reads page after page
+   * from its checkpoint and ends a catch-up on an empty read, never on a short page, since a page
+   * may stop short of a hole.
    *
    * @param afterOffset read events with global_offset strictly greater than this value
    * @param maxCount maximum number of events to return
@@ -321,7 +431,8 @@ public interface EventStore {
   List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount);
 
   /**
-   * Reads events from a specific stream starting after the given version.
+   * Reads events from a specific stream starting after the given version. Each event is read as
+   * Read path in the class javadoc describes.
    *
    * @param streamId the stream to read from
    * @param afterVersion read events with version strictly greater than this value
