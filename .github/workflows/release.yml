@@ -43,6 +43,8 @@ name: Release
 #
 # Before the run, one pull request prepares the commit that is released. It
 #   - dates the `## [<version>]` heading of CHANGELOG.md;
+#   - moves the coordinates the README's Installation, the quickstart, the getting-started guide and
+#     the module READMEs name to <version> (for the first release they name it already);
 #   - rewrites the Status section of the README to name the version as released ("`1.0.0` is the
 #     first release of StreamRune", not "will be") and removes the sentences that say it is not on
 #     Maven Central yet, there and in the pages ReleaseStatusTest in streamrune-core lists;

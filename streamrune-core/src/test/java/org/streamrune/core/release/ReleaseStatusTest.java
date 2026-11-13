@@ -30,7 +30,9 @@ import org.junit.jupiter.api.Test;
  * moved above it: the tag then freezes a README whose preview is the next one, and Publish
  * Snapshot, which refuses a version below a tagged release, keeps publishing. A later undated entry
  * ({@code ## [1.0.1] — unreleased}) changes nothing while the Installation still names a released
- * version.
+ * version; once it is dated, the Installation must name it, and every page that installs a release
+ * names the same version, so the pull request that dates the next release moves the coordinates
+ * too.
  *
  * <p>The README's "Preview builds" section names the development version, and no other page does:
  * the version moves in the build and the README only.
@@ -48,6 +50,14 @@ class ReleaseStatusTest {
       Pattern.compile("org\\.streamrune:streamrune-core:([0-9]+\\.[0-9]+\\.[0-9]+[0-9A-Za-z.-]*)");
 
   private static final Pattern NOT_YET = Pattern.compile("is not on Maven Central yet");
+
+  private static final Pattern DATED_ENTRY =
+      Pattern.compile(
+          "(?m)^## \\[([0-9]+\\.[0-9]+\\.[0-9]+[^\\]]*)\\] (?:—|-) [0-9]{4}-[0-9]{2}-[0-9]{2}\\s*$");
+
+  private static final Pattern COORDINATE =
+      Pattern.compile(
+          "org\\.streamrune:streamrune-[a-z-]+:([0-9][^\"'\\s)]*)|<version>([0-9][^<]*)</version>");
 
   private static final Pattern TO_COME = Pattern.compile("will be the (?:first|next) release");
 
@@ -104,6 +114,87 @@ class ReleaseStatusTest {
   }
 
   @Test
+  void aSecondReleaseMovesTheCoordinatesTheStatusAndThePreview() {
+    String changelog =
+        "# Changelog\n\n## [1.0.1] — 2027-01-10\n\nFixes.\n\n## [1.0.0] — 2026-12-01\n\nFirst.\n";
+    assertThat(
+            statusProblems(
+                changelog, pages("`1.0.0` is the first release of StreamRune."), "1.0.1-SNAPSHOT"))
+        .singleElement()
+        .asString()
+        .contains("README.md installs 1.0.0, but the newest dated CHANGELOG entry is 1.0.1");
+
+    Map<String, String> moved = pages("`1.0.1` is the latest release of StreamRune.");
+    moved.replaceAll(
+        (page, text) -> text.replace("streamrune-core:1.0.0", "streamrune-core:1.0.1"));
+    assertThat(statusProblems(changelog, moved, "1.0.2-SNAPSHOT")).isEmpty();
+    assertThat(statusProblems(changelog, moved, "1.0.1-SNAPSHOT"))
+        .singleElement()
+        .asString()
+        .contains("1.0.1-SNAPSHOT sorts below 1.0.1");
+  }
+
+  @Test
+  void everyPageInstallsTheVersionTheReadmeInstalls() throws IOException {
+    Path root = RepositoryScripts.repositoryRoot();
+    Map<String, String> texts = new LinkedHashMap<>();
+    for (Path page : pages(root)) {
+      texts.put(
+          root.relativize(page).toString().replace('\\', '/'),
+          Files.readString(page, StandardCharsets.UTF_8));
+    }
+    Matcher installed = INSTALLED.matcher(texts.get("README.md"));
+    assertThat(installed.find()).isTrue();
+    assertThat(coordinateProblems(texts, installed.group(1))).isEmpty();
+  }
+
+  @Test
+  void aPageLeftOnTheVersionBeforeIsNamed() {
+    Map<String, String> texts = new LinkedHashMap<>();
+    texts.put(
+        "README.md",
+        "implementation(\"org.streamrune:streamrune-core:1.0.1\")\n<version>1.0.1</version>");
+    texts.put(
+        "streamrune-test/README.md",
+        "testImplementation(\"org.streamrune:streamrune-test:1.0.0\")");
+    texts.put("docs/QUICKSTART.md", "<version>1.0.0</version>");
+    texts.put("CHANGELOG.md", "org.streamrune:streamrune-core:1.0.0");
+    texts.put("docs/reference/release-1.0.0.md", "org.streamrune:streamrune-core:1.0.0");
+    texts.put("docs/preview.md", "org.streamrune:streamrune-core:1.0.2-SNAPSHOT");
+
+    assertThat(coordinateProblems(texts, "1.0.1"))
+        .containsExactly(
+            "streamrune-test/README.md installs 1.0.0, not 1.0.1",
+            "docs/QUICKSTART.md installs 1.0.0, not 1.0.1");
+  }
+
+  /**
+   * The pages of {@code texts} that install a release version other than {@code installed}: every
+   * {@code org.streamrune:<module>:<version>} and Maven {@code <version>} that is not a -SNAPSHOT,
+   * except in {@code CHANGELOG.md} and the pages about one release ({@code
+   * docs/reference/release-*}).
+   */
+  static List<String> coordinateProblems(Map<String, String> texts, String installed) {
+    List<String> problems = new ArrayList<>();
+    texts.forEach(
+        (page, text) -> {
+          if (page.equals("CHANGELOG.md") || page.startsWith("docs/reference/release-")) {
+            return;
+          }
+          Matcher m = COORDINATE.matcher(text);
+          Set<String> wrong = new java.util.LinkedHashSet<>();
+          while (m.find()) {
+            String version = m.group(1) != null ? m.group(1) : m.group(2);
+            if (!version.endsWith("-SNAPSHOT") && !version.equals(installed)) {
+              wrong.add(version);
+            }
+          }
+          wrong.forEach(v -> problems.add(page + " installs " + v + ", not " + installed));
+        });
+    return problems;
+  }
+
+  @Test
   void thePreviewBuildsSectionNamesTheVersionTheBuildPublishes() {
     String readme = RepositoryScripts.read("README.md");
     int start = readme.indexOf("\n## Preview builds\n");
@@ -156,6 +247,16 @@ class ReleaseStatusTest {
           "CHANGELOG.md has no `## [" + version + "]` entry, the version README.md installs");
     }
     boolean released = !entry.group(1).strip().equals("unreleased");
+    Matcher dated = DATED_ENTRY.matcher(changelog);
+    if (dated.find() && !dated.group(1).equals(version)) {
+      problems.add(
+          "README.md installs "
+              + version
+              + ", but the newest dated CHANGELOG entry is "
+              + dated.group(1)
+              + ": the pull request that dates an entry moves the coordinates of the README, the "
+              + "guides and the module READMEs to its version");
+    }
     pages.forEach(
         (page, raw) -> {
           String text = raw.replaceAll("\\s+", " ");
