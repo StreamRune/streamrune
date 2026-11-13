@@ -112,7 +112,7 @@ class OpenTelemetryModuleTest {
   @Test
   void anOpenTelemetrySwitchedOffByItsOwnSettingGivesTheNoopTracing_andLeavesTheGlobalUnread() {
     for (Map<String, String> off :
-        List.of(Map.of("otel.sdk.disabled", "true"), Map.of("otel.traces.exporter", "None"))) {
+        List.of(Map.of("otel.sdk.disabled", "true"), Map.of("otel.sdk.disabled", " True "))) {
       assertSame(
           StreamRuneTracing.NOOP,
           new StreamRuneMicronautModule()
@@ -134,7 +134,7 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(SDK),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "otlp"))));
+                environment(Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "none"))));
 
     GlobalOpenTelemetry.set(SDK);
     assertSame(SDK.getTracerProvider(), GlobalOpenTelemetry.get().getTracerProvider());

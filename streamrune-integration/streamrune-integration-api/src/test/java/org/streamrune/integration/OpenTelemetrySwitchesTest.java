@@ -13,9 +13,8 @@ class OpenTelemetrySwitchesTest {
   void aSwitchAtItsOffValue_switchesTracingOff_ignoringCaseAndSurroundingWhitespace() {
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
-                OpenTelemetrySwitches.SPRING,
-                Map.of("management.tracing.export.enabled", " False ")::get))
-        .contains(new Switch("management.tracing.export.enabled", "false"));
+                OpenTelemetrySwitches.SPRING, Map.of("management.tracing.enabled", " False ")::get))
+        .contains(new Switch("management.tracing.enabled", "false"));
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
                 OpenTelemetrySwitches.QUARKUS, Map.of("quarkus.otel.sdk.disabled", "TRUE")::get))
@@ -23,8 +22,23 @@ class OpenTelemetrySwitchesTest {
         .contains("quarkus.otel.sdk.disabled=true");
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
-                OpenTelemetrySwitches.MICRONAUT, Map.of("otel.traces.exporter", "none")::get))
+                OpenTelemetrySwitches.MICRONAUT, Map.of("otel.sdk.disabled", "true")::get))
         .isPresent();
+  }
+
+  @Test
+  void aSettingThatOnlyRemovesTheExporter_leavesTracingOn() {
+    Map<String, String> exportOff =
+        Map.of(
+            "otel.traces.exporter", "none",
+            "management.tracing.export.enabled", "false",
+            "quarkus.otel.traces.exporter", "none");
+    assertThat(OpenTelemetrySwitches.switchedOffBy(OpenTelemetrySwitches.SPRING, exportOff::get))
+        .isEmpty();
+    assertThat(OpenTelemetrySwitches.switchedOffBy(OpenTelemetrySwitches.QUARKUS, exportOff::get))
+        .isEmpty();
+    assertThat(OpenTelemetrySwitches.switchedOffBy(OpenTelemetrySwitches.MICRONAUT, exportOff::get))
+        .isEmpty();
   }
 
   @Test
@@ -34,7 +48,7 @@ class OpenTelemetrySwitchesTest {
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
                 OpenTelemetrySwitches.SPRING,
-                Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "otlp,none")::get))
+                Map.of("otel.sdk.disabled", "false", "management.tracing.enabled", "yes")::get))
         .isEmpty();
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(

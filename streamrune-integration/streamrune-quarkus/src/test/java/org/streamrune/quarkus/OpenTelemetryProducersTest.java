@@ -128,9 +128,8 @@ class OpenTelemetryProducersTest {
         List.of(
             Map.of("quarkus.otel.sdk.disabled", "true"),
             Map.of("quarkus.otel.traces.enabled", "false"),
-            Map.of("quarkus.otel.traces.exporter", "none"),
-            Map.of("otel.sdk.disabled", " TRUE "),
-            Map.of("otel.traces.exporter", "none"))) {
+            Map.of("quarkus.otel.enabled", "false"),
+            Map.of("otel.sdk.disabled", " TRUE "))) {
       assertSame(
           StreamRuneTracing.NOOP,
           new StreamRuneProducers()
@@ -151,7 +150,11 @@ class OpenTelemetryProducersTest {
                 satisfied(SDK),
                 TestProperties.defaults(),
                 TestProperties.config(
-                    Map.of("quarkus.otel.sdk.disabled", "false", "otel.traces.exporter", "otlp"))));
+                    Map.of(
+                        "quarkus.otel.sdk.disabled",
+                        "false",
+                        "quarkus.otel.traces.exporter",
+                        "none"))));
 
     GlobalOpenTelemetry.set(SDK);
     assertEquals(

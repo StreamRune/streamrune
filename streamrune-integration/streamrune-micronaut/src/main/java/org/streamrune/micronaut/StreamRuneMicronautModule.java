@@ -327,8 +327,8 @@ public class StreamRuneMicronautModule {
    * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
    * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
    * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#MICRONAUT switches}
-   * that turn OpenTelemetry tracing off ({@code otel.sdk.disabled=true}, {@code
-   * otel.traces.exporter=none}). An application {@code StreamRuneTracing} bean replaces it.
+   * that turn OpenTelemetry tracing off ({@code otel.sdk.disabled=true}). An application {@code
+   * StreamRuneTracing} bean replaces it.
    *
    * @param beanContext the context the {@code OpenTelemetry} bean is looked up in
    * @param properties the StreamRune configuration properties

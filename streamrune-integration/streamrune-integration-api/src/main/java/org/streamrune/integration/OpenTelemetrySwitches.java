@@ -16,11 +16,15 @@ import java.util.stream.Stream;
  * into every outbox row.
  *
  * <p>The switches are those of the OpenTelemetry SDK itself ({@link #SDK}: {@code
- * otel.sdk.disabled=true}, {@code otel.traces.exporter=none}, as system properties, environment
- * variables or configuration keys) and those of each framework's OpenTelemetry support ({@link
- * #SPRING}, {@link #QUARKUS}, {@link #MICRONAUT}). A value matches ignoring case and surrounding
- * whitespace. {@code streamrune.tracing.enabled=false} switches StreamRune's spans off on its own,
- * whatever the OpenTelemetry settings are.
+ * otel.sdk.disabled=true}, as a system property, an environment variable or a configuration key)
+ * and those of each framework's OpenTelemetry support ({@link #SPRING}, {@link #QUARKUS}, {@link
+ * #MICRONAUT}). A value matches ignoring case and surrounding whitespace.
+ *
+ * <p>A setting that only removes the exporter ({@code otel.traces.exporter=none}, {@code
+ * management.tracing.export.enabled=false}) is not among them: the SDK still runs, and a span
+ * processor of the application, or of a test, still receives the spans. {@code
+ * streamrune.tracing.enabled=false} switches StreamRune's spans off whatever the OpenTelemetry
+ * settings are.
  */
 public final class OpenTelemetrySwitches {
 
@@ -49,22 +53,17 @@ public final class OpenTelemetrySwitches {
   }
 
   /** The OpenTelemetry SDK's own switches, which every integration reads. */
-  public static final List<Switch> SDK =
-      List.of(new Switch("otel.sdk.disabled", "true"), new Switch("otel.traces.exporter", "none"));
+  public static final List<Switch> SDK = List.of(new Switch("otel.sdk.disabled", "true"));
 
   /** The SDK's switches and those of Spring Boot's tracing support. */
-  public static final List<Switch> SPRING =
-      with(
-          new Switch("management.tracing.enabled", "false"),
-          new Switch("management.tracing.export.enabled", "false"));
+  public static final List<Switch> SPRING = with(new Switch("management.tracing.enabled", "false"));
 
   /** The SDK's switches and those of the Quarkus OpenTelemetry extension. */
   public static final List<Switch> QUARKUS =
       with(
           new Switch("quarkus.otel.enabled", "false"),
           new Switch("quarkus.otel.sdk.disabled", "true"),
-          new Switch("quarkus.otel.traces.enabled", "false"),
-          new Switch("quarkus.otel.traces.exporter", "none"));
+          new Switch("quarkus.otel.traces.enabled", "false"));
 
   /** The SDK's switches, which Micronaut's OpenTelemetry tracing module reads as they are. */
   public static final List<Switch> MICRONAUT = SDK;

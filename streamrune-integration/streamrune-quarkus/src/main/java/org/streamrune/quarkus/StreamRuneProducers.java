@@ -492,8 +492,8 @@ public class StreamRuneProducers {
    * tracer provider of its own (nothing registered), so an application without OpenTelemetry pays
    * nothing. It is {@code NOOP} too when the configuration holds one of the {@link
    * org.streamrune.integration.OpenTelemetrySwitches#QUARKUS switches} that turn OpenTelemetry
-   * tracing off ({@code quarkus.otel.sdk.disabled=true}, {@code otel.sdk.disabled=true}, ...). An
-   * application {@code StreamRuneTracing} bean replaces it.
+   * tracing off ({@code quarkus.otel.sdk.disabled=true}, {@code otel.sdk.disabled=true}, and more).
+   * An application {@code StreamRuneTracing} bean replaces it.
    *
    * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so an
    * SDK the application registers globally is registered before the application starts, or is an

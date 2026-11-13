@@ -118,11 +118,7 @@ class OpenTelemetryAutoConfigurationTest {
   @Test
   void anOpenTelemetrySwitchedOffByItsOwnSettingGivesTheNoopTracing() {
     for (String off :
-        java.util.List.of(
-            "management.tracing.enabled=false",
-            "management.tracing.export.enabled=false",
-            "otel.sdk.disabled=true",
-            "otel.traces.exporter=none")) {
+        java.util.List.of("management.tracing.enabled=false", "otel.sdk.disabled=true")) {
       runner
           .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
           .withPropertyValues(off)
@@ -134,7 +130,8 @@ class OpenTelemetryAutoConfigurationTest {
     }
     runner
         .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
-        .withPropertyValues("management.tracing.export.enabled=true", "otel.traces.exporter=otlp")
+        // Without an exporter the SDK still runs, and a span processor still receives the spans.
+        .withPropertyValues("management.tracing.export.enabled=false", "otel.traces.exporter=none")
         .run(
             ctx ->
                 assertThat(ctx.getBean(StreamRuneTracing.class))

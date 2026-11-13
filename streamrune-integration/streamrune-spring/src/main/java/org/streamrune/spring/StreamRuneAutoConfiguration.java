@@ -921,8 +921,8 @@ public class StreamRuneAutoConfiguration {
      * when that OpenTelemetry has no tracer provider of its own (nothing registered), so an
      * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
      * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#SPRING switches}
-     * that turn OpenTelemetry tracing off ({@code management.tracing.export.enabled=false}, {@code
-     * otel.sdk.disabled=true}, ...). An application {@code StreamRuneTracing} bean replaces it.
+     * that turn OpenTelemetry tracing off ({@code management.tracing.enabled=false}, {@code
+     * otel.sdk.disabled=true}). An application {@code StreamRuneTracing} bean replaces it.
      *
      * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so
      * an SDK the application registers globally is registered before the context starts, or is an
