@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
  * holds plugin jars, compiled build scripts and the Gradle distribution, which the build executes,
  * and every workflow on {@code main} writes such entries; so it has no {@code actions/cache} step,
  * no {@code setup-java} {@code cache:} and a {@code setup-gradle} with {@code cache-disabled:
- * true}. A secret named above the jobs reaches every job, and no workflow passes its secrets on
+ * true}. A secret named outside the jobs reaches every job, and no workflow passes its secrets on
  * whole ({@code secrets: inherit}). The wrapper pins its distribution by checksum, since those jobs
  * download it.
  */
@@ -109,7 +109,7 @@ class WorkflowSupplyChainTest {
   }
 
   @Test
-  void aReleaseSecretAtTheTopOfAWorkflowMakesEveryJobOneThatHoldsIt() {
+  void aReleaseSecretAtTheTopLevelOfAWorkflowMakesEveryJobOneThatHoldsIt() {
     String workflow =
         """
         on: push
@@ -125,6 +125,20 @@ class WorkflowSupplyChainTest {
     assertThat(cacheProblems(Map.of("w.yml", workflow.lines().toList()), secretJobs))
         .containsExactly("w.yml build: setup-gradle without cache-disabled");
     assertThat(secretJobs).containsEntry("w.yml", List.of("build"));
+
+    String below =
+        """
+        on: push
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        env:
+          TOKEN: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        """;
+    assertThat(cacheProblems(Map.of("w.yml", below.lines().toList()), new TreeMap<>()))
+        .containsExactly("w.yml build: setup-gradle without cache-disabled");
   }
 
   @Test
@@ -150,18 +164,16 @@ class WorkflowSupplyChainTest {
    * What lets a job that holds a release secret read or write a cache: {@code actions/cache} (its
    * restore and save actions included), {@code setup-java} with {@code cache:}, {@code
    * setup-gradle} without {@code cache-disabled: true}. A job holds a release secret when its body
-   * names one, or when the workflow names one above its jobs (a workflow-level {@code env:}). The
-   * jobs that hold one are added to {@code secretJobs}.
+   * names one, or when the workflow names one outside its jobs (a workflow-level {@code env:},
+   * above or below {@code jobs:}). The jobs that hold one are added to {@code secretJobs}.
    */
   static List<String> cacheProblems(
       Map<String, List<String>> workflows, Map<String, List<String>> secretJobs) {
     List<String> problems = new ArrayList<>();
     workflows.forEach(
         (name, lines) -> {
-          int jobsAt = lines.indexOf("jobs:");
           boolean workflowLevel =
-              lines.subList(0, Math.max(jobsAt, 0)).stream()
-                  .anyMatch(l -> RELEASE_SECRET.matcher(l).find());
+              outsideJobs(lines).stream().anyMatch(l -> RELEASE_SECRET.matcher(l).find());
           jobs(lines)
               .forEach(
                   (job, body) -> {
@@ -226,6 +238,22 @@ class WorkflowSupplyChainTest {
       }
     }
     return jobs;
+  }
+
+  /** The lines of a workflow outside its {@code jobs:} block, above it or below it. */
+  static List<String> outsideJobs(List<String> lines) {
+    List<String> outside = new ArrayList<>();
+    boolean inJobs = false;
+    for (String line : lines) {
+      boolean topLevel = !line.isEmpty() && !line.startsWith(" ") && !line.startsWith("#");
+      if (topLevel) {
+        inJobs = line.equals("jobs:");
+      }
+      if (!inJobs) {
+        outside.add(line);
+      }
+    }
+    return outside;
   }
 
   /** The text of the step whose {@code uses:} line is {@code body[index]}. */
