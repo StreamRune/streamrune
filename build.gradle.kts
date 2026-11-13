@@ -635,7 +635,10 @@ subprojects {
     group = "org.streamrune"
     // The development default is the preview version that CI publishes to the Central Portal
     // snapshot repository on every push to main (.github/workflows/publish-snapshot.yml). A release
-    // passes -PreleaseVersion=<version>, which always wins.
+    // passes -PreleaseVersion=<version>, which always wins. After a release this default moves to a
+    // -SNAPSHOT that sorts above it, together with the version the README's "Preview builds" names
+    // (ReleaseStatusTest holds the two equal; Publish Snapshot refuses a version below a tagged
+    // release); the header of .github/workflows/release.yml lists the step.
     version = (project.findProperty("releaseVersion") as String?) ?: "1.0.0-alpha-SNAPSHOT"
 
     java {
@@ -1398,7 +1401,7 @@ subprojects {
         // ── The POM licence <url> resolves to the text that actually governs ───────
         //
         // Derived from the same `version` the artifacts carry (the `releaseVersion` property,
-        // defaulting to 1.0.0-alpha-SNAPSHOT), never hardcoded, so a release build and a snapshot
+        // defaulting to the development version), never hardcoded, so a release build and a snapshot
         // build each emit a URL pointing at the licence text of the code being published. A release
         // pins the tag `v<version>` rather than a branch: a release tag is never moved or deleted
         // once its version is on Maven Central (the header of .github/workflows/release.yml asks for

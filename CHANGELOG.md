@@ -4,14 +4,15 @@ All notable changes to StreamRune are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-`1.0.0-alpha-SNAPSHOT` is the unsigned preview of the next release, published from `main`: it is
-rebuilt each time the Build workflow passes there and goes only to the Maven Central snapshot
-repository (`https://central.sonatype.com/repository/maven-snapshots/`, see
-[Preview builds](README.md#preview-builds)), never to Maven Central itself. Its API, database schema
-and configuration keys can change in any later snapshot without a migration path. A schema change
-edits the baseline migrations in place, so a database created by an earlier snapshot fails Flyway's
-checksum validation: recreate it (with Docker Compose, `docker compose down -v`) when you move to a
-newer snapshot.
+The unsigned preview of the next release is a `-SNAPSHOT` version published from `main` (the
+[Preview builds](README.md#preview-builds) section of the README on `main` names it): it is rebuilt
+each time the Build workflow passes there and goes only to the Maven Central snapshot repository
+(`https://central.sonatype.com/repository/maven-snapshots/`), never to Maven Central itself. What it
+adds since the last release can change in any later snapshot without a migration path. From `1.0.0`
+on, a migration a release has shipped never changes, and a schema change is a new versioned
+migration; a migration that no release has shipped yet can still change between snapshots, so a
+database created by an earlier snapshot can fail Flyway's checksum validation: recreate it (with
+Docker Compose, `docker compose down -v`) when you move to a newer snapshot.
 
 ## [1.0.0] — unreleased
 
@@ -170,7 +171,15 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   HikariCP type, the only public signature that names one;
   `PgAdvisoryLocker.withDedicatedPool(DataSource)` takes a lock pool of any library and
   `PostgresNotificationSubscription.createListenDataSource` returns a `ListenDataSource`), the
-  PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0.
+  PostgreSQL JDBC driver 42.7.10 and SLF4J 2.0. At runtime scope only, it also brings Dropwizard
+  Metrics 4.2.40 and 5.0.8 (`metrics-core` and `metrics-healthchecks` of each) and Micrometer
+  1.16.3: HikariCP checks for those types, and a GraalVM native-image build of the Quarkus and
+  Micronaut integrations fails unless they resolve. StreamRune never creates them, and HikariCP uses
+  them only when the application hands it a registry of its own.
+- `streamrune-runtime` brings, at runtime scope, cron-utils 9.2.1 (the cron schedules of
+  `CronExpression`), the Jakarta Validation API 3.0.2 (`BeanValidationInterceptor` and
+  `ValidatingProjectionDecorator`, which validate only with a provider the application adds), Caffeine
+  3.2 and Jackson's `jackson-datatype-jsr310`.
 - Frameworks: Spring Boot 4.1.x (built and tested against 4.1.2, Spring Security 7.1.x), Quarkus
   3.40.x, Micronaut 5.2.x (Micronaut Security 5.4, Validation 5.2, Serde 3.2). Micrometer 1.16 or
   newer: the framework declares 1.16.3, the floor it is built against, and an application runs the

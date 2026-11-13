@@ -4,11 +4,13 @@ Event sourcing framework for Java.
 
 ## Status
 
-`1.0.0` is the first release of StreamRune. Releases are published to Maven Central, signed, with
-every module under the `org.streamrune` group at the release's version; the
-[releases page](https://github.com/StreamRune/streamrune/releases) and the
-[CHANGELOG](CHANGELOG.md) say what each release contains. `1.0.0-alpha-SNAPSHOT` is the unsigned
-preview of the next release, published from `main` (see [Preview builds](#preview-builds)).
+`1.0.0` will be the first release of StreamRune. `1.0.0` is not on Maven Central yet: the
+coordinates under [Installation](#installation) resolve once it is released, and until then the
+preview build is the way to try StreamRune (see [Preview builds](#preview-builds)). Releases are
+published to Maven Central, signed, with every module under the `org.streamrune` group at the
+release's version; the [releases page](https://github.com/StreamRune/streamrune/releases) and the
+[CHANGELOG](CHANGELOG.md) say what each release contains. The unsigned preview of the next release
+is published from `main`.
 
 ## Installation
 
@@ -49,6 +51,17 @@ the Build workflow passes on it. It is published only to the Maven Central snaps
 to Maven Central itself, its artifacts are not signed, and it can change or break at any time. It is
 licensed under the Business Source License 1.1, like every StreamRune version (see
 [License](#license)).
+
+Each module of the preview is published on its own. A Publish Snapshot run that stops part-way
+leaves the modules it did not reach on an earlier commit until a later run completes, so while the
+newest [Publish Snapshot run](https://github.com/StreamRune/streamrune/actions/workflows/publish-snapshot.yml)
+on `main` is red, the preview may mix modules of different commits.
+
+The preview version moves after every release to one that sorts above that release, and this
+section on `main` names the current one. Depend on every StreamRune module at the preview version:
+Maven and Gradle resolve a module that a build also reaches at a release version (through a starter,
+a BOM or a platform) to the higher of the two versions, which is the release whenever the preview
+version sorts below it.
 
 To try it, add the snapshot repository and depend on `org.streamrune:*:1.0.0-alpha-SNAPSHOT`.
 
