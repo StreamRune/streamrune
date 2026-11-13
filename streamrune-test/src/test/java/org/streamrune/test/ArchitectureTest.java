@@ -30,7 +30,7 @@ import org.streamrune.core.types.UserId;
  * <p>These rules enforce test utilities conventions and the project-wide test ecosystem standards:
  *
  * <ul>
- *   <li>JUnit 5 as the sole test framework (no Spock, TestNG, JUnit 4, etc.)
+ *   <li>JUnit Jupiter as the sole test framework (no Spock, TestNG, JUnit 4, etc.)
  *   <li>AssertJ for fluent assertions
  *   <li>Testcontainers for integration tests that need a real database
  *   <li>Java 25 features (records for test DTOs, switch expressions) in test code

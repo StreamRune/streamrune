@@ -5,6 +5,11 @@ need no framework setup, no Spring context, and no database — they start in mi
 This guide covers all test layers from fast unit tests to full TestContainers integration
 tests.
 
+The test kit, `org.streamrune:streamrune-test`, runs on JUnit Jupiter 5.12.2 or newer, 6.x included,
+and does not choose your JUnit version: it requires `junit-jupiter-api` at 5.12.2 and brings no
+JUnit BOM, so your tests run on the JUnit your build or framework manages. With Maven, manage JUnit
+through `org.junit:junit-bom` in `<dependencyManagement>` (Spring Boot and Quarkus do).
+
 ---
 
 ## Unit Testing Deciders

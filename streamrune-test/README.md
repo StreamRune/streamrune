@@ -135,7 +135,11 @@ assertEquals(1, faults.calls("saveOffset"));
 ## Requirements
 
 - Java 25
-- JUnit 6 (`junit-jupiter-api`, exposed as an `api` dependency)
+- JUnit Jupiter 5.12.2 or newer, 6.x included (`junit-jupiter-api`, an `api` dependency at 5.12.2).
+  The kit brings no JUnit BOM, so your tests run on the JUnit your build manages. With Maven,
+  manage JUnit through `org.junit:junit-bom` in `<dependencyManagement>` (or declare JUnit before
+  the kit): otherwise Maven's nearest-first rule can take the kit's `junit-jupiter-api` beside a
+  newer `junit-jupiter-engine`, and the engine fails to start.
 - Depends on `streamrune-core`, `streamrune-runtime` (for `SagaFixture`) and `streamrune-crypto-api`, plus Jackson
 
 ## Known Limitations

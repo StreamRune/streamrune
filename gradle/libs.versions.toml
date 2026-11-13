@@ -69,6 +69,13 @@ reactor = "3.8.7"
 
 # Testing
 junit = "6.1.3"
+# The JUnit floor the test kit (streamrune-test) is compiled against and publishes as its requirement
+# on junit-jupiter-api: the lowest JUnit Jupiter it runs on. The kit exports no JUnit BOM, so an
+# application keeps the JUnit its own build or framework manages, 5.x or 6.x: Maven applies the
+# application's management and Gradle takes the highest version requested, which is the
+# application's as long as this floor stays at or below it. The framework's own tests run on `junit`.
+# verifyJUnitFloor in streamrune-test checks the published metadata.
+junit-floor = "5.12.2"
 testcontainers = "2.0.5"
 mockito = "5.20.0"
 assertj = "3.27.7"
@@ -192,6 +199,7 @@ reactor-test = { module = "io.projectreactor:reactor-test", version.ref = "react
 
 # Testing
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter-api-floor = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit-floor" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version.ref = "mockito" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }

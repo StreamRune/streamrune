@@ -57,7 +57,7 @@ dependencies {
     // Testing: InMemoryEventStore, EventStoreFixture
     testImplementation("org.streamrune:streamrune-test:1.0.0")
 
-    // JUnit
+    // JUnit: the test kit runs on JUnit Jupiter 5.12.2 or newer and leaves the version to you
     testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
