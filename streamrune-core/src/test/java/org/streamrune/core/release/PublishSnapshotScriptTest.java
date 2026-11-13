@@ -21,9 +21,11 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>The stand-in {@code gradlew} lists the modules of {@code FAKE_MODULES} in its dry run and
  * answers each module upload with the next line of {@code outcomes}: {@code ok}, {@code 429} (the
  * snapshot repository's rate limit, in the words Gradle prints), {@code 503}, {@code net} (a read
- * timeout) or {@code fail} (a failure that is neither the server's nor the network's); with no line
- * left, the upload succeeds. The stand-in {@code git} fails its first {@code FAKE_LS_REMOTE_FAIL}
- * reads of the tags. Every upload is appended to {@code uploads}, every wait to {@code sleeps}.
+ * timeout), {@code dns} or {@code dnsmac} (a host that did not resolve, in Gradle's words on Linux
+ * and on macOS) or {@code fail} (a failure that is neither the server's nor the network's); with no
+ * line left, the upload succeeds. The stand-in {@code git} fails its first {@code
+ * FAKE_LS_REMOTE_FAIL} reads of the tags. Every upload is appended to {@code uploads}, every wait
+ * to {@code sleeps}.
  */
 class PublishSnapshotScriptTest {
 
@@ -58,7 +60,9 @@ class PublishSnapshotScriptTest {
             case "$outcome" in
               429) echo "> Could not PUT 'https://central.sonatype.com/x.jar'. Received status code 429 from server: Too Many Requests"; exit 1 ;;
               503) echo "> Could not GET 'https://central.sonatype.com/x.xml'. Received status code 503 from server: Service Unavailable"; exit 1 ;;
-              net) echo "> Could not PUT 'https://central.sonatype.com/x.jar'."; echo "   > java.net.SocketTimeoutException: Read timed out"; exit 1 ;;
+              net) echo "> Could not PUT 'https://central.sonatype.com/x.jar'."; echo "   > Read timed out"; exit 1 ;;
+              dns) echo "> Could not GET 'https://central.sonatype.com/x.xml'."; echo "   > central.sonatype.com: Temporary failure in name resolution"; exit 1 ;;
+              dnsmac) echo "> Could not GET 'https://central.sonatype.com/x.xml'."; echo "   > central.sonatype.com: nodename nor servname provided, or not known"; exit 1 ;;
               fail) echo "> Compilation failed; see the compiler error output for details."; exit 1 ;;
             esac
             exit 0
@@ -238,6 +242,18 @@ class PublishSnapshotScriptTest {
     assertThat(result.exitCode()).as(result.output()).isZero();
     assertThat(lines("uploads"))
         .containsExactly(":core", ":runtime", ":runtime", ":runtime", ":spring", ":starter");
+    assertThat(lines("sleeps")).containsExactly("90", "180");
+  }
+
+  @Test
+  void aHostThatDidNotResolveIsRepeatedLikeANetworkFailure() throws IOException {
+    outcomes("dns", "dnsmac");
+
+    RepositoryScripts.Result result = run();
+
+    assertThat(result.exitCode()).as(result.output()).isZero();
+    assertThat(lines("uploads"))
+        .containsExactly(":core", ":core", ":core", ":runtime", ":spring", ":starter");
     assertThat(lines("sleeps")).containsExactly("90", "180");
   }
 

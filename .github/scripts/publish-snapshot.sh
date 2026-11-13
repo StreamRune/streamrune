@@ -192,7 +192,10 @@ for module in "${modules[@]}"; do
       delay=${delays[refusals]}
       refusals=$((refusals + 1))
       what="The snapshot repository refused $module (refusal $refusals in a row)"
-    elif grep -qiE 'SocketTimeoutException|Read timed out|Connect timed out|Connection reset|Remote host terminated the handshake|SSLHandshakeException|UnknownHostException|NoHttpResponseException' "$log"; then
+    # Gradle prints the messages of the causes, not their exception classes: a DNS failure reads
+    # "<host>: nodename nor servname provided, or not known" (macOS), "Name or service not known" or
+    # "Temporary failure in name resolution" (Linux).
+    elif grep -qiE 'Read timed out|Connect timed out|connect timed out|Connection reset|Remote host terminated the handshake|nodename nor servname provided|Name or service not known|Temporary failure in name resolution|The target server failed to respond|SocketTimeoutException|SSLHandshakeException|UnknownHostException|NoHttpResponseException' "$log"; then
       if [ "$breaks" -ge "${#net_delays[@]}" ]; then
         error "The network broke the upload of $module $((breaks + 1)) times in a row."
         break 2
