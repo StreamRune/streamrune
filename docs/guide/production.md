@@ -548,9 +548,13 @@ a deployment switches an area without a rebuild.
   OpenTelemetry found has no tracer provider of its own (no bean, and nothing registered
   globally), when `streamrune.tracing.enabled` is `false`, when the SDK is switched off by one of
   its own settings — `otel.sdk.disabled=true` (system property, environment variable or
-  configuration key) on every integration, `management.tracing.enabled=false` on Spring Boot,
+  configuration key) on every integration, `management.opentelemetry.enabled=false` on Spring Boot,
   `quarkus.otel.enabled=false`, `quarkus.otel.sdk.disabled=true` or
-  `quarkus.otel.traces.enabled=false` on Quarkus; the integration logs which one at `INFO` — and,
+  `quarkus.otel.traces.enabled=false` on Quarkus; the integration logs which one at `INFO`.
+  Spring Boot maps the environment variable `OTEL_SDK_DISABLED` onto
+  `management.opentelemetry.enabled`; `otel.sdk.disabled` is the switch of an SDK Spring Boot does
+  not build, the OpenTelemetry Java agent's. `management.tracing.enabled`, Spring Boot 3's
+  spelling of the export switch, is not one — and,
   on Spring and Micronaut, when
   `opentelemetry-api` is not on the classpath at all: those two do not depend on it (it is a
   compile-only dependency), and an application without it starts and runs. The Quarkus integration

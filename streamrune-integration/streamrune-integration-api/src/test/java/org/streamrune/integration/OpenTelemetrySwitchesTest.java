@@ -13,8 +13,9 @@ class OpenTelemetrySwitchesTest {
   void aSwitchAtItsOffValue_switchesTracingOff_ignoringCaseAndSurroundingWhitespace() {
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
-                OpenTelemetrySwitches.SPRING, Map.of("management.tracing.enabled", " False ")::get))
-        .contains(new Switch("management.tracing.enabled", "false"));
+                OpenTelemetrySwitches.SPRING,
+                Map.of("management.opentelemetry.enabled", " False ")::get))
+        .contains(new Switch("management.opentelemetry.enabled", "false"));
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
                 OpenTelemetrySwitches.QUARKUS, Map.of("quarkus.otel.sdk.disabled", "TRUE")::get))
@@ -48,7 +49,16 @@ class OpenTelemetrySwitchesTest {
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(
                 OpenTelemetrySwitches.SPRING,
-                Map.of("otel.sdk.disabled", "false", "management.tracing.enabled", "yes")::get))
+                Map.of(
+                        "otel.sdk.disabled",
+                        "false",
+                        "management.opentelemetry.enabled",
+                        "true",
+                        // Spring Boot 3's spelling of the export switch, which Spring Boot 4
+                        // ignores.
+                        "management.tracing.enabled",
+                        "false")
+                    ::get))
         .isEmpty();
     assertThat(
             OpenTelemetrySwitches.switchedOffBy(

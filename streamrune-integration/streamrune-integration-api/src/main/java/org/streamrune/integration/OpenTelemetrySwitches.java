@@ -55,8 +55,16 @@ public final class OpenTelemetrySwitches {
   /** The OpenTelemetry SDK's own switches, which every integration reads. */
   public static final List<Switch> SDK = List.of(new Switch("otel.sdk.disabled", "true"));
 
-  /** The SDK's switches and those of Spring Boot's tracing support. */
-  public static final List<Switch> SPRING = with(new Switch("management.tracing.enabled", "false"));
+  /**
+   * The SDK's switches and Spring Boot's: {@code management.opentelemetry.enabled=false} replaces
+   * the SDK Spring Boot builds with one that has no span processor, and Spring Boot maps the
+   * environment variable {@code OTEL_SDK_DISABLED} onto it. {@code otel.sdk.disabled} stays among
+   * them for an SDK that is not Spring Boot's: the OpenTelemetry Java agent's, which reads it as a
+   * system property or an environment variable. {@code management.tracing.export.enabled=false}
+   * only removes the exporters and is not a switch.
+   */
+  public static final List<Switch> SPRING =
+      with(new Switch("management.opentelemetry.enabled", "false"));
 
   /** The SDK's switches and those of the Quarkus OpenTelemetry extension. */
   public static final List<Switch> QUARKUS =

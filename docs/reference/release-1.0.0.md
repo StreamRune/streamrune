@@ -1351,7 +1351,7 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
 - The integrations wire the tracing themselves: a `StreamRuneTracing` bean built from the
   application's `OpenTelemetry` bean, or, without one, from `GlobalOpenTelemetry` (so the
   OpenTelemetry Java agent works out of the box), `NOOP` when neither exists or when the SDK is
-  switched off by its own settings (`otel.sdk.disabled=true`, `management.tracing.enabled=false`,
+  switched off by its own settings (`otel.sdk.disabled=true`, `management.opentelemetry.enabled=false`,
   `quarkus.otel.sdk.disabled=true`, …); an application's own
   `StreamRuneTracing` bean wins. Every component an integration builds takes it, and the command bus
   adds the command interceptor itself, never twice. `streamrune.tracing.enabled` and

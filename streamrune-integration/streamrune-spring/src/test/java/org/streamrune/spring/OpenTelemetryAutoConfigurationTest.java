@@ -118,7 +118,7 @@ class OpenTelemetryAutoConfigurationTest {
   @Test
   void anOpenTelemetrySwitchedOffByItsOwnSettingGivesTheNoopTracing() {
     for (String off :
-        java.util.List.of("management.tracing.enabled=false", "otel.sdk.disabled=true")) {
+        java.util.List.of("management.opentelemetry.enabled=false", "otel.sdk.disabled=true")) {
       runner
           .withBean(OpenTelemetry.class, OpenTelemetryAutoConfigurationTest::openTelemetry)
           .withPropertyValues(off)
@@ -136,6 +136,48 @@ class OpenTelemetryAutoConfigurationTest {
             ctx ->
                 assertThat(ctx.getBean(StreamRuneTracing.class))
                     .isNotSameAs(StreamRuneTracing.NOOP));
+  }
+
+  /**
+   * Spring Boot's own OpenTelemetry SDK auto-configuration, not a stub bean: with {@code
+   * management.opentelemetry.enabled=false} it builds an SDK with no span processor, and
+   * StreamRune's tracing is {@code NOOP}; by default, and with Spring Boot 3's export switch {@code
+   * management.tracing.enabled=false}, which Spring Boot 4 does not read, StreamRune traces through
+   * it.
+   */
+  @Test
+  void springBootsOwnOpenTelemetrySwitch_turnsStreamRunesTracingOff() {
+    ApplicationContextRunner withBootsSdk =
+        runner.withConfiguration(
+            AutoConfigurations.of(
+                org.springframework.boot.opentelemetry.autoconfigure
+                    .OpenTelemetrySdkAutoConfiguration.class));
+    for (String off : java.util.List.of("management.opentelemetry.enabled=false")) {
+      withBootsSdk
+          .withPropertyValues(off)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasSingleBean(OpenTelemetry.class);
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .as(off)
+                    .isSameAs(StreamRuneTracing.NOOP);
+              });
+    }
+    for (String[] on :
+        java.util.List.of(
+            new String[0],
+            new String[] {"management.opentelemetry.enabled=true"},
+            new String[] {"management.tracing.enabled=false"})) {
+      withBootsSdk
+          .withPropertyValues(on)
+          .run(
+              ctx -> {
+                assertThat(ctx).hasSingleBean(OpenTelemetry.class);
+                assertThat(ctx.getBean(StreamRuneTracing.class))
+                    .as(java.util.Arrays.toString(on))
+                    .isNotSameAs(StreamRuneTracing.NOOP);
+              });
+    }
   }
 
   @Test
