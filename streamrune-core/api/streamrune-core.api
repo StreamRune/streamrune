@@ -1476,6 +1476,7 @@ public final record org.streamrune.core.tracing.SpanLink
 public interface org.streamrune.core.tracing.StreamRuneTracing
   public abstract boolean enabled(org.streamrune.core.tracing.TracingArea)
   public abstract org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, org.streamrune.core.tracing.SpanLink, org.streamrune.core.tracing.SpanBaggage)
+  public default java.lang.Runnable propagating(java.lang.Runnable)
   public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes)
   public default org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
   public static final org.streamrune.core.tracing.StreamRuneTracing NOOP

@@ -96,6 +96,23 @@ public interface StreamRuneTracing {
   }
 
   /**
+   * {@code task} wrapped to run under the trace context current on this thread now, on whichever
+   * thread later runs it: work handed to another thread continues the caller's trace instead of
+   * starting one of its own. The command bus wraps the task of each {@code executeAsync} command
+   * with it, on the submitting thread, so the command's span is a child of the caller's.
+   *
+   * <p>The default returns {@code task} itself; an implementation whose trace context is bound to a
+   * thread overrides it. {@code OpenTelemetryTracing} returns {@code Context.current().wrap(task)}.
+   *
+   * @param task the work to hand to another thread
+   * @return the task to run there
+   * @throws NullPointerException if {@code task} is {@code null}
+   */
+  default Runnable propagating(Runnable task) {
+    return java.util.Objects.requireNonNull(task, "task is required");
+  }
+
+  /**
    * Starts a span with a link and the baggage to make current with it, and makes it current on this
    * thread until the returned scope is closed. Returns {@link TraceScope#NOOP} when {@code area} is
    * not {@linkplain #enabled(TracingArea) enabled}.

@@ -35,10 +35,10 @@ import org.streamrune.core.types.LogSanitizer;
  * <p>The span name and attribute keys are those of {@link TraceAttributes}. The command id, the
  * aggregate id and the stream id pass {@link LogSanitizer#sanitizeForTrace(String)}.
  *
- * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread, where no
- * caller context is current — the span would become an orphaned root. Configure {@code
- * asyncTaskWrapper(task -> Context.current().wrap(task))} on the bus builder so the submitting
- * thread's context is captured and made current around the async execution.
+ * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread. The bus
+ * wraps the command's task with {@link StreamRuneTracing#propagating(Runnable)} of this
+ * interceptor's tracing on the submitting thread, so the caller's trace context is current there
+ * and the span is a child of the caller's span.
  *
  * <p><b>Re-entrancy:</b> the span scopes are held on a per-thread STACK. The bus runs {@code
  * after()} in reverse registration order, so {@code InlineProjectionInterceptor} executes user
@@ -162,6 +162,11 @@ public final class TracingCommandInterceptor implements CommandInterceptor {
       // fails the command.
       return SpanLink.NONE;
     }
+  }
+
+  /** The tracing this interceptor starts its spans through. */
+  StreamRuneTracing tracing() {
+    return tracing;
   }
 
   /** Whether this interceptor starts command spans: its tracing's command area is on. */

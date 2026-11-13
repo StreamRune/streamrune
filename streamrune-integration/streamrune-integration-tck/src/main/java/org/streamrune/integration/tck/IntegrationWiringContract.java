@@ -784,6 +784,36 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * A command the integration's bus runs through {@code executeAsync} continues the caller's trace,
+   * with no bean and no setting: its {@code command/…} span is a child of the span current on the
+   * submitting thread, as a synchronous command's is.
+   */
+  @Test
+  public void anAsyncCommandContinuesTheCallersTrace() throws Exception {
+    OpenTelemetryBean.reset();
+    try (Application application =
+        start(null, Map.of(), Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
+      assertStarted(application);
+      io.opentelemetry.api.trace.Span caller =
+          OpenTelemetryBean.view().getTracer("caller").spanBuilder("caller").startSpan();
+      try (io.opentelemetry.context.Scope ignored = caller.makeCurrent()) {
+        application
+            .bean(VirtualThreadCommandBus.class)
+            .executeAsync(new ContractCommand("async-1"))
+            .get(30, java.util.concurrent.TimeUnit.SECONDS);
+      } finally {
+        caller.end();
+      }
+
+      List<SpanData> spans = OpenTelemetryBean.spans();
+      SpanData callerSpan = onlySpan(spans, s -> s.getName().equals("caller"));
+      SpanData command = onlySpan(spans, s -> s.getName().startsWith("command/"));
+      assertEquals(callerSpan.getTraceId(), command.getTraceId(), "the caller's trace");
+      assertEquals(callerSpan.getSpanId(), command.getParentSpanId(), "a child of the caller");
+    }
+  }
+
+  /**
    * {@code streamrune.tracing.event-store.enabled=false} removes every {@code eventstore/…} span of
    * the integration's PostgreSQL event store, and the command and its lock are still traced.
    */

@@ -175,6 +175,14 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    */
   private final TracingCommandInterceptor commandSpans;
 
+  /**
+   * The tracing whose {@link StreamRuneTracing#propagating(Runnable)} carries the caller's trace
+   * context to an {@code executeAsync} command: the tracing of {@link #commandSpans} when the chain
+   * holds one, else the tracing the bus was built with, so the store's and the locker's spans of
+   * the command join the caller's trace too.
+   */
+  private final StreamRuneTracing asyncTracing;
+
   private final UnaryOperator<Runnable> asyncTaskWrapper;
   private final Supplier<StreamRuneContext.RequestContext> unboundRequestContext;
 
@@ -212,6 +220,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       DeadLetterQueue deadLetterQueue,
       StreamRuneMetrics metrics,
       List<CommandInterceptor> interceptors,
+      StreamRuneTracing tracing,
       UnaryOperator<Runnable> asyncTaskWrapper,
       Supplier<StreamRuneContext.RequestContext> unboundRequestContext,
       Clock clock,
@@ -235,6 +244,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
     this.interceptors = List.copyOf(interceptors);
     this.commandSpans = commandSpansOf(this.interceptors);
+    this.asyncTracing = commandSpans != null ? commandSpans.tracing() : tracing;
     this.asyncTaskWrapper = asyncTaskWrapper;
     this.unboundRequestContext = unboundRequestContext;
     this.clock = clock != null ? clock : Clock.systemUTC();
@@ -834,10 +844,12 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    *
    * <p>Caller context that does not cross {@code Thread.start()} is captured at submission: {@link
    * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED} and {@link
-   * StreamRuneContext#CAUSE} are re-bound on the new thread, and the configured {@link
-   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state
-   * such as the current OpenTelemetry context. When {@code CURRENT} is not bound at submission, the
-   * {@link Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
+   * StreamRuneContext#CAUSE} are re-bound on the new thread, the trace context is carried by the
+   * {@link Builder#tracing tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, so the
+   * command's span is a child of the caller's, and the configured {@link
+   * Builder#asyncTaskWrapper(UnaryOperator) asyncTaskWrapper} can capture other thread-bound state.
+   * When {@code CURRENT} is not bound at submission, the {@link
+   * Builder#unboundRequestContext(Supplier) unbound-request-context source} is asked on the
    * submitting thread, and the command runs under its answer.
    */
   @Override
@@ -936,9 +948,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
    * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
    * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
-   * carrier, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
-   * asyncTaskWrapper} is applied here so it can capture thread-bound caller state such as the
-   * current OpenTelemetry context.
+   * carrier, the tracing's {@link StreamRuneTracing#propagating(Runnable)} captures the trace
+   * context, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
+   * asyncTaskWrapper} is applied here, around both, so it can capture other thread-bound caller
+   * state.
    */
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
@@ -991,6 +1004,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
     ScopedValue.Carrier boundCarrier = carrier;
     Runnable task = boundCarrier != null ? () -> boundCarrier.run(completeFuture) : completeFuture;
+    // The caller's trace context, captured here on the submitting thread: the command's span is a
+    // child of the caller's span, as a synchronous command's is.
+    task = asyncTracing.propagating(task);
     if (asyncTaskWrapper != null) {
       task = asyncTaskWrapper.apply(task);
       if (task == null) {
@@ -2476,15 +2492,21 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /**
      * Sets a wrapper applied to the task that {@link #executeAsync} runs on its new virtual thread.
      * The wrapper is invoked on the submitting thread for each async command, so it can capture
-     * thread-bound caller context that does not cross {@code Thread.start()} — for example the
-     * current OpenTelemetry context, which {@link TracingCommandInterceptor} needs to parent the
-     * command span instead of starting an orphaned root span:
+     * thread-bound caller context that does not cross {@code Thread.start()}, a logging MDC for
+     * example:
      *
      * <pre>{@code
      * VirtualThreadCommandBus.builder()
-     *     .asyncTaskWrapper(task -> Context.current().wrap(task))
+     *     .asyncTaskWrapper(task -> {
+     *       Map<String, String> mdc = MDC.getCopyOfContextMap();
+     *       return () -> { MDC.setContextMap(mdc); try { task.run(); } finally { MDC.clear(); } };
+     *     })
      *     ...
      * }</pre>
+     *
+     * <p>The trace context needs no wrapper: the bus carries it through its {@link #tracing
+     * tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, inside the wrapper, so the span
+     * of an async command is a child of the caller's span.
      *
      * <p>Not applied to synchronous {@link #execute}, which runs on the caller's thread where the
      * context is already present. The returned runnable must run the task on the thread it is run
@@ -2695,6 +2717,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
           deadLetterQueue,
           metrics,
           tracedInterceptors(),
+          tracing,
           asyncTaskWrapper,
           unboundRequestContext,
           clock,

@@ -147,6 +147,16 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     return new OpenTelemetryScope(span, context.makeCurrent());
   }
 
+  /**
+   * {@code task} wrapped in the OpenTelemetry context current on this thread, {@code
+   * Context.current().wrap(task)}: the span and the baggage of the caller are current while it
+   * runs, on any thread.
+   */
+  @Override
+  public Runnable propagating(Runnable task) {
+    return Context.current().wrap(Objects.requireNonNull(task, "task is required"));
+  }
+
   @Override
   public String toString() {
     return "OpenTelemetryTracing{" + settings + "}";
