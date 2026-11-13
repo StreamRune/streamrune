@@ -948,10 +948,11 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * submitting thread so caller context can be captured before it is lost: ScopedValues ({@link
    * StreamRuneContext#CURRENT}, {@code DLQ_REPLAY}, {@link StreamRuneContext#SAGA_OWNED}, {@link
    * StreamRuneContext#CAUSE}) don't inherit across {@code Thread.start()} and are re-bound via a
-   * carrier, the tracing's {@link StreamRuneTracing#propagating(Runnable)} captures the trace
-   * context, and the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
-   * asyncTaskWrapper} is applied here, around both, so it can capture other thread-bound caller
-   * state.
+   * carrier, the configured {@link Builder#asyncTaskWrapper(java.util.function.UnaryOperator)
+   * asyncTaskWrapper} is applied around them so it can capture other thread-bound caller state, and
+   * the tracing's {@link StreamRuneTracing#propagating(Runnable)} wraps the result: the wrapper
+   * runs under the caller's trace context, so a span it opens nests under the caller's span, and a
+   * context it makes current itself (a fresh root) is the one the command runs under.
    */
   private <C extends Command> Runnable prepareAsyncTask(
       C command, CompletableFuture<CommandResult> future, AdmissionSlot slot) {
@@ -1004,16 +1005,16 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     }
     ScopedValue.Carrier boundCarrier = carrier;
     Runnable task = boundCarrier != null ? () -> boundCarrier.run(completeFuture) : completeFuture;
-    // The caller's trace context, captured here on the submitting thread: the command's span is a
-    // child of the caller's span, as a synchronous command's is.
-    task = asyncTracing.propagating(task);
     if (asyncTaskWrapper != null) {
       task = asyncTaskWrapper.apply(task);
       if (task == null) {
         throw new IllegalStateException("asyncTaskWrapper returned null");
       }
     }
-    return task;
+    // The caller's trace context, captured here on the submitting thread and made current around
+    // the wrapper: the command's span is a child of the caller's span, as a synchronous command's
+    // is, unless the wrapper makes another context current.
+    return asyncTracing.propagating(task);
   }
 
   private <C extends Command> CommandResult executeInternal(
@@ -2506,8 +2507,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
      * }</pre>
      *
      * <p>The trace context needs no wrapper: the bus carries it through its {@link #tracing
-     * tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, inside the wrapper, so the span
-     * of an async command is a child of the caller's span.
+     * tracing}'s {@link StreamRuneTracing#propagating(Runnable)}, around the wrapper, so the span
+     * of an async command is a child of the caller's span, and so is a span the wrapper opens. A
+     * wrapper that wants the command in a trace of its own makes another context current around the
+     * task, a root one for example.
      *
      * <p>Not applied to synchronous {@link #execute}, which runs on the caller's thread where the
      * context is already present. The returned runnable must run the task on the thread it is run

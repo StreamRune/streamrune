@@ -7,7 +7,6 @@ import io.opentelemetry.context.Scope;
 import io.opentelemetry.sdk.testing.junit5.OpenTelemetryExtension;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.streamrune.core.AggregateState;
@@ -113,22 +112,43 @@ class AsyncCommandTracingTest {
   }
 
   @Test
-  void anAsyncTaskWrapper_runsAroundTheCarriedTrace() throws Exception {
-    AtomicInteger wrapped = new AtomicInteger();
+  void aSpanTheAsyncTaskWrapperOpens_nestsUnderTheCaller_andTheCommandUnderIt() throws Exception {
+    io.opentelemetry.api.trace.Tracer wrapperTracer =
+        otelTesting.getOpenTelemetry().getTracer("wrapper");
     try (var bus =
         lampBus()
             .tracing(tracing())
             .asyncTaskWrapper(
                 task ->
                     () -> {
-                      wrapped.incrementAndGet();
-                      task.run();
+                      Span dispatch = wrapperTracer.spanBuilder("async dispatch").startSpan();
+                      try (Scope ignored = dispatch.makeCurrent()) {
+                        task.run();
+                      } finally {
+                        dispatch.end();
+                      }
                     })
             .build()) {
       SpanData request = runUnderARequest(bus);
 
-      assertThat(wrapped).hasValue(1);
-      assertThat(named("command/Switch").getParentSpanId()).isEqualTo(request.getSpanId());
+      SpanData dispatch = named("async dispatch");
+      assertThat(dispatch.getParentSpanId()).isEqualTo(request.getSpanId());
+      assertThat(named("command/Switch").getParentSpanId()).isEqualTo(dispatch.getSpanId());
+    }
+  }
+
+  @Test
+  void aWrapperThatMakesTheRootContextCurrent_putsTheCommandInATraceOfItsOwn() throws Exception {
+    try (var bus =
+        lampBus()
+            .tracing(tracing())
+            .asyncTaskWrapper(task -> io.opentelemetry.context.Context.root().wrap(task))
+            .build()) {
+      SpanData request = runUnderARequest(bus);
+
+      SpanData command = named("command/Switch");
+      assertThat(command.getParentSpanContext().isValid()).isFalse();
+      assertThat(command.getTraceId()).isNotEqualTo(request.getTraceId());
     }
   }
 

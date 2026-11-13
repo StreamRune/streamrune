@@ -462,7 +462,10 @@ this table cannot drift from what is actually exported. All StreamRune span attr
   span nests under the saga's. A command run through `executeAsync` runs on a virtual thread of
   its own: the bus carries the caller's trace context to it through its tracing's
   `StreamRuneTracing.propagating(Runnable)`, so its span nests under the caller's span as a
-  synchronous command's does, on a bus an integration builds too. An implementation of the seam
+  synchronous command's does, on a bus an integration builds too. It is made current around the
+  bus's `asyncTaskWrapper`, so a span the wrapper opens nests there too, and a wrapper that makes
+  another context current around the task (a root one) puts the command in that context's trace.
+  An implementation of the seam
   whose context is bound to a thread overrides `propagating`; its default returns the task as it is.
 - `eventstore/read` covers a read from the start of its query to the end of its events'
   deserialization, as a child of the span current on the reading thread: a read a request
