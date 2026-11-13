@@ -9,14 +9,15 @@ name: Build
 # default of the shared PostgresTestImage); the `postgres-17` job re-runs exactly the
 # PostgreSQL-backed suites (`postgresTest`: streamrune-postgres, streamrune-postgres-crypto,
 # streamrune-spring, streamrune-quarkus, streamrune-e2e) against postgres:17-alpine. It is a
-# separate job, not a matrix leg of `build`, so `build` keeps the exact check-run name
+# separate job, not a matrix leg of `build`, so `build` keeps the exact job name
 # verifyReleaseChecks looks up and the 17 leg skips the compile/coverage/Javadoc work that does not
 # depend on the server version.
 #
 # Release gate: verifyReleaseChecks in the root build.gradle.kts (dependsOn'd by the Central upload
-# task) queries the GitHub Checks API for this workflow's check-runs, "build" and "postgres-17", on
-# the exact commit being released and REFUSES to publish unless both concluded `success` (see
-# requiredCiCheckNames there). A release that release.yml cuts comes from a commit of main, whose
+# task) asks the GitHub Actions API for this workflow's runs (.github/workflows/build.yml) on the
+# exact commit being released and REFUSES to publish unless the jobs "build" and "postgres-17" of the
+# newest of them concluded `success` (see ReleaseChecks there). Renaming this file or those jobs
+# means changing ReleaseChecks.REQUIRED with them. A release that release.yml cuts comes from a commit of main, whose
 # push ran this workflow; the tag release.yml pushes starts no run, because GitHub starts no
 # workflow for a push made with a workflow's own token. The `tags: ['v*']` trigger builds a tag
 # pushed by hand, so its commit has both checks too, and the gate fails closed for the right reason
@@ -46,14 +47,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # ubuntu-latest ships a Docker daemon; the integration tests need it for Testcontainers.
       - name: Verify Docker available
@@ -64,7 +65,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports
           path: '**/build/reports/tests/'
@@ -79,14 +80,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Verify Docker available
         run: docker info
@@ -96,7 +97,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-reports-postgres-17
           path: '**/build/reports/tests/'

@@ -26,9 +26,11 @@ name: Broker E2E Tests
 #
 # Release gate: no trigger here makes a publish wait for or check this workflow's result. The
 # actual gate is verifyReleaseChecks in the root build.gradle.kts (a dependency of the Central
-# upload task), which queries the GitHub Checks API for THIS workflow's check-run (job name
-# "broker-e2e") on the exact commit being released and REFUSES to publish unless it concluded
-# `success` there — overridable only by an explicit, loudly-logged `-PskipCiVerification=true`.
+# upload task), which asks the GitHub Actions API for THIS workflow's runs
+# (.github/workflows/broker-e2e-test.yml) on the exact commit being released and REFUSES to publish
+# unless the job "broker-e2e" of the newest of them concluded `success` — a red night after a green
+# one refuses it — overridable only by an explicit, loudly-logged `-PskipCiVerification=true`.
+# Renaming this file or the job means changing ReleaseChecks.REQUIRED with them.
 
 on:
   workflow_dispatch:
@@ -49,14 +51,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: '25'
           distribution: 'temurin'  # matches build.yml; brokerTest needs only a JDK 25
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # Testcontainers boots Postgres, Kafka and RabbitMQ for these tests.
       - name: Verify Docker available
@@ -67,7 +69,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: broker-e2e-reports
           path: 'streamrune-integration/streamrune-e2e/build/reports/tests/'

@@ -72,9 +72,9 @@ tasks.withType<Test>().configureEach {
 // test bypasses the poller. It is therefore driven by .github/workflows/broker-e2e-test.yml on a
 // nightly cron, on workflow_dispatch, and on every `v*` tag push. The tag push
 // only starts that workflow — the gate that actually makes a release cut unable to ship without
-// it having run (and passed) is verifyReleaseChecks in the root build.gradle.kts, which queries
-// the GitHub Checks API for this workflow's check-run (job name "broker-e2e") on the exact tagged
-// commit before the Central upload task is allowed to run.
+// it having run (and passed) is verifyReleaseChecks in the root build.gradle.kts, which requires
+// the job "broker-e2e" of this workflow's newest run on the exact tagged commit to have concluded
+// success (GitHub Actions API) before the Central upload task is allowed to run.
 // ---------------------------------------------------------------------------------------------
 tasks.named<Test>("test") {
     useJUnitPlatform {
