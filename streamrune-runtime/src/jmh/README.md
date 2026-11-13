@@ -52,10 +52,11 @@ unchanged code — CPU-only series (`StreamRuneBenchmark.eventStoreLoad`, `batch
 and 293 µs/op). Every series moves with the machine, though: divided by the median change of all
 the series of its run, a series' change stayed between 0.81 and 1.33. A comparison with the previous
 run reports the machine, so nothing is commented on a commit. After recording, the workflow's judge
-job compares each benchmark of the newest point with the median of its previous five points (with
+job compares each benchmark of the newest point with the median of its previous nine points (with
 fewer than three, nothing is judged yet) and reports a regression when it is over 2.5 times that
-baseline in the two newest points, or over 1.5 times it relative to the median of its run in each of
-its last three points (`.github/scripts/benchmark-trend.py`). The job then fails, with a warning
+baseline in the two newest points, or over 1.5 times it relative to the median of its run in three
+of its last four points (`.github/scripts/benchmark-trend.py`; the nine-point window keeps the
+baseline at the level before a slowdown through its fourth slow point). The job then fails, with a warning
 naming the benchmark and a table in the job summary. A smaller slowdown shows as a trend over several
 points of the chart, and a run of the benchmark on both commits on one machine confirms it.
 

@@ -2,8 +2,8 @@
 reports a benchmark that has become slower, for benchmark.yml.
 
 usage: python3 benchmark-trend.py <data.js> <benchmark set name>
-        [--threshold 2.5] [--window 5] [--min-baseline 3]
-        [--sustained-threshold 1.5] [--sustained-points 3] [--min-series 5]
+        [--threshold 2.5] [--window 9] [--min-baseline 3]
+        [--sustained-threshold 1.5] [--sustained-points 3] [--sustained-of 4] [--min-series 5]
 
 Shared GitHub runners are not one machine. On unchanged code, two runs that drew the same kind of
 machine agree within about 6%, but runs that drew different machines differ by up to 2.1 times, on
@@ -25,9 +25,16 @@ it:
     extreme machine raises no alert, a large slowdown that stays does, even one that slows every
     benchmark alike;
   - a sustained regression: its ratio to the run exceeds --sustained-threshold (1.5, above the 1.33
-    measured on unchanged code) in each of its last --sustained-points points (3): a smaller
-    slowdown of some benchmarks that stays for three runs, whatever machines they drew. A slowdown
-    of nearly every benchmark alike is the machine's share here, and only the first rule sees it.
+    measured on unchanged code) in at least --sustained-points (3) of its last --sustained-of (4)
+    points: a smaller slowdown of some benchmarks that stays, whatever machines the runs drew, with
+    one noisy point allowed. A slowdown of nearly every benchmark alike is the machine's share
+    here, and only the first rule sees it.
+
+The window is 9 points so that the baseline is still the level before a slowdown in its fourth
+slow point (a median of 9 holds while at most 4 of them are slow): the sustained rule then judges
+the first four slow points, and it reports the slowdown in each run from the third slow point to
+the fifth. With a window of 5 the baseline moves to the new level from the fourth slow point on,
+and a slowdown with one noisy point among its first three would never be reported.
 
 It prints a table of every judged benchmark, writes it to the job summary when GITHUB_STEP_SUMMARY
 is set, emits a ::warning:: for each regression and exits 1 when there is one, 0 otherwise. A
@@ -75,10 +82,11 @@ def main(argv):
     parser.add_argument("data")
     parser.add_argument("name")
     parser.add_argument("--threshold", type=float, default=2.5)
-    parser.add_argument("--window", type=int, default=5)
+    parser.add_argument("--window", type=int, default=9)
     parser.add_argument("--min-baseline", type=int, default=3)
     parser.add_argument("--sustained-threshold", type=float, default=1.5)
     parser.add_argument("--sustained-points", type=int, default=3)
+    parser.add_argument("--sustained-of", type=int, default=4)
     parser.add_argument("--min-series", type=int, default=5)
     args = parser.parse_args(argv)
 
@@ -116,13 +124,15 @@ def main(argv):
         before, _ = ratio(values, len(values) - 2, args.window, args.min_baseline)
         to_run = current / machine[newest] if newest in machine else None
         large = current > args.threshold and before is not None and before > args.threshold
-        last = [index for index, _ in points[-args.sustained_points:]]
-        sustained = len(last) == args.sustained_points and all(
-            index in ratios[bench]
+        last = [index for index, _ in points[-args.sustained_of:]]
+        over = sum(
+            1
+            for index in last
+            if index in ratios[bench]
             and index in machine
             and ratios[bench][index] / machine[index] > args.sustained_threshold
-            for index in last
         )
+        sustained = over >= args.sustained_points
         if large:
             status = "regression"
             regressions.append(
@@ -133,7 +143,7 @@ def main(argv):
             status = "sustained regression"
             regressions.append(
                 f"{bench} takes more than {args.sustained_threshold:g}x its baseline, relative to "
-                f"the other benchmarks of the run, in each of its last {args.sustained_points} points"
+                f"the other benchmarks of the run, in {over} of its last {args.sustained_of} points"
             )
         elif current > args.threshold or (to_run is not None and to_run > args.sustained_threshold):
             status = "over once"
@@ -148,7 +158,8 @@ def main(argv):
         f"### Benchmarks of {commit} against the median of their previous {args.window} points",
         "",
         f"A regression: over {args.threshold:g}x in the two newest points, or over "
-        f"{args.sustained_threshold:g}x relative to the run in the last {args.sustained_points}.",
+        f"{args.sustained_threshold:g}x relative to the run in {args.sustained_points} of the last "
+        f"{args.sustained_of}.",
         "",
         "| benchmark | newest | baseline | ratio | to the run | |",
         "|---|---:|---:|---:|---:|---|",

@@ -103,6 +103,32 @@ class BenchmarkTrendScriptTest {
   }
 
   @Test
+  void aSmallerSlowdownWithOneNoisyPointAmongItsFirstFourIsReported() throws IOException {
+    // 1.6 times from point 5 on, its second slow point drawn 10% faster (1.44 relative to the run).
+    // Over in three of the last four points, each against a baseline still at the level before.
+    RepositoryScripts.Result result =
+        judge(history(ones(9), Map.of("load", new double[] {1, 1, 1, 1, 1, 1.6, 1.44, 1.6, 1.6})));
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output())
+        .contains("::warning::load takes more than 1.5x")
+        .contains("in 3 of its last 4");
+  }
+
+  @Test
+  void aSmallerSlowdownIsStillReportedInItsFifthSlowRun() throws IOException {
+    // The baseline, a median of the previous nine points, is the level before the slowdown while
+    // at most four of them are slow; a shorter window has moved to the new level by now.
+    RepositoryScripts.Result result =
+        judge(
+            history(
+                ones(10), Map.of("load", new double[] {1, 1, 1, 1, 1, 1.6, 1.44, 1.6, 1.6, 1.6})));
+
+    assertThat(result.exitCode()).as(result.output()).isEqualTo(1);
+    assertThat(result.output()).contains("::warning::load takes more than 1.5x");
+  }
+
+  @Test
   void aSmallerSlowdownForTwoPointsOnlyRaisesNoAlert() throws IOException {
     RepositoryScripts.Result result =
         judge(

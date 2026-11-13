@@ -38,11 +38,11 @@ name: Benchmarks
 # divided by the median change of all the series of its run, a series' change stayed between 0.81
 # and 1.33. A comparison with the previous run reports the machine, not the code, so nothing is
 # commented on a commit. The judge job compares each benchmark of the newest point with the median
-# of its previous five points (one fast or slow machine does not become the baseline; with fewer
+# of its previous nine points (one fast or slow machine does not become the baseline; with fewer
 # than three earlier points nothing is judged yet) and reports a regression when the benchmark is
 # over 2.5 times that baseline in the two newest points (above the 2.1 between machines; a slowdown
-# of every benchmark included), or over 1.5 times it relative to the median of its run in each of
-# its last three points (above the 1.33 measured on unchanged code). A regression fails the judge
+# of every benchmark included), or over 1.5 times it relative to the median of its run in three of
+# its last four points (above the 1.33 measured on unchanged code). A regression fails the judge
 # job, with a warning naming the benchmark and a table in the job summary. A smaller slowdown is a
 # trend to read over several points of the chart, not a verdict from one. Confirm an alert by running the
 # benchmark locally on both commits, for example
