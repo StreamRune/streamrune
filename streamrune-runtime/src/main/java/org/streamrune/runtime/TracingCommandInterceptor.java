@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Objects;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.DomainException;
+import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
@@ -40,7 +41,10 @@ import org.streamrune.core.types.LogSanitizer;
  * DomainException} rejects — its decider, or a gate such as authorization or validation — ends it
  * with the unset status and {@link TraceAttributes#COMMAND_REJECTION_TYPE}: a rejection is the
  * command's answer, as a client error is an HTTP server's, and an operator who alerts on failed
- * spans is not paged for it. Any other failure records the exception and the ERROR status.
+ * spans is not paged for it. A saga's forward command that the saga forward fence refuses ({@link
+ * SagaForwardFencedException}) ends it the same way, with {@link TraceAttributes#COMMAND_OUTCOME}
+ * {@code FENCED}, the outcome its append span records. Any other failure records the exception and
+ * the ERROR status.
  *
  * <p>For {@code executeAsync}: the command span is created on the spawned virtual thread. The bus
  * wraps the command's task with {@link StreamRuneTracing#propagating(Runnable)} of this
@@ -57,6 +61,9 @@ import org.streamrune.core.types.LogSanitizer;
  * closes the scopes in LIFO order, which the OpenTelemetry context contract requires.
  */
 public final class TracingCommandInterceptor implements CommandInterceptor {
+
+  /** The {@link TraceAttributes#COMMAND_OUTCOME} of a command the saga forward fence refused. */
+  private static final String FENCED = "FENCED";
 
   private final StreamRuneTracing tracing;
 
@@ -136,6 +143,9 @@ public final class TracingCommandInterceptor implements CommandInterceptor {
       if (error instanceof DomainException rejection) {
         // The domain's answer, not a failure: no ERROR status, no exception event, no message.
         scope.setAttribute(TraceAttributes.COMMAND_REJECTION_TYPE, rejection.getClass().getName());
+      } else if (error instanceof SagaForwardFencedException) {
+        // The forward fence's answer, which the append span records as its FENCED outcome.
+        scope.setAttribute(TraceAttributes.COMMAND_OUTCOME, FENCED);
       } else if (error != null) {
         scope.recordError(error);
       } else {

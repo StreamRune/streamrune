@@ -1335,7 +1335,7 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   at 256 characters followed by `...`). Expected outcomes are attributes, not errors
   (`streamrune.append.outcome` `APPENDED`/`CONFLICT`/`DUPLICATE`/`FENCED`, a lock `TIMEOUT`, a saga
   step `DEFERRED`, a command its domain rejected: `streamrune.command.rejection.type`, no error
-  status), background work with nothing to do emits no span, a consumer's poll is one trace (the
+  status, a saga forward command the fence refused: `streamrune.command.outcome` `FENCED`), background work with nothing to do emits no span, a consumer's poll is one trace (the
   `eventstore/read` span starts only under a current span), and a recorded error carries the
   exception's type and its own message, sanitized and cut at 256 characters, never the messages of
   its causes. A subscription's delivery span clears the baggage while its listener runs. An

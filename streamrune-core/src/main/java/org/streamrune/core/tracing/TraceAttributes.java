@@ -44,11 +44,11 @@ import org.streamrune.core.types.SubscriptionName;
  * names, never ids. A constant whose value holds a {@code /} is a span name; every other constant
  * is an attribute key.
  *
- * <p><b>Outcomes.</b> An expected outcome — a command its domain rejected, a lock not acquired in
- * time, an append that lost its optimistic-lock check or that the saga forward fence refused, a
- * saga event held for later, a saga step that waits for another step of its saga — is an attribute
- * value, and the span keeps an unset or OK status. A failure records the exception type and message
- * and the ERROR status.
+ * <p><b>Outcomes.</b> An expected outcome — a command its domain rejected, a saga's forward command
+ * the forward fence refused, a lock not acquired in time, an append that lost its optimistic-lock
+ * check or that the saga forward fence refused, a saga event held for later, a saga step that waits
+ * for another step of its saga — is an attribute value, and the span keeps an unset or OK status. A
+ * failure records the exception type and message and the ERROR status.
  */
 public final class TraceAttributes {
 
@@ -84,6 +84,15 @@ public final class TraceAttributes {
    * compensation is a failure of the saga, and records the rejection by its type alone.
    */
   public static final String COMMAND_REJECTION_TYPE = "streamrune.command.rejection.type";
+
+  /**
+   * How a command ended when it ended in an expected outcome other than success or a rejection:
+   * {@code FENCED}, a saga's forward command the saga forward fence refused because the saga has
+   * left its forward phase, the outcome its {@link #EVENT_STORE_APPEND} span records as {@link
+   * #APPEND_OUTCOME} {@code FENCED}. The span keeps the unset status and records no exception.
+   * Absent otherwise.
+   */
+  public static final String COMMAND_OUTCOME = "streamrune.command.outcome";
 
   /**
    * Span name for one command execution.

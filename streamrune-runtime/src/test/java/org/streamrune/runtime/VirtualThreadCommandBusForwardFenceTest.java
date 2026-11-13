@@ -338,4 +338,76 @@ class VirtualThreadCommandBusForwardFenceTest {
             .allMatch(e -> e.errorMessage() != null && e.errorMessage().contains("refused")),
         "the audit row says the command was refused: " + failures.getFirst().errorMessage());
   }
+
+  /**
+   * Through the real bus, a forward command the fence refuses is an expected outcome on its command
+   * span as on its append span: {@code streamrune.command.outcome} {@code FENCED}, the unset status
+   * and no exception event, beside {@code streamrune.append.outcome} {@code FENCED}.
+   */
+  @Test
+  void aFencedCommandsSpan_isTheOutcomeFenced_notAnError() {
+    var otel = io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+    var sdk =
+        io.opentelemetry.sdk.OpenTelemetrySdk.builder()
+            .setTracerProvider(
+                io.opentelemetry.sdk.trace.SdkTracerProvider.builder()
+                    .addSpanProcessor(
+                        io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(otel))
+                    .build())
+            .build();
+    var tracing = OpenTelemetryTracing.of(sdk, TracingSettings.allEnabled());
+    var rows = new InMemorySagaStore();
+    rows.create(
+        ORIGIN.sagaId(),
+        ORIGIN.sagaType(),
+        new FulfillmentState(SagaStatus.RUNNING),
+        SagaStatus.RUNNING);
+    rows.claimCompensating(
+        ORIGIN.sagaId(), ORIGIN.sagaType(), new FulfillmentState(SagaStatus.COMPENSATING), 1L);
+    var inbox = new InMemoryCommandInbox();
+    var store =
+        InMemoryEventStore.serializing(
+                org.streamrune.core.SimpleEventTypeRegistry.builder()
+                    .registerEvent("Shipped", Shipped.class)
+                    .registerState("ShipmentState", ShipmentState.class)
+                    .build(),
+                null)
+            .withCommandInbox(inbox)
+            .withSagaStore(rows)
+            .withTracing(tracing);
+    var bus = bus(store, new ShipDecider()).commandInbox(inbox).tracing(tracing).build();
+    var key = IdempotencyKey.of("saga:saga-1:cmd:fenced");
+
+    assertThrows(
+        SagaForwardFencedException.class,
+        () ->
+            ScopedValue.where(StreamRuneContext.SAGA_FORWARD, forward(key))
+                .where(StreamRuneContext.CAUSE, new StreamRuneContext.DispatchCause(null, ORIGIN))
+                .call(() -> bus.execute(new Ship("s-fenced", true), key)));
+
+    var spans = otel.getFinishedSpanItems();
+    var command =
+        spans.stream().filter(sp -> sp.getName().equals("command/Ship")).findFirst().orElseThrow();
+    assertEquals(io.opentelemetry.api.trace.StatusCode.UNSET, command.getStatus().getStatusCode());
+    assertTrue(command.getEvents().isEmpty(), command::toString);
+    assertEquals(
+        "FENCED",
+        command
+            .getAttributes()
+            .get(
+                io.opentelemetry.api.common.AttributeKey.stringKey(
+                    org.streamrune.core.tracing.TraceAttributes.COMMAND_OUTCOME)));
+    var append =
+        spans.stream()
+            .filter(sp -> sp.getName().equals("eventstore/append"))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(
+        "FENCED",
+        append
+            .getAttributes()
+            .get(
+                io.opentelemetry.api.common.AttributeKey.stringKey(
+                    org.streamrune.core.tracing.TraceAttributes.APPEND_OUTCOME)));
+  }
 }

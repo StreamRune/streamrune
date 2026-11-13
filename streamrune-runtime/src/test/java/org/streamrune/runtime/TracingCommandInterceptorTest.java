@@ -201,6 +201,30 @@ class TracingCommandInterceptorTest {
   }
 
   @Test
+  void aFencedForwardCommand_isTheOutcomeFenced_withNoErrorStatus_andNoEvent() {
+    var interceptor =
+        new TracingCommandInterceptor(
+            OpenTelemetryTracing.of(otelTesting.getOpenTelemetry(), TracingSettings.allEnabled()));
+    var ctx = ctx("Ship");
+    interceptor.before(ctx);
+    interceptor.onError(
+        ctx,
+        new org.streamrune.core.saga.SagaForwardFencedException(
+            org.streamrune.core.saga.SagaOrigin.dispatchedBy(
+                org.streamrune.core.types.SagaType.of("orders.Fulfillment"),
+                org.streamrune.core.saga.SagaId.of("saga-1"))));
+
+    SpanData span = otelTesting.getSpans().getFirst();
+    assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+    assertTrue(span.getEvents().isEmpty());
+    assertEquals(
+        "FENCED",
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_OUTCOME)));
+    assertNull(
+        span.getAttributes().get(AttributeKey.stringKey(TraceAttributes.COMMAND_REJECTION_TYPE)));
+  }
+
+  @Test
   void aContextWithoutAStream_carriesNeitherTypeNorStreamAttribute() {
     var interceptor =
         new TracingCommandInterceptor(
