@@ -1141,12 +1141,20 @@ public final class InMemoryEventStore implements EventStore {
    * deserialized to its ORIGINAL (stored) runtime class — re-running {@code @Encrypted} decryption
    * (a crypto-shredded subject yields {@link CryptoShreddingModule#REDACTED}) and resolving the
    * stored {@code state_type} through the registry via the NON-throwing resolver (a retired/renamed
-   * type is discarded → full replay, never a crash). A version mismatch is then migrated up through
-   * the registered chain, or discarded if unmigratable — mirroring {@code PostgresEventStore.load}.
+   * type is discarded → full replay, never a crash). A version mismatch is migrated up through the
+   * registered chain; one the chain cannot bridge is discarded before the state is deserialized,
+   * and so is a retired stored type — mirroring {@code PostgresEventStore.load}.
    */
   private ResolvedSnapshot resolveSnapshot(Snapshot snapshot, int expectedSnapshotVersion) {
     boolean compatible =
         expectedSnapshotVersion == 0 || snapshot.snapshotVersion() == expectedSnapshotVersion;
+    if (!compatible && !migrations.canReach(snapshot.snapshotVersion(), expectedSnapshotVersion)) {
+      // A version mismatch no complete migration chain bridges is discarded before the stored
+      // state is read, as PostgresEventStore decides it: a snapshot the load will not use is never
+      // deserialized (nor decrypted), so a crypto failure in it cannot fail the load, and no
+      // migration step runs on it.
+      return ResolvedSnapshot.discard();
+    }
 
     AggregateState storedState;
     if (objectMapper == null) {
@@ -1180,9 +1188,9 @@ public final class InMemoryEventStore implements EventStore {
     if (compatible) {
       return new ResolvedSnapshot(storedState, snapshot.version());
     }
-    // Version mismatch: try to migrate the stored state up to the expected schema version. A
-    // complete chain upgrades the snapshot (only later events replay); a gapped/absent chain
-    // discards it (full replay), mirroring PostgresEventStore and the plain-mismatch baseline.
+    // Version mismatch with a complete chain (checked above): migrate the stored state up to the
+    // expected schema version, so only later events replay. The empty result below stays for
+    // safety; a chain canReach accepted lands on the expected version or throws.
     //
     // SnapshotMigrationChain.migrate() can also THROW — NullPointerException when a
     // step returns null, or IllegalStateException when a step's result does not match its
