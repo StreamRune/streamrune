@@ -16,6 +16,7 @@ import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.Internal;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.RetryPolicy;
 import org.streamrune.core.SimpleEventTypeRegistry;
@@ -1627,7 +1628,7 @@ public class StreamRuneMicronautModule {
    * it is correct under any connection pooling; the leader's monotonic epoch fences a superseded
    * leader out at the projection commit. Requires a {@link DataSource} and {@code
    * streamrune.subscription.single-active-consumer.enabled} reading as on (default on) — through
-   * {@link SingleActiveConsumerEnabled}, the reading the saga forward fence's {@code auto} follows
+   * {@code SingleActiveConsumerEnabled}, the reading the saga forward fence's {@code auto} follows
    * too. The lease TTL is {@code streamrune.subscription.single-active-consumer.lease-ttl} (default
    * 15s) — the failover bound; the renew heartbeat runs at {@code ttl/3}. When absent or disabled
    * the projection runners fall back to {@link
@@ -1666,8 +1667,11 @@ public class StreamRuneMicronautModule {
    * SagaEventPathRetentionConfigurer} reads it through for the forward fence's {@code auto}.
    * {@code @Requires(notEquals = "false")} kept the leadership bean for {@code off}, {@code no} or
    * {@code 0} while the fence read them as off. An unknown spelling throws, so the context does not
-   * start.
+   * start. Public only because Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
    */
+  @Internal
   public static final class SingleActiveConsumerEnabled
       implements io.micronaut.context.condition.Condition {
     @Override

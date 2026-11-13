@@ -182,8 +182,8 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   `streamrune-crypto-api` brings Caffeine 3.2.
 - GraalVM native image: GraalVM CE 25.0.1.
 - `streamrune-test` runs on JUnit Jupiter 5.12.2 or newer, 6.x included: it requires
-  `junit-jupiter-api` at 5.12.2 (an `api` dependency) and brings no JUnit BOM, so an application's
-  tests run on the JUnit its own build manages.
+  `junit-jupiter-api` at 5.12.2 (an `api` dependency) and brings no JUnit BOM of its own, so an
+  application's tests run on the JUnit (5.12.2 or newer) its own build manages.
 - Docker is needed only to run the framework's own PostgreSQL-backed test suites (Testcontainers).
 
 ### Known limitations

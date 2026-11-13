@@ -57,7 +57,7 @@ import org.streamrune.runtime.TracingProjectionDecorator;
  * registration must declare {@code AT_LEAST_ONCE_IDEMPOTENT}.
  *
  * <p>Disabled when {@code streamrune.projections.auto-discovery.enabled=false} (or any other
- * canonical-false spelling — see {@link AutoDiscoveryEnabled}).
+ * canonical-false spelling — see {@code AutoDiscoveryEnabled}).
  */
 @Factory
 @Requires(condition = ProjectionFactory.AutoDiscoveryEnabled.class)
@@ -442,7 +442,12 @@ public class ProjectionFactory {
    * enabled} flag (see {@link ProjectionModeCondition}, below, and {@code discover()}), which
    * already used it. Absent (or blank) defaults to enabled, matching the old {@code notEquals}
    * behavior for a missing property.
+   *
+   * <p>Public only because Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
    */
+  @Internal
   public static final class AutoDiscoveryEnabled implements Condition {
     @Override
     public boolean matches(ConditionContext context) {

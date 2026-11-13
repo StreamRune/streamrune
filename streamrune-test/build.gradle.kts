@@ -20,7 +20,9 @@ dependencies {
     // The JUnit floor the kit runs on (see `junit-floor` in the version catalog), not a JUnit BOM:
     // an exported BOM would move every JUnit module of an application to its version. The kit's
     // main sources compile against the floor, so they cannot use API it lacks; its tests run on
-    // the framework's JUnit (the root build's testImplementation platform).
+    // the framework's JUnit (the root build's testImplementation platform). The compiler does not
+    // see API that JUnit 6 removed (MethodOrderer.Alphanumeric, for one): the kit's own tests, on
+    // JUnit 6, are what catch a use of it.
     api(libs.junit.jupiter.api.floor)
     api(libs.jackson.databind)
     api(libs.jackson.core)
@@ -75,8 +77,11 @@ val verifyJUnitFloor =
                 @Suppress("UNCHECKED_CAST")
                 val variants = json["variants"] as List<Map<String, Any?>>
                 for (variant in variants) {
+                    // Constraints count too: one on a JUnit module raises it like a dependency.
                     @Suppress("UNCHECKED_CAST")
-                    val dependencies = (variant["dependencies"] as List<Map<String, Any?>>?).orEmpty()
+                    val dependencies =
+                        (variant["dependencies"] as List<Map<String, Any?>>?).orEmpty() +
+                            (variant["dependencyConstraints"] as List<Map<String, Any?>>?).orEmpty()
                     for (dependency in dependencies) {
                         val coordinates = "${dependency["group"]}:${dependency["module"]}"
                         @Suppress("UNCHECKED_CAST")

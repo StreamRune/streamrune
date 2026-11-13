@@ -153,10 +153,12 @@ StreamRune module uses it: the runtime, the PostgreSQL store or one of the integ
 covered by this policy and may change or disappear in any release. The generated API documentation
 leaves it out. Application code does not call, implement or bind it.
 
-The build holds this policy: each published module records its public API in a checked-in file
+The build records the public types and members of each published module in a checked-in file
 (`api/<module>.api`), and `check` fails when the compiled module differs from it or when a public
-signature names an `@Internal` type, so every change to the public API is deliberate and visible in
-review.
+signature names an `@Internal` type, so every change to them is deliberate and visible in review.
+The files also list the integrations' `@Bean`, producer and factory methods and the constructors of
+their properties types, which are wiring, not API (see below): a change there is reviewed, and does
+not wait for a major version.
 
 The `@Bean`, producer and factory methods of the Spring, Quarkus and Micronaut integrations are
 wiring that the container calls, not API: an application replaces a bean with one of its own, and

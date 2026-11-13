@@ -144,15 +144,20 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   the same check before each commit, and `./gradlew spotlessApply` fixes what it reports.
 - **The public API is recorded.** Each published module has `api/<module>.api`: its public types
   (in an exported package, not marked `@Internal`) with their supertypes and their public members,
-  and the protected members of a non-final type, with generic signatures. `verifyApiSurface`, part
-  of `check` and `quickCheck`, fails when the compiled module differs from that file, and lists the
-  removed or changed lines (they break code written against the API) apart from the added ones.
-  After a deliberate change, `./gradlew apiDump` rewrites the file and the pull request carries
-  it, so every API change is visible in review; from `1.0.0` on, a removed or changed line waits for
-  a major version unless it is outside the public API (README, "API stability"). The same task
-  enforces the rules of `@Internal`: no public signature names a StreamRune type that is
-  `@Internal`, nested in one, not exported or not public, and every `@Internal` declaration carries
-  the `@hidden` javadoc tag. The checker is `gradle/api-check/ApiSurfaceCheck.java`.
+  and the protected members of a non-final type, with generic signatures, annotation defaults, the
+  retention and targets of annotation types and the order of enum constants. `verifyApiSurface`,
+  part of `check` and `quickCheck`, fails when the compiled module differs from that file, and
+  lists type by type the removed or changed lines apart from the added ones; a removed or changed
+  line can break code written against the API, unless it only widens what the API declares. After a deliberate change, `./gradlew
+  apiDump` rewrites the file and the pull request carries it, so every API change is visible in
+  review; from `1.0.0` on, a breaking change waits for a major version unless it is outside the
+  public API (README, "API stability": the integrations' `@Bean`, producer and factory methods and
+  the constructors of their properties types are listed but are wiring). The same task enforces the
+  rules of `@Internal`: no public signature names a StreamRune type that is `@Internal`, nested in
+  one, not exported, not reachable or not on the class path, and every `@Internal` declaration
+  carries the `@hidden` javadoc tag (read from the parsed sources and counted against the class
+  files). The checker is `gradle/api-check/ApiSurfaceCheck.java`; `testApiSurfaceCheck`, part of
+  `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside it on compiled fixtures.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested

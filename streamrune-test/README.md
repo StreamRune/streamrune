@@ -136,7 +136,8 @@ assertEquals(1, faults.calls("saveOffset"));
 
 - Java 25
 - JUnit Jupiter 5.12.2 or newer, 6.x included (`junit-jupiter-api`, an `api` dependency at 5.12.2).
-  The kit brings no JUnit BOM, so your tests run on the JUnit your build manages. With Maven,
+  The kit brings no JUnit BOM of its own and raises no JUnit at or above 5.12.2, so your tests run
+  on the JUnit your build manages. With Maven,
   manage JUnit through `org.junit:junit-bom` in `<dependencyManagement>` (or declare JUnit before
   the kit): otherwise Maven's nearest-first rule can take the kit's `junit-jupiter-api` beside a
   newer `junit-jupiter-engine`, and the engine fails to start.

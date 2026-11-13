@@ -56,8 +56,7 @@ class TestEcosystemArchitectureTest {
   // bytecode has no direct org.junit.jupiter reference — ArchUnit's dependency check is per-class,
   // not transitive through the superclass, so it would otherwise flag a class that is exercising
   // JUnit Jupiter exactly as intended. Excluded by name pattern rather than allowlisting the
-  // concrete
-  // class, since every future *ContractTest subclass repeats this shape.
+  // concrete class, since every future *ContractTest subclass repeats this shape.
   @ArchTest
   static final ArchRule junit5_is_present =
       classes()
