@@ -223,34 +223,6 @@ public class StreamRuneBenchmark {
     bh.consume(state.store.load(state.snapshotStreamId));
   }
 
-  // ===== Decider Benchmarks =====
-
-  @State(Scope.Thread)
-  public static class DeciderState {
-    public Decider<BenchmarkCommand, BenchmarkState, BenchmarkEvent> decider;
-    public BenchmarkState state;
-
-    @Param({"0", "10", "100"})
-    public int stateSize;
-
-    @Setup(Level.Iteration)
-    public void setup() {
-      decider = new BenchmarkDecider();
-      state = new BenchmarkState("aggregate-1", "tenant-1", stateSize);
-    }
-  }
-
-  @Benchmark
-  @BenchmarkMode(Mode.Throughput)
-  @OutputTimeUnit(TimeUnit.SECONDS)
-  @Warmup(iterations = 2, time = 1)
-  @Measurement(iterations = 3, time = 1)
-  @Fork(1)
-  public void deciderDecide(DeciderState state) {
-    var cmd = new BenchmarkCommand(AggregateId.of("aggregate-1"));
-    state.decider.decide(cmd, state.state);
-  }
-
   // ===== Helper Methods =====
 
   /**

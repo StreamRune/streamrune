@@ -17,5 +17,8 @@ Please give us reasonable time to release a fix before disclosing details public
 
 ## Supported versions
 
-Only the latest release receives fixes. A fix lands on `main` first, so the preview build
-(`1.0.0-alpha-SNAPSHOT`, built from `main`) carries it before the next release does.
+Only the latest release receives fixes. A fix lands on `main` first, so the preview build (built
+from `main`; the [Preview builds](README.md#preview-builds) section of the README on `main` names its
+version) carries it before the next release does. Move every StreamRune module of a build to the
+preview version together: a module the build also reaches at a release version resolves to the
+higher of the two.

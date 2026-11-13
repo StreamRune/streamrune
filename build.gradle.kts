@@ -342,6 +342,172 @@ private object TestSummary {
     }
 }
 
+// ── The rule of verifyReleaseChecks ────────────────────────────────────────────────────────────
+//
+// verifyReleaseChecks (in the publishing section below) asks the GitHub Actions API for the workflow
+// runs of the commit being released and lets the upload through only when, for each workflow that
+// holds a required check, the NEWEST run of that workflow on the commit has finished and its job of
+// that name concluded success. A check is known by the workflow file that defines it and the job's
+// name inside that run, never by a check-run name alone: another workflow, or GitHub's own Pages
+// build, can report a check called `build` too. Only the runs this repository started for a push, a
+// schedule or a manual dispatch count; a pull request's run tests a merge with another branch, not
+// the commit as it is. Newest means created last: a red nightly after a green one refuses the
+// release, and so does a run still in progress, until it is re-run green or a newer run is.
+//
+// A nested object for the reason PublicSupertypeScopeCheck gives: verifyReleaseChecks calls it from
+// its doLast.
+private object ReleaseChecks {
+    /** The required checks: the jobs, by the workflow file whose runs carry them. */
+    val REQUIRED: Map<String, List<String>> =
+        mapOf(
+            ".github/workflows/build.yml" to listOf("build", "postgres-17"),
+            ".github/workflows/broker-e2e-test.yml" to listOf("broker-e2e"))
+
+    /** The events whose runs count. */
+    val EVENTS = setOf("push", "schedule", "workflow_dispatch")
+
+    /** The `--jq` projection of `repos/<slug>/actions/runs?head_sha=<sha>`, one run per line. */
+    const val RUNS_JQ =
+        ".workflow_runs[] | [.id, .path, .event, (.head_repository.full_name // \"\"), .status, " +
+            "(.conclusion // \"\"), .created_at] | @tsv"
+
+    /** The `--jq` projection of `repos/<slug>/actions/runs/<id>/jobs`, one job per line. */
+    const val JOBS_JQ = ".jobs[] | [.name, .status, (.conclusion // \"\")] | @tsv"
+
+    data class Run(
+        val id: Long,
+        val path: String,
+        val event: String,
+        val repository: String,
+        val status: String,
+        val conclusion: String,
+        val createdAt: String,
+    )
+
+    data class Job(val name: String, val status: String, val conclusion: String)
+
+    fun parseRuns(tsv: String): List<Run> =
+        tsv.lines().filter { it.isNotBlank() }.map { line ->
+            val c = line.split("\t")
+            require(c.size >= 7 && c[0].toLongOrNull() != null) { "unexpected workflow run line: $line" }
+            Run(c[0].toLong(), c[1], c[2], c[3], c[4], c[5], c[6])
+        }
+
+    fun parseJobs(tsv: String): List<Job> =
+        tsv.lines().filter { it.isNotBlank() }.map { line ->
+            val c = line.split("\t")
+            require(c.size >= 3) { "unexpected job line: $line" }
+            Job(c[0], c[1], c[2])
+        }
+
+    /** The newest run of [path] that counts, or null: created last, the larger id on a tie. */
+    fun newest(runs: List<Run>, path: String, repository: String): Run? =
+        runs.filter { it.path == path && it.event in EVENTS && it.repository == repository }
+            .maxWithOrNull(compareBy<Run>({ it.createdAt }, { it.id }))
+
+    /**
+     * Why the commit whose workflow runs are [runs] may not be released, one line per reason; empty
+     * when every required check concluded success in the newest run of its workflow. [jobsOf] lists
+     * the jobs of the latest attempt of a run.
+     */
+    fun problems(runs: List<Run>, repository: String, jobsOf: (Long) -> List<Job>): List<String> {
+        val problems = ArrayList<String>()
+        REQUIRED.forEach { (path, names) ->
+            val run = newest(runs, path, repository)
+            if (run == null) {
+                problems.add(
+                    "$path has no run on this commit (push, schedule or workflow_dispatch in " +
+                        "$repository), so ${names.joinToString()} never ran on it")
+                return@forEach
+            }
+            val described = "the newest run of $path on this commit (run ${run.id}, ${run.event}, ${run.createdAt})"
+            if (run.status != "completed") {
+                problems.add("$described is ${run.status}; wait until it finishes")
+                return@forEach
+            }
+            val jobs = jobsOf(run.id)
+            names.forEach { name ->
+                val matching = jobs.filter { it.name == name }
+                when {
+                    matching.isEmpty() -> problems.add("$described has no job $name")
+                    matching.any { it.status != "completed" || it.conclusion != "success" } ->
+                        problems.add(
+                            "$name in $described concluded " +
+                                matching.joinToString { it.conclusion.ifEmpty { it.status } })
+                }
+            }
+        }
+        return problems
+    }
+
+    /**
+     * The cases the rule must decide as written above, run by the root task
+     * verifyReleaseChecksRule on every `check`; returns the cases it decides otherwise.
+     */
+    fun selfCheck(): List<String> {
+        val repo = "StreamRune/streamrune"
+        val build = ".github/workflows/build.yml"
+        val broker = ".github/workflows/broker-e2e-test.yml"
+        fun run(id: Long, path: String, event: String, created: String, status: String = "completed", repository: String = repo) =
+            Run(id, path, event, repository, status, "", created)
+        val green = listOf(Job("build", "completed", "success"), Job("postgres-17", "completed", "success"))
+        val brokerGreen = listOf(Job("broker-e2e", "completed", "success"))
+        val brokerRed = listOf(Job("broker-e2e", "completed", "failure"))
+        data class Case(val name: String, val runs: List<Run>, val jobs: Map<Long, List<Job>>, val pass: Boolean)
+        val baseRuns = listOf(run(1, build, "push", "2026-01-01T10:00:00Z"), run(2, broker, "schedule", "2026-01-02T03:00:00Z"))
+        val baseJobs = mapOf(1L to green, 2L to brokerGreen)
+        val cases =
+            listOf(
+                Case("every newest run green", baseRuns, baseJobs, true),
+                Case(
+                    "a red nightly after a green one",
+                    baseRuns + run(3, broker, "schedule", "2026-01-03T03:00:00Z"),
+                    baseJobs + (3L to brokerRed),
+                    false),
+                Case(
+                    "a green run after a red one",
+                    baseRuns + run(3, broker, "workflow_dispatch", "2026-01-01T09:00:00Z"),
+                    baseJobs + (3L to brokerRed),
+                    true),
+                Case(
+                    "the newest run still in progress",
+                    baseRuns + run(3, broker, "workflow_dispatch", "2026-01-03T03:00:00Z", status = "in_progress"),
+                    baseJobs,
+                    false),
+                Case("no run of a required workflow", baseRuns.take(1), baseJobs, false),
+                Case(
+                    "a required job failed in the newest run",
+                    baseRuns,
+                    baseJobs + (1L to listOf(Job("build", "completed", "success"), Job("postgres-17", "completed", "failure"))),
+                    false),
+                Case(
+                    "a required job missing from the newest run",
+                    baseRuns,
+                    baseJobs + (1L to listOf(Job("build", "completed", "success"))),
+                    false),
+                Case(
+                    "a green job of the same name in another workflow",
+                    baseRuns + run(3, ".github/workflows/other.yml", "push", "2026-01-04T00:00:00Z"),
+                    baseJobs + (1L to listOf(Job("build", "completed", "failure"), Job("postgres-17", "completed", "success"))) + (3L to green),
+                    false),
+                Case(
+                    "a newer pull-request run does not count",
+                    baseRuns + run(3, build, "pull_request", "2026-01-04T00:00:00Z"),
+                    baseJobs + (3L to listOf(Job("build", "completed", "failure"), Job("postgres-17", "completed", "failure"))),
+                    true),
+                Case(
+                    "a run of another repository does not count",
+                    listOf(run(1, build, "push", "2026-01-01T10:00:00Z", repository = "someone/fork"), baseRuns[1]),
+                    baseJobs,
+                    false),
+            )
+        return cases.mapNotNull { case ->
+            val problems = problems(case.runs, repo) { case.jobs[it].orEmpty() }
+            if (problems.isEmpty() == case.pass) null else "${case.name}: decided ${if (case.pass) "refuse" else "pass"} ($problems)"
+        }
+    }
+}
+
 // The build's TestSummary.Runs: every test task records itself in it, testSummary reads it.
 private val testRuns = gradle.sharedServices.registerIfAbsent("testRuns", TestSummary.Runs::class.java) {}
 
@@ -469,7 +635,11 @@ subprojects {
     group = "org.streamrune"
     // The development default is the preview version that CI publishes to the Central Portal
     // snapshot repository on every push to main (.github/workflows/publish-snapshot.yml). A release
-    // passes -PreleaseVersion=<version>, which always wins.
+    // passes -PreleaseVersion=<version>, which always wins. The pull request that prepares a release
+    // moves this default to a -SNAPSHOT that sorts above it, together with the version the README's
+    // "Preview builds" names (ReleaseStatusTest holds the two equal and the default above a dated
+    // release; Publish Snapshot refuses a version below a tagged release); the header of
+    // .github/workflows/release.yml lists the steps.
     version = (project.findProperty("releaseVersion") as String?) ?: "1.0.0-alpha-SNAPSHOT"
 
     java {
@@ -1232,10 +1402,12 @@ subprojects {
         // ── The POM licence <url> resolves to the text that actually governs ───────
         //
         // Derived from the same `version` the artifacts carry (the `releaseVersion` property,
-        // defaulting to 1.0.0-alpha-SNAPSHOT), never hardcoded, so a release build and a snapshot
+        // defaulting to the development version), never hardcoded, so a release build and a snapshot
         // build each emit a URL pointing at the licence text of the code being published. A release
-        // pins the tag `v<version>` rather than a branch: the tag cannot move, so the text a
-        // consumer reads years later is the text that shipped. A snapshot has no tag by
+        // pins the tag `v<version>` rather than a branch: a release tag is never moved or deleted
+        // once its version is on Maven Central (the header of .github/workflows/release.yml asks for
+        // a tag ruleset that enforces it), so the text a consumer reads years later is the text
+        // that shipped. A snapshot has no tag by
         // construction and is published only to the snapshot repository, where it is replaced by
         // the next push to main, so it points at `main`.
         val licenseRef = if (projectVersion.endsWith("-SNAPSHOT")) "main" else "v$projectVersion"
@@ -1636,43 +1808,37 @@ subprojects {
         // verifyReleaseTag (above) only proves git facts (the tag exists, on HEAD, on origin) — it
         // has no notion of CI.
         //
-        // This task queries the GitHub Checks API for the exact tagged commit and refuses to
-        // proceed unless every name in REQUIRED_CHECK_NAMES concluded `success` there. Check-run
-        // names are the workflow job's key (or its `name:`, if set) as GitHub renders it on the
-        // Checks API — verified empirically against this repository's own history (`gh api
-        // repos/StreamRune/streamrune/commits/main/check-runs`): build.yml's `build:` job produces a
-        // check-run literally named "build". By the same rule broker-e2e-test.yml's `broker-e2e:`
-        // job produces "broker-e2e" — NOT "broker-e2e-test" (that is only the workflow's
-        // filename/title; read the job key in .github/workflows/broker-e2e-test.yml if it is ever
-        // renamed). build.yml's second job, `postgres-17:` (the PostgreSQL-backed suites on the
-        // oldest supported server), produces "postgres-17" by the same rule and is required too — the
-        // release declares PostgreSQL 17 or newer, so it must not ship from a commit whose 17 leg is
-        // red or missing.
-        // Uses the "any check-run with this name concluded success" rule, so a check that failed
-        // once and was re-run green still satisfies the gate.
+        // This task asks the GitHub Actions API for the workflow runs of the exact commit at HEAD and
+        // refuses to proceed unless, for each workflow in ReleaseChecks.REQUIRED, the newest run that
+        // counts has finished and its required jobs concluded `success` (the rule and why it reads
+        // the newest run is at ReleaseChecks, near the top of this file; the root task
+        // verifyReleaseChecksRule holds the rule to its cases on every `check`). A failed run re-run
+        // green satisfies it, because the jobs listed are those of a run's latest attempt; a red run
+        // newer than a green one refuses it, and so does a newer run still in progress — wait for it.
         //
         // Escape hatch: `-PskipCiVerification=true` skips this task entirely, logging loudly (a
         // WARN naming the version) so the bypass is never silent. Fails closed otherwise: an
-        // unauthenticated/missing `gh` CLI, an API error, or a required check simply absent from
-        // the response all REFUSE the publish, for the same reason verifyReleaseTag fails closed —
-        // "cannot confirm CI passed" and "confirmed CI failed" carry the same irreversible risk.
+        // unauthenticated/missing `gh` CLI, an API error, an answer it cannot read, or a required
+        // check absent, still running or not green all REFUSE the publish, for the same reason
+        // verifyReleaseTag fails closed — "cannot confirm CI passed" and "confirmed CI failed" carry
+        // the same irreversible risk.
         //
         // Runnable on its own: `./gradlew verifyReleaseChecks -PreleaseVersion=<version>`.
         val githubRepoSlug = "StreamRune/streamrune"
-        val requiredCiCheckNames = setOf("build", "broker-e2e", "postgres-17")
         val verifyReleaseChecks =
             tasks.register("verifyReleaseChecks") {
-                description = "Fails a release publish unless build/broker-e2e/postgres-17 concluded " +
-                    "success on the GitHub Checks API for the exact tagged commit."
+                description = "Fails a release publish unless build/postgres-17 (Build) and broker-e2e " +
+                    "(Broker E2E Tests) concluded success in the newest run of their workflow on the " +
+                    "exact tagged commit."
                 group = "verification"
                 val label = project.path
                 val versionUnderRelease = projectVersion
                 val workTree = gitWorkTree
                 val repoSlug = githubRepoSlug
-                val requiredNames = requiredCiCheckNames
                 val skipCiVerificationProp = providers.gradleProperty("skipCiVerification")
                 outputs.upToDateWhen { false }
                 doLast {
+                    val required = ReleaseChecks.REQUIRED
                     if (versionUnderRelease.endsWith("-SNAPSHOT")) {
                         logger.lifecycle(
                             "$label: version $versionUnderRelease is a snapshot — no CI-check " +
@@ -1683,7 +1849,7 @@ subprojects {
                         logger.warn(
                             "$label: -PskipCiVerification=true — SKIPPING the required-CI-checks " +
                                 "verification for version $versionUnderRelease. " +
-                                "This publish proceeds WITHOUT confirming $requiredNames concluded " +
+                                "This publish proceeds WITHOUT confirming $required concluded " +
                                 "success on this commit. Use only for a deliberate, understood " +
                                 "override.")
                         return@doLast
@@ -1729,78 +1895,81 @@ subprojects {
                     }
 
                     // `gh api ... --jq` does the JSON parsing (no JSON library on this script's
-                    // classpath); --paginate covers a commit with more check-runs than one page.
-                    // One line per check-run: "<name>\t<status>\t<conclusion>" (conclusion is
-                    // empty for a run still in progress — @tsv renders jq null as "").
-                    val ghArgs =
-                        listOf(
-                            "gh", "api", "--paginate",
-                            "repos/$repoSlug/commits/$headCommit/check-runs",
-                            "--jq", ".check_runs[] | [.name, .status, .conclusion] | @tsv")
-                    val (ghExit, ghOutput, ghError) =
-                        try {
-                            val process =
-                                ProcessBuilder(ghArgs)
-                                    .directory(workTree)
-                                    .redirectErrorStream(false)
-                                    .start()
-                            val out = process.inputStream.bufferedReader().readText()
-                            val err = process.errorStream.bufferedReader().readText()
-                            if (!process.waitFor(120, TimeUnit.SECONDS)) {
-                                process.destroyForcibly()
+                    // classpath) into tab-separated lines; --paginate covers more runs or jobs than
+                    // one page holds.
+                    fun ghApi(endpoint: String, jq: String): String {
+                        val (exit, output, error) =
+                            try {
+                                val process =
+                                    ProcessBuilder(listOf("gh", "api", "--paginate", endpoint, "--jq", jq))
+                                        .directory(workTree)
+                                        .redirectErrorStream(false)
+                                        .start()
+                                val out = process.inputStream.bufferedReader().readText()
+                                val err = process.errorStream.bufferedReader().readText()
+                                if (!process.waitFor(120, TimeUnit.SECONDS)) {
+                                    process.destroyForcibly()
+                                    throw GradleException(
+                                        "$label: `gh api $endpoint` did not finish within 120s " +
+                                            "while verifying CI checks for release tag $tag. A release " +
+                                            "publish is refused when this cannot be confirmed.")
+                                }
+                                Triple(process.exitValue(), out, err)
+                            } catch (e: GradleException) {
+                                throw e
+                            } catch (e: Exception) {
                                 throw GradleException(
-                                    "$label: `gh api .../check-runs` did not finish within 120s " +
-                                        "while verifying CI checks for release tag $tag. A release " +
-                                        "publish is refused when this cannot be confirmed.")
+                                    "$label: could not run `gh api` to verify CI checks for release " +
+                                        "tag $tag (${e.message}). Install/authenticate the GitHub CLI " +
+                                        "(`gh auth login`), or pass -PskipCiVerification=true to " +
+                                        "deliberately bypass this gate. A release publish is refused " +
+                                        "when CI status cannot be confirmed.", e)
                             }
-                            Triple(process.exitValue(), out, err)
-                        } catch (e: GradleException) {
-                            throw e
-                        } catch (e: Exception) {
+                        if (exit != 0) {
                             throw GradleException(
-                                "$label: could not run `gh api` to verify CI checks for release " +
-                                    "tag $tag (${e.message}). Install/authenticate the GitHub CLI " +
-                                    "(`gh auth login`), or pass -PskipCiVerification=true to " +
-                                    "deliberately bypass this gate. A release publish is refused " +
-                                    "when CI status cannot be confirmed.", e)
+                                "$label: `gh api $endpoint` exited $exit while verifying CI checks " +
+                                    "for release tag $tag (stderr: ${error.trim().ifEmpty { "<empty>" }}). " +
+                                    "Confirm `gh` is installed and authenticated (`gh auth status`), " +
+                                    "or pass -PskipCiVerification=true to deliberately bypass this " +
+                                    "gate. A release publish is refused when CI status cannot be " +
+                                    "confirmed.")
                         }
-                    if (ghExit != 0) {
-                        throw GradleException(
-                            "$label: `gh api repos/$repoSlug/commits/$headCommit/check-runs` " +
-                                "exited $ghExit while verifying CI checks for release tag $tag " +
-                                "(stderr: ${ghError.trim().ifEmpty { "<empty>" }}). Confirm `gh` " +
-                                "is installed and authenticated (`gh auth status`), or pass " +
-                                "-PskipCiVerification=true to deliberately bypass this gate. A " +
-                                "release publish is refused when CI status cannot be confirmed.")
+                        return output
                     }
 
-                    val successfulNames: Set<String> =
-                        ghOutput.lines()
-                            .filter { it.isNotBlank() }
-                            .mapNotNull { line ->
-                                val cols = line.split("\t")
-                                if (cols.size < 3) null else Triple(cols[0], cols[1], cols[2])
+                    val problems =
+                        try {
+                            val runs =
+                                ReleaseChecks.parseRuns(
+                                    ghApi(
+                                        "repos/$repoSlug/actions/runs?head_sha=$headCommit&per_page=100",
+                                        ReleaseChecks.RUNS_JQ))
+                            ReleaseChecks.problems(runs, repoSlug) { runId ->
+                                ReleaseChecks.parseJobs(
+                                    ghApi(
+                                        "repos/$repoSlug/actions/runs/$runId/jobs?per_page=100",
+                                        ReleaseChecks.JOBS_JQ))
                             }
-                            .filter { (_, status, conclusion) ->
-                                status == "completed" && conclusion == "success"
-                            }
-                            .map { (name, _, _) -> name }
-                            .toSet()
-                    val missing = requiredNames - successfulNames
-                    if (missing.isNotEmpty()) {
+                        } catch (e: IllegalArgumentException) {
+                            throw GradleException(
+                                "$label: could not read the answer of the GitHub Actions API while " +
+                                    "verifying CI checks for release tag $tag (${e.message}). A release " +
+                                    "publish is refused when CI status cannot be confirmed.", e)
+                        }
+                    if (problems.isNotEmpty()) {
                         throw GradleException(
-                            "$label: required CI check(s) $missing did not conclude `success` on " +
-                                "commit $headCommit (release tag $tag) per the GitHub Checks API " +
-                                "(repos/$repoSlug/commits/$headCommit/check-runs). Required: " +
-                                "$requiredNames; confirmed success: $successfulNames. `build` and " +
-                                "`postgres-17` come from the Build run of the commit's push to main, " +
-                                "`broker-e2e` from a Broker E2E Tests run on main (nightly, or started by " +
-                                "hand); a tag pushed by the Release workflow starts neither. Wait for " +
-                                "them, or pass -PskipCiVerification=true to deliberately bypass this gate.")
+                            "$label: commit $headCommit (release tag $tag) may not be released yet: " +
+                                problems.joinToString("; ") + ". Required: $required, each in the " +
+                                "newest push, schedule or workflow_dispatch run of its workflow on the " +
+                                "commit. `build` and `postgres-17` come from the Build run of the " +
+                                "commit's push to main, `broker-e2e` from a Broker E2E Tests run on main " +
+                                "(nightly, or started by hand); a tag pushed by the Release workflow " +
+                                "starts neither. Re-run a failed run, or start a new one, and wait for " +
+                                "it; or pass -PskipCiVerification=true to deliberately bypass this gate.")
                     }
                     logger.lifecycle(
-                        "$label: required CI checks $requiredNames all concluded success on " +
-                            "commit $headCommit (release tag $tag).")
+                        "$label: required CI checks $required all concluded success in the newest " +
+                            "run of their workflow on commit $headCommit (release tag $tag).")
                 }
             }
 
@@ -2116,6 +2285,24 @@ gradle.taskGraph.whenReady {
 
 listOf("test", "check", "build").forEach { tasks.named(it) { finalizedBy(testSummary) } }
 
+// The rule of verifyReleaseChecks (ReleaseChecks, near the top of this file) decides its cases as
+// its comment says: a red run newer than a green one refuses, a run of another workflow or of a pull
+// request does not count. The release gate runs only at release time, so the rule is held to its
+// cases here, in every `check` and quickCheck, without contacting GitHub.
+val verifyReleaseChecksRule =
+    tasks.register("verifyReleaseChecksRule") {
+        group = "verification"
+        description = "Holds the rule of verifyReleaseChecks to its cases, offline."
+        doLast {
+            val wrong = ReleaseChecks.selfCheck()
+            if (wrong.isNotEmpty()) {
+                throw GradleException("verifyReleaseChecks decides these cases wrongly: " + wrong.joinToString("; "))
+            }
+            logger.lifecycle("The rule of verifyReleaseChecks decides its cases as documented.")
+        }
+    }
+tasks.named("check") { dependsOn(verifyReleaseChecksRule) }
+
 // The fast lane for the edit-compile-test loop: compiles every source set of every module (main,
 // test and runtime's JMH benchmarks, as `check` does), runs spotlessCheck (the root's and every
 // module's), the tests of dockerFreeModules and the doc-lint tests of docLintModules. JaCoCo report
@@ -2133,6 +2320,7 @@ tasks.register("quickCheck") {
     dependsOn(docLintModules.map { "$it:docLintTest" })
     dependsOn(subprojects.map { p -> p.tasks.matching { it.name == "verifyApiSurface" } })
     dependsOn(testApiSurfaceCheck)
+    dependsOn(verifyReleaseChecksRule)
     finalizedBy(testSummary)
 }
 

@@ -21,9 +21,10 @@ an in-memory event store, and a simple read model — all tested without a datab
 StreamRune's modules all share the `org.streamrune` group and one version, and a release resolves
 from `mavenCentral()` — there is no local build step, and each module pulls in the rest of the
 framework it needs transitively. The next section shows a complete `build.gradle.kts` for `1.0.0`,
-the first release (the [CHANGELOG](../../CHANGELOG.md) says what it contains). To try the unsigned
-preview of the next release, `1.0.0-alpha-SNAPSHOT`, add the Maven Central snapshot repository as
-shown in [Preview builds](../../README.md#preview-builds).
+the first release (the [CHANGELOG](../../CHANGELOG.md) says what it contains). `1.0.0` is not on
+Maven Central yet: until it is, use the unsigned preview of the next release instead — its version
+and the Maven Central snapshot repository it needs are in
+[Preview builds](../../README.md#preview-builds).
 
 ---
 

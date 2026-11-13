@@ -1,7 +1,7 @@
 name: Benchmarks
 
 # Runs the JMH benchmarks every night and keeps their results as a history, so a change that makes a
-# hot path slower shows up within a day of landing on main. Two jobs:
+# hot path slower shows up within a day of landing on main. Three jobs:
 #
 #   benchmark  Builds the benchmark jars, then runs the `jmh` tasks of the three modules with
 #              benchmarks, one after another (jmhModules in the root build.gradle.kts):
@@ -16,26 +16,36 @@ name: Benchmarks
 #              The per-module JSON results are merged into one file, kept for 90 days as the
 #              `jmh-results` artifact of the run. Its token reads the repository and nothing more.
 #   record     Hands the merged file to github-action-benchmark, which appends it to the history
-#              in dev/bench/data.js on the gh-pages branch and compares it with the previous run.
-#              It needs contents: write, to push gh-pages and to comment on the commit.
+#              in dev/bench/data.js on the gh-pages branch. It needs contents: write, to push
+#              gh-pages, and runs no repository code.
+#   judge      Reads the history back and judges its newest point
+#              (.github/scripts/benchmark-trend.py), with a read-only token.
 #
 # Where the results go. Only a run on main records: a run started by hand on another branch is
-# compared with the history and commented on, and its commit on gh-pages is not pushed. The first
+# compared with the history, and its commit on gh-pages is not pushed. The first
 # run on main creates the gh-pages branch, empty, before the action writes to it. Each data point
 # and each alert belongs to the commit the run benchmarked (github.sha), not to the tip of main when
 # the run records. A run whose commit is already the last one in the history (a night without a
 # push to main, or a second run on the same commit) records nothing and comments nothing: the
-# history gets one point per commit, and an unchanged main does not repeat its alert every night. Once GitHub Pages
+# history gets one point per commit, and an unchanged main is not judged again every night. Once GitHub Pages
 # serves gh-pages, the chart is at https://streamrune.github.io/streamrune/dev/bench/: one chart per
 # benchmark (and parameter set), one point per recorded run, the commit of each point on hover.
 # Every value is a time per operation, so lower is better throughout.
 #
-# The alert. When a benchmark takes more than 130% of its time in the previous recorded run, the
-# action comments on the commit with a table of the benchmarks over the threshold; it mentions no
-# one, and the run does not fail. Shared GitHub runners vary by roughly 10-20% from one run to the
-# next (other tenants, CPU model, turbo), which is why the threshold is 130%: these runs catch large
-# regressions, and a smaller change is a trend to read over several points of the chart, not a
-# verdict from one. Confirm an alert by running the benchmark locally on both commits, for example
+# The alert. Shared GitHub runners are not one machine. On unchanged code, two runs that drew the
+# same kind of machine agree within about 6%, while runs that drew different machines differ by up
+# to 2.1 times, CPU-only and PostgreSQL series alike; but every series moves with the machine, and
+# divided by the median change of all the series of its run, a series' change stayed between 0.81
+# and 1.33. A comparison with the previous run reports the machine, not the code, so nothing is
+# commented on a commit. The judge job compares each benchmark of the newest point with the median
+# of its previous nine points (one fast or slow machine does not become the baseline; with fewer
+# than three earlier points nothing is judged yet) and reports a regression when the benchmark is
+# over 2.5 times that baseline in the two newest points (above the 2.1 between machines; a slowdown
+# of every benchmark included), or over 1.5 times it relative to the median of its run in three of
+# its last four points (above the 1.33 measured on unchanged code). A regression fails the judge
+# job, with a warning naming the benchmark and a table in the job summary. A smaller slowdown is a
+# trend to read over several points of the chart, not a verdict from one. Confirm an alert by running the
+# benchmark locally on both commits, for example
 # `./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark`; src/jmh/README.md
 # of each module describes its benchmarks.
 #
@@ -87,7 +97,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # Everything the benchmarks need is compiled and packaged here, so the next step runs the
       # benchmarks and nothing else: no compilation competes with a measurement.
@@ -138,7 +148,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write # push gh-pages, comment on the commit when a benchmark is over the threshold
+      contents: write # push gh-pages
+    outputs:
+      record: ${{ steps.pages.outputs.record }}
     env:
       BENCHMARK_NAME: StreamRune JMH
     steps:
@@ -198,8 +210,10 @@ jobs:
           fi
 
       # tool: jmh reads the JSON of `-rf json` and treats every value as smaller-is-better, which
-      # is what the average times of -PbenchCi are.
-      - name: Record the results and compare them with the previous run
+      # is what the average times of -PbenchCi are. The action's own comparison is with the previous
+      # run only, which reports the runner rather than the code; it comments on nothing and fails
+      # nothing, and the judge job judges the history instead.
+      - name: Record the results
         if: steps.pages.outputs.record == 'true'
         uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
         with:
@@ -213,6 +227,28 @@ jobs:
           # the commit github.ref points to when this job runs, not the one benchmarked.
           ref: ${{ github.sha }}
           auto-push: ${{ github.ref == 'refs/heads/main' }}
-          alert-threshold: '130%'
-          comment-on-alert: true
+          alert-threshold: '250%'
+          comment-on-alert: false
           fail-on-alert: false
+
+  # The history ends with this run's point once record has pushed it (on main). This job runs the
+  # repository's script, so it holds a read-only token and keeps none in the checkout.
+  judge:
+    needs: record
+    if: needs.record.outputs.record == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      BENCHMARK_NAME: StreamRune JMH
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Judge the newest point against the history
+        run: |
+          git fetch --no-tags --depth=1 origin gh-pages
+          git show FETCH_HEAD:dev/bench/data.js > "$RUNNER_TEMP/data.js"
+          python3 -I .github/scripts/benchmark-trend.py "$RUNNER_TEMP/data.js" "$BENCHMARK_NAME"

@@ -45,10 +45,20 @@ Pages serves that branch, the history is a chart per benchmark at
 <https://streamrune.github.io/streamrune/dev/bench/>; every value is a time per operation, so lower
 is better.
 
-When a benchmark takes more than 130% of its previous recorded time, the action comments on the
-commit; the run does not fail. Shared GitHub runners vary by roughly 10–20% between runs, so the
-nightly numbers catch large regressions; a smaller change shows as a trend over several points, and
-a run of the benchmark on both commits on one machine confirms it.
+Shared GitHub runners are not one machine. In the first recorded runs, two runs on the same commit
+agreed within about 6%, while runs that drew different machines differed by up to 2.1 times on
+unchanged code — CPU-only series (`StreamRuneBenchmark.eventStoreLoad`, `batchSize=1`: 0.131 and
+0.064 µs/op) as much as PostgreSQL ones (`PostgresEventStoreBenchmark.load`, `streamLength=10`: 617
+and 293 µs/op). Every series moves with the machine, though: divided by the median change of all
+the series of its run, a series' change stayed between 0.81 and 1.33. A comparison with the previous
+run reports the machine, so nothing is commented on a commit. After recording, the workflow's judge
+job compares each benchmark of the newest point with the median of its previous nine points (with
+fewer than three, nothing is judged yet) and reports a regression when it is over 2.5 times that
+baseline in the two newest points, or over 1.5 times it relative to the median of its run in three
+of its last four points (`.github/scripts/benchmark-trend.py`; the nine-point window keeps the
+baseline at the level before a slowdown through its fourth slow point). The job then fails, with a warning
+naming the benchmark and a table in the job summary. A smaller slowdown shows as a trend over several
+points of the chart, and a run of the benchmark on both commits on one machine confirms it.
 
 ## In `check`
 
@@ -95,16 +105,18 @@ much as one that justified one: it stops the same optimization being re-proposed
 
 ### `OutboxEventMapperBenchmark`
 
-Cost of `OutboxEventMapper#toOutbox` on the outbox emit hot path, for a SKIPPED event (type-check
-only, returns an empty list) vs a PUBLISHED event (one Jackson `writeValueAsString`). Added with the
-transactional-outbox feature to establish the per-event overhead the outbox imposes on
-every append, including for events that produce no outbox entry at all.
+Cost of `OutboxEventMapper#toOutbox` on the outbox emit hot path for an event that produces an
+outbox entry: one Jackson `writeValueAsString` and `OutboxEntry.pending`, the per-event overhead the
+outbox adds to an append. An event the mapper skips costs a type check and an empty list, no
+StreamRune code, so it has no benchmark.
 
 ### `StreamRuneBenchmark`
 
 Broad throughput/latency baselines rather than A/B comparisons: `VirtualThreadCommandBus.execute`
-throughput, `EventStore` append/load over batch sizes 1/10/100, and `Decider.decide` over state
-sizes 0/10/100. No landed change traces to these; they exist as a regression baseline.
+throughput and `EventStore` append/load over batch sizes 1/10/100. No landed change traces to these;
+they exist as a regression baseline. The command's decider is the benchmark's own and returns one
+event without reading the state, so a `Decider.decide` of its own would measure no StreamRune code
+and has no benchmark.
 
 ### `TracingBenchmark`
 

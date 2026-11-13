@@ -7,7 +7,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.openjdk.jmh.infra.Blackhole;
 import org.streamrune.runtime.StreamRuneBenchmark.CommandBusState;
-import org.streamrune.runtime.StreamRuneBenchmark.DeciderState;
 import org.streamrune.runtime.StreamRuneBenchmark.EventStoreState;
 
 /**
@@ -106,16 +105,5 @@ class StreamRuneBenchmarkSmokeTest {
     var history = state.store.load(state.snapshotStreamId);
     assertThat(history.snapshotState()).isNotNull();
     assertThat(history.events()).hasSize(5);
-  }
-
-  @Test
-  @DisplayName("deciderDecide runs twice without throwing")
-  void deciderDecideRunsTwice() {
-    DeciderState state = new DeciderState();
-    state.stateSize = 10;
-    state.setup();
-
-    assertDoesNotThrow(() -> benchmark.deciderDecide(state));
-    assertDoesNotThrow(() -> benchmark.deciderDecide(state));
   }
 }

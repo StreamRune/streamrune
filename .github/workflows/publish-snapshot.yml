@@ -1,10 +1,12 @@
 name: Publish Snapshot
 
-# Publishes the development version (1.0.0-alpha-SNAPSHOT, the default in the root
+# Publishes the development version (the -SNAPSHOT default of `version` in the root
 # build.gradle.kts) to the Maven Central Portal snapshot repository,
 # https://central.sonatype.com/repository/maven-snapshots/, every time the Build workflow
 # succeeds on a push to main. Consumers add that repository to try the preview; see the
-# "Preview builds" section of the README.
+# "Preview builds" section of the README. Each module has its own snapshot metadata, so the
+# modules are published one at a time and all of them come from one commit only when the run
+# succeeds; a failed run leaves the modules it did not reach on an earlier commit.
 #
 # - It waits for the whole Build workflow (both the `build` and the `postgres-17` jobs) to
 #   conclude `success`, and it publishes exactly the commit that Build tested (head_sha).
@@ -16,6 +18,9 @@ name: Publish Snapshot
 #   -SNAPSHOT version and uploads it unsigned; any other version requires a signature, so a
 #   release version could not be published from here even by mistake.
 # - workflow_dispatch republishes the current main on demand.
+# - Every action is pinned to a commit and the Gradle caches are neither read nor written: the
+#   Portal token is in this job's environment, so no tag that moves and no Gradle home another job
+#   wrote runs beside it.
 on:
   workflow_run:
     workflows: [Build]
@@ -40,36 +45,32 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The upload itself takes a few minutes; the rest is the waits after the snapshot repository
+    # refused an upload for its rate (at most SNAPSHOT_WAIT_BUDGET, 90 minutes, in all).
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
 
-      # The snapshot repository answers 429 Too Many Requests when uploads come too fast (each
-      # module PUTs its jar, sources, javadoc, POM, module file and their checksums). The upload
-      # runs one module at a time, and a rejected attempt is repeated after a pause, up to three
-      # attempts in all; each attempt publishes a complete new timestamped snapshot.
+      # The snapshot repository answers 429 Too Many Requests when uploads come too fast. The script
+      # refuses a development version below a tagged version, then uploads one module at a time and
+      # repeats a refused upload, or one the network broke, from the module it stopped at, after a
+      # wait that grows with every failure in a row (.github/scripts/publish-snapshot.sh says how
+      # long and why). A run that gives up fails and names the modules that still serve an earlier
+      # commit's snapshot.
       - name: Publish the snapshot to the Central Portal snapshot repository
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-        run: |
-          for attempt in 1 2 3; do
-            if ./gradlew publishToMavenCentral --no-parallel --max-workers=1 --no-daemon --console=plain; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "::warning::Snapshot upload attempt $attempt failed; retrying in 180 seconds."
-              sleep 180
-            fi
-          done
-          echo "::error::The snapshot upload failed three times."
-          exit 1
+        run: bash .github/scripts/publish-snapshot.sh

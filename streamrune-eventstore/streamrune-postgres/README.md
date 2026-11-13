@@ -25,10 +25,18 @@ implementation("org.streamrune:streamrune-postgres:1.0.0")
 implementation("org.streamrune:streamrune-postgres:1.0.0")
 ```
 
-> A release resolves from `mavenCentral()`. The unsigned preview of the next release,
-> `1.0.0-alpha-SNAPSHOT`, needs the Maven Central snapshot repository: see
+> A release resolves from `mavenCentral()`; the [Status](../../README.md#status) of the README says
+> whether it is published yet. The unsigned preview of the next release has a version of its
+> own and needs the Maven Central snapshot repository: see
 > [Preview builds](../../README.md#preview-builds). The [CHANGELOG](../../CHANGELOG.md) says what
 > each release contains.
+
+Besides HikariCP, Flyway, the PostgreSQL JDBC driver and SLF4J, the module brings, at runtime scope
+only, Dropwizard Metrics 4.2 and 5.0 (`metrics-core` and `metrics-healthchecks` of each) and
+Micrometer: HikariCP checks for those types, and a GraalVM native-image build of the Quarkus and
+Micronaut integrations fails unless they resolve. StreamRune never creates them, and HikariCP uses
+them only when the application hands it a registry of its own, so a dependency report or a
+vulnerability scan of an application lists them although StreamRune never runs them.
 
 ## Database Schema
 

@@ -8,8 +8,9 @@ name: Release
 #                     set, the version is a release version, the tag v<version> is absent or on this
 #                     commit, Maven Central does not have the version and CHANGELOG.md has a dated
 #                     `## [<version>]` section. It then confirms that the CI checks the upload
-#                     requires succeeded on this commit, runs the full build at the release version
-#                     and keeps the release notes as the `release-notes` artifact.
+#                     requires succeeded in the newest run of their workflow on this commit, runs the
+#                     full build at the release version and keeps the release notes as the
+#                     `release-notes` artifact.
 #   rehearse-signing  A dry run only: signs every module at the release version into a scratch
 #                     repository on the runner and checks that every published file is signed.
 #   tag               Pushes the annotated tag v<version> on this commit, unless it is there.
@@ -25,21 +26,47 @@ name: Release
 # The tag comes before the upload because the build demands it. Every POM's licence URL points at
 # v<version>, and two tasks the Central upload task depends on (root build.gradle.kts) refuse a
 # release upload: verifyReleaseTag unless the tag is on origin, on the commit being published, with
-# a clean working tree; verifyReleaseChecks unless the checks `build`, `postgres-17` and `broker-e2e`
-# concluded success on that commit. A push made with the workflow's own token starts no other
-# workflow, so this tag starts neither Build nor Broker E2E Tests: the checks are the ones the
+# a clean working tree; verifyReleaseChecks unless the jobs `build` and `postgres-17` of the newest
+# Build run and the job `broker-e2e` of the newest Broker E2E Tests run on that commit concluded
+# success (a run still in progress refuses too). A push made with the workflow's own token starts no
+# other workflow, so this tag starts neither Build nor Broker E2E Tests: the checks are the ones the
 # commit already has, `build` and `postgres-17` from its push to main, `broker-e2e` from the nightly
 # run or a run of Broker E2E Tests started on main. The verify job checks them first, so a commit
 # without them is refused before it is tagged. To release under a GPG-signed tag, push it by hand on
 # the commit before the run (git tag -s v<version> -m 'StreamRune <version>' <commit>, then
 # git push origin v<version>): verify accepts a tag on the run's commit and the tag job leaves it as
-# it is. A tag pushed by hand starts Build and Broker E2E Tests on its commit.
+# it is. A tag pushed by hand starts Build and Broker E2E Tests on its commit; those runs are then
+# the newest, so start the release once both have finished green. The same holds for a Broker E2E
+# Tests run that starts on the commit while the release runs: the nightly one is scheduled for 03:00
+# UTC and often starts hours later, so look at the Actions tab before starting the release. Publish
+# refuses until such a run has finished green; "Re-run failed jobs" then continues the release.
+#
+# Before the run, one pull request prepares the commit that is released. It
+#   - dates the `## [<version>]` heading of CHANGELOG.md;
+#   - moves the coordinates the README's Installation, the quickstart, the getting-started guide and
+#     the module READMEs name to <version> (for the first release they name it already);
+#   - rewrites the Status section of the README to name the version as released ("`1.0.0` is the
+#     first release of StreamRune", not "will be") and removes the sentences that say it is not on
+#     Maven Central yet, there and in the pages ReleaseStatusTest in streamrune-core lists;
+#   - moves the default `version` in the root build.gradle.kts to the next development version, a
+#     -SNAPSHOT that sorts above the release (after 1.0.0, for example 1.0.1-SNAPSHOT or
+#     1.1.0-SNAPSHOT; 1.0.0-alpha-SNAPSHOT sorts below 1.0.0, so Maven and Gradle would pick the
+#     release over it), together with the version the README's "Preview builds" section names, so
+#     the tagged README names the real next preview and Publish Snapshot, which refuses a version
+#     below a tagged release, never stops;
+#   - lists every Flyway migration the release ships, with its SHA-256, in
+#     gradle/released-migrations.txt (`shasum -a 256 <file>`); a released migration never changes.
+# ReleaseStatusTest and ReleasedMigrationsTest fail until the pull request does all of it.
 #
 # Two steps stay manual, on purpose:
 #   - The upload is a user-managed deployment: Maven Central serves nothing until Publish is pressed
 #     on the validated deployment at https://central.sonatype.com/publishing/deployments. That makes
 #     the version public, and it cannot be undone: Maven Central never replaces or deletes a version.
 #   - The GitHub release is a draft. Publish it once Maven Central serves the version.
+#
+# A release tag is never moved or deleted once its version is on Maven Central: every POM of the
+# version names the licence at that tag. Protect refs/tags/v* with a tag ruleset that restricts
+# updates and deletions; deleting a tag before its version is published (below) needs its bypass.
 #
 # Secrets (repository secrets; this file names them and holds no value):
 #   MAVEN_CENTRAL_USERNAME  the username of the Central Portal user token (Publish Snapshot reads it)
@@ -88,14 +115,18 @@ concurrency:
   cancel-in-progress: false
 
 # Every action is pinned to a commit, so a tag that moves cannot change the code that runs beside
-# the signing key and the Portal token; the comment names the release of that commit.
+# the signing key and the Portal token; the comment names the release of that commit. No job reads
+# or writes the Gradle caches (cache-disabled): a cached Gradle home holds plugin jars, compiled
+# build scripts and the Gradle distribution, which the build would execute, and any workflow on main
+# writes those entries. Each job downloads its dependencies and the wrapper's distribution, which
+# gradle-wrapper.properties pins by checksum.
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
-      checks: read # verifyReleaseChecks reads the check-runs of this commit
+      actions: read # verifyReleaseChecks reads the workflow runs of this commit and their jobs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -203,13 +234,12 @@ jobs:
               "$VERSION" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$notes"
             echo "Release notes: the lead of the CHANGELOG section of $VERSION and a link to the whole section, which exceeds $limit characters."
           fi
-          # A link into docs/ written relative, ](docs/…) or ](./docs/…), as the 1.0.0 entry links its
-          # reference page, resolves in GitHub's file view but not on a release page: it is pointed
-          # at that file at the tag. Images, anchors and absolute links stay as written, and so does
-          # any other relative link; write those absolute in CHANGELOG.md.
-          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag"
-          sed -E "s#(^|[^!])(\[[^]]*\])\((\./)?(docs/[^ ()]*)\)#\1\2(${base}/\4)#g" "$notes" > "$notes.tmp"
-          mv "$notes.tmp" "$notes"
+          # A relative link, ](README.md#…) or ](docs/…), resolves in GitHub's file view but not on a
+          # release page: every one is pointed at its file at the tag, and a link the rewrite cannot
+          # read refuses the run (.github/scripts/release-notes-links.sh). Anchors and absolute links
+          # stay as written.
+          bash .github/scripts/release-notes-links.sh "$notes" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$tag" \
+            || fail "The release notes of $VERSION have a link a release page cannot resolve (listed above)."
           [ "$(wc -m < "$notes")" -le "$limit" ] || fail "The release notes exceed $limit characters."
           echo "Releasing $VERSION from $GITHUB_SHA as $tag."
 
@@ -226,11 +256,13 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
 
       # The gate the upload passes in the publish job, run here as well so that a commit whose
       # checks have not concluded success is refused before anything is tagged.
-      - name: Check that build, postgres-17 and broker-e2e succeeded on this commit
+      - name: Check that build, postgres-17 and broker-e2e succeeded in the newest runs on this commit
         env:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
@@ -273,10 +305,10 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      # The job that holds the signing key reads the Gradle caches and writes none.
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # The job that holds the signing key neither reads nor writes the Gradle caches.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          cache-read-only: true
+          cache-disabled: true
 
       # verifyReleaseTag and verifyReleaseChecks guard only the Central upload, so a release version
       # signs into a scratch repository without the tag: this proves that SIGNING_KEY and
@@ -353,7 +385,7 @@ jobs:
     timeout-minutes: 75
     permissions:
       contents: read
-      checks: read # verifyReleaseChecks reads the check-runs of this commit
+      actions: read # verifyReleaseChecks reads the workflow runs of this commit and their jobs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -370,10 +402,10 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      # The job that holds the signing key reads the Gradle caches and writes none.
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # The job that holds the signing key neither reads nor writes the Gradle caches.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          cache-read-only: true
+          cache-disabled: true
 
       # verifyReleaseTag and verifyReleaseChecks run first, as dependencies of the upload. The
       # Portal then validates the bundle (signatures, POMs, sources and Javadoc jars); the task waits

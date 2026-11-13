@@ -62,13 +62,13 @@ import org.junit.jupiter.api.Test;
  * never flagged. The other files, the build files among them, are not checked for it.
  *
  * <p><b>What is scanned.</b> Every {@code .java} (main and test), {@code .md} and build file
- * (Gradle scripts, version catalog, properties, workflows, SQL, shell and batch scripts, XML, JSON,
- * text) under the repository root, and the files without an extension the repository publishes, by
- * name ({@link #SCANNED_NAMES}: the commit template {@code .gitmessage}, {@code LICENSE}, {@code
- * NOTICE}, {@code CODEOWNERS}, the git hook, {@code gradlew}), except build output, VCS and tool
- * directories, and the internal working material that is never published ({@link
- * #PRUNED_DIRECTORY_NAMES}, {@link #PRUNED_RELATIVE_PATHS}). {@code CHANGELOG.md} is scanned like
- * everything else.
+ * (Gradle scripts, version catalog, properties, workflows, SQL, shell, batch and Python scripts,
+ * XML, JSON, text) under the repository root, and the files without an extension the repository
+ * publishes, by name ({@link #SCANNED_NAMES}: the commit template {@code .gitmessage}, {@code
+ * LICENSE}, {@code NOTICE}, {@code CODEOWNERS}, the git hook, {@code gradlew}), except build
+ * output, VCS and tool directories, and the internal working material that is never published
+ * ({@link #PRUNED_DIRECTORY_NAMES}, {@link #PRUNED_RELATIVE_PATHS}). {@code CHANGELOG.md} is
+ * scanned like everything else.
  *
  * <p><b>The one allow-list.</b> A crash-point table in the javadoc of a test legitimately labels
  * its rows ({@code INV-n} for the invariant a row protects, {@code CP-n} for the crash point it
@@ -133,7 +133,8 @@ class InternalTrackerIdRatchetTest {
           "bat",
           "xml",
           "json",
-          "txt");
+          "txt",
+          "py");
 
   /**
    * The files without an extension that the repository publishes, scanned by name: the commit

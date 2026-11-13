@@ -29,8 +29,9 @@ public Response placeOrder(PlaceOrderCommand cmd) {
 implementation("org.streamrune:streamrune-quarkus:1.0.0")
 ```
 
-> A release resolves from `mavenCentral()`. The unsigned preview of the next release,
-> `1.0.0-alpha-SNAPSHOT`, needs the Maven Central snapshot repository: see
+> A release resolves from `mavenCentral()`; the [Status](../../README.md#status) of the README says
+> whether it is published yet. The unsigned preview of the next release has a version of its
+> own and needs the Maven Central snapshot repository: see
 > [Preview builds](../../README.md#preview-builds). The [CHANGELOG](../../CHANGELOG.md) says what
 > each release contains.
 
