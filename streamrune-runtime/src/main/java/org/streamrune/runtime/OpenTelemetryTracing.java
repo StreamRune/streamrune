@@ -26,6 +26,7 @@ import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
+import org.streamrune.core.types.LogSanitizer;
 
 /**
  * The {@link StreamRuneTracing} that records spans through the OpenTelemetry API, under the
@@ -43,7 +44,13 @@ import org.streamrune.core.tracing.TracingArea;
  * with the exception's type, its own message and its stack trace, in which a cause or a suppressed
  * exception is named by its type and frames alone: a nested message can quote the data the failing
  * code was handling. The span's status is ERROR, with the exception's own message. A message that
- * is the cause's {@code toString()}, as the cause-only constructors make it, counts as absent.
+ * is the cause's {@code toString()}, as the cause-only constructors make it, counts as absent. The
+ * message is free text that can quote what a caller sent, so it passes {@link
+ * LogSanitizer#sanitizeFreeText(String)} and is cut as an identifier is ({@link
+ * LogSanitizer#sanitizeForTrace(String)}, {@value LogSanitizer#MAX_TRACE_LENGTH} characters and
+ * {@code ...}) wherever it is recorded: the event's message, the first line of its stack trace and
+ * the status description. A run of line breaks or control characters becomes one space, and a
+ * format character is removed.
  *
  * <p>This is the class of the seam that references OpenTelemetry, and the {@code opentelemetry-api}
  * dependency is optional: an application without it never loads this class as long as it passes
@@ -187,7 +194,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
    */
   static String stackTraceWithoutCauseMessages(Throwable error) {
     StringBuilder trace = new StringBuilder();
-    String message = ownMessage(error);
+    String message = tracedMessage(error);
     trace.append(error.getClass().getName());
     if (message != null) {
       trace.append(": ").append(message);
@@ -212,6 +219,15 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       return null;
     }
     return message;
+  }
+
+  /**
+   * The message of {@code error} as a span records it, or {@code null}: its {@linkplain #ownMessage
+   * own message}, sanitized as free text and cut to {@value LogSanitizer#MAX_TRACE_LENGTH}
+   * characters followed by {@code ...}.
+   */
+  static String tracedMessage(Throwable error) {
+    return LogSanitizer.sanitizeForTrace(LogSanitizer.sanitizeFreeText(ownMessage(error)));
   }
 
   private static void appendFrames(
@@ -274,7 +290,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
 
     @Override
     public void recordError(Throwable error) {
-      String message = ownMessage(error);
+      String message = tracedMessage(error);
       AttributesBuilder event =
           Attributes.builder()
               .put(EXCEPTION_TYPE, error.getClass().getName())

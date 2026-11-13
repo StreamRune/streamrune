@@ -24,6 +24,7 @@ import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -117,6 +118,38 @@ class TracingErrorRecordingTest {
         .isNull();
     assertThat(OpenTelemetryTracing.ownMessage(new RuntimeException("own", new IOException("x"))))
         .isEqualTo("own");
+  }
+
+  @Test
+  void anOwnMessage_isSanitizedAndBounded_inTheEvent_theStackTrace_andTheStatus() {
+    String echoed =
+        "Coupon not valid: " + "x".repeat(5000) + "\r\nforged line\u202Ereversed\u0000end";
+
+    try (TraceScope scope =
+        tracing()
+            .start(
+                TracingArea.COMMAND, "command/Redeem", SpanKind.INTERNAL, SpanAttributes.empty())) {
+      scope.recordError(new IllegalStateException(echoed));
+    }
+
+    SpanData span = otelTesting.getSpans().getFirst();
+    EventData event = exceptionEvent(span);
+    String message = event.getAttributes().get(AttributeKey.stringKey("exception.message"));
+    assertThat(message)
+        .startsWith("Coupon not valid: xxx")
+        .endsWith("...")
+        .hasSize(LogSanitizer.MAX_TRACE_LENGTH + 3)
+        .doesNotContain("\r", "\n", "\u202E", "\u0000");
+    assertThat(span.getStatus().getDescription()).isEqualTo(message);
+    String trace = event.getAttributes().get(AttributeKey.stringKey("exception.stacktrace"));
+    assertThat(trace)
+        .startsWith(IllegalStateException.class.getName() + ": " + message + "\n\tat ");
+
+    assertThat(
+            OpenTelemetryTracing.tracedMessage(
+                new IllegalStateException("line one\r\n\r\nline two\u202E")))
+        .isEqualTo("line one line two");
+    assertThat(OpenTelemetryTracing.tracedMessage(new IllegalStateException())).isNull();
   }
 
   @Test
