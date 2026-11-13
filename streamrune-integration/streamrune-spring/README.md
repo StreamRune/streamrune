@@ -67,7 +67,7 @@ streamrune:
   stripe-count: 1024
   event-store:
     # bound on every event-store statement, per transaction or statement (never on the pooled
-    # session); 0 sets none
+    # session); 0s sets none
     statement-timeout: 30s
 ```
 

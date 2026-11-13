@@ -84,12 +84,12 @@ public interface AggregateLocker {
     }
     if (timeout.isNegative()) {
       throw new IllegalArgumentException(
-          name + " must not be negative (use 0 for \"do not wait\"), got: " + timeout);
+          name + " must not be negative (use 0s for \"do not wait\"), got: " + timeout);
     }
     if (!timeout.isZero() && timeout.toMillis() < MIN_TIMEOUT_MILLIS) {
       throw new IllegalArgumentException(
           name
-              + " must be either exactly 0 (\"do not wait\") or at least "
+              + " must be either exactly 0s (\"do not wait\") or at least "
               + MIN_TIMEOUT_MILLIS
               + "ms — lock timeouts are expressed in whole milliseconds, and a shorter value"
               + " truncates to 0, which PostgreSQL reads as \"no timeout at all\"; got: "

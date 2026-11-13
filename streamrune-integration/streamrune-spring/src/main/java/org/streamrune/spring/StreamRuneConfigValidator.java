@@ -22,6 +22,10 @@ public class StreamRuneConfigValidator implements SmartInitializingSingleton {
 
   @Override
   public void afterSingletonsInstantiated() {
+    // Spring ignores a streamrune.* name it does not bind, where Quarkus refuses one: a name an
+    // application writes for a property StreamRune binds under another name is refused here, so
+    // the application does not run on that property's default without a word.
+    org.streamrune.integration.MisspelledPropertyNames.refuseIfSet(env::containsProperty);
     // Every application, also one that builds its own command bus: a JVM that runs the Graal JIT,
     // which is not reliable with StreamRune, refuses to start (the bus builder runs the same
     // check).

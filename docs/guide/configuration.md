@@ -15,7 +15,10 @@ A default is written in one form in this guide and in every other table with a `
   `500ms`. All three integrations accept that form as it is, and ISO-8601 (`PT168H` for `7d`,
   `PT60S` for `1m`, `PT0.05S` for `50ms`) as well. A bare number is not portable — Spring reads
   `5000` as milliseconds, Quarkus as seconds, and Micronaut refuses to start on it — so always
-  write the unit;
+  write the unit, also for zero: `0s`. Micronaut refuses every value it cannot read, naming the
+  property and the value, where it would otherwise bind the property's default: a unit in upper
+  case or after a space (`1D`, `1 d`), a decimal (`1.5d`), and a number of milliseconds above
+  2147483647 (`2592000000ms`; write `30d`);
 - a boolean or a number as its value: `true`, `100`, `2.0`; a text as it is: `operator-only`;
 - `—` where the property has no default.
 
@@ -31,7 +34,7 @@ integration does not bind.
 | `streamrune.retry-max-attempts` | `3` | Attempts of a command whose append met an optimistic-lock conflict. |
 | `streamrune.retry-initial-delay` | `50ms` | Delay before the first retry. |
 | `streamrune.retry-backoff-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |
-| `streamrune.lock-timeout` | `5s` | How long a command waits for its aggregate's lock; `0` tries once, a negative value fails the start. |
+| `streamrune.lock-timeout` | `5s` | How long a command waits for its aggregate's lock; `0s` tries once, a negative value fails the start. |
 | `streamrune.stripe-count` | `1024` | Stripes of the in-process aggregate locker. |
 | `streamrune.max-in-flight-async-commands` | `10000` | `executeAsync` commands admitted and not yet complete beyond which the next one is refused. |
 | `streamrune.circuit-breaker-failure-threshold` | `5` | Consecutive command failures that open the circuit breaker. |
@@ -45,7 +48,7 @@ integration does not bind.
 | Property | Default | Meaning |
 |---|---|---|
 | `streamrune.event-store.schema.auto-initialize` | `true` | Whether the framework's Flyway migrations run at startup. |
-| `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0` sets none of its own. |
+| `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0s` sets none of its own. |
 | `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions; at least `1ms`. |
 | `streamrune.polling-jitter` | `1s` | Random jitter added to that interval; `0s` disables it, a positive value below `1ms` fails the start. |
 | `streamrune.projections.auto-discovery.enabled` | `true` | Whether the integration builds and starts the runners of the `@ProjectionConfig` projections. |
@@ -73,7 +76,7 @@ integration does not bind.
 
 | Property | Default | Meaning |
 |---|---|---|
-| `streamrune.inbox.retention-max-age` | `7d` | How long processed command-inbox rows are kept; `0` or negative keeps them. |
+| `streamrune.inbox.retention-max-age` | `7d` | How long processed command-inbox rows are kept; `0s` or negative keeps them. |
 | `streamrune.dead-letter.enabled` | `true` | Whether the retry runner replays dead-lettered commands automatically. |
 | `streamrune.dead-letter.max-retries` | `5` | Replays of an entry before it is exhausted. |
 | `streamrune.dead-letter.retry-interval` | `1m` | Interval between two replays. |
@@ -90,16 +93,16 @@ integration does not bind.
 | `streamrune.outbox.retry-max-attempts` | `10` | Delivery attempts a rejected entry may accrue before it is `FAILED`. |
 | `streamrune.outbox.retry-initial-delay` | `1s` | First retry delay; it grows by the multiplier, up to 60s. |
 | `streamrune.outbox.retry-backoff-multiplier` | `2.0` | Factor by which the retry delay grows with each attempt. |
-| `streamrune.outbox.retention-max-age` | `7d` | How long delivered entries are kept; `0` or negative keeps them. |
-| `streamrune.outbox.skipped-retention-max-age` | `30d` | How long skipped entries are kept; `0` or negative keeps them. |
+| `streamrune.outbox.retention-max-age` | `7d` | How long delivered entries are kept; `0s` or negative keeps them. |
+| `streamrune.outbox.skipped-retention-max-age` | `30d` | How long skipped entries are kept; `0s` or negative keeps them. |
 
 ## Server-Sent Events
 
 | Property | Default | Meaning |
 |---|---|---|
 | `streamrune.sse.enabled` | `false` | Whether the Server-Sent Events endpoint and its feed exist. |
-| `streamrune.sse.timeout` | `5m` | How long a stream stays open; `0` or negative sets no timeout. |
-| `streamrune.sse.keep-alive-interval` | `30s` | Interval of the keepalive comment frame; `0` or negative writes none. |
+| `streamrune.sse.timeout` | `5m` | How long a stream stays open; `0s` or negative sets no timeout. |
+| `streamrune.sse.keep-alive-interval` | `30s` | Interval of the keepalive comment frame; `0s` or negative writes none. |
 | `streamrune.sse.polling-interval` | `1s` | How often the feed reads the global stream; at least `1ms`. |
 
 ## Metrics and startup

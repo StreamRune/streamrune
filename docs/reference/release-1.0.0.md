@@ -61,7 +61,7 @@ license.
   own, changes no setting of the `DataSource` and owns nothing that needs closing; the store borrows
   one connection per operation. Hand it a pooled `DataSource`.
 - **Statement bound.** Every statement the store runs is bounded — `statementTimeout(Duration)`,
-  `streamrune.event-store.statement-timeout`, 30 seconds by default, `0` for none — per transaction
+  `streamrune.event-store.statement-timeout`, 30 seconds by default, `0s` for none — per transaction
   (`SET LOCAL statement_timeout`) or per statement (the JDBC query timeout), never on the pooled
   session.
 - **Idle bound of an append.** An append transaction also sets `SET LOCAL
@@ -69,7 +69,7 @@ license.
   that goes silent inside an append — paused, or cut off from the database without its connection
   closing — has its session ended by the server at the bound, which releases the command's inbox
   key, a saga's shared fence lock and the global offset counter. Transaction-scoped, so it works
-  behind a transaction-pooling PgBouncer. A statement bound of `0` sets neither bound.
+  behind a transaction-pooling PgBouncer. A statement bound of zero sets neither bound.
 - Store writes commit correctly on a pool configured with `auto-commit=false` as well as with the
   default: the store commits after its statement and rolls back on failure, leaving the pool's
   setting untouched. This covers the outbox, offsets, snapshots, dead letters, saga state, leases,
@@ -229,7 +229,7 @@ license.
 - `VirtualThreadCommandBus` (implements `CommandBus` and `AsyncCommandBus`): load → `Decider.guard`
   → `Decider.decide` → append, under a per-stream lock (`LocalStripedLocker`, 1024 stripes by
   default, or `PgAdvisoryLocker`), with `RetryPolicy` retries for `OptimisticLockException` and
-  `LockException` only (default 3 attempts, 50 ms, ×2, jitter). `lockTimeout` defaults to 5 s; `0`
+  `LockException` only (default 3 attempts, 50 ms, ×2, jitter). `lockTimeout` defaults to 5 s; zero
   means a single non-blocking attempt; the builder refuses `null`, the lockers reject a negative value,
   and the integrations reject a negative `streamrune.lock-timeout` at startup.
 - `CommandResult` carries the events, `streamId`, `finalVersion`, `globalOffsets`, the envelopes and
@@ -1184,7 +1184,9 @@ set of `streamrune.*` properties with the same names on all three (a `Duration` 
 suffix — `streamrune.polling-interval`, `streamrune.retry-initial-delay`,
 `streamrune.dead-letter.retry-interval`, `streamrune.outbox.flush-interval`, … — and a bare number is
 not portable: Spring reads it as milliseconds, Quarkus as seconds, and Micronaut refuses to start on
-it, so always write the unit):
+it, so always write the unit, also for zero, `0s`; Micronaut refuses any value it cannot read,
+naming the property and the value, and the three refuse a `-ms` spelling of an interval key, naming
+the key to set):
 
 - The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
   `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,

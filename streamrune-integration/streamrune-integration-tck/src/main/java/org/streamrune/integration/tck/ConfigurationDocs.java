@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.streamrune.core.metrics.MetricNames;
 import org.streamrune.core.tracing.TraceAttributes;
+import org.streamrune.integration.MisspelledPropertyNames;
 
 /**
  * The configuration keys a set of markdown files names, and the defaults its tables state: what
@@ -287,11 +288,14 @@ public final class ConfigurationDocs {
    * Every {@code streamrune.} name inside a string literal of the Java sources under {@code
    * sourceRoot} that is not a key of {@code oracle}, a meter, a span attribute or a namespace of
    * them, as {@code file:line: name}: a key the integration reads in code that the oracle does not
-   * know. Comment lines (starting with {@code //}, {@code /*} or {@code *}) are skipped.
+   * know. The names of {@code MisspelledPropertyNames}, which the integrations look up only to
+   * refuse them, are not keys and are not reported. Comment lines (starting with {@code //}, {@code
+   * /*} or {@code *}) are skipped.
    */
   public static List<String> unknownInJavaSources(Path sourceRoot, Map<String, String> oracle) {
     Set<String> known = new TreeSet<>(oracle.keySet());
     known.addAll(nonConfigurationNames());
+    known.addAll(MisspelledPropertyNames.all().keySet());
     List<String> problems = new ArrayList<>();
     try (Stream<Path> sources = Files.walk(sourceRoot)) {
       for (Path source : sources.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {

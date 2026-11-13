@@ -41,6 +41,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SnapshotPurgeSetting;
@@ -216,6 +217,71 @@ public abstract class IntegrationWiringContract {
           application,
           "streamrune.dead-letter.retention-max-age (PT720H)",
           "must not exceed streamrune.inbox.retention-max-age (PT168H)");
+    }
+  }
+
+  /**
+   * A value the integration cannot read as the type of its property refuses the start, and the
+   * refusal names the property and the value: no integration binds the property's default in its
+   * place. Durations, numbers and a duration bound outside the properties types alike.
+   */
+  @Test
+  public void anUnreadableValueRefusesStartNamingThePropertyAndTheValue() {
+    for (Map.Entry<String, String> unreadable :
+        List.of(
+            Map.entry("streamrune.outbox.flush-interval", "soon"),
+            Map.entry("streamrune.inbox.retention-max-age", "a week"),
+            Map.entry("streamrune.saga.compensation-retry-interval", "often"),
+            Map.entry("streamrune.stripe-count", "many"))) {
+      try (Application application =
+          start(null, Map.of(unreadable.getKey(), unreadable.getValue()), Set.of())) {
+        assertRefused(application, unreadable.getKey(), unreadable.getValue());
+      }
+    }
+  }
+
+  /**
+   * A name that reads like a StreamRune property but that no integration binds, such as an interval
+   * with a {@code -ms} suffix, refuses the start and the refusal names it: no integration runs on
+   * the default of the property the application meant.
+   */
+  @Test
+  public void aMisspelledPropertyNameRefusesStart() {
+    MisspelledPropertyNames.all()
+        .keySet()
+        .forEach(
+            name -> {
+              try (Application application = start(null, Map.of(name, "5"), Set.of())) {
+                assertRefused(application, name);
+              }
+            });
+  }
+
+  /**
+   * Zero written with its unit, {@code 0s}, is zero on every integration: a zero dead-letter
+   * retention beside a finite inbox retention reaches the check that refuses it, where a value the
+   * integration bound as its default would start.
+   */
+  @Test
+  public void zeroWithItsUnitReachesTheRetentionCheck() {
+    try (Application application =
+        start(
+            null,
+            Map.of("streamrune.dead-letter.retention-max-age", "0s"),
+            Set.of(CommandInboxBean.class, DeadLetterQueueBean.class))) {
+      assertRefused(
+          application,
+          "streamrune.dead-letter.retention-max-age (PT0S (pruning disabled))",
+          "must not exceed streamrune.inbox.retention-max-age (PT168H)");
+    }
+  }
+
+  /** A negative lock timeout refuses the start on every integration, naming the property. */
+  @Test
+  public void aNegativeLockTimeoutRefusesStart() {
+    try (Application application =
+        start(null, Map.of("streamrune.lock-timeout", "-5s"), Set.of())) {
+      assertRefused(application, "streamrune.lock-timeout must not be negative", "PT-5S");
     }
   }
 
