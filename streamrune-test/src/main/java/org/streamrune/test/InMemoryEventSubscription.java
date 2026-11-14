@@ -41,47 +41,53 @@ import org.streamrune.core.types.GlobalOffset;
  *
  * <p>Unlike the production subscriptions, delivery is <b>synchronous on the appending thread</b> —
  * deterministic for unit tests: when {@code append} returns and no delivery is running on another
- * thread, the listener has run; during a delivery on another thread the append returns at once and
- * that delivery delivers the event (see below). Catch-up on {@link #start()} mirrors the production
- * poll-after-LISTEN: events appended before the subscription started are delivered immediately.
+ * thread, the listener has run. During a delivery on another thread the append returns at once and
+ * that delivery delivers the event (see below), on its own thread. Catch-up on {@link #start()}
+ * mirrors the production poll-after-LISTEN: events appended before the subscription started are
+ * delivered immediately.
  *
  * <p><b>An append from inside the listener starts no nested delivery.</b> When the listener appends
  * (it executes a command, as a saga runner or a process manager does) or calls {@link #poll()}, the
  * delivery in progress on that thread picks the new events up after the batch in hand is
  * acknowledged, and delivers them before the outermost {@code append} returns. Every event is
  * delivered once, in offset order. An append made by another thread while a delivery is in progress
- * does not wait for it: it returns at once, and the delivery in progress delivers its events, in
- * offset order, before the call that started that delivery returns. A listener may therefore block
- * on work it handed to another thread that appends, as long as that work does not call {@link
- * #poll()}: a poll waits for the delivery the listener is part of and would deadlock. {@link
- * #poll()} and {@link #start()} do wait for a delivery in progress, and then deliver everything
- * pending.
+ * does not wait for it: it returns at once, and a delivery already under way delivers its events,
+ * in offset order — the one in progress, before the call that started it returns, or, when another
+ * thread's append or poll takes the delivery over as it ends, before that call returns. A delivery
+ * that fails leaves them pending with its batch. When the listener waits for the threads it handed
+ * work to, their events are delivered before the listener's own delivery returns. That work must
+ * not call {@link #poll()}, which waits for the delivery the listener is part of and would
+ * deadlock, and must not need a lock that the appending thread holds, such as the aggregate lock of
+ * the command that appended the event: that lock is held until the delivery returns, and the
+ * listener waits for the work. {@link #poll()} and {@link #start()} do wait for a delivery in
+ * progress, and then deliver everything pending.
  *
  * <p><b>What the listener finds bound.</b> A production subscription calls its listener on a thread
  * of its own, where no request context, saga flag or dispatch cause is bound. This subscription
- * calls the listener on the appending thread, so it takes those three away for the call: {@link
- * StreamRuneContext#isSagaDispatch()} is {@code false} and {@link StreamRuneContext#cause()} is
- * {@code null}, even when the event was appended by a saga's dispatch. A command the listener
+ * calls the listener on the appending thread (for an event handed to a delivery in progress, on the
+ * delivering thread, with that thread's bindings), so it takes those three away for the call:
+ * {@link StreamRuneContext#isSagaDispatch()} is {@code false} and {@link StreamRuneContext#cause()}
+ * is {@code null}, even when the event was appended by a saga's dispatch. A command the listener
  * executes is therefore not a saga dispatch and its events carry no saga origin, exactly as when
- * the same event reaches the listener through {@link #poll()}. When the appending thread has
- * nothing bound, nothing is bound for the listener either. A listener that continues an event's
- * flow says so, as it does in production: it dispatches inside {@link
+ * the same event reaches the listener through {@link #poll()}. When the thread that calls the
+ * listener has nothing bound, nothing is bound for the listener either. A listener that continues
+ * an event's flow says so, as it does in production: it dispatches inside {@link
  * StreamRuneContext#continuing(EventEnvelope)}, and the events of that command carry the event's id
  * as their causation id and its saga origin one hop further.
  *
  * <p>Two differences from a production subscription remain, both because the listener shares the
- * appender's thread:
+ * calling thread, the appender's or the delivering thread's:
  *
  * <ul>
- *   <li>When the appending thread has a request context bound, the listener runs under an empty one
+ *   <li>When the calling thread has a request context bound, the listener runs under an empty one
  *       (a generated correlation id; no trace id, user, baggage or captured authority) instead of
  *       none: {@link StreamRuneContext#capture()} is not {@code null}, and commands the listener
  *       executes directly while handling one batch share that correlation id, where each gets its
  *       own in production.
- *   <li>Everything else the appending thread holds stays visible to the listener: scoped values
- *       other than the three above, thread-locals, and locks. A command the listener executes on
- *       the stream of the command that appended the event re-enters the stream lock that command
- *       still holds, where in production it waits for the lock to be released.
+ *   <li>Everything else the calling thread holds stays visible to the listener: scoped values other
+ *       than the three above, thread-locals, and locks. A command the listener executes on the
+ *       stream of the command that appended the event re-enters the stream lock that command still
+ *       holds, where in production it waits for the lock to be released.
  * </ul>
  *
  * <p>Thread-safe; batches are delivered in strict offset order, one delivery at a time (delivery is
@@ -261,8 +267,9 @@ public final class InMemoryEventSubscription implements EventSubscription {
 
   /**
    * Calls the listener outside the request context, the saga flag and the dispatch cause of the
-   * thread that appended or polled. A {@link ScopedValue} cannot be unbound, so each of the three
-   * that is bound on this thread is bound again around the call, to a value that reads as absent.
+   * thread that calls it, the one that appended, polled or took the delivery over. A {@link
+   * ScopedValue} cannot be unbound, so each of the three that is bound on this thread is bound
+   * again around the call, to a value that reads as absent.
    */
   private void deliver(List<EventEnvelope> batch) {
     ScopedValue.Carrier detached = null;

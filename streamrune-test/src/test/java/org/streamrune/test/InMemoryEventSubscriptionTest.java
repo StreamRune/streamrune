@@ -355,6 +355,73 @@ class InMemoryEventSubscriptionTest {
   }
 
   @Test
+  void aLockIsNotLeftHeldByAnErrorFromTheListener() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (calls.incrementAndGet() == 1) {
+                throw new AssertionError("listener assertion");
+              }
+            });
+    sub.start();
+
+    assertThrows(AssertionError.class, () -> append(STREAM, 1, "first"));
+
+    Thread poller = Thread.ofVirtual().start(sub::poll);
+    assertTrue(poller.join(Duration.ofSeconds(5)), "a poll from another thread is not blocked");
+    assertEquals(1, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void anAppendThatLandsAfterTheLastReadOfADeliveryIsStillDelivered() throws Exception {
+    // An empty read scans every stored event, so a seeded store keeps the delivering thread in its
+    // last read long enough for a second thread's append to land between that read and the release
+    // of the delivery lock. Wherever it lands, both events are delivered once both appends
+    // returned; the attempts only make it land there.
+    int seeded = 20_000;
+    StreamId seedStream = StreamId.of(TYPE, AggregateId.of("seed"));
+    List<EventEnvelope> seed = new ArrayList<>();
+    for (int v = 1; v <= seeded; v++) {
+      seed.add(envelope(seedStream, v, "seed"));
+    }
+    store.append(seedStream, seed, Version.initial());
+    AtomicInteger released = new AtomicInteger();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (((Added) events.getLast().event()).sku().equals("trigger")) {
+                released.incrementAndGet(); // the listener's last act: the last read follows
+              }
+            },
+            seeded + 1);
+    sub.start();
+    StreamId late = StreamId.of(TYPE, AggregateId.of("late"));
+
+    for (int attempt = 1; attempt <= 20; attempt++) {
+      int round = attempt;
+      Thread second =
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    while (released.get() < round) {
+                      Thread.onSpinWait();
+                    }
+                    append(late, round, "late");
+                  });
+      append(STREAM, attempt, "trigger");
+      assertTrue(second.join(Duration.ofSeconds(5)));
+
+      assertEquals(
+          store.lastGlobalOffset().value(),
+          sub.lastDeliveredOffset(),
+          "both appends returned, so both events are delivered");
+    }
+  }
+
+  @Test
   void anErrorThrownByTheListenerReachesTheAppender() {
     var sub =
         new InMemoryEventSubscription(
