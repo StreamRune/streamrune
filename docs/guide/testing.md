@@ -161,7 +161,10 @@ instead of production. Build the store from the registry your application gives
 `new InMemoryEventStore(typeRegistry)`, or `new InMemoryEventStore(typeRegistry, cryptoEngine)`
 with an `InMemoryCryptoEngine` to exercise crypto-shredding. As `PostgresEventStore` does, the store
 refuses a registry that holds an `@Encrypted` type when it has no crypto engine: building it throws
-an `IllegalStateException` naming the field, because the field would be stored as plaintext.
+an `IllegalStateException` naming the field, because the field would be stored as plaintext. The
+check scans the types the registry lists, so a hand-written `EventTypeRegistry` must override
+`registeredTypes()`: without an engine, a registry that does not is refused with that method's
+`UnsupportedOperationException`.
 
 ```java
 package com.example.order;
@@ -936,7 +939,9 @@ store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
 `write` serializes the payloads with a copy of the store's own `ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
 reads back, and leaves the fields of an `@Encrypted` event in the clear: the file holds
-them as plain text, and a store with a crypto engine encrypts them when the file is appended. A fixture file therefore holds personal data as plain text — record
+them as plain text. `appendTo` binds the payloads as they are, without decrypting, so replaying a
+file into a store built with a crypto engine (`new InMemoryEventStore(typeRegistry, cryptoEngine)`)
+stores each of those fields encrypted. A fixture file therefore holds personal data as plain text — record
 it from synthetic data only, and keep it in test resources.
 
 ---
@@ -981,7 +986,10 @@ class MyEventStoreContractTest extends EventStoreContract {
 - `EventStoreContract` — `newStore(setup)` returns an `EventStore` over empty storage with a command
   inbox, built with a `Setup`: the type registry, crypto engine, upcasters and snapshot migrations
   of a deployment (`Setup.defaults()` resolves the suite's types and has no crypto, upcasters or
-  migrations). `reopen(store, setup)` returns a new store over the same data as `store`, built with
+  migrations). A store built with a registry that holds an `@Encrypted` type and no engine must
+  refuse it with an `IllegalStateException` from `newStore`: call
+  `EncryptedTypeGuard.require(setup.registry(), setup.crypto())` from `streamrune-crypto-api` in
+  your store's constructor to do it with the message of the shipped stores. `reopen(store, setup)` returns a new store over the same data as `store`, built with
   a possibly different setup, as a deployment restarted with another configuration sees what it
   stored before. It covers version assignment, strict conflict detection (an expected version behind or beyond the
   head), the empty append, atomicity (also of appends racing for one version), the absence of

@@ -1445,7 +1445,9 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   back through an `EventTypeRegistry` (`new InMemoryEventStore(typeRegistry, cryptoEngine)`), so
   `@Encrypted` fields, crypto-shredding and type registration are exercised in every unit test.
   Also like `PostgresEventStore`, it refuses a registry with an `@Encrypted` type and no crypto
-  engine when it is built (`IllegalStateException`). `InMemoryEventStoreFactory` for DI.
+  engine when it is built (`IllegalStateException`; a registry that does not list its types
+  with `registeredTypes()` is refused with that method's `UnsupportedOperationException`). A custom
+  store applies the same rule with `EncryptedTypeGuard.require(registry, engine)`. `InMemoryEventStoreFactory` for DI.
 
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),

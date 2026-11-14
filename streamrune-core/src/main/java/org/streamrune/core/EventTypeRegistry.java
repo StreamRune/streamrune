@@ -39,14 +39,14 @@ public interface EventTypeRegistry {
    *
    * <p>Default implementation throws {@link UnsupportedOperationException} rather than returning an
    * empty collection: a silent empty default would let the {@code @Encrypted} plaintext-PII startup
-   * guard ({@code CryptoConfigValidator}, run when a {@code PostgresEventStore} is built without a
-   * {@code CryptoEngine}) skip validation for any registry that did not override it, exactly the
-   * "fail open on a privacy control" this framework's SPI policy forbids (see {@code
-   * DeadLetterQueue}'s default-method policy: an optional capability's default fails loudly, never
-   * silently). Implementations that back a real registry (see {@link SimpleEventTypeRegistry}) must
-   * override this to expose their registered classes. A registry with genuinely nothing to
-   * enumerate may explicitly override it to return {@code List.of()} — that is a visible,
-   * deliberate choice, unlike inheriting a silent default.
+   * guard (run when an event store, {@code PostgresEventStore} or {@code InMemoryEventStore}, is
+   * built without a {@code CryptoEngine}) skip validation for any registry that did not override
+   * it, exactly the "fail open on a privacy control" this framework's SPI policy forbids (see
+   * {@code DeadLetterQueue}'s default-method policy: an optional capability's default fails loudly,
+   * never silently). Implementations that back a real registry (see {@link
+   * SimpleEventTypeRegistry}) must override this to expose their registered classes. A registry
+   * with genuinely nothing to enumerate may explicitly override it to return {@code List.of()} —
+   * that is a visible, deliberate choice, unlike inheriting a silent default.
    *
    * @return an unmodifiable collection of registered event and state classes; never {@code null}
    * @throws UnsupportedOperationException if not overridden
@@ -54,7 +54,7 @@ public interface EventTypeRegistry {
   default java.util.Collection<Class<?>> registeredTypes() {
     throw new UnsupportedOperationException(
         "registeredTypes() is not implemented by this EventTypeRegistry, so the @Encrypted"
-            + " plaintext-PII startup guard (CryptoConfigValidator, run when a PostgresEventStore"
+            + " plaintext-PII startup guard (run when an event store, PostgreSQL or in-memory,"
             + " is built without a CryptoEngine) cannot scan your registered event/state types and"
             + " would otherwise silently skip validation. Override registeredTypes() to return"
             + " every event and state class this registry can resolve (see"

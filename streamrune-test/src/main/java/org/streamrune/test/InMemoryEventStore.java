@@ -53,8 +53,8 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
-import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 
 /**
@@ -203,6 +203,12 @@ public final class InMemoryEventStore implements EventStore {
 
   private final ObjectMapper objectMapper;
 
+  /**
+   * The mapper {@link #bindStoredForm} binds a fixture payload with: the payload is clear text, so
+   * it binds without decrypting. {@code objectMapper} itself for a store built over a mapper.
+   */
+  private final ObjectMapper clearMapper;
+
   private final EventTypeRegistry typeRegistry;
 
   /**
@@ -214,6 +220,8 @@ public final class InMemoryEventStore implements EventStore {
    *     PostgresEventStore} does (required)
    * @throws IllegalStateException if a registered type carries {@code @Encrypted}: without a crypto
    *     engine its field would be stored as plaintext, which {@code PostgresEventStore} refuses too
+   * @throws UnsupportedOperationException if {@code typeRegistry} does not list its types (see
+   *     {@link EventTypeRegistry#registeredTypes()}), so the check cannot run
    */
   public InMemoryEventStore(EventTypeRegistry typeRegistry) {
     this(typeRegistry, null);
@@ -230,27 +238,32 @@ public final class InMemoryEventStore implements EventStore {
    *     no registered type carries {@code @Encrypted}
    * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
    *     carries {@code @Encrypted}, as {@code PostgresEventStore} refuses it
+   * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and {@code
+   *     typeRegistry} does not list its types (see {@link EventTypeRegistry#registeredTypes()})
    */
   public InMemoryEventStore(EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     this(
         serializingMapper(cryptoEngine),
-        requireCryptoConfig(
-            Objects.requireNonNull(typeRegistry, "typeRegistry is required"), cryptoEngine),
+        serializingMapper(null),
+        requireCryptoConfig(typeRegistry, cryptoEngine),
         null);
   }
 
   /**
    * Creates a store that serializes through the given {@link ObjectMapper} on append/save and
-   * deserializes through it on read — for an application whose production store is given its own
-   * mapper.
+   * deserializes through it on read, for the kit's own tests of a store over a mapper with an
+   * application's serializers. Performs no {@code @Encrypted} check: a mapper without the crypto
+   * module writes {@code @Encrypted} components as plaintext, which is why this constructor is not
+   * public. Use {@link #InMemoryEventStore(EventTypeRegistry, CryptoEngine)}.
    *
-   * @param objectMapper the mapper to round-trip with; must be configured like the production one
+   * @param objectMapper the mapper to round-trip with
    * @param typeRegistry resolves event and state classes on read, exactly as {@code
    *     PostgresEventStore} does (required)
    */
-  public InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
+  InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
     this(
         Objects.requireNonNull(objectMapper, "objectMapper is required"),
+        objectMapper,
         Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
         null);
   }
@@ -259,8 +272,12 @@ public final class InMemoryEventStore implements EventStore {
    * A store over the stored data of {@code shared}, or over empty storage when it is {@code null}.
    */
   private InMemoryEventStore(
-      ObjectMapper objectMapper, EventTypeRegistry typeRegistry, InMemoryEventStore shared) {
+      ObjectMapper objectMapper,
+      ObjectMapper clearMapper,
+      EventTypeRegistry typeRegistry,
+      InMemoryEventStore shared) {
     this.objectMapper = objectMapper;
+    this.clearMapper = clearMapper;
     this.typeRegistry = typeRegistry;
     if (shared == null) {
       this.globalStream = new CopyOnWriteArrayList<>();
@@ -292,32 +309,27 @@ public final class InMemoryEventStore implements EventStore {
    *     registered type carries {@code @Encrypted}
    * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
    *     carries {@code @Encrypted}
+   * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and {@code
+   *     typeRegistry} does not list its types
    */
   static InMemoryEventStore sharingStorageOf(
       InMemoryEventStore source, EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     Objects.requireNonNull(source, "source is required");
     return new InMemoryEventStore(
         serializingMapper(cryptoEngine),
-        requireCryptoConfig(
-            Objects.requireNonNull(typeRegistry, "typeRegistry is required"), cryptoEngine),
+        serializingMapper(null),
+        requireCryptoConfig(typeRegistry, cryptoEngine),
         source);
   }
 
   /**
-   * Refuses a registry with an {@code @Encrypted} type when there is no crypto engine, as {@code
-   * PostgresEventStore} does when it is built: the store's mapper would write the field as
-   * plaintext. Returns {@code typeRegistry}.
-   *
-   * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
-   *     carries {@code @Encrypted}
-   * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and {@code
-   *     typeRegistry} does not list its types
+   * Runs {@link EncryptedTypeGuard}, the check {@code PostgresEventStore} runs when it is built,
+   * and returns {@code typeRegistry}.
    */
   private static EventTypeRegistry requireCryptoConfig(
       EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
-    if (cryptoEngine == null) {
-      CryptoConfigValidator.validate(typeRegistry.registeredTypes(), null);
-    }
+    Objects.requireNonNull(typeRegistry, "typeRegistry is required");
+    EncryptedTypeGuard.require(typeRegistry, cryptoEngine);
     return typeRegistry;
   }
 
@@ -491,10 +503,10 @@ public final class InMemoryEventStore implements EventStore {
     }
   }
 
-  /** {@link #toEnvelope} over {@code events}, inside the load's deserialize span when traced. */
+  /** {@link #deserialized} over {@code events}, inside the load's deserialize span when traced. */
   private List<EventEnvelope> deserialize(Stream<StoredEvent> events, boolean traced) {
     if (!traced) {
-      return events.map(this::toEnvelope).toList();
+      return events.map(this::deserialized).toList();
     }
     List<StoredEvent> stored = events.toList();
     UpcasterChain chain = upcasterChain;
@@ -510,17 +522,17 @@ public final class InMemoryEventStore implements EventStore {
             .put(TraceAttributes.EVENT_COUNT, (long) stored.size())
             .put(TraceAttributes.UPCAST_COUNT, upcasts)
             .build(),
-        scope -> stored.stream().map(this::toEnvelope).toList());
+        scope -> stored.stream().map(this::deserialized).toList());
   }
 
   /**
-   * {@link #toEnvelope} over a read's {@code events}, inside the read span when {@code traced} and
-   * there are any; the span starts at {@code started}, when the read started.
+   * {@link #deserialized} over a read's {@code events}, inside the read span when {@code traced}
+   * and there are any; the span starts at {@code started}, when the read started.
    */
   private List<EventEnvelope> readEvents(
       Stream<StoredEvent> events, String readKind, boolean traced, Instant started) {
     if (!traced) {
-      return events.map(this::toEnvelope).toList();
+      return events.map(this::deserialized).toList();
     }
     List<StoredEvent> stored = events.toList();
     if (stored.isEmpty()) {
@@ -537,7 +549,7 @@ public final class InMemoryEventStore implements EventStore {
                 .build(),
             started);
     try {
-      List<EventEnvelope> read = stored.stream().map(this::toEnvelope).toList();
+      List<EventEnvelope> read = stored.stream().map(this::deserialized).toList();
       scope.recordSuccess();
       return read;
     } catch (Throwable t) {
@@ -968,7 +980,12 @@ public final class InMemoryEventStore implements EventStore {
    * subject yields {@link CryptoShreddingModule#REDACTED}) — mirroring {@code
    * PostgresEventStore.toEnvelope}.
    */
-  private EventEnvelope toEnvelope(StoredEvent stored) {
+  private EventEnvelope deserialized(StoredEvent stored) {
+    return toEnvelope(stored, objectMapper);
+  }
+
+  /** {@code stored}, bound with {@code objectMapper}. */
+  private EventEnvelope toEnvelope(StoredEvent stored, ObjectMapper objectMapper) {
     EventType eventType = stored.eventType();
     Class<?> eventClass = typeRegistry.resolveEventType(eventType);
     try {
@@ -1397,7 +1414,9 @@ public final class InMemoryEventStore implements EventStore {
    * Binds an event in its stored form — its payload JSON, its metadata JSON and the schema version
    * of the payload — the way a read binds a stored event: the registry resolves the type, the
    * upcaster chain upcasts a payload below its current version, and a payload above it is refused.
-   * For {@link EventStreamFixtures}, whose files hold events in that form.
+   * The payload is clear text, as the file holds it, so it binds without decrypting: appending the
+   * envelope encrypts its {@code @Encrypted} fields. For {@link EventStreamFixtures}, whose files
+   * hold events in that form.
    */
   EventEnvelope bindStoredForm(
       StreamId streamId,
@@ -1414,7 +1433,8 @@ public final class InMemoryEventStore implements EventStore {
             eventType,
             payloadJson,
             metadataJson,
-            schemaVersion));
+            schemaVersion),
+        clearMapper);
   }
 
   /**

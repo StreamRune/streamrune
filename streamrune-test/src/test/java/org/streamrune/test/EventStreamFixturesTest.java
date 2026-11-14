@@ -393,6 +393,42 @@ class EventStreamFixturesTest {
     assertEquals(all(store), all(replayed));
   }
 
+  record Registered(
+      String userId,
+      @Encrypted(subjectId = "userId") String name,
+      @Encrypted(subjectId = "userId") String email)
+      implements DomainEvent {}
+
+  /**
+   * A fixture holds the clear text, so a replay into a store with a crypto engine must not decrypt
+   * it: "John" is valid Base64, which a decrypting bind would read as a ciphertext and redact.
+   */
+  @Test
+  void aStreamWithEncryptedFieldsReplaysIntoAStoreWithACryptoEngine() throws IOException {
+    var registry = registry(Registered.class);
+    var engine = new InMemoryCryptoEngine();
+    var store = new InMemoryEventStore(registry, engine);
+    StreamId user = StreamId.of(AggregateType.of("user"), AggregateId.of("u1"));
+    var registered = new Registered("u1", "John", "john@example.com");
+    store.append(user, List.of(envelope(user, 1, registered, 1)), Version.initial());
+    Path file = dir.resolve("users.json");
+
+    EventStreamFixtures.write(store, file);
+    var otherEngine = new InMemoryCryptoEngine();
+    var replayed = new InMemoryEventStore(registry, otherEngine);
+    EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
+
+    String text = Files.readString(file);
+    assertTrue(text.contains("\"name\" : \"John\""), () -> "in the clear: " + text);
+    assertEquals(registered, replayed.load(user).events().getFirst().event());
+    assertEquals(all(store), all(replayed));
+    // the replayed store encrypted the fields: shredding the subject redacts them
+    otherEngine.deleteKey(org.streamrune.core.types.SubjectId.of("u1"));
+    var redacted = (Registered) replayed.load(user).events().getFirst().event();
+    assertEquals(CryptoShreddingModule.REDACTED, redacted.name());
+    assertEquals(CryptoShreddingModule.REDACTED, redacted.email());
+  }
+
   @Test
   void read_ofAFileThatIsNoEventStream_failsNamingTheFile() throws IOException {
     Path file = dir.resolve("broken.json");

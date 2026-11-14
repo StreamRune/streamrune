@@ -286,8 +286,10 @@ public abstract class org.streamrune.test.EventStoreContract
   public void anEventStoredBelowTheCurrentVersionIsUpcastOnEveryReadPath()
   public void anUpcasterReturningDataTheClassCannotBindFailsWithAnEventDeserializationException()
   public void anUpcasterThatThrowsFailsTheReadWithAnEventDeserializationException()
+  public void appendChecksStreamEventsAndExpectedVersionInThatOrder()
   public void appendRefusesANullArgumentAndStoresNothing()
   public void appendRefusesANullExpectedVersionWhateverTheEventListAndStoresNothing()
+  public void appendWithKeyChecksTheEventArgumentsBeforeTheKeyAndTheCommandType()
   public void appendWithKeyRefusesANullExpectedVersionWhateverTheEventListAndClaimsNothing()
   public void appendingTheSameEnvelopeTwiceStoresTwoEvents()
   public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceAcrossInstances() throws java.lang.Exception
@@ -615,7 +617,6 @@ public final class org.streamrune.test.InMemoryDeadLetterQueue implements org.st
   public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
 
 public final class org.streamrune.test.InMemoryEventStore implements org.streamrune.core.EventStore
-  public <init>(com.fasterxml.jackson.databind.ObjectMapper, org.streamrune.core.EventTypeRegistry)
   public <init>(org.streamrune.core.EventTypeRegistry)
   public <init>(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine)
   public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)

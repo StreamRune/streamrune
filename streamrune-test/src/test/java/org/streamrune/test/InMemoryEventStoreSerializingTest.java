@@ -15,6 +15,7 @@ import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -257,12 +258,53 @@ class InMemoryEventStoreSerializingTest {
     assertDoesNotThrow(() -> new InMemoryEventStore(mapper, registry));
     var plain = SimpleEventTypeRegistry.builder().registerEvent("Added", Added.class).build();
     assertDoesNotThrow(() -> new InMemoryEventStore(plain, null));
-    // as PostgresEventStore does, a registry with an @Encrypted type needs a crypto engine
+  }
+
+  @Test
+  void aRegistryWithAnEncryptedTypeIsRefusedWithoutACryptoEngine() {
+    var plain = SimpleEventTypeRegistry.builder().registerEvent("Added", Added.class).build();
+    var source = new InMemoryEventStore(plain);
+
+    // every path that builds a store over a registry runs the check PostgresEventStore runs
     var refused = assertThrows(IllegalStateException.class, () -> new InMemoryEventStore(registry));
     assertTrue(refused.getMessage().contains("PiiRegistered.email"), refused.getMessage());
     assertThrows(
+        IllegalStateException.class, () -> new InMemoryEventStore(registry, (CryptoEngine) null));
+    assertThrows(
         IllegalStateException.class,
-        () -> InMemoryEventStore.sharingStorageOf(new InMemoryEventStore(plain), registry, null));
+        () -> InMemoryEventStore.sharingStorageOf(source, registry, null));
+    assertThrows(
+        IllegalStateException.class,
+        () -> InMemoryEventStoreFactory.builder(registry).build().create());
+    assertThrows(IllegalStateException.class, () -> EventStoreFixture.store(registry));
+
+    // with an engine the same registry is accepted, by every path
+    var engine = new InMemoryCryptoEngine();
+    assertDoesNotThrow(() -> new InMemoryEventStore(registry, engine));
+    assertDoesNotThrow(() -> InMemoryEventStore.sharingStorageOf(source, registry, engine));
+    assertDoesNotThrow(
+        () -> InMemoryEventStoreFactory.builder(registry).cryptoEngine(engine).build().create());
+  }
+
+  @Test
+  void aRegistryThatDoesNotListItsTypesIsRefusedWithoutACryptoEngineAndAcceptedWithOne() {
+    EventTypeRegistry unlisted =
+        new EventTypeRegistry() {
+          @Override
+          public Class<?> resolveEventType(EventType eventType) {
+            return Added.class;
+          }
+
+          @Override
+          public Class<?> resolveStateType(String stateType) {
+            return CartState.class;
+          }
+        };
+
+    var refused =
+        assertThrows(UnsupportedOperationException.class, () -> new InMemoryEventStore(unlisted));
+    assertTrue(refused.getMessage().contains("registeredTypes()"), refused.getMessage());
+    assertDoesNotThrow(() -> new InMemoryEventStore(unlisted, new InMemoryCryptoEngine()));
   }
 
   @Test

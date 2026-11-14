@@ -37,6 +37,9 @@ public final class org.streamrune.crypto.CryptoShreddingModule extends com.faste
   public static final java.lang.String REDACTED = "[REDACTED]"
   public void setupModule(com.fasterxml.jackson.databind.Module$SetupContext)
 
+public final class org.streamrune.crypto.EncryptedTypeGuard
+  public static void require(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine)
+
 public interface org.streamrune.crypto.ForgottenSubjectStore
   public abstract boolean isForgotten(org.streamrune.core.types.SubjectId)
   public abstract void forget(org.streamrune.core.types.SubjectId)

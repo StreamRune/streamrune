@@ -107,6 +107,20 @@ import org.streamrune.core.types.Version;
  * class for such a decorator. A new method added to this interface comes with a {@code default}; a
  * decorator forwards it as well once it wants the wrapped store's answer.
  *
+ * <h2>Stores built over a registry</h2>
+ *
+ * <p>A store that serializes events and snapshot states with Jackson through an {@link
+ * EventTypeRegistry} and a {@link org.streamrune.core.crypto.CryptoEngine} refuses, when it is
+ * built, a registry that holds a type with an {@code @Encrypted} component when it has no engine,
+ * with an {@link IllegalStateException} naming every such field: it would store the component as
+ * plaintext, with no key ever minted for a later erasure to delete. A registry that does not list
+ * its types ({@link EventTypeRegistry#registeredTypes()}) cannot be cleared and is refused with
+ * that method's {@link UnsupportedOperationException}. {@code PostgresEventStore} and {@code
+ * InMemoryEventStore} both refuse it; a store of your own calls {@code
+ * org.streamrune.crypto.EncryptedTypeGuard.require(registry, engine)} from {@code
+ * streamrune-crypto-api} to apply the same rule with the same message, and the {@code
+ * EventStoreContract} of {@code streamrune-test} holds it to it.
+ *
  * <h2>Transactional outbox</h2>
  *
  * <p>No method of this interface accepts outbox entries, and {@link
@@ -228,8 +242,9 @@ public interface EventStore {
    * @param expectedVersion the expected current version for optimistic locking
    * @return result containing the assigned global offsets for each event and the final version
    * @throws NullPointerException if {@code streamId}, {@code events} or {@code expectedVersion} is
-   *     {@code null}: a {@code null} {@code expectedVersion} is refused for an empty {@code events}
-   *     list as for a non-empty one, before anything is stored
+   *     {@code null}, checked in that order, with the message {@code "<name> is required"} (for
+   *     example {@code "expectedVersion is required"}): a {@code null} {@code expectedVersion} is
+   *     refused for an empty {@code events} list as for a non-empty one, before anything is written
    */
   AppendResult append(StreamId streamId, List<EventEnvelope> events, Version expectedVersion);
 
@@ -560,8 +575,9 @@ public interface EventStore {
    * CommandInbox#requireCommandType} before they write anything, so a longer one claims no key and
    * stores no event.
    *
-   * @throws NullPointerException if {@code streamId}, {@code events}, {@code expectedVersion} or
-   *     {@code idempotencyKey} is {@code null}, also for an empty {@code events} list
+   * @throws NullPointerException if {@code streamId}, {@code events}, {@code expectedVersion},
+   *     {@code idempotencyKey} or {@code commandType} is {@code null}, checked in that order and
+   *     also for an empty {@code events} list, before anything is written or the key is claimed
    * @throws IllegalArgumentException if {@code idempotencyKey} is already recorded against a
    *     different command type or a different stream, or if {@code commandType} is longer than
    *     {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
