@@ -104,6 +104,13 @@ class OutboxPollerRestartRaceTest {
     // Not restartable: started stays set, so a restart is refused rather than silently duplicating.
     assertTrue(poller.isStarted(), "a join-timeout close() must leave the runner not-restartable");
     assertThrows(IllegalStateException.class, poller::start);
+
+    // Wait for the thread the timed-out join left behind: it releases its claim and logs while it
+    // winds down, and those lines belong to this test, not to whichever test runs next.
+    pollThread.get().join(2_000);
+    assertFalse(pollThread.get().isAlive(), "the poll thread ends after its slow shutdown");
+    poller.close(); // the thread has stopped: the guard is reset
+    assertFalse(poller.isStarted());
   }
 
   @Test

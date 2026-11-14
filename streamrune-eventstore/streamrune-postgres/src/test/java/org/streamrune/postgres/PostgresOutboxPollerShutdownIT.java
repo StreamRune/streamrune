@@ -307,8 +307,11 @@ class PostgresOutboxPollerShutdownIT {
       throws Exception {
     insertBacklog(50, 20);
     var published = Collections.synchronizedList(new ArrayList<String>());
+    var publishedByRelay = new ArrayList<List<String>>();
     var relays = new ArrayList<OutboxPoller>();
     for (int r = 0; r < 2; r++) {
+      var mine = new CopyOnWriteArrayList<String>();
+      publishedByRelay.add(mine);
       relays.add(
           OutboxPoller.builder()
               .outboxStore(
@@ -316,7 +319,14 @@ class PostgresOutboxPollerShutdownIT {
                       pool,
                       PostgresOutboxStore.DEFAULT_CLAIM_LEASE,
                       OutboxOrderingMode.STRICT_PER_AGGREGATE))
-              .publisher(recordingPublisher(published))
+              .publisher(
+                  new OutboxPublisher() {
+                    @Override
+                    public void publish(OutboxEntry entry) {
+                      mine.add(entry.id().value());
+                      published.add(entry.id().value());
+                    }
+                  })
               .batchSize(20)
               .pollInterval(Duration.ofMillis(100))
               .build());
@@ -332,6 +342,9 @@ class PostgresOutboxPollerShutdownIT {
     assertEquals("1000", countWithStatus("DELIVERED"));
     assertEquals("0", countWithStatus("IN_PROGRESS"));
     assertEachStreamInOrderOnce(List.copyOf(published), 50, 20);
+    for (int r = 0; r < 2; r++) {
+      assertFalse(publishedByRelay.get(r).isEmpty(), "relay " + r + " took part in the drain");
+    }
   }
 
   @Test
@@ -340,7 +353,11 @@ class PostgresOutboxPollerShutdownIT {
     // On a strict backlog the claim is most of each batch, so a stop at a random moment of a drain
     // usually lands in a claim. Whatever the claim had committed must be released, not left
     // claimed until the lease expires.
-    var random = new Random();
+    // The stop points are random. The seed is printed and named in every failure message: to
+    // repeat a failing run, put it in place of System.nanoTime().
+    long seed = System.nanoTime();
+    System.out.println("closingTheRelayAnywhereInADrain_leavesNoEntryClaimed seed=" + seed);
+    var random = new Random(seed);
     int stoppedMidDrain = 0;
     for (int iteration = 0; iteration < 10; iteration++) {
       cleanTable();
@@ -369,16 +386,18 @@ class PostgresOutboxPollerShutdownIT {
         poller.close();
       }
 
-      assertFalse(poller.isAlive(), "the poll thread has stopped");
+      assertFalse(poller.isAlive(), "seed " + seed + ": the poll thread has stopped");
       assertEquals(
           "0",
           countWithStatus("IN_PROGRESS"),
-          "iteration " + iteration + ": no entry stays claimed");
+          "seed " + seed + ", iteration " + iteration + ": no entry stays claimed");
       if (!"2000".equals(countWithStatus("DELIVERED"))) {
         stoppedMidDrain++;
       }
     }
-    assertTrue(stoppedMidDrain > 0, "at least one stop landed in the middle of a drain");
+    assertTrue(
+        stoppedMidDrain > 0,
+        "seed " + seed + ": at least one stop landed in the middle of a drain");
   }
 
   private static String status(String id) throws SQLException {
