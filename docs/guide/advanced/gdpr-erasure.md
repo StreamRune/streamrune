@@ -837,7 +837,9 @@ runbook for the audit-log queries.
 If any registered event or state type has an `@Encrypted` component (directly or in a nested
 record) but **no `CryptoEngine` is configured**, building the event store **fails fast with
 `IllegalStateException`** rather than silently persisting that PII as plaintext. The check runs in
-`CryptoConfigValidator.validate(...)` from every builder of a `PostgresEventStore` —
+`EncryptedTypeGuard.check(...)` (`streamrune-crypto-api`, the public entry point a custom event
+store calls too) from every builder of a `PostgresEventStore` and from the constructors of
+`InMemoryEventStore` —
 `PostgresEventStoreFactory.create()` (the path all three integrations use),
 `PostgresEventStore.create(...)` and `PostgresEventStore.builder().build()` — before the database is
 touched. A custom `EventTypeRegistry` that does not implement `registeredTypes()` is refused there

@@ -117,7 +117,7 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       {@code @Encrypted} type and no crypto engine refuses it, with an {@link
  *       IllegalStateException} naming the field, before it stores anything: it would write the
  *       field as plaintext. A store of your own applies the rule with {@code
- *       org.streamrune.crypto.EncryptedTypeGuard.require(registry, engine)}. The case builds the
+ *       org.streamrune.crypto.EncryptedTypeGuard.check(registry, engine)}. The case builds the
  *       store through {@link #newStore(Setup)}, so that is where the refusal must come from.
  *   <li><b>Atomicity.</b> A multi-event append stores all of its events or none, also when several
  *       race for one version, and its events become readable together: while appends run, no read

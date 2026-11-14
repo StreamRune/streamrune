@@ -237,7 +237,8 @@ public final class InMemoryEventStore implements EventStore {
    * @param cryptoEngine crypto engine for {@code @Encrypted} field handling; {@code null} only when
    *     no registered type carries {@code @Encrypted}
    * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
-   *     carries {@code @Encrypted}, as {@code PostgresEventStore} refuses it
+   *     carries {@code @Encrypted}, as {@code PostgresEventStore} refuses it; also, with or without
+   *     an engine, if a sealed type of the registry cannot be read (see {@code EncryptedTypeGuard})
    * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and {@code
    *     typeRegistry} does not list its types (see {@link EventTypeRegistry#registeredTypes()})
    */
@@ -329,8 +330,14 @@ public final class InMemoryEventStore implements EventStore {
   private static EventTypeRegistry requireCryptoConfig(
       EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     Objects.requireNonNull(typeRegistry, "typeRegistry is required");
-    EncryptedTypeGuard.require(typeRegistry, cryptoEngine);
+    EncryptedTypeGuard.check(typeRegistry, cryptoEngine);
     return typeRegistry;
+  }
+
+  /** Whether {@code mapper} carries a {@link CryptoShreddingModule}. */
+  private static boolean encrypts(ObjectMapper mapper) {
+    return mapper.getRegisteredModuleIds().stream()
+        .anyMatch(id -> String.valueOf(id).endsWith(CryptoShreddingModule.class.getSimpleName()));
   }
 
   /** The mapper {@code PostgresEventStore.create()} configures. */
@@ -1417,6 +1424,9 @@ public final class InMemoryEventStore implements EventStore {
    * The payload is clear text, as the file holds it, so it binds without decrypting: appending the
    * envelope encrypts its {@code @Encrypted} fields. For {@link EventStreamFixtures}, whose files
    * hold events in that form.
+   *
+   * @throws IllegalStateException if this store was built over an {@link ObjectMapper} that carries
+   *     the crypto module: it would decrypt the clear text and bind {@code [REDACTED]} in its place
    */
   EventEnvelope bindStoredForm(
       StreamId streamId,
@@ -1425,6 +1435,13 @@ public final class InMemoryEventStore implements EventStore {
       int schemaVersion,
       String payloadJson,
       String metadataJson) {
+    if (clearMapper == objectMapper && encrypts(objectMapper)) {
+      throw new IllegalStateException(
+          "This InMemoryEventStore was built over an ObjectMapper with the crypto module, which"
+              + " would decrypt the clear text of a fixture and bind [REDACTED] in its place."
+              + " Replay into a store built with new InMemoryEventStore(typeRegistry,"
+              + " cryptoEngine), which encrypts the fields when it appends them.");
+    }
     return toEnvelope(
         new StoredEvent(
             GlobalOffset.initial(),

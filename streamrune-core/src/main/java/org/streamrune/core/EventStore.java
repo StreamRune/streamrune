@@ -113,11 +113,11 @@ import org.streamrune.core.types.Version;
  * EventTypeRegistry} and a {@link org.streamrune.core.crypto.CryptoEngine} refuses, when it is
  * built, a registry that holds a type with an {@code @Encrypted} component when it has no engine,
  * with an {@link IllegalStateException} naming every such field: it would store the component as
- * plaintext, with no key ever minted for a later erasure to delete. A registry that does not list
- * its types ({@link EventTypeRegistry#registeredTypes()}) cannot be cleared and is refused with
- * that method's {@link UnsupportedOperationException}. {@code PostgresEventStore} and {@code
- * InMemoryEventStore} both refuse it; a store of your own calls {@code
- * org.streamrune.crypto.EncryptedTypeGuard.require(registry, engine)} from {@code
+ * plaintext, with no key ever minted for a later erasure to delete. Without an engine, a registry
+ * that does not list its types ({@link EventTypeRegistry#registeredTypes()}) cannot be cleared and
+ * is refused with that method's {@link UnsupportedOperationException}. {@code PostgresEventStore}
+ * and {@code InMemoryEventStore} both refuse it; a store of your own calls {@code
+ * org.streamrune.crypto.EncryptedTypeGuard.check(registry, engine)} from {@code
  * streamrune-crypto-api} to apply the same rule with the same message, and the {@code
  * EventStoreContract} of {@code streamrune-test} holds it to it.
  *

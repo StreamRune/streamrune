@@ -937,7 +937,7 @@ written with sorted keys, so the same stream is always the same file, and its id
 replay unchanged. `appendTo` binds each payload as the store binds a stored one: the
 store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
-`write` serializes the payloads with a copy of the store's own `ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
+`write` serializes the payloads with a copy of the store's own `ObjectMapper`, so a type that declares its own serializer by annotation
 reads back, and leaves the fields of an `@Encrypted` event in the clear: the file holds
 them as plain text. `appendTo` binds the payloads as they are, without decrypting, so replaying a
 file into a store built with a crypto engine (`new InMemoryEventStore(typeRegistry, cryptoEngine)`)
@@ -988,7 +988,7 @@ class MyEventStoreContractTest extends EventStoreContract {
   of a deployment (`Setup.defaults()` resolves the suite's types and has no crypto, upcasters or
   migrations). A store built with a registry that holds an `@Encrypted` type and no engine must
   refuse it with an `IllegalStateException` from `newStore`: call
-  `EncryptedTypeGuard.require(setup.registry(), setup.crypto())` from `streamrune-crypto-api` in
+  `EncryptedTypeGuard.check(setup.registry(), setup.crypto())` from `streamrune-crypto-api` in
   your store's constructor to do it with the message of the shipped stores. `reopen(store, setup)` returns a new store over the same data as `store`, built with
   a possibly different setup, as a deployment restarted with another configuration sees what it
   stored before. It covers version assignment, strict conflict detection (an expected version behind or beyond the

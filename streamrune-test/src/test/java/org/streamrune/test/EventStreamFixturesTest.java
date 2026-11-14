@@ -430,6 +430,33 @@ class EventStreamFixturesTest {
   }
 
   @Test
+  void aStoreBuiltOverAMapperWithTheCryptoModule_refusesToReplayAFile() throws IOException {
+    var registry = registry(Registered.class);
+    var source = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
+    StreamId user = StreamId.of(AggregateType.of("user"), AggregateId.of("u1"));
+    source.append(
+        user,
+        List.of(envelope(user, 1, new Registered("u1", "John", "john@example.com"), 1)),
+        Version.initial());
+    Path file = dir.resolve("users.json");
+    EventStreamFixtures.write(source, file);
+    var encrypting =
+        new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .registerModule(new CryptoShreddingModule(new InMemoryCryptoEngine()));
+    var target = new InMemoryEventStore(encrypting, registry);
+    var events = EventStreamFixtures.read(file);
+
+    var refused =
+        assertThrows(
+            IllegalStateException.class, () -> EventStreamFixtures.appendTo(target, events));
+
+    assertTrue(
+        refused.getMessage().contains("InMemoryEventStore(typeRegistry,"), refused.getMessage());
+    assertTrue(all(target).isEmpty(), "nothing replayed");
+  }
+
+  @Test
   void read_ofAFileThatIsNoEventStream_failsNamingTheFile() throws IOException {
     Path file = dir.resolve("broken.json");
     Files.writeString(file, "{ \"not\": \"an array\" }");

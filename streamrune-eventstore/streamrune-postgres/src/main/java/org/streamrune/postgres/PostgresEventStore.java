@@ -734,7 +734,7 @@ public final class PostgresEventStore implements EventStore {
     if (typeRegistry == null) {
       throw new IllegalArgumentException("typeRegistry is required");
     }
-    EncryptedTypeGuard.require(typeRegistry, cryptoEngine);
+    EncryptedTypeGuard.check(typeRegistry, cryptoEngine);
   }
 
   /**

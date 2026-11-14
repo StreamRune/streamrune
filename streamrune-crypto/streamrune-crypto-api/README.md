@@ -103,6 +103,7 @@ To legitimately re-register a forgotten subject, lift its tombstone explicitly w
 | Component | Description |
 |---|---|
 | `CryptoShreddingModule` | Jackson `SimpleModule` for transparent encrypt/decrypt |
+| `EncryptedTypeGuard` | `check(registry, engine)`: the fail-fast an event store runs when it is built — a registry with an `@Encrypted` type and no engine is refused (`IllegalStateException`); `PostgresEventStore` and `InMemoryEventStore` call it, and a custom store calls it to meet `EventStoreContract` |
 | `CachedCryptoEngine` | Decorator caching `decrypt` results, with a mandatory write-TTL ceiling |
 | `ForgottenSubjectStore` | Tombstone SPI used by the Vault and AWS KMS engines; `InMemoryForgottenSubjectStore` is the process-local implementation for tests |
 | `InMemoryCryptoEngine` | AES-256-GCM in-memory test engine, keys lost on JVM restart — in `streamrune-test` (`org.streamrune.test`), not this module |
