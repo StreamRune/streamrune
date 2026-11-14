@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +14,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.RetryPolicy;
@@ -68,13 +70,15 @@ import org.streamrune.core.types.LogSanitizer;
  * released at once.
  *
  * <p><b>Draining:</b> one poll cycle claims and publishes batch after batch while each batch comes
- * back full ({@code batchSize} entries) and every one of its entries resolved — confirmed by the
- * transport or rejected for that entry alone. A partial or empty batch ends the cycle, and so does
- * any batch that ended abnormally: a stop, a publish cut short by the deadline, a transport failure
- * or an in-flight hand-off. After the cycle the relay waits {@code pollInterval}. One cycle drains
- * for at most {@link #DRAIN_BUDGET_POLL_INTERVALS} poll intervals before it yields to the schedule.
- * Each batch keeps its own claim, its own publish deadline and its own {@code outbox/relay} span;
- * the gauges are sampled once per cycle.
+ * back full ({@code batchSize} entries), delivered at least one entry, and every one of its entries
+ * resolved — confirmed by the transport or rejected for that entry alone. A partial or empty batch
+ * ends the cycle, and so does a batch that delivered nothing, a batch that claimed again an entry
+ * the cycle already failed (a retry due at once), and any batch that ended abnormally: a stop, a
+ * publish cut short by the deadline, a transport failure or an in-flight hand-off. After the cycle
+ * the relay waits {@code pollInterval}. One cycle drains for at most {@link
+ * #DRAIN_BUDGET_POLL_INTERVALS} poll intervals plus the batch in progress, then yields to the
+ * schedule. Each batch keeps its own claim, its own publish deadline and its own {@code
+ * outbox/relay} span; the gauges are sampled once per cycle.
  *
  * <p><b>Testing:</b> {@link #pollCycle()} is package-private to allow tests to invoke one poll
  * cycle synchronously without starting a background thread.
@@ -185,10 +189,18 @@ public final class OutboxPoller implements AutoCloseable {
    * under a sustained backlog it spends at least 10 of every 11 intervals delivering, whatever the
    * interval; and the gauges and the other once-per-cycle work run at least every 11 intervals plus
    * one batch. The budget is checked between batches, never inside one: each batch is bounded by
-   * its own publish deadline. A constant rather than a builder option: the pause it buys is one
-   * poll interval, which {@code pollInterval} already tunes.
+   * its own publish deadline, so a cycle can overrun the budget by the batch in progress. Measured
+   * on {@link System#nanoTime()}, whatever clock the builder was given, so a fixed or stepping test
+   * clock cannot stretch it. A constant rather than a builder option: the pause it buys is one poll
+   * interval, which {@code pollInterval} already tunes.
    */
   static final int DRAIN_BUDGET_POLL_INTERVALS = 10;
+
+  /**
+   * How often, in consecutive poll cycles that reach their drain budget, the relay logs the
+   * saturation at INFO: on the first such cycle and on every tenth after it; DEBUG otherwise.
+   */
+  private static final int BUDGET_YIELD_LOG_EVERY = 10;
 
   /** The outcome of a batch the relay stopped before handing anything off. */
   private static final OutboxPublisher.BatchResult NOTHING_ATTEMPTED =
@@ -207,6 +219,11 @@ public final class OutboxPoller implements AutoCloseable {
   private final Duration pollInterval;
   // DRAIN_BUDGET_POLL_INTERVALS poll intervals in nanoseconds, saturated at Long.MAX_VALUE.
   private final long drainBudgetNanos;
+  // The monotonic time the drain budget is measured on: System::nanoTime, or a test's ticker.
+  private final LongSupplier drainTicker;
+  // Consecutive poll cycles that ended on the drain budget; reset by a cycle that ended otherwise.
+  // Atomic for the same self-close race as transportStreak.
+  private final AtomicInteger budgetYieldStreak = new AtomicInteger();
   private final StreamRuneMetrics metrics;
   private final ResilientPollLoop pollLoop;
   // The identity this relay claims and marks entries under. Read once from the store; every mark*
@@ -361,6 +378,7 @@ public final class OutboxPoller implements AutoCloseable {
     this.batchSize = builder.batchSize;
     this.pollInterval = builder.pollInterval;
     this.drainBudgetNanos = drainBudgetNanos(builder.pollInterval);
+    this.drainTicker = builder.drainTicker;
     this.metrics = builder.metrics;
     this.orderingMode = builder.orderingMode;
     this.claimLease = builder.claimLease;
@@ -426,11 +444,11 @@ public final class OutboxPoller implements AutoCloseable {
 
   /**
    * One poll cycle: the once-per-cycle checks and gauges, then batch after batch while the last one
-   * came back full and resolved (see {@link #processBatch}), the thread was not interrupted and the
-   * cycle is inside its {@linkplain #DRAIN_BUDGET_POLL_INTERVALS drain budget}. Without the drain
-   * the relay waited a full poll interval after every batch, capping its throughput at {@code
-   * batchSize / pollInterval} however deep the backlog. A failure of any batch ends the cycle as a
-   * failed one; the outcomes of the batches before it are already stored.
+   * came back full, delivered something and resolved (see {@link #processBatch}), the thread was
+   * not interrupted and the cycle is inside its {@linkplain #DRAIN_BUDGET_POLL_INTERVALS drain
+   * budget}. Without the drain the relay waited a full poll interval after every batch, capping its
+   * throughput at {@code batchSize / pollInterval} however deep the backlog. A failure of any batch
+   * ends the cycle as a failed one; the outcomes of the batches before it are already stored.
    */
   private void pollCycle(InterruptDeferral interrupts) {
     // The first-cycle legacy-data check runs before the gauges and independently
@@ -442,32 +460,58 @@ public final class OutboxPoller implements AutoCloseable {
     // per cycle, not per batch: three counts per batch would add load exactly while a backlog
     // drains.
     sampleObservability();
-    long cycleStart = time.nanoTime();
+    long cycleStart = drainTicker.getAsLong();
+    // The entries a batch of this cycle failed: a later batch that claims one of them again (its
+    // retry was due at once, as with a zero initial delay) ends the cycle, so the drain never walks
+    // an entry's retry ladder back to back.
+    Set<OutboxEntryId> failedThisCycle = new HashSet<>();
     int batches = 1;
-    while (processBatch(interrupts)) {
-      // A stop delivered by the batch's resume(): the next loadPending would fail at the socket.
-      if (Thread.currentThread().isInterrupted()) {
-        return;
-      }
-      if (time.nanoTime() - cycleStart >= drainBudgetNanos) {
-        LOG.debug(
-            "Outbox relay drained {} full batches in one cycle and reached its drain budget of {}"
-                + " poll intervals; yielding to the schedule",
-            batches,
-            DRAIN_BUDGET_POLL_INTERVALS);
+    // A stop delivered by the batch's resume() ends the cycle: the next loadPending would fail at
+    // the socket.
+    while (processBatch(interrupts, failedThisCycle) && !Thread.currentThread().isInterrupted()) {
+      if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
+        reportDrainBudgetReached(batches);
         return;
       }
       batches++;
+    }
+    budgetYieldStreak.set(0);
+  }
+
+  /**
+   * Logs a cycle that drained full batches until its budget: at INFO on the first of a streak of
+   * such cycles and on every {@value #BUDGET_YIELD_LOG_EVERY}th, so a relay that cannot catch up is
+   * visible in the logs as well as in {@code streamrune.outbox.pending}.
+   */
+  private void reportDrainBudgetReached(int batches) {
+    int streak = budgetYieldStreak.incrementAndGet();
+    if (streak == 1 || streak % BUDGET_YIELD_LOG_EVERY == 0) {
+      LOG.info(
+          "Outbox relay is draining a backlog at its full rate: {} consecutive poll cycle(s)"
+              + " reached the drain budget of {} poll intervals ({} full batches this cycle); the"
+              + " gauges are sampled once per cycle",
+          streak,
+          DRAIN_BUDGET_POLL_INTERVALS,
+          batches);
+    } else {
+      LOG.debug(
+          "Outbox relay drained {} full batches and reached its drain budget ({} consecutive"
+              + " cycles); yielding to the schedule",
+          batches,
+          streak);
     }
   }
 
   /**
    * Claims, publishes and records one batch.
    *
-   * @return whether the cycle may claim the next batch at once: the batch came back full and every
-   *     entry of it resolved, with no stop requested (see {@link BatchOutcome#resolved()})
+   * @param failedThisCycle the entries earlier batches of this cycle failed; this batch's failures
+   *     are added
+   * @return whether the cycle may claim the next batch at once: the batch came back full, claimed
+   *     no entry the cycle already failed, delivered at least one entry, and every entry of it
+   *     resolved, with no stop requested (see {@link BatchOutcome#resolved()})
    */
-  private boolean processBatch(InterruptDeferral interrupts) {
+  private boolean processBatch(InterruptDeferral interrupts, Set<OutboxEntryId> failedThisCycle) {
     // Anchor the publish deadline BEFORE loadPending claims anything. loadPending stamps
     // claimed_at (the DB clock) as it runs; capturing the base here — rather than after it returns
     // — charges the claim-query latency (RECLAIM_EXPIRED + claim CTE on a large backlog, or a GC
@@ -481,11 +525,19 @@ public final class OutboxPoller implements AutoCloseable {
     if (pending.isEmpty()) {
       return false;
     }
+    boolean claimedARetryOfThisCycle = false;
+    for (OutboxEntry entry : pending) {
+      if (failedThisCycle.contains(entry.id())) {
+        claimedARetryOfThisCycle = true;
+        break;
+      }
+    }
     BatchOutcome outcome =
         traced
             ? publishTraced(pending, claimBase, lease, interrupts)
             : publishAndRecord(pending, claimBase, lease, interrupts);
-    return outcome.resolved() && pending.size() >= batchSize;
+    failedThisCycle.addAll(outcome.result().failed().keySet());
+    return outcome.resolved() && !claimedARetryOfThisCycle && pending.size() >= batchSize;
   }
 
   /** {@link #publishAndRecord} inside the batch's {@code outbox/relay} span. */
@@ -513,12 +565,16 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * What one batch came to: the publisher's result, and whether the batch {@code resolved} — every
-   * claimed entry was confirmed or failed for itself alone (an ENTRY rejection, a terminal {@code
-   * FAILED}, a lease lost to another relay), and no stop was requested while it ran. A batch with
-   * an entry the deadline or a stop left unattempted, a TRANSPORT failure, an IN_FLIGHT hand-off or
-   * an interrupted publish is not resolved: claiming the next batch at once would hammer a degraded
-   * transport or outrun a stop, so the cycle ends and the relay waits its poll interval.
+   * What one batch came to: the publisher's result, and whether the batch {@code resolved} — at
+   * least one entry was confirmed and marked delivered, every other claimed entry failed for itself
+   * alone (an ENTRY rejection, a terminal {@code FAILED}, a lease lost to another relay), and no
+   * stop was requested while it ran. A batch that delivered nothing is not resolved: rejections
+   * with no delivery beside them are no evidence of a healthy transport (an exchange missing after
+   * a deploy, a receiver answering 404 to everything), and draining would walk the whole backlog up
+   * its retry ladders. Nor is a batch with an entry the deadline or a stop left unattempted, a
+   * TRANSPORT failure, an IN_FLIGHT hand-off or an interrupted publish: claiming the next batch at
+   * once would hammer a degraded transport or outrun a stop, so the cycle ends and the relay waits
+   * its poll interval.
    */
   private record BatchOutcome(OutboxPublisher.BatchResult result, boolean resolved) {}
 
@@ -674,8 +730,9 @@ public final class OutboxPoller implements AutoCloseable {
    *
    * @param stopping whether a stop was requested during the cycle (changes only the log wording for
    *     the released entries)
-   * @return whether every entry resolved for itself: none was left unattempted, and none failed
-   *     TRANSPORT, IN_FLIGHT or by an interrupt (see {@link BatchOutcome})
+   * @return whether the batch delivered at least one entry and every entry resolved for itself:
+   *     none was left unattempted, and none failed TRANSPORT, IN_FLIGHT or by an interrupt (see
+   *     {@link BatchOutcome})
    */
   private boolean recordOutcome(
       List<OutboxEntry> pending,
@@ -686,9 +743,11 @@ public final class OutboxPoller implements AutoCloseable {
       boolean stopping) {
     // Pass an immutable snapshot to markDeliveredAll so any late mutation of the live set
     // from the publisher cannot affect the store call.
+    int delivered = 0;
     if (!result.confirmed().isEmpty()) {
       var confirmed = List.copyOf(result.confirmed());
       int transitioned = store.markDeliveredAll(confirmed, claimedBy);
+      delivered = transitioned;
       if (transitioned < confirmed.size()) {
         // Lost lease for the missing ids: another relay recorded their outcome (expected under
         // failover). This is a benign no-op — log and continue, never throw.
@@ -874,7 +933,8 @@ public final class OutboxPoller implements AutoCloseable {
       releaseUnattempted(
           unattemptedEntries, result, pending.size(), claimBase, publishDeadline, lease, stopping);
     }
-    return unattemptedEntries.isEmpty()
+    return delivered > 0
+        && unattemptedEntries.isEmpty()
         && transportFailures == 0
         && inFlightFailures == 0
         && interruptedPublishes == 0;
@@ -1032,7 +1092,7 @@ public final class OutboxPoller implements AutoCloseable {
     }
     // Guarded — a byte-identical twin of the DLQ retry runner's sampleObservability, whose
     // own degradation-gauge call was guarded the same way. This one runs FIRST in
-    // every processBatch(), before loadPending claims anything, so an unguarded throw here aborted
+    // every pollCycle(), before loadPending claims anything, so an unguarded throw here aborted
     // the ENTIRE outbox poll cycle — no claim, no delivery, no retry — every single cycle a
     // throwing metrics backend was wired, indistinguishable from a dead relay except for the
     // gauge that never got the chance to report it.
@@ -1512,6 +1572,7 @@ public final class OutboxPoller implements AutoCloseable {
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
     private Clock clock;
+    private LongSupplier drainTicker = System::nanoTime;
     // Read from the store in build(): the poller logs and reasons about the mode, so a store that
     // does not state one (the throwing default, or null) fails at wiring, like claimLease.
     private OutboxOrderingMode orderingMode;
@@ -1586,6 +1647,15 @@ public final class OutboxPoller implements AutoCloseable {
      */
     public Builder clock(Clock clock) {
       this.clock = Objects.requireNonNull(clock, "clock is required");
+      return this;
+    }
+
+    /**
+     * Overrides the monotonic time the drain budget is measured on. Package-private test seam:
+     * production uses {@link System#nanoTime()}.
+     */
+    Builder drainTicker(LongSupplier drainTicker) {
+      this.drainTicker = drainTicker;
       return this;
     }
 

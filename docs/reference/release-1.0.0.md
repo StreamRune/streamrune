@@ -891,17 +891,19 @@ license.
   lease is a logged no-op. Delivery outcomes are classified per publisher by hand-off phase: a
   **transport** failure (pre-hand-off) is retried forever and never counts toward `FAILED`; an
   **in-flight** failure (post-hand-off) holds the claim until the lease expires; a **per-entry**
-  rejection burns an attempt and reaches terminal `FAILED` after `maxAttempts`. The per-cycle publish
+  rejection burns an attempt and reaches terminal `FAILED` after `maxAttempts`. The per-batch publish
   deadline is `min(80 % of the lease, lease − publisher.inFlightHorizon())`. `build()` refuses a lease
   that does not strictly exceed the publisher's in-flight horizon, a store whose `orderingMode()` or
   `claimLease()` returns `null` (a non-positive lease is the explicit opt-out), and a non-positive
   batch size or poll interval.
 - A poll cycle claims the next batch at once while the last one came back full (`batchSize`
-  entries) and every entry of it was confirmed or rejected for itself; a partial or empty batch, a
-  stop, a publish cut short by its deadline, a transport failure or an in-flight hand-off ends the
-  cycle, and the relay waits `pollInterval`. One cycle drains for at most ten poll intervals. Each
-  batch keeps its own claim, publish deadline and `outbox/relay` span; the gauges are sampled once
-  per cycle.
+  entries), delivered at least one entry, and every entry of it was confirmed or rejected for
+  itself. A partial or empty batch, a batch that delivered nothing, a batch that claimed again an
+  entry the cycle already failed, a stop, a publish cut short by its deadline, a transport failure
+  or an in-flight hand-off ends the cycle, and the relay waits `pollInterval`. One cycle drains for
+  at most ten poll intervals plus the batch in progress, measured on the monotonic clock. Each batch
+  keeps its own claim, publish deadline and `outbox/relay` span; the gauges are sampled once per
+  cycle, so they can be up to about eleven poll intervals old while a backlog drains.
 - Stopping the relay mid-batch records the deliveries the broker confirmed, keeps an entry whose
   publish the stop cut short claimed until its lease expires, and returns the untouched entries to
   `PENDING` at once.
