@@ -174,7 +174,7 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 89);
+        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 90);
   }
 
   @Test

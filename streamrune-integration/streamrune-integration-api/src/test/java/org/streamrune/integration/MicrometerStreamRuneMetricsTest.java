@@ -511,6 +511,7 @@ class MicrometerStreamRuneMetricsTest {
     metrics.recordSubscriptionDeliveryLatency(1_000L);
     metrics.recordSubscriptionLag(SubscriptionName.of("orders"), 3);
     metrics.recordListenerReconnect("streamrune_events");
+    metrics.recordTracingFailure("start");
     metrics.recordQueryDispatched("FindOrder");
     metrics.recordQueryDuration("FindOrder", 1_000L);
     metrics.recordQueryCacheHit("FindOrder");

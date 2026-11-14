@@ -136,7 +136,6 @@ class PgAdvisoryLockerTracingFailureIT {
         new BrokenTracing(Fault.START, exception),
         new BrokenTracing(Fault.SET_ATTRIBUTE, exception),
         new BrokenTracing(Fault.RECORD_SUCCESS, exception),
-        new BrokenTracing(Fault.RECORD_ERROR, exception),
         new BrokenTracing(Fault.CLOSE, exception),
         new BrokenTracing(Fault.CLOSE, () -> new OutOfMemoryError("in the span's end")));
   }
@@ -194,6 +193,30 @@ class PgAdvisoryLockerTracingFailureIT {
           assertThat(lock).as("the other replica locks o-%s", i).isNotNull();
         }
       }
+    }
+  }
+
+  /**
+   * An acquisition that fails for a reason of its own — here a timeout the locker rejects — records
+   * its exception on the span; a tracing that throws there does not replace it.
+   */
+  @org.junit.jupiter.api.Test
+  void aFailedAcquisitionIsReportedByItsOwnException_whenRecordingItThrows() throws Exception {
+    BrokenTracing broken =
+        new BrokenTracing(
+            Fault.RECORD_ERROR, () -> new IllegalStateException("the tracing failed"));
+    try (PgAdvisoryLocker locker =
+        PgAdvisoryLocker.withDedicatedPool(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), 2)
+            .traced(broken)) {
+      Throwable seen = null;
+      try (AutoCloseable lock = locker.acquireLock(order(1), Duration.ofMillis(-1))) {
+        assertThat(lock).isNull();
+      } catch (Throwable t) {
+        seen = t;
+      }
+      assertThat(seen).isInstanceOf(IllegalArgumentException.class);
+      assertThat(broken.thrown.get()).as("recording the error threw").isEqualTo(1);
+      assertThat(advisoryLocksHeld()).isZero();
     }
   }
 

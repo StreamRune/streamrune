@@ -115,6 +115,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case OPENTELEMETRY_SWITCHED_OFF -> this::anOpenTelemetrySwitchedOffBySdkSettingsStartsNoSpan;
       case ASYNC_CONTINUES_TRACE -> this::anAsyncCommandContinuesTheCallersTrace;
       case APPLICATION_LOCKER_TRACED -> this::anApplicationsLockerIsTracedOnItsOwnLocks;
+      case TRACING_FAILURES_COUNTED -> this::aTracingThatThrowsFailsNothingAndIsCounted;
       case READABLE_VALUES -> this::anUnreadableValueRefusesStartNamingThePropertyAndTheValue;
       case MISSPELLED_NAMES -> this::aMisspelledPropertyNameRefusesStart;
       case ZERO_WITH_ITS_UNIT -> this::zeroWithItsUnitReachesTheRetentionCheck;
