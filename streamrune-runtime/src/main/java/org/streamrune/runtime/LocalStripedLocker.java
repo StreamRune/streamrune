@@ -29,6 +29,13 @@ public final class LocalStripedLocker implements AggregateLocker {
 
   private final Lock[] stripes;
 
+  /**
+   * The handle of each stripe, whose {@code close()} unlocks it, built once: an acquisition
+   * allocates nothing between the grant of the lock and the handle it returns, so nothing can be
+   * thrown there that would leave the stripe locked with no one holding its handle.
+   */
+  private final AutoCloseable[] handles;
+
   private final StreamRuneTracing tracing;
 
   /** Whether {@link #tracing} records the lock area, read once. */
@@ -57,12 +64,17 @@ public final class LocalStripedLocker implements AggregateLocker {
     for (int i = 0; i < stripeCount; i++) {
       stripes[i] = new ReentrantLock(fair);
     }
+    this.handles = new AutoCloseable[stripeCount];
+    for (int i = 0; i < stripeCount; i++) {
+      handles[i] = stripes[i]::unlock;
+    }
     this.tracing = StreamRuneTracing.NOOP;
     this.traced = false;
   }
 
-  private LocalStripedLocker(Lock[] stripes, StreamRuneTracing tracing) {
+  private LocalStripedLocker(Lock[] stripes, AutoCloseable[] handles, StreamRuneTracing tracing) {
     this.stripes = stripes;
+    this.handles = handles;
     this.tracing = GuardedTracing.of(tracing);
     this.traced = this.tracing.enabled(TracingArea.LOCK);
   }
@@ -80,7 +92,8 @@ public final class LocalStripedLocker implements AggregateLocker {
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
   public LocalStripedLocker traced(StreamRuneTracing tracing) {
-    return new LocalStripedLocker(stripes, Objects.requireNonNull(tracing, "tracing is required"));
+    return new LocalStripedLocker(
+        stripes, handles, Objects.requireNonNull(tracing, "tracing is required"));
   }
 
   /**
@@ -132,7 +145,9 @@ public final class LocalStripedLocker implements AggregateLocker {
           scope.close();
         }
       } catch (Throwable tracingFailure) {
-        notAcquired.addSuppressed(tracingFailure);
+        if (tracingFailure != notAcquired) {
+          notAcquired.addSuppressed(tracingFailure);
+        }
       }
       throw notAcquired;
     }
@@ -158,7 +173,9 @@ public final class LocalStripedLocker implements AggregateLocker {
     try {
       lock.close();
     } catch (Throwable releaseFailure) {
-      failure.addSuppressed(releaseFailure);
+      if (releaseFailure != failure) {
+        failure.addSuppressed(releaseFailure);
+      }
     }
   }
 
@@ -178,6 +195,6 @@ public final class LocalStripedLocker implements AggregateLocker {
       Thread.currentThread().interrupt();
       throw new LockAcquisitionException(streamId, "Interrupted acquiring lock", e);
     }
-    return lock::unlock;
+    return handles[index];
   }
 }

@@ -341,7 +341,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
           scope.close();
         }
       } catch (Throwable tracingFailure) {
-        notAcquired.addSuppressed(tracingFailure);
+        if (tracingFailure != notAcquired) {
+          notAcquired.addSuppressed(tracingFailure);
+        }
       }
       throw notAcquired;
     }
@@ -370,7 +372,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     try {
       lock.close();
     } catch (Throwable releaseFailure) {
-      failure.addSuppressed(releaseFailure);
+      if (releaseFailure != failure) {
+        failure.addSuppressed(releaseFailure);
+      }
     }
   }
 
@@ -402,7 +406,18 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     // a catch of SQLException alone misses), or an Error (OOME, a lazy driver LinkageError)
     // from the lock attempt. Without this the pool slot leaks permanently and, after maxPoolSize
     // such events, the whole command path deadlocks long after the fault cleared.
+    AutoCloseable handle;
     try {
+      // The handle is built before the lock is asked for: nothing is allocated between the grant
+      // of the lock and the return, so no Error there can drop a handle that holds the lock.
+      handle =
+          () -> {
+            try {
+              conn.commit();
+            } finally {
+              conn.close();
+            }
+          };
       try {
         conn.setAutoCommit(false);
       } catch (SQLException e) {
@@ -438,13 +453,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
       throw t;
     }
 
-    return () -> {
-      try {
-        conn.commit();
-      } finally {
-        conn.close();
-      }
-    };
+    return handle;
   }
 
   private static void markTimedOut(boolean[] timedOut) {
