@@ -25,11 +25,21 @@ import org.streamrune.test.EventStoreContract.CrashPoint;
  * installed by {@link #install()}, whose backend terminates itself with {@code
  * pg_terminate_backend(pg_backend_pid())} in the middle of the statement, so PostgreSQL rolls back
  * the transaction as it does for a dead client. Each trigger fires once per {@link #arm}: it is
- * armed by setting its sequence so that the next {@code nextval} returns {@code 2}, and a sequence
- * is not rolled back with the transaction that advanced it. A point after the write is durable
- * cannot be reached from the server: the connections of {@link #connections(DataSource)} commit, or
- * run an autocommit update, then terminate their backend and report the lost acknowledgement a dead
- * connection reports, SQLState {@code 08006}.
+ * armed by setting its sequence so that a later {@code nextval} returns {@code 2}, and a sequence
+ * is not rolled back with the transaction that advanced it.
+ *
+ * <p>A trigger kill lands inside the statement that writes the row: the row is written and its
+ * statement has not returned. A point therefore shows that nothing the write did before that
+ * statement was committed on its own; the row of the killed statement is gone whatever the store's
+ * transactions are. So the two points named after a first row fire on the second row, when the
+ * statement of the first has returned: a store that commits rows one at a time keeps that first
+ * row, and the case sees it. The window after the key claim's statement belongs to the next point:
+ * a key committed apart from its events survives a kill at {@code AFTER_OFFSET_RESERVATION}, not
+ * one at {@code AFTER_KEY_CLAIM}.
+ *
+ * <p>A point after the write is durable cannot be reached from the server: the connections of
+ * {@link #connections(DataSource)} commit, or run an autocommit update, then terminate their
+ * backend and report the lost acknowledgement a dead connection reports, SQLState {@code 08006}.
  *
  * <p>Arming applies to the database, not to one store: the crash cases run one write at a time.
  */
@@ -46,6 +56,10 @@ final class PostgresCrashPoints {
     TRIGGERS.put(CrashPoint.AFTER_FIRST_OUTBOX_WRITE, "AFTER INSERT ON outbox_events");
     TRIGGERS.put(CrashPoint.DURING_SNAPSHOT_SAVE, "AFTER INSERT OR UPDATE ON snapshot_store");
   }
+
+  /** The points named after a first row, whose trigger fires on the second (class javadoc). */
+  private static final Set<CrashPoint> SECOND_ROW =
+      Set.of(CrashPoint.AFTER_FIRST_EVENT_WRITE, CrashPoint.AFTER_FIRST_OUTBOX_WRITE);
 
   private static final Set<CrashPoint> AFTER_DURABLE =
       Set.of(CrashPoint.AFTER_COMMIT, CrashPoint.AFTER_SNAPSHOT_COMMIT);
@@ -103,15 +117,22 @@ final class PostgresCrashPoints {
     }
   }
 
-  /** Arms {@code point}: the next write over the database that reaches it dies there. */
+  /**
+   * Arms {@code point}: the next write over the database that reaches it dies there. A point after
+   * the write is durable is taken by the next commit on a connection of {@link
+   * #connections(DataSource)}, of a write or of a read transaction, or by the next autocommit
+   * update; arm it right before the write.
+   */
   void arm(CrashPoint point) {
     if (AFTER_DURABLE.contains(point)) {
       dieAfterDurable = true;
       return;
     }
+    // is_called false: the next nextval returns 1, the one after it 2
+    String fires = SECOND_ROW.contains(point) ? ", 1, false" : ", 1";
     try (var conn = admin.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("SELECT setval('" + name(point) + "', 1)");
+      stmt.execute("SELECT setval('" + name(point) + "'" + fires + ")");
     } catch (SQLException e) {
       throw new IllegalStateException(e);
     }

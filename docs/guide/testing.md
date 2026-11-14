@@ -954,12 +954,16 @@ class MyEventStoreContractTest extends EventStoreContract {
 
   @Override
   protected EventStore reopen(EventStore store, Setup setup) {
-    return build(setup);                                 // the same tables, another setup
+    return build(newDataSource(), setup);                // the same tables, connections of its own
   }
 
   private EventStore build(Setup setup) {
-    return new MyEventStore(dataSource, setup.registry(), setup.crypto(), setup.upcasters(),
-        setup.migrations(), new MyCommandInbox(dataSource));
+    return build(dataSource, setup);
+  }
+
+  private EventStore build(DataSource source, Setup setup) {
+    return new MyEventStore(source, setup.registry(), setup.crypto(), setup.upcasters(),
+        setup.migrations(), new MyCommandInbox(source));
   }
 }
 ```
@@ -985,12 +989,13 @@ class MyEventStoreContractTest extends EventStoreContract {
   runs the concurrency cases a second time with their workers split over `store` and a second
   instance from `reopen`, used alongside it as another process of the deployment; a store whose
   storage lives in one process, as the in-memory one, returns `false`. `supportsTransactionalOutbox()`
-  with `outboxOf(store)` checks that the entries `EventStoreContract.OUTBOX_MAPPER` derives are
+  (`false` by default) with `outboxOf(store)` checks that the entries `EventStoreContract.OUTBOX_MAPPER` derives are
   stored with their append and never with a refused or replayed one. `supportsCrashInjection()`
-  with `crashAt(store, point)` kills a write at each `EventStoreContract.CrashPoint` (after the key
+  (`false` by default) with `crashAt(store, point)` kills a write at each `EventStoreContract.CrashPoint` (after the key
   claim, the offset reservation, the first event, the first outbox entry or the commit of an append;
   during or after a snapshot save) and checks what a reopened store reads: nothing of a write killed
-  before it is durable, all of one killed after, and one effect for a keyed append run again.
+  before it is durable, all of one killed after, and at most one effect for a keyed append run
+  again.
   `PostgresEventStoreContractTest` kills the backend from a row trigger for the points before the
   commit, and from a connection wrapper right after it.
 - `CommandInboxContract` — `newStore()` returns an `Inboxed` pair: an empty `CommandInbox` and the

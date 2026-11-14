@@ -15,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -230,7 +231,8 @@ public abstract class EventStoreContract {
 
   /**
    * A new store instance over the same data as {@code store}, built with {@code setup} in place of
-   * the setup {@code store} was built with; {@code store} is not used again by the case.
+   * the setup {@code store} was built with; outside the {@code …AcrossInstances} cases, {@code
+   * store} is not used again by the case.
    *
    * <p>It models a deployment restarted with another configuration over the same database: the new
    * store reads every event, snapshot, purge record and command-inbox row {@code store} stored,
@@ -315,8 +317,10 @@ public abstract class EventStoreContract {
    * process's, and the call throws. Only that write dies; the suite then opens the store a
    * restarted process would, with {@link #reopen(EventStore, Setup)}, and checks what the write
    * left; it does not judge what the call throws. Called only when {@link
-   * #supportsCrashInjection()}, and only for {@link CrashPoint#AFTER_FIRST_OUTBOX_WRITE} when
-   * {@link #supportsTransactionalOutbox()}.
+   * #supportsCrashInjection()}: with {@link CrashPoint#AFTER_KEY_CLAIM} only when {@link
+   * #supportsIdempotentAppend()}, with {@link CrashPoint#AFTER_FIRST_OUTBOX_WRITE} only when {@link
+   * #supportsTransactionalOutbox()}, with the two snapshot points only when {@link
+   * #supportsSnapshots()}.
    */
   protected void crashAt(EventStore store, CrashPoint point) {
     throw new UnsupportedOperationException("the suite cannot crash a write of the store");
@@ -324,10 +328,11 @@ public abstract class EventStoreContract {
 
   /**
    * A point inside a write of a store at which the process running it can die. A store maps each to
-   * the moment of its own write that matches the description.
+   * the moment of its own write that matches the description; a store whose write has no such
+   * moment kills it at the next one it has.
    */
   public enum CrashPoint {
-    /** A keyed append has recorded its key; nothing else of it is written. */
+    /** A keyed append has claimed its key, not yet durably; nothing else of it is written. */
     AFTER_KEY_CLAIM,
     /** An append has taken the global offsets of its events; none of its events is written. */
     AFTER_OFFSET_RESERVATION,
@@ -468,14 +473,19 @@ public abstract class EventStoreContract {
 
   /**
    * The second instance an {@code …AcrossInstances} case runs half of its workers on, opened over
-   * the data of {@link #store} by {@link #withSecondInstance()}; {@link #store} itself otherwise.
+   * the data of {@link #store} by {@link #withSecondInstance()}; {@code null} otherwise.
    */
-  private EventStore peer;
+  private EventStore second;
 
   @BeforeEach
   void freshStore() {
     store = newStore(Setup.defaults());
-    peer = store;
+    second = null;
+  }
+
+  /** The second instance when a case opened one, {@link #store} otherwise. */
+  private EventStore peer() {
+    return second != null ? second : store;
   }
 
   /**
@@ -483,7 +493,7 @@ public abstract class EventStoreContract {
    * n}, the second instance for an odd one. Readers of a case call the second instance.
    */
   private EventStore instance(int n) {
-    return n % 2 == 0 ? store : peer;
+    return n % 2 == 0 ? store : peer();
   }
 
   /**
@@ -492,7 +502,7 @@ public abstract class EventStoreContract {
    */
   private void withSecondInstance() {
     assumeTrue(supportsMultipleInstances(), "the store's storage belongs to one instance");
-    peer = reopen(store, Setup.defaults());
+    second = reopen(store, Setup.defaults());
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -864,7 +874,7 @@ public abstract class EventStoreContract {
         () -> {
           GlobalOffset cursor = GlobalOffset.initial();
           while (writing.getCount() > 0 && !Thread.currentThread().isInterrupted()) {
-            List<EventEnvelope> read = peer.readGlobalStream(cursor, maxCount);
+            List<EventEnvelope> read = peer().readGlobalStream(cursor, maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readGlobalStream", read, batchSize, violations);
             }
@@ -880,7 +890,8 @@ public abstract class EventStoreContract {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             StreamId stream = streams.get(n % streams.size());
             List<EventEnvelope> read =
-                peer.readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
+                peer()
+                    .readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readStream", read, batchSize, violations);
             }
@@ -894,7 +905,10 @@ public abstract class EventStoreContract {
         () -> {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             recordPartialBatches(
-                "load", peer.load(streams.get(n % streams.size())).events(), batchSize, violations);
+                "load",
+                peer().load(streams.get(n % streams.size())).events(),
+                batchSize,
+                violations);
           }
           return null;
         });
@@ -1262,7 +1276,7 @@ public abstract class EventStoreContract {
     GlobalOffset[] checkpoint = {GlobalOffset.initial()};
     Runnable readPage =
         () -> {
-          List<EventEnvelope> page = peer.readGlobalStream(checkpoint[0], pageSize);
+          List<EventEnvelope> page = peer().readGlobalStream(checkpoint[0], pageSize);
           if (!page.isEmpty()) {
             read.addAll(page);
             checkpoint[0] = page.getLast().globalOffset();
@@ -1621,7 +1635,7 @@ public abstract class EventStoreContract {
         if (System.nanoTime() > deadline) {
           fail("the writers did not finish within 60 seconds");
         }
-        long head = peer.lastGlobalOffset().value();
+        long head = peer().lastGlobalOffset().value();
         List<Long> readable =
             global().stream().map(e -> e.globalOffset().value()).filter(o -> o <= head).toList();
         samples.add(new Sample(head, readable));
@@ -2187,7 +2201,7 @@ public abstract class EventStoreContract {
     assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
     List<StreamId> streams = new ArrayList<>();
     for (int r = 0; r < 8; r++) {
-      streams.add(r % 2 == 0 ? A : B);
+      streams.add(r % 4 < 2 ? A : B);
     }
 
     List<KeyedOutcome> outcomes = raceOneKey(IdempotencyKey.of("key-raced"), streams, 2);
@@ -2427,7 +2441,6 @@ public abstract class EventStoreContract {
     crashAt(store, point);
     assertThrows(Throwable.class, write::run, "the write died at " + point);
     store = reopen(store, Setup.defaults());
-    peer = store;
   }
 
   /**
@@ -2474,10 +2487,15 @@ public abstract class EventStoreContract {
       assertEquals(retry.globalOffsets(), replay.globalOffsets());
     }
     assertEquals(List.of(1L, 2L, 3L, 4L), versions(stored(A)), "the rerun stored the three once");
-    assertEquals(5, global().size());
-    assertEquals(offsets(global()), pagedByCheckpoint(), "paging visits every event once");
+    List<EventEnvelope> storedEvents = new ArrayList<>(stored(A));
+    storedEvents.addAll(stored(B));
+    List<GlobalOffset> expected =
+        offsets(storedEvents).stream()
+            .sorted(Comparator.comparingLong(GlobalOffset::value))
+            .toList();
+    assertEquals(expected, pagedByCheckpoint(), "paging visits every stored event once, in order");
     if (supportsTransactionalOutbox()) {
-      assertEquals(Set.copyOf(entryIds(global())), Set.copyOf(outboxIds(store)));
+      assertEquals(Set.copyOf(entryIds(storedEvents)), Set.copyOf(outboxIds(store)));
       assertEquals(5, outboxIds(store).size(), "each event has one outbox entry");
     }
   }

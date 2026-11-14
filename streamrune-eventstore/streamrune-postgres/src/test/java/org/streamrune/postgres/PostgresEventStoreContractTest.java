@@ -23,7 +23,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The shared event-store contract against {@link PostgresEventStore} on the shipped baseline, with
- * a command inbox, and its snapshots purged by {@link PostgresSnapshotStorePurger}.
+ * a command inbox and a transactional outbox, its snapshots purged by {@link
+ * PostgresSnapshotStorePurger} and its writes killed by {@link PostgresCrashPoints}.
  */
 @Testcontainers
 class PostgresEventStoreContractTest extends EventStoreContract {

@@ -122,7 +122,9 @@ public abstract class CommandInboxContract {
    * Arms {@code inboxed} so that the next keyed append of its store that reaches {@code point} dies
    * there as it would if the process running it were killed, as {@link
    * EventStoreContract#crashAt(EventStore, CrashPoint)} describes. Called only when {@link
-   * #supportsCrashInjection()}, with a point of an append.
+   * #supportsCrashInjection()}, with {@link CrashPoint#AFTER_KEY_CLAIM}, {@link
+   * CrashPoint#AFTER_OFFSET_RESERVATION}, {@link CrashPoint#AFTER_FIRST_EVENT_WRITE} or {@link
+   * CrashPoint#AFTER_COMMIT}.
    */
   protected void crashAt(Inboxed inboxed, CrashPoint point) {
     throw new UnsupportedOperationException("the suite cannot crash a write of the store");

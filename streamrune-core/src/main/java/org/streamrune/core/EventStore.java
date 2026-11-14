@@ -74,10 +74,14 @@ import org.streamrune.core.types.Version;
  *       once and in order.
  *   <li>A write interrupted after it became durable, before its caller learned so, is stored whole,
  *       as if it had returned.
- *   <li>An {@link #appendWithKey} repeated with the same key after either converges on exactly one
- *       effect: it stores its events once, or returns the recorded result with {@code
- *       alreadyApplied()} and stores nothing. A plain {@link #append} repeated after a durable
- *       interrupted one stores its events again: an append is not idempotent.
+ *   <li>An {@link #appendWithKey} repeated with the same key after either stores its events at most
+ *       once: it stores them, or returns the recorded result with {@code alreadyApplied()} and
+ *       stores nothing, or is refused as any append is (a version conflict when the stream has
+ *       moved on, a fence refusal) and stores nothing. A plain {@link #append} keeps no such
+ *       record: repeated with the same expected version after a durable interrupted one it is
+ *       refused with {@link OptimisticLockException}, because the head has moved; appended again at
+ *       the new head, as a command run again from a fresh load does, it stores its events a second
+ *       time.
  * </ul>
  *
  * <h2>Several instances</h2>
