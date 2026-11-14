@@ -981,11 +981,26 @@ class MyEventStoreContractTest extends EventStoreContract {
   `false`, and the suite checks the refusal instead. A store whose snapshots a `SnapshotPurger`
   purges overrides `purgeSnapshot(streamId)` to purge one and return `true`, which runs the purge
   generation cases. The saga forward fence has its own suite, `SagaForwardFenceContract`.
+  Three more hooks reach what the SPI cannot. `supportsMultipleInstances()` (`true` by default)
+  runs the concurrency cases a second time with their workers split over `store` and a second
+  instance from `reopen`, used alongside it as another process of the deployment; a store whose
+  storage lives in one process, as the in-memory one, returns `false`. `supportsTransactionalOutbox()`
+  with `outboxOf(store)` checks that the entries `EventStoreContract.OUTBOX_MAPPER` derives are
+  stored with their append and never with a refused or replayed one. `supportsCrashInjection()`
+  with `crashAt(store, point)` kills a write at each `EventStoreContract.CrashPoint` (after the key
+  claim, the offset reservation, the first event, the first outbox entry or the commit of an append;
+  during or after a snapshot save) and checks what a reopened store reads: nothing of a write killed
+  before it is durable, all of one killed after, and one effect for a keyed append run again.
+  `PostgresEventStoreContractTest` kills the backend from a row trigger for the points before the
+  commit, and from a connection wrapper right after it.
 - `CommandInboxContract` — `newStore()` returns an `Inboxed` pair: an empty `CommandInbox` and the
   event store whose `appendWithKey` writes its rows (the inbox has no write method of its own).
   `setProcessedAt(inboxed, key, processedAt)` moves a recorded row's processed time, so the
   retention cases age rows without waiting. It covers the recorded result of a processed command,
   the zero-event command, a failed keyed append that records nothing, and `deleteProcessedBefore`.
+  A pair whose keyed append can be killed overrides `supportsCrashInjection()`, `crashAt(inboxed,
+  point)` and `reopen(inboxed)`: a command killed before it is durable leaves no row, one killed
+  after is recorded with its events.
 - `OffsetStoreContract` — `newStore()` returns an `OffsetStore`. It covers reads, saves, per-name
   isolation, `reset` and the monotonic guard; a store without the guard overrides
   `guardsAgainstRegression()` to return `false`.

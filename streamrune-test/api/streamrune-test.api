@@ -83,16 +83,19 @@ public static final record org.streamrune.test.CommandBusProvenanceContract$Mark
 public abstract class org.streamrune.test.CommandInboxContract
   protected abstract org.streamrune.test.CommandInboxContract$Inboxed newStore()
   protected abstract void setProcessedAt(org.streamrune.test.CommandInboxContract$Inboxed, org.streamrune.core.types.IdempotencyKey, java.time.Instant)
+  protected boolean supportsCrashInjection()
   protected final org.streamrune.core.CommandInbox inbox()
   protected final org.streamrune.core.EventStore eventStore()
   protected org.streamrune.core.EventStore$IdempotentAppendResult process(org.streamrune.core.types.IdempotencyKey, org.streamrune.core.types.StreamId, long, int)
   protected org.streamrune.test.CommandInboxContract$Inboxed inboxed
+  protected org.streamrune.test.CommandInboxContract$Inboxed reopen(org.streamrune.test.CommandInboxContract$Inboxed)
   protected static final java.lang.String COMMAND_TYPE = "com.example.inbox.CreateProduct"
   protected static final java.time.Instant AGED
   protected static final org.streamrune.core.types.AggregateType PRODUCT
   protected static final org.streamrune.core.types.StreamId STREAM
   protected static final org.streamrune.core.types.StreamId STREAM_OTHER_TYPE
   protected static java.util.List<org.streamrune.core.EventEnvelope> events(org.streamrune.core.types.StreamId, long, int)
+  protected void crashAt(org.streamrune.test.CommandInboxContract$Inboxed, org.streamrune.test.EventStoreContract$CrashPoint)
   public <init>()
   public static final org.streamrune.core.types.EventType EVENT_TYPE
   public void aCommandTypeOfExactlyTheColumnWidthIsFoundAsRecorded()
@@ -100,6 +103,10 @@ public abstract class org.streamrune.test.CommandInboxContract
   public void aFoundRowIsBoundToItsOwnStreamAndNotToTheSameIdUnderAnotherType()
   public void aKeyDeletedByRetentionIsProcessedAgain()
   public void aKeyNeverProcessedIsNotFound()
+  public void aKeyedAppendKilledAfterClaimingItsKeyRecordsNothing()
+  public void aKeyedAppendKilledAfterItIsDurableIsRecordedWithItsEvents()
+  public void aKeyedAppendKilledAfterItsFirstEventRecordsNothing()
+  public void aKeyedAppendKilledAfterTakingItsOffsetsRecordsNothing()
   public void aKeyedAppendThatFailsRecordsNothing()
   public void aProcessedCommandIsFoundWithTheResultItRecorded()
   public void aReplayLeavesTheRecordedRowAsItWas()
@@ -151,14 +158,19 @@ public abstract class org.streamrune.test.EventStoreContract
   protected abstract org.streamrune.core.EventStore newStore(org.streamrune.test.EventStoreContract$Setup)
   protected abstract org.streamrune.core.EventStore reopen(org.streamrune.core.EventStore, org.streamrune.test.EventStoreContract$Setup)
   protected boolean purgeSnapshot(org.streamrune.core.types.StreamId)
+  protected boolean supportsCrashInjection()
   protected boolean supportsIdempotentAppend()
   protected boolean supportsLastGlobalOffset()
+  protected boolean supportsMultipleInstances()
   protected boolean supportsSnapshotSchemaVersions()
   protected boolean supportsSnapshots()
+  protected boolean supportsTransactionalOutbox()
+  protected java.util.List<java.lang.String> outboxIds(org.streamrune.core.EventStore)
   protected java.util.List<org.streamrune.core.EventEnvelope> global()
   protected java.util.List<org.streamrune.core.EventEnvelope> stored(org.streamrune.core.types.StreamId)
   protected org.streamrune.core.EventStore store
   protected org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, long, int, org.streamrune.core.types.IdempotencyKey, java.lang.String)
+  protected org.streamrune.core.outbox.OutboxStore outboxOf(org.streamrune.core.EventStore)
   protected static final java.lang.String COMMAND_TYPE = "com.example.contract.PlaceOrder"
   protected static final java.lang.String OTHER_COMMAND_TYPE = "com.example.contract.CancelOrder"
   protected static final org.streamrune.core.types.AggregateType ORDER
@@ -166,17 +178,21 @@ public abstract class org.streamrune.test.EventStoreContract
   protected static final org.streamrune.core.types.StreamId A_OTHER_TYPE
   protected static final org.streamrune.core.types.StreamId B
   protected static java.util.List<java.lang.Long> versions(java.util.List<org.streamrune.core.EventEnvelope>)
+  protected static java.util.List<java.lang.String> entryIds(java.util.List<org.streamrune.core.EventEnvelope>)
   protected static java.util.List<java.lang.String> values(java.util.List<org.streamrune.core.EventEnvelope>)
   protected static java.util.List<org.streamrune.core.EventEnvelope> events(org.streamrune.core.types.StreamId, long, int)
   protected static java.util.List<org.streamrune.core.types.GlobalOffset> offsets(java.util.List<org.streamrune.core.EventEnvelope>)
   protected static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, long)
   protected static void assertStrictlyIncreasing(java.util.List<org.streamrune.core.types.GlobalOffset>)
+  protected void crashAt(org.streamrune.core.EventStore, org.streamrune.test.EventStoreContract$CrashPoint)
   public <init>()
+  public static final org.streamrune.core.outbox.OutboxEventMapper OUTBOX_MAPPER
   public static final org.streamrune.core.types.EventType EVENT_TYPE
   public void aCommandTypeIsBoundedAtTheColumnWidthAndARefusedOneStoresNothing()
   public void aCryptoMappingFailureInAMigrationStepIsAnEventDeserializationException()
   public void aFirstAppendStoresVersionsFromOneInListOrder()
   public void aFirstKeyedAppendStoresItsEvents()
+  public void aFirstSnapshotSaveKilledBeforeItIsDurableLeavesNone()
   public void aFutureExpectedVersionIsRejectedAndStoresNothing()
   public void aFutureExpectedVersionOnANewStreamIsRejected()
   public void aKeyRecordedForAnotherCommandTypeIsRefused()
@@ -185,6 +201,11 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aKeyStoreOutageInAMigrationStepFailsTheLoadPlainly()
   public void aKeyStoreOutageOnReadIsAPlainEventStoreException()
   public void aKeyStoreOutageWhileDeserializingAUsableSnapshotFailsTheLoadPlainly()
+  public void aKeyedAppendKilledAfterClaimingItsKeyLeavesNothingAndItsRetryStoresOnce()
+  public void aKeyedAppendKilledAfterItIsDurableIsStoredWholeAndItsRetryIsAReplay()
+  public void aKeyedAppendKilledAfterItsFirstEventLeavesNothingAndItsRetryStoresOnce()
+  public void aKeyedAppendKilledAfterItsFirstOutboxEntryLeavesNothingAndItsRetryStoresOnce()
+  public void aKeyedAppendKilledAfterTakingItsOffsetsLeavesNothingAndItsRetryStoresOnce()
   public void aKeyedAppendRefusedForAStaleVersionLeavesTheKeyUnclaimed()
   public void aKeyedAppendWithAFutureVersionIsRefused()
   public void aLaterSnapshotReplacesTheEarlierOne()
@@ -194,6 +215,7 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aPurgeRemovesTheSnapshotAndRaisesTheGeneration()
   public void aReadEventCarriesItsStreamTypePayloadAndMetadata()
   public void aReadThatCannotReadAnEventFailsAsAWholeAndSkipsNothing()
+  public void aReaderPagingByCheckpointReadsEveryEventOnceAcrossInstances() throws java.lang.Exception
   public void aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce() throws java.lang.Exception
   public void aRejectedAppendDoesNotMoveTheHead()
   public void aRejectedMultiEventAppendStoresNoneOfItsEvents()
@@ -204,6 +226,7 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aReopenedStoreSeesTheStoredSnapshot()
   public void aReplayIsAnsweredFromTheRecordWhateverItCarries()
   public void aReplayReturnsTheRecordedResultAndStoresNothing()
+  public void aReplayedKeyStoresNoOutboxEntry()
   public void aSaveAtGenerationZeroOfANeverPurgedStreamIsStored()
   public void aSaveFromALoadAfterThePurgeIsStored()
   public void aSaveFromALoadBeforeThePurgeWritesNothing()
@@ -218,6 +241,8 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aSnapshotIsMigratedThroughEveryStepOfTheChain()
   public void aSnapshotOfARetiredStateTypeIsDiscarded()
   public void aSnapshotOfAStateTypeTheRegistryDoesNotResolveIsRefused()
+  public void aSnapshotSaveKilledAfterItIsDurableIsUsedAndSavesAgain()
+  public void aSnapshotSaveKilledBeforeItIsDurableKeepsTheEarlierSnapshot()
   public void aSnapshotSchemaVersionBelowOneIsRejected()
   public void aSnapshotStoredAboveTheExpectedVersionIsDiscarded()
   public void aSnapshotWhoseMigrationStepGoesPastTheExpectedVersionIsDiscarded()
@@ -239,7 +264,13 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aZeroEventCommandDoesNotConsultTheHead()
   public void aZeroEventCommandRecordsTheExpectedVersionAsItsFinalVersion()
   public void afterAConflictTheStreamContinuesWithoutAGap()
+  public void anAppendKilledAfterItIsDurableIsStoredWhole()
+  public void anAppendKilledAfterItsFirstEventLeavesNothing()
+  public void anAppendKilledAfterItsFirstOutboxEntryLeavesNothing()
+  public void anAppendKilledAfterTakingItsOffsetsLeavesNothing()
+  public void anAppendRefusedForItsVersionStoresNoOutboxEntry()
   public void anAppendReturnsOneGlobalOffsetPerEventInOrder()
+  public void anAppendStoresAnOutboxEntryForEachOfItsEvents()
   public void anEmptyAppendStoresNothingAndReturnsTheExpectedVersion()
   public void anEmptyAppendToAnExistingStreamStoresNothing()
   public void anErasedSubjectsTombstoneAUsableSnapshotRejectsFailsTheLoad()
@@ -255,9 +286,12 @@ public abstract class org.streamrune.test.EventStoreContract
   public void anUpcasterThatThrowsFailsTheReadWithAnEventDeserializationException()
   public void appendRefusesANullArgumentAndStoresNothing()
   public void appendingTheSameEnvelopeTwiceStoresTwoEvents()
+  public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceAcrossInstances() throws java.lang.Exception
   public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset() throws java.lang.Exception
   public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce() throws java.lang.Exception
+  public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnceAcrossInstances() throws java.lang.Exception
   public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream() throws java.lang.Exception
+  public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStreamAcrossInstances() throws java.lang.Exception
   public void distinctKeysAppendIndependently()
   public void eventTypesAsLongAsTheCoreTypeAllowsAreStoredAndRead()
   public void eventsStoredAfterTheHeadWasReadLieAboveIt()
@@ -273,7 +307,10 @@ public abstract class org.streamrune.test.EventStoreContract
   public void loadWithZeroUsesAnySnapshot()
   public void loadWithZeroWorksOnEveryStore()
   public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch() throws java.lang.Exception
+  public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatchAcrossInstances() throws java.lang.Exception
   public void noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun() throws java.lang.Exception
+  public void noReadReturnsPartOfAnAppendWhileMultiEventAppendsRunAcrossInstances() throws java.lang.Exception
+  public void nothingBecomesReadableAtOrBelowAHeadAcrossInstances() throws java.lang.Exception
   public void nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun() throws java.lang.Exception
   public void pagingByCheckpointVisitsEveryEventOnceInOrder()
   public void readGlobalStreamOfAnEmptyStoreIsEmpty()
@@ -290,6 +327,7 @@ public abstract class org.streamrune.test.EventStoreContract
   public void theHeadIsTheOffsetOfTheLastStoredEvent()
   public void theHeadOfAnEmptyStoreIsTheInitialOffset()
   public void theOffsetsOfAnAppendAreTheOffsetsItsEventsReadBackWith()
+  public void theOffsetsOfAnAppendFollowTheOrderOfItsEventsAcrossInstances() throws java.lang.Exception
   public void theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend() throws java.lang.Exception
   public void theSameIdUnderAnotherAggregateTypeIsAnotherStream()
   public void theSaveWithoutASchemaVersionStoresSchemaVersionOne()
@@ -311,6 +349,18 @@ public static final record org.streamrune.test.EventStoreContract$ContractState 
   public final int hashCode()
   public final java.lang.String toString()
   public java.lang.String marker()
+
+public static enum org.streamrune.test.EventStoreContract$CrashPoint
+  constants AFTER_KEY_CLAIM, AFTER_OFFSET_RESERVATION, AFTER_FIRST_EVENT_WRITE, AFTER_FIRST_OUTBOX_WRITE, AFTER_COMMIT, DURING_SNAPSHOT_SAVE, AFTER_SNAPSHOT_COMMIT
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_COMMIT
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_FIRST_EVENT_WRITE
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_FIRST_OUTBOX_WRITE
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_KEY_CLAIM
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_OFFSET_RESERVATION
+  public static final org.streamrune.test.EventStoreContract$CrashPoint AFTER_SNAPSHOT_COMMIT
+  public static final org.streamrune.test.EventStoreContract$CrashPoint DURING_SNAPSHOT_SAVE
+  public static org.streamrune.test.EventStoreContract$CrashPoint valueOf(java.lang.String)
+  public static org.streamrune.test.EventStoreContract$CrashPoint[] values()
 
 public static final record org.streamrune.test.EventStoreContract$Setup
   public <init>(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>)
