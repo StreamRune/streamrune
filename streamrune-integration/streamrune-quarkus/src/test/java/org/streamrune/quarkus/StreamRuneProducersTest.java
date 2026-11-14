@@ -128,7 +128,9 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     AggregateLocker locker =
         producers.aggregateLocker(
-            TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            TestProperties.defaults(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            unsatisfied());
     assertNotNull(locker);
   }
 
@@ -165,7 +167,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             TestBeanManagers.withInterceptors(),
@@ -192,7 +196,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             withNulls,
@@ -224,7 +230,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             TestBeanManagers.withInterceptors(),
@@ -944,7 +952,8 @@ class StreamRuneProducersTest {
         producers.streamRuneTracing(
             satisfied(OpenTelemetry.noop()),
             TestProperties.defaults(),
-            satisfied(TestProperties.config(Map.of())));
+            satisfied(TestProperties.config(Map.of())),
+            unsatisfied());
     assertSame(org.streamrune.core.tracing.StreamRuneTracing.NOOP, tracing);
   }
 
@@ -1408,7 +1417,8 @@ class StreamRuneProducersTest {
                     mock(EventStore.class),
                     producers.aggregateLocker(
                         TestProperties.defaults(),
-                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                        unsatisfied()),
                     TestProperties.defaults(),
                     unsatisfied(), // no application SnapshotPolicy bean
                     emptyInterceptorInstance(),
@@ -1447,7 +1457,8 @@ class StreamRuneProducersTest {
                     mock(EventStore.class),
                     producers.aggregateLocker(
                         TestProperties.defaults(),
-                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                        unsatisfied()),
                     TestProperties.defaults(),
                     unsatisfied(), // no application SnapshotPolicy bean
                     emptyInterceptorInstance(),
@@ -1481,7 +1492,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             mock(EventStore.class),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1509,7 +1522,9 @@ class StreamRuneProducersTest {
             producers.virtualThreadCommandBus(
                 mock(EventStore.class),
                 producers.aggregateLocker(
-                    TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                    TestProperties.defaults(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                    unsatisfied()),
                 TestProperties.defaults(),
                 unsatisfied(), // no application SnapshotPolicy bean
                 emptyInterceptorInstance(),
@@ -1550,7 +1565,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1602,7 +1619,7 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES).withCommandInbox(inbox),
             producers.aggregateLocker(
-                properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP, unsatisfied()),
             properties,
             unsatisfied(),
             emptyInterceptorInstance(),
@@ -1747,7 +1764,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             eventStore,
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             emptyInterceptorInstance(),
@@ -1893,7 +1912,9 @@ class StreamRuneProducersTest {
         producers.virtualThreadCommandBus(
             store,
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             snapshotPolicyInstance,
             emptyInterceptorInstance(),

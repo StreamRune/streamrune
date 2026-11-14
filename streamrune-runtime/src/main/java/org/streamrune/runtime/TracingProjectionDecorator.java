@@ -54,8 +54,8 @@ public final class TracingProjectionDecorator implements Projection {
       ProjectionName projectionName, Projection delegate, StreamRuneTracing tracing) {
     this.projectionName = Objects.requireNonNull(projectionName, "projectionName is required");
     this.delegate = Objects.requireNonNull(delegate, "delegate is required");
-    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
-    this.traced = tracing.enabled(TracingArea.PROJECTION);
+    this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
+    this.traced = this.tracing.enabled(TracingArea.PROJECTION);
   }
 
   /**
@@ -72,14 +72,14 @@ public final class TracingProjectionDecorator implements Projection {
    */
   public static Projection traced(
       ProjectionName projectionName, Projection projection, StreamRuneTracing tracing) {
-    Objects.requireNonNull(tracing, "tracing is required");
+    StreamRuneTracing guarded = GuardedTracing.of(tracing);
     if (projection == null
         || projectionName == null
-        || !tracing.enabled(TracingArea.PROJECTION)
+        || !guarded.enabled(TracingArea.PROJECTION)
         || projection instanceof TracingProjectionDecorator) {
       return projection;
     }
-    return new TracingProjectionDecorator(projectionName, projection, tracing);
+    return new TracingProjectionDecorator(projectionName, projection, guarded);
   }
 
   @Override
@@ -160,9 +160,9 @@ public final class TracingProjectionDecorator implements Projection {
       T result = call.get();
       scope.recordSuccess();
       return result;
-    } catch (Exception e) {
-      scope.recordError(e);
-      throw e;
+    } catch (Throwable t) {
+      scope.recordError(t);
+      throw t;
     } finally {
       scope.close();
     }

@@ -302,7 +302,12 @@ public class StreamRuneAutoConfiguration {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
-            .tracing(tracingOf(tracingProvider))
+            // The tracing meets the metrics bean here: its guard counts its failures there.
+            .tracing(
+                org.streamrune.runtime.GuardedTracing.of(
+                    tracingOf(tracingProvider),
+                    metricsProvider.getIfAvailable(
+                        () -> org.streamrune.core.StreamRuneMetrics.NOOP)))
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
             // when no metrics bean exists (behavior unchanged).
@@ -399,13 +404,20 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
-   * through the {@link StreamRuneTracing} bean.
+   * through the {@link StreamRuneTracing} bean; a failure of that tracing counts in the {@link
+   * org.streamrune.core.StreamRuneMetrics} bean.
    */
   @Bean
   @ConditionalOnMissingBean(org.streamrune.core.AggregateLocker.class)
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneProperties properties, ObjectProvider<StreamRuneTracing> tracingProvider) {
-    return new LocalStripedLocker(properties.stripeCount()).traced(tracingOf(tracingProvider));
+      StreamRuneProperties properties,
+      ObjectProvider<StreamRuneTracing> tracingProvider,
+      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+    return new LocalStripedLocker(properties.stripeCount())
+        .traced(
+            org.streamrune.runtime.GuardedTracing.of(
+                tracingOf(tracingProvider),
+                metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP)));
   }
 
   /** The {@link StreamRuneTracing} bean, or {@link StreamRuneTracing#NOOP} without one. */
@@ -595,7 +607,12 @@ public class StreamRuneAutoConfiguration {
     List<CommandInterceptor> interceptors =
         CommandInterceptorOrdering.sorted(interceptorProvider.orderedStream().toList());
 
-    StreamRuneTracing tracing = tracingOf(tracingProvider);
+    // The tracing meets the metrics bean here: its guard counts its failures there, and it is
+    // this guard the locker and the bus are handed.
+    StreamRuneTracing tracing =
+        org.streamrune.runtime.GuardedTracing.of(
+            tracingOf(tracingProvider),
+            metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
     var builder =
         VirtualThreadCommandBus.builder()
             .allowGraalJit(properties.jvm().allowGraalJit())
@@ -922,7 +939,9 @@ public class StreamRuneAutoConfiguration {
      * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
      * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#SPRING switches}
      * that turn OpenTelemetry tracing off ({@code management.opentelemetry.enabled=false}, {@code
-     * otel.sdk.disabled=true}). An application {@code StreamRuneTracing} bean replaces it.
+     * otel.sdk.disabled=true}). An application {@code StreamRuneTracing} bean replaces it. A
+     * failure of the tracing counts in the {@link org.streamrune.core.StreamRuneMetrics} bean
+     * ({@code streamrune.tracing.failures}).
      *
      * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so
      * an SDK the application registers globally is registered before the context starts, or is an
@@ -933,11 +952,16 @@ public class StreamRuneAutoConfiguration {
     public StreamRuneTracing streamRuneTracing(
         ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry,
         StreamRuneProperties properties,
-        org.springframework.core.env.Environment environment) {
-      return tracingOf(
-          openTelemetry.getIfAvailable(),
-          properties.tracing().settings(),
-          environment::getProperty);
+        org.springframework.core.env.Environment environment,
+        ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+      // Made counting: a failure of the tracing counts in the metrics bean wherever the bean is
+      // handed to, the application's own components included.
+      return org.streamrune.runtime.GuardedTracing.of(
+          tracingOf(
+              openTelemetry.getIfAvailable(),
+              properties.tracing().settings(),
+              environment::getProperty),
+          metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
     }
 
     /**
@@ -979,7 +1003,10 @@ public class StreamRuneAutoConfiguration {
    */
   static org.streamrune.core.AggregateLocker traced(
       org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
-    if (!tracing.enabled(org.streamrune.core.tracing.TracingArea.LOCK)) {
+    // Asked through the guard, like every other use of the tracing: one that throws here traces
+    // no lock and fails no startup.
+    if (!org.streamrune.runtime.GuardedTracing.of(tracing)
+        .enabled(org.streamrune.core.tracing.TracingArea.LOCK)) {
       return locker;
     }
     if (locker instanceof LocalStripedLocker local) {

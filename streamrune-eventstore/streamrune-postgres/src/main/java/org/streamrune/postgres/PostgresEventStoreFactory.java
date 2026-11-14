@@ -20,6 +20,7 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.upcasting.EventUpcaster;
+import org.streamrune.runtime.GuardedTracing;
 
 /**
  * Factory for {@link PostgresEventStore}: checks the server version, applies and validates the
@@ -456,7 +457,7 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
         .outboxEventMapper(outboxEventMapper)
         .commandInbox(commandInbox)
         .statementTimeout(statementTimeout)
-        .tracing(tracing)
+        .tracing(GuardedTracing.of(tracing, metrics))
         .buildAfterCryptoCheck();
   }
 

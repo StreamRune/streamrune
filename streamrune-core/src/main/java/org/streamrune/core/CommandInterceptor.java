@@ -151,7 +151,10 @@ public interface CommandInterceptor {
    *
    * <p>{@code after()} and {@code onError()} invoke both members even when the first-called member
    * throws: the remaining member still runs, and any secondary failure is attached as a suppressed
-   * exception of the one that propagates (the bus logs and isolates it).
+   * exception of the one that propagates (the bus logs and isolates it). An {@link Error} a member
+   * throws is handled the same way, so the other member still releases what its {@code before()}
+   * opened; when one member throws an {@code Error} and the other an exception, the {@code Error}
+   * is the one that propagates, with the exception suppressed on it.
    */
   static CommandInterceptor compose(CommandInterceptor first, CommandInterceptor second) {
     return new CommandInterceptor() {
@@ -162,13 +165,13 @@ public interface CommandInterceptor {
         }
         try {
           return second.before(ctx);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
           // first.before() completed, so per the lifecycle contract it must be notified of the
           // failure even though the bus only sees the composed unit as the thrower.
           try {
             first.onError(ctx, e);
-          } catch (RuntimeException onErrorFailure) {
-            e.addSuppressed(onErrorFailure);
+          } catch (Throwable onErrorFailure) {
+            throw bothFailures(e, onErrorFailure);
           }
           throw e;
         }
@@ -178,11 +181,11 @@ public interface CommandInterceptor {
       public void after(CommandContext ctx) {
         try {
           second.after(ctx);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
           try {
             first.after(ctx);
-          } catch (RuntimeException alsoFailed) {
-            e.addSuppressed(alsoFailed);
+          } catch (Throwable alsoFailed) {
+            throw bothFailures(e, alsoFailed);
           }
           throw e;
         }
@@ -193,17 +196,45 @@ public interface CommandInterceptor {
       public void onError(CommandContext ctx, Throwable error) {
         try {
           second.onError(ctx, error);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
           try {
             first.onError(ctx, error);
-          } catch (RuntimeException alsoFailed) {
-            e.addSuppressed(alsoFailed);
+          } catch (Throwable alsoFailed) {
+            throw bothFailures(e, alsoFailed);
           }
           throw e;
         }
         first.onError(ctx, error);
       }
     };
+  }
+
+  /**
+   * Throws the one of two failures of a composed interceptor that propagates, with the other
+   * suppressed on it: {@code primary}, the one thrown first, unless only {@code secondary} is an
+   * {@link Error} — an {@code Error} is never demoted to the suppressed exception of an exception,
+   * which the bus would log and swallow. The same throwable twice is thrown as it is. A member's
+   * checked exception that it does not declare is handled as its unchecked ones are.
+   *
+   * @return never; declared so that a caller can write {@code throw bothFailures(...)}
+   */
+  private static RuntimeException bothFailures(Throwable primary, Throwable secondary) {
+    Throwable thrown = primary;
+    Throwable suppressed = secondary;
+    if (secondary instanceof Error && !(primary instanceof Error)) {
+      thrown = secondary;
+      suppressed = primary;
+    }
+    if (suppressed != thrown) {
+      thrown.addSuppressed(suppressed);
+    }
+    return sneakyThrow(thrown);
+  }
+
+  /** Throws {@code thrown} as it is, a checked exception a member let out undeclared included. */
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> RuntimeException sneakyThrow(Throwable thrown) throws T {
+    throw (T) thrown;
   }
 
   /** Returns a no-op interceptor that does nothing. */

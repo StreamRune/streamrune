@@ -152,7 +152,7 @@ public static final record org.streamrune.micronaut.StreamRuneMicronautCryptoPro
 
 public class org.streamrune.micronaut.StreamRuneMicronautModule
   public <init>()
-  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.tracing.StreamRuneTracing, org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
   public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
   public org.streamrune.core.QueryBus queryBus(org.streamrune.runtime.SimpleQueryBus, org.streamrune.runtime.CachingQueryBus, org.streamrune.core.audit.AuditStore)
@@ -162,7 +162,7 @@ public class org.streamrune.micronaut.StreamRuneMicronautModule
   public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(javax.sql.DataSource, org.streamrune.micronaut.StreamRuneMicronautProperties)
-  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(io.micronaut.context.BeanContext, org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.env.Environment)
+  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(io.micronaut.context.BeanContext, org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.env.Environment, org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.integration.MicrometerStreamRuneMetrics micrometerStreamRuneMetrics(io.micrometer.core.instrument.MeterRegistry, org.streamrune.micronaut.StreamRuneMicronautProperties)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.integration.AuthenticatedUserResolver, boolean)
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()

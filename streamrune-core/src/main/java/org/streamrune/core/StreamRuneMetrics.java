@@ -425,6 +425,17 @@ public interface StreamRuneMetrics {
       SubscriptionName subscriptionName, java.util.function.LongSupplier lagSupplier) {}
 
   /**
+   * Records one failure of the tracing: a {@code StreamRuneTracing}, or a scope it returned, threw,
+   * and the guard in front of it caught that, so the traced work went on without the span. See
+   * {@link org.streamrune.core.metrics.MetricNames#TRACING_FAILURES}.
+   *
+   * @param operation the operation of the tracing seam that threw, one of a fixed set: {@code
+   *     enabled}, {@code start}, {@code startChild}, {@code propagating}, {@code setAttribute},
+   *     {@code recordSuccess}, {@code recordError}, {@code link}, {@code close}
+   */
+  default void recordTracingFailure(String operation) {}
+
+  /**
    * Records a LISTEN/NOTIFY listener reconnect. Incremented each time the push-notification
    * connection is lost and the listener re-establishes (or attempts to). See {@link
    * org.streamrune.core.metrics.MetricNames#SUBSCRIPTIONS_LISTENER_RECONNECTS}.

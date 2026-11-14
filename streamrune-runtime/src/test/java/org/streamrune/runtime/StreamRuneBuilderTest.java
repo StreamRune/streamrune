@@ -210,7 +210,10 @@ class StreamRuneBuilderTest {
         .tracing(tracing)
         .build();
 
-    assertSame(tracing, received.get().tracing());
+    // The factory gets the application's tracing behind the facade's guard: the one guard the bus,
+    // its locker and the projections get, so a store built from it is guarded and counted alike.
+    assertTrue(received.get().tracing() instanceof GuardedTracing);
+    assertEquals("NamedTracing", received.get().tracing().toString());
   }
 
   @Test
@@ -227,7 +230,10 @@ class StreamRuneBuilderTest {
         .tracing(tracing)
         .build();
 
-    assertSame(tracing, received.get().tracing());
+    // The factory gets the application's tracing behind the facade's guard: the one guard the bus,
+    // its locker and the projections get, so a store built from it is guarded and counted alike.
+    assertTrue(received.get().tracing() instanceof GuardedTracing);
+    assertEquals("NamedTracing", received.get().tracing().toString());
   }
 
   @Test
@@ -257,6 +263,11 @@ class StreamRuneBuilderTest {
         SpanLink link,
         SpanBaggage baggage) {
       return TraceScope.NOOP;
+    }
+
+    @Override
+    public String toString() {
+      return "NamedTracing";
     }
   }
 

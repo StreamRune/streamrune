@@ -93,6 +93,7 @@ public final class org.streamrune.integration.MicrometerStreamRuneMetrics implem
   public void recordSubscriptionEventReceived()
   public void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
   public void recordSystemicKeyStoreFailure()
+  public void recordTracingFailure(java.lang.String)
   public void registerInFlightCommandsGauge(java.util.function.LongSupplier)
   public void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
 

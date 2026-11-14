@@ -287,7 +287,11 @@ public class ProjectionAutoConfig {
       return null;
     }
     var builder = InlineProjectionInterceptor.builder();
-    StreamRuneTracing tracing = tracingOf(tracingProvider);
+    // The tracing meets the metrics bean here: its guard counts its failures there.
+    StreamRuneTracing tracing =
+        org.streamrune.runtime.GuardedTracing.of(
+            tracingOf(tracingProvider),
+            metricsProvider.getIfAvailable(() -> StreamRuneMetrics.NOOP));
     for (var e : entries) {
       // INLINE has no checkpoint to be transactional with: only AT_LEAST_ONCE_IDEMPOTENT boots.
       ProjectionProcessorResolution.requireInlineMode(e.name(), e.deliveryMode());

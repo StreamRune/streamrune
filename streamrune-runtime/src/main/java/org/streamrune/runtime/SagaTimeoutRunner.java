@@ -276,8 +276,8 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       Duration claimWait,
       Duration anchorGrace,
       StreamRuneTracing tracing) {
-    this.tracing = tracing;
-    this.traced = tracing.enabled(TracingArea.SAGA);
+    this.tracing = GuardedTracing.of(tracing, metrics);
+    this.traced = this.tracing.enabled(TracingArea.SAGA);
     this.stepLock = stepLock;
     this.boundRunner = boundRunner;
     this.claimWait = claimWait;
@@ -309,7 +309,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
             : inboxRetentionMaxAge;
     this.executor =
         new SagaStepExecutor<>(
-            SagaDeciderAdapter.compensationOnly(decider), sagaStore, commandBus, metrics, tracing);
+            SagaDeciderAdapter.compensationOnly(decider),
+            sagaStore,
+            commandBus,
+            metrics,
+            this.tracing);
     Duration maxBackoff =
         pollInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? pollInterval : MAX_FAILURE_BACKOFF;
     this.pollLoop =
@@ -735,10 +739,14 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
       return false;
     }
-    TraceScope scope = startTimeoutSpan(sagaId);
+    // The claim hold is taken: everything from here to its release runs inside the try whose
+    // finally releases it, the start of the span included. A hold that outlived this method would
+    // keep the saga's step lock with the poll thread for as long as the runner lives.
+    TraceScope scope = TraceScope.NOOP;
     try {
       LoadedSaga<S> claimedByAStep;
       try {
+        scope = startTimeoutSpan(sagaId);
         deferredClaims.remove(sagaId);
         Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
         if (current.isEmpty() || current.get().status().isHalted()) {

@@ -138,7 +138,7 @@ public class org.streamrune.quarkus.StreamRuneLifecycle
 
 public class org.streamrune.quarkus.StreamRuneProducers
   public <init>()
-  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.core.tracing.StreamRuneTracing, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
   public org.streamrune.core.EventStoreFactory postgresEventStoreFactory(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresEventAuditStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxEventMapper>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresOutboxStore>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresCommandInbox>, jakarta.enterprise.inject.Instance<org.streamrune.core.CommandInbox>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
@@ -150,7 +150,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(jakarta.enterprise.inject.Instance<javax.sql.DataSource>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
-  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(jakarta.enterprise.inject.Instance<io.opentelemetry.api.OpenTelemetry>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>)
+  public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(jakarta.enterprise.inject.Instance<io.opentelemetry.api.OpenTelemetry>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.integration.AuthenticatedUserResolver quarkusAuthenticatedUserResolver(jakarta.enterprise.inject.Instance<io.quarkus.security.identity.SecurityIdentity>)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.integration.AuthenticatedUserResolver>)
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()

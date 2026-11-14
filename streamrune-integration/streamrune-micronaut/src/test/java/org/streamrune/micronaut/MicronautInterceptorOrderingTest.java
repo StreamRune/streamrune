@@ -93,7 +93,8 @@ class MicronautInterceptorOrderingTest {
             new InMemoryEventStore(TYPES),
             module.aggregateLocker(
                 StreamRuneMicronautProperties.withDefaults(),
-                org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                null),
             StreamRuneMicronautProperties.withDefaults(),
             null, // no application SnapshotPolicy bean
             containerOrder,

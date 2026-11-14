@@ -330,7 +330,7 @@ public final class SagaRunner<S extends SagaState> {
   private SagaRunner(Builder<S> builder) {
     this.orchestrator = builder.orchestrator;
     this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
-    this.tracing = builder.tracing;
+    this.tracing = GuardedTracing.of(builder.tracing, builder.metrics);
     this.traced = tracing.enabled(TracingArea.SAGA);
     this.sagaStore = builder.sagaStore;
     this.commandBus = builder.commandBus;
@@ -347,7 +347,7 @@ public final class SagaRunner<S extends SagaState> {
             metrics,
             builder.inboxRetentionMaxAge,
             builder.clock,
-            builder.tracing);
+            this.tracing);
     this.forwardFenceConfigured = builder.forwardFence != null;
     this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
     this.lease =

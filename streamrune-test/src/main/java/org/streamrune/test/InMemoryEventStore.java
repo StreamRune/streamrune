@@ -54,6 +54,7 @@ import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.GuardedTracing;
 
 /**
  * In-memory implementation of {@link EventStore} for testing and development.
@@ -378,8 +379,8 @@ public final class InMemoryEventStore implements EventStore {
    * @return this store, for chaining
    */
   public InMemoryEventStore withTracing(StreamRuneTracing tracing) {
-    this.tracing = Objects.requireNonNull(tracing, "tracing is required");
-    this.traced = tracing.enabled(TracingArea.EVENT_STORE);
+    this.tracing = GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"));
+    this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
     return this;
   }
 

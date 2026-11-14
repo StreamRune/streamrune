@@ -120,6 +120,7 @@ final class ReferenceApplication implements Application {
     OPENTELEMETRY_SWITCHED_OFF,
     ASYNC_CONTINUES_TRACE,
     APPLICATION_LOCKER_TRACED,
+    TRACING_FAILURES_COUNTED,
     READABLE_VALUES,
     MISSPELLED_NAMES,
     ZERO_WITH_ITS_UNIT,
@@ -180,6 +181,17 @@ final class ReferenceApplication implements Application {
     try {
       validate();
       tracing = tracing();
+      if (keeps(Rule.TRACING_FAILURES_COUNTED)) {
+        // The one guard of the tracing, bound to the application's metrics.
+        List<org.streamrune.core.StreamRuneMetrics> metrics =
+            beansOf(org.streamrune.core.StreamRuneMetrics.class);
+        tracing =
+            org.streamrune.runtime.GuardedTracing.of(
+                tracing,
+                metrics.isEmpty()
+                    ? org.streamrune.core.StreamRuneMetrics.NOOP
+                    : metrics.getFirst());
+      }
       if (beansOf(StreamRuneTracing.class).isEmpty()) {
         beans.add(tracing);
       }

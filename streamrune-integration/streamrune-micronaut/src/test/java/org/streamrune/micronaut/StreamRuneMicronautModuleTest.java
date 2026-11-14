@@ -74,7 +74,8 @@ class StreamRuneMicronautModuleTest {
     AggregateLocker locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
     assertNotNull(locker);
   }
 
@@ -85,7 +86,8 @@ class StreamRuneMicronautModuleTest {
     AggregateLocker locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
 
     VirtualThreadCommandBus bus =
         module.virtualThreadCommandBus(
@@ -118,7 +120,8 @@ class StreamRuneMicronautModuleTest {
     AggregateLocker locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -160,7 +163,8 @@ class StreamRuneMicronautModuleTest {
     AggregateLocker locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -194,7 +198,8 @@ class StreamRuneMicronautModuleTest {
     AggregateLocker locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
     assertThrows(
         IllegalStateException.class,
         () ->
@@ -242,7 +247,8 @@ class StreamRuneMicronautModuleTest {
                     mock(EventStore.class),
                     module.aggregateLocker(
                         StreamRuneMicronautProperties.withDefaults(),
-                        org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                        org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                        null),
                     StreamRuneMicronautProperties.withDefaults(),
                     null, // no application SnapshotPolicy bean
                     List.of(),
@@ -278,7 +284,8 @@ class StreamRuneMicronautModuleTest {
     var locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(
             new org.streamrune.runtime.DeciderRegistration<>(
@@ -349,7 +356,8 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES).withCommandInbox(inbox),
-            module.aggregateLocker(properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+            module.aggregateLocker(
+                properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
             properties,
             null,
             List.of(),
@@ -1141,7 +1149,8 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES),
-            module.aggregateLocker(defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+            module.aggregateLocker(
+                defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
             defaults,
             null,
             List.of(),
@@ -1184,7 +1193,8 @@ class StreamRuneMicronautModuleTest {
     var locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+            null);
 
     var registrations =
         List.<org.streamrune.runtime.DeciderRegistration<?, ?, ?>>of(

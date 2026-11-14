@@ -223,6 +223,16 @@ public final class MetricNames {
   public static final String SUBSCRIPTIONS_LAG = "streamrune.subscriptions.lag";
 
   /**
+   * Failures of the tracing that StreamRune caught: a {@code StreamRuneTracing} or one of its
+   * scopes threw — a sampler or a span processor of the OpenTelemetry SDK underneath it, or an
+   * implementation of the application's own — and the traced work went on without the span. Tagged
+   * by {@link #TAG_OPERATION}. Counter; any nonzero value means spans are being lost. Counted in
+   * the metrics of the component whose tracing failed; a component built without metrics counts
+   * none.
+   */
+  public static final String TRACING_FAILURES = "streamrune.tracing.failures";
+
+  /**
    * LISTEN/NOTIFY listener reconnect attempts (each fired when the push-notification connection is
    * lost and the listener reconnects). A rising count signals a flapping push path even while
    * polling keeps delivering; a listener that has permanently died stops incrementing it.
@@ -735,4 +745,11 @@ public final class MetricNames {
    * on {@link #SUBSCRIPTIONS_LISTENER_RECONNECTS}.
    */
   public static final String TAG_CHANNEL = "channel";
+
+  /**
+   * Bounded: the operation of the tracing seam that threw, on {@link #TRACING_FAILURES}: {@code
+   * enabled}, {@code start}, {@code startChild}, {@code propagating}, {@code setAttribute}, {@code
+   * recordSuccess}, {@code recordError}, {@code link} or {@code close}.
+   */
+  public static final String TAG_OPERATION = "operation";
 }

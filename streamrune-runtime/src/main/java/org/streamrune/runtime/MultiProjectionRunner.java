@@ -491,7 +491,7 @@ public final class MultiProjectionRunner implements AutoCloseable {
           classifier,
           healthContributor,
           clock,
-          tracing);
+          GuardedTracing.of(tracing, metrics));
     }
   }
 }

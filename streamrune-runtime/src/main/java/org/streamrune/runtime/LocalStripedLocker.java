@@ -29,6 +29,13 @@ public final class LocalStripedLocker implements AggregateLocker {
 
   private final Lock[] stripes;
 
+  /**
+   * The handle of each stripe, whose {@code close()} unlocks it, built once: an acquisition
+   * allocates nothing between the grant of the lock and the handle it returns, so nothing can be
+   * thrown there that would leave the stripe locked with no one holding its handle.
+   */
+  private final AutoCloseable[] handles;
+
   private final StreamRuneTracing tracing;
 
   /** Whether {@link #tracing} records the lock area, read once. */
@@ -57,14 +64,19 @@ public final class LocalStripedLocker implements AggregateLocker {
     for (int i = 0; i < stripeCount; i++) {
       stripes[i] = new ReentrantLock(fair);
     }
+    this.handles = new AutoCloseable[stripeCount];
+    for (int i = 0; i < stripeCount; i++) {
+      handles[i] = stripes[i]::unlock;
+    }
     this.tracing = StreamRuneTracing.NOOP;
     this.traced = false;
   }
 
-  private LocalStripedLocker(Lock[] stripes, StreamRuneTracing tracing) {
+  private LocalStripedLocker(Lock[] stripes, AutoCloseable[] handles, StreamRuneTracing tracing) {
     this.stripes = stripes;
-    this.tracing = tracing;
-    this.traced = tracing.enabled(TracingArea.LOCK);
+    this.handles = handles;
+    this.tracing = GuardedTracing.of(tracing);
+    this.traced = this.tracing.enabled(TracingArea.LOCK);
   }
 
   /**
@@ -75,12 +87,17 @@ public final class LocalStripedLocker implements AggregateLocker {
    * returned locker and this one share their locks, so a stream locked through one is locked for
    * the other.
    *
+   * <p>A tracing that throws never fails an acquisition: the failure is logged. It is counted in
+   * {@code streamrune.tracing.failures} only when {@code tracing} already counts — the tracing bean
+   * of an integration does; this method takes no metrics of its own.
+   *
    * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
    * @return a locker that traces through {@code tracing}
    * @throws NullPointerException if {@code tracing} is {@code null}
    */
   public LocalStripedLocker traced(StreamRuneTracing tracing) {
-    return new LocalStripedLocker(stripes, Objects.requireNonNull(tracing, "tracing is required"));
+    return new LocalStripedLocker(
+        stripes, handles, Objects.requireNonNull(tracing, "tracing is required"));
   }
 
   /**
@@ -113,21 +130,56 @@ public final class LocalStripedLocker implements AggregateLocker {
             SpanAttributes.builder()
                 .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
                 .build());
+    AutoCloseable lock;
     try {
-      AutoCloseable lock = acquire(streamId, timeout);
-      scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
-      scope.recordSuccess();
-      return lock;
-    } catch (LockAcquisitionException notAcquired) {
-      scope.setAttribute(
-          TraceAttributes.LOCK_OUTCOME,
-          notAcquired.getCause() instanceof InterruptedException ? "INTERRUPTED" : "TIMEOUT");
+      lock = acquire(streamId, timeout);
+    } catch (Throwable notAcquired) {
+      // Nothing is held. The span ends with the outcome, and the caller sees the acquisition's
+      // own failure whatever the span does.
+      try {
+        try {
+          if (notAcquired instanceof LockAcquisitionException) {
+            scope.setAttribute(
+                TraceAttributes.LOCK_OUTCOME,
+                notAcquired.getCause() instanceof InterruptedException ? "INTERRUPTED" : "TIMEOUT");
+          } else {
+            scope.recordError(notAcquired);
+          }
+        } finally {
+          scope.close();
+        }
+      } catch (Throwable tracingFailure) {
+        if (tracingFailure != notAcquired) {
+          notAcquired.addSuppressed(tracingFailure);
+        }
+      }
       throw notAcquired;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
+    }
+    // The lock is held from here on, and the caller does not have it yet: nothing below may leave
+    // this method without either handing the lock over or releasing it. The tracing is guarded
+    // and does not throw; if anything is thrown here all the same, the lock is released first.
+    try {
+      try {
+        scope.setAttribute(TraceAttributes.LOCK_OUTCOME, "ACQUIRED");
+        scope.recordSuccess();
+      } finally {
+        scope.close();
+      }
+    } catch (Throwable afterAcquisition) {
+      releaseAfterFailure(lock, afterAcquisition);
+      throw afterAcquisition;
+    }
+    return lock;
+  }
+
+  /** Releases {@code lock}, which the caller never received, before {@code failure} propagates. */
+  private static void releaseAfterFailure(AutoCloseable lock, Throwable failure) {
+    try {
+      lock.close();
+    } catch (Throwable releaseFailure) {
+      if (releaseFailure != failure) {
+        failure.addSuppressed(releaseFailure);
+      }
     }
   }
 
@@ -147,6 +199,6 @@ public final class LocalStripedLocker implements AggregateLocker {
       Thread.currentThread().interrupt();
       throw new LockAcquisitionException(streamId, "Interrupted acquiring lock", e);
     }
-    return lock::unlock;
+    return handles[index];
   }
 }

@@ -84,11 +84,12 @@ public final class InlineProjectionInterceptor implements CommandInterceptor {
       return;
     }
     var envelopes = result.envelopes();
-    RuntimeException firstFailure = null;
+    Exception firstFailure = null;
     for (var reg : registrations) {
       try {
         reg.projection().process(envelopes);
-      } catch (RuntimeException e) {
+      } catch (Exception e) {
+        // A checked exception a projection lets out without declaring it is one more failure.
         logger.error(
             "Inline projection '{}' failed for command {} — the events are committed and the"
                 + " remaining inline projections still run",
@@ -103,8 +104,13 @@ public final class InlineProjectionInterceptor implements CommandInterceptor {
       }
     }
     if (firstFailure != null) {
-      throw firstFailure;
+      throw sneakyThrow(firstFailure);
     }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> RuntimeException sneakyThrow(Throwable thrown) throws T {
+    throw (T) thrown;
   }
 
   private record Registration(ProjectionName name, Projection projection) {}

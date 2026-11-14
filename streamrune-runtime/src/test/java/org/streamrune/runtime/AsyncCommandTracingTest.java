@@ -123,6 +123,9 @@ class AsyncCommandTracingTest {
   void aSpanTheAsyncTaskWrapperOpens_nestsUnderTheCaller_andTheCommandUnderIt() throws Exception {
     io.opentelemetry.api.trace.Tracer wrapperTracer =
         otelTesting.getOpenTelemetry().getTracer("wrapper");
+    // The command's future completes inside task.run(), before the wrapper ends its own span:
+    // the test waits for the wrapper to have ended it, not only for the future.
+    java.util.concurrent.CountDownLatch dispatchEnded = new java.util.concurrent.CountDownLatch(1);
     try (var bus =
         lampBus()
             .tracing(tracing())
@@ -134,10 +137,14 @@ class AsyncCommandTracingTest {
                         task.run();
                       } finally {
                         dispatch.end();
+                        dispatchEnded.countDown();
                       }
                     })
             .build()) {
       SpanData request = runUnderARequest(bus);
+      assertThat(dispatchEnded.await(10, java.util.concurrent.TimeUnit.SECONDS))
+          .as("the wrapper ended its span")
+          .isTrue();
 
       SpanData dispatch = named("async dispatch");
       assertThat(dispatch.getParentSpanId()).isEqualTo(request.getSpanId());

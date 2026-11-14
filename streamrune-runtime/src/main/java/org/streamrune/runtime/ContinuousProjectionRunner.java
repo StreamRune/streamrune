@@ -2432,7 +2432,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           readRetryMaxBackoff,
           maxReadPoisonRetries,
           clock,
-          tracing);
+          GuardedTracing.of(tracing, metrics));
     }
   }
 }

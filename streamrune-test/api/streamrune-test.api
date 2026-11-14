@@ -914,6 +914,7 @@ public class org.streamrune.test.RecordingStreamRuneMetrics implements org.strea
   public void recordSubscriptionEventReceived(org.streamrune.core.types.SubscriptionName)
   public void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
   public void recordSystemicKeyStoreFailure()
+  public void recordTracingFailure(java.lang.String)
   public void registerInFlightCommandsGauge(java.util.function.LongSupplier)
   public void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
   public void reset()
