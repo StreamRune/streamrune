@@ -566,6 +566,11 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordTracingFailure(String operation) {
+    record(MetricNames.TRACING_FAILURES, 1, MetricNames.TAG_OPERATION, operation);
+  }
+
+  @Override
   public void recordListenerReconnect(String channel) {
     record(MetricNames.SUBSCRIPTIONS_LISTENER_RECONNECTS, 1, MetricNames.TAG_CHANNEL, channel);
   }

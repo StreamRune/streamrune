@@ -309,7 +309,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
             : inboxRetentionMaxAge;
     this.executor =
         new SagaStepExecutor<>(
-            SagaDeciderAdapter.compensationOnly(decider), sagaStore, commandBus, metrics, tracing);
+            SagaDeciderAdapter.compensationOnly(decider),
+            sagaStore,
+            commandBus,
+            metrics,
+            this.tracing);
     Duration maxBackoff =
         pollInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? pollInterval : MAX_FAILURE_BACKOFF;
     this.pollLoop =

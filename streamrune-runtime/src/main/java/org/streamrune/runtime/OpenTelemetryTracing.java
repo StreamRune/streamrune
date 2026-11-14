@@ -52,8 +52,8 @@ import org.streamrune.core.types.LogSanitizer;
  * the status description. A run of line breaks or control characters becomes one space, and a
  * format character is removed.
  *
- * <p>{@link #of} returns the tracing {@linkplain GuardedTracing guarded}, so an OpenTelemetry SDK
- * extension that throws never fails the work a span covers.
+ * <p>{@link #of} returns the tracing guarded, so an OpenTelemetry SDK extension that throws never
+ * fails the work a span covers.
  *
  * <p>This is the class of the seam that references OpenTelemetry, and the {@code opentelemetry-api}
  * dependency is optional: an application without it never loads this class as long as it passes
@@ -80,9 +80,9 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
 
   /**
    * The tracing that records the areas {@code settings} switches on through {@code openTelemetry}.
-   * It is {@linkplain GuardedTracing guarded}: what the OpenTelemetry SDK throws underneath it — a
-   * sampler, a span processor's {@code onStart} or {@code onEnd}, a context storage — is caught and
-   * logged, and the traced work runs on without the span.
+   * It is guarded: what the OpenTelemetry SDK throws underneath it — a sampler, a span processor's
+   * {@code onStart} or {@code onEnd}, a context storage — is caught and logged, and the traced work
+   * runs on without the span.
    *
    * @param openTelemetry the OpenTelemetry instance whose tracer records the spans
    * @param settings the switches
@@ -114,8 +114,7 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
     SpanBuilder builder = tracer.spanBuilder(spanName).setSpanKind(otelKind(kind));
     attributes.forEach((key, value) -> setAttribute(builder, key, value));
     builder.setStartTimestamp(startTime);
-    Span span = builder.startSpan();
-    return current(span, Context.current().with(span));
+    return current(builder.startSpan(), SpanBaggage.KEEP);
   }
 
   /**
@@ -162,29 +161,31 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
               TraceFlags.getSampled(),
               TraceState.getDefault()));
     }
-    Span span = builder.startSpan();
-    Context context = Context.current().with(span);
-    if (!baggage.keepsCurrent()) {
-      BaggageBuilder baggageBuilder = Baggage.builder();
-      baggage.entries().forEach(baggageBuilder::put);
-      context = context.with(baggageBuilder.build());
-    }
-    return current(span, context);
+    return current(builder.startSpan(), baggage);
   }
 
   /**
-   * Makes {@code context}, which holds the started {@code span}, current. A context that cannot be
-   * made current ends the span it would have leaked, and the failure goes to the guard.
+   * Makes the started {@code span} current, with {@code baggage} when it replaces the current one.
+   * Whatever is thrown from here on — reading the current context, building the baggage, making the
+   * context current — ends the span, which nothing else would end, and goes to the guard.
    */
-  private static TraceScope current(Span span, Context context) {
+  private static TraceScope current(Span span, SpanBaggage baggage) {
     Scope scope;
     try {
+      Context context = Context.current().with(span);
+      if (!baggage.keepsCurrent()) {
+        BaggageBuilder baggageBuilder = Baggage.builder();
+        baggage.entries().forEach(baggageBuilder::put);
+        context = context.with(baggageBuilder.build());
+      }
       scope = context.makeCurrent();
     } catch (Throwable t) {
       try {
         span.end();
       } catch (Throwable endFailure) {
-        t.addSuppressed(endFailure);
+        if (endFailure != t) {
+          t.addSuppressed(endFailure);
+        }
       }
       throw t;
     }

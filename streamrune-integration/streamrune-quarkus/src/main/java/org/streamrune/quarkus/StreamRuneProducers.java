@@ -152,7 +152,11 @@ public class StreamRuneProducers {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
-            .tracing(tracing)
+            // The one guard of the application's tracing, which counts its failures in the
+            // metrics bean; every other component the tracing reaches holds the same guard.
+            .tracing(
+                org.streamrune.runtime.GuardedTracing.of(
+                    tracing, resolveMetricsOrDefault(metricsInstance)))
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
             // when absent, behavior unchanged.
@@ -570,7 +574,9 @@ public class StreamRuneProducers {
    */
   static org.streamrune.core.AggregateLocker traced(
       org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
-    if (!tracing.enabled(TracingArea.LOCK)) {
+    // Asked through the guard, like every other use of the tracing: one that throws here traces
+    // no lock and fails no startup.
+    if (!org.streamrune.runtime.GuardedTracing.of(tracing).enabled(TracingArea.LOCK)) {
       return locker;
     }
     if (locker instanceof LocalStripedLocker local) {
@@ -1285,7 +1291,11 @@ public class StreamRuneProducers {
             .eventStore(eventStore)
             .locker(traced(locker, tracing))
             // Adds the command interceptor in its slot, unless the chain holds the application's.
-            .tracing(tracing)
+            // The one guard of the application's tracing, which counts its failures in the
+            // metrics bean; every other component the tracing reaches holds the same guard.
+            .tracing(
+                org.streamrune.runtime.GuardedTracing.of(
+                    tracing, resolveMetricsOrDefault(metricsInstance)))
             .retryPolicy(retryPolicy)
             .snapshotPolicy(resolveSnapshotPolicy(snapshotPolicyInstance, properties))
             .lockTimeout(properties.lockTimeout())

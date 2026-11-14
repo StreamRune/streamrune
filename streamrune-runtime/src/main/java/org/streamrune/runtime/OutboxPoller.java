@@ -632,10 +632,9 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * Starts an outbox span. The relay's tracing is {@linkplain GuardedTracing guarded}, so the
-   * tracing can never change a delivery: a {@code start} that throws gives {@link TraceScope#NOOP},
-   * the scope swallows what its own methods throw, and the relay delivers every entry as it would
-   * untraced.
+   * Starts an outbox span. The relay's tracing is guarded, so the tracing can never change a
+   * delivery: a {@code start} that throws gives {@link TraceScope#NOOP}, the scope swallows what
+   * its own methods throw, and the relay delivers every entry as it would untraced.
    */
   private TraceScope guardedStart(
       String spanName, SpanKind kind, SpanAttributes attributes, SpanLink link) {

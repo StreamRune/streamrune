@@ -898,6 +898,15 @@ public final class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
   }
 
   @Override
+  public void recordTracingFailure(String operation) {
+    Counter.builder(meter(MetricNames.TRACING_FAILURES))
+        .tag(MetricNames.TAG_OPERATION, operation)
+        .description("Failures of the tracing that were caught; the traced work went on")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
   public void recordListenerReconnect(String channel) {
     Counter.builder(meter(MetricNames.SUBSCRIPTIONS_LISTENER_RECONNECTS))
         .tag(MetricNames.TAG_CHANNEL, channel)

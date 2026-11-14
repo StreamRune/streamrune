@@ -347,7 +347,7 @@ public final class SagaRunner<S extends SagaState> {
             metrics,
             builder.inboxRetentionMaxAge,
             builder.clock,
-            builder.tracing);
+            this.tracing);
     this.forwardFenceConfigured = builder.forwardFence != null;
     this.executor.forwardFence(!Boolean.FALSE.equals(builder.forwardFence));
     this.lease =

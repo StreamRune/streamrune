@@ -302,7 +302,13 @@ public class StreamRuneAutoConfiguration {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
-            .tracing(tracingOf(tracingProvider))
+            // The one guard of the application's tracing, which counts its failures in the
+            // metrics bean; every other component the tracing reaches holds the same guard.
+            .tracing(
+                org.streamrune.runtime.GuardedTracing.of(
+                    tracingOf(tracingProvider),
+                    metricsProvider.getIfAvailable(
+                        () -> org.streamrune.core.StreamRuneMetrics.NOOP)))
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
             // when no metrics bean exists (behavior unchanged).
@@ -595,7 +601,12 @@ public class StreamRuneAutoConfiguration {
     List<CommandInterceptor> interceptors =
         CommandInterceptorOrdering.sorted(interceptorProvider.orderedStream().toList());
 
-    StreamRuneTracing tracing = tracingOf(tracingProvider);
+    // The one guard of the application's tracing, which counts its failures in the metrics bean;
+    // every other component the tracing reaches holds the same guard.
+    StreamRuneTracing tracing =
+        org.streamrune.runtime.GuardedTracing.of(
+            tracingOf(tracingProvider),
+            metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
     var builder =
         VirtualThreadCommandBus.builder()
             .allowGraalJit(properties.jvm().allowGraalJit())
@@ -979,7 +990,10 @@ public class StreamRuneAutoConfiguration {
    */
   static org.streamrune.core.AggregateLocker traced(
       org.streamrune.core.AggregateLocker locker, StreamRuneTracing tracing) {
-    if (!tracing.enabled(org.streamrune.core.tracing.TracingArea.LOCK)) {
+    // Asked through the guard, like every other use of the tracing: one that throws here traces
+    // no lock and fails no startup.
+    if (!org.streamrune.runtime.GuardedTracing.of(tracing)
+        .enabled(org.streamrune.core.tracing.TracingArea.LOCK)) {
       return locker;
     }
     if (locker instanceof LocalStripedLocker local) {
