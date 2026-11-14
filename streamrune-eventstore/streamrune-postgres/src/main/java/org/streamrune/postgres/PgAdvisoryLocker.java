@@ -414,6 +414,17 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
           () -> {
             try {
               conn.commit();
+            } catch (Throwable commitFailure) {
+              // The transaction may still be open, and the lock with it: end it here rather than
+              // rely on the pool to roll a returned connection back.
+              try {
+                conn.rollback();
+              } catch (Throwable rollbackFailure) {
+                if (rollbackFailure != commitFailure) {
+                  commitFailure.addSuppressed(rollbackFailure);
+                }
+              }
+              throw commitFailure;
             } finally {
               conn.close();
             }

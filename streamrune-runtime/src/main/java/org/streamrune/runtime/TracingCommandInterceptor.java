@@ -110,14 +110,20 @@ public final class TracingCommandInterceptor implements CommandInterceptor {
                     ? LogSanitizer.sanitizeForTrace(ctx.streamId().value())
                     : null)
             .build();
-    stack
-        .get()
-        .push(
-            tracing.start(
-                TracingArea.COMMAND,
-                TraceAttributes.commandSpanName(ctx.commandType()),
-                SpanKind.INTERNAL,
-                attributes));
+    TraceScope scope =
+        tracing.start(
+            TracingArea.COMMAND,
+            TraceAttributes.commandSpanName(ctx.commandType()),
+            SpanKind.INTERNAL,
+            attributes);
+    try {
+      stack.get().push(scope);
+    } catch (Throwable t) {
+      // The span is current and no frame holds it: before() did not complete, so no callback
+      // would end it.
+      scope.close();
+      throw t;
+    }
     return true;
   }
 

@@ -189,7 +189,17 @@ public final class OpenTelemetryTracing implements StreamRuneTracing {
       }
       throw t;
     }
-    return new OpenTelemetryScope(span, scope);
+    try {
+      return new OpenTelemetryScope(span, scope);
+    } catch (Throwable t) {
+      // The context is current and nothing owns it yet: restore the previous one, end the span.
+      try {
+        scope.close();
+      } finally {
+        span.end();
+      }
+      throw t;
+    }
   }
 
   /**

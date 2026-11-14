@@ -192,7 +192,11 @@ public final class SagaStepLock {
     Key key = new Key(sagaType, sagaId);
     Entry entry = arrive(key);
     boolean entered = false;
+    Hold hold;
     try {
+      // Built before the lock is asked for: nothing is allocated between the grant and the
+      // return, so nothing thrown there can leave the lock with no one holding its Hold.
+      hold = new Hold(key, entry);
       // The timed form tests the interrupt status before it tests the lock. A thread that arrives
       // interrupted takes a lock nobody holds or waits for, and keeps its status for its caller.
       entered =
@@ -222,7 +226,7 @@ public final class SagaStepLock {
               + stepWait
               + "; this delivery read nothing and dispatched nothing, and is delivered again");
     }
-    return new Hold(key, entry);
+    return hold;
   }
 
   /**
@@ -239,7 +243,10 @@ public final class SagaStepLock {
     Key key = new Key(sagaType, sagaId);
     Entry entry = arrive(key);
     boolean entered = false;
+    Hold hold;
     try {
+      // Built before the lock is asked for, as in enterStep.
+      hold = new Hold(key, entry);
       if (entry.lock.isHeldByCurrentThread()) {
         return null;
       }
@@ -259,7 +266,7 @@ public final class SagaStepLock {
         leave(key);
       }
     }
-    return entered ? new Hold(key, entry) : null;
+    return entered ? hold : null;
   }
 
   /** Counts this thread on the saga's entry, creating the entry for the first one. */
