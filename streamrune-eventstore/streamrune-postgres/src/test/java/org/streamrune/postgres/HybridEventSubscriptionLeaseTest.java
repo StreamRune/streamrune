@@ -18,6 +18,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -50,6 +52,9 @@ import org.streamrune.test.InMemorySagaStore;
  * notification reaches the same gate as a poll.
  */
 class HybridEventSubscriptionLeaseTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Opened.class).build();
 
   private static final String NAME = "hybrid-leased";
 
@@ -114,7 +119,7 @@ class HybridEventSubscriptionLeaseTest {
     InMemorySagaStore rows = new InMemorySagaStore();
     InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(rows);
     SagaRunner<OrderState> runner =
         SagaRunner.<OrderState>builder()
             .decider(new QuietSaga())

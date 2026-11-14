@@ -14,6 +14,8 @@ import org.streamrune.core.CommandBus.CommandResult;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
@@ -26,6 +28,12 @@ import org.streamrune.test.InMemoryEventStore;
  * on top of after(), the no-op would be dead-lettered, and the caller told the command failed.
  */
 class VirtualThreadCommandBusNoOpCommitTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Touched.class)
+          .registerState("TouchState", TouchState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("touch");
 
@@ -84,7 +92,7 @@ class VirtualThreadCommandBusNoOpCommitTest {
     var interceptor = new CountingInterceptor();
     var bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .locker(RELEASE_FAILS)
             .interceptors(interceptor)
             .register(TYPE, Touch.class, cmd -> AggregateId.of(cmd.id()), new NoOpDecider())

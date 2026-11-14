@@ -3,15 +3,15 @@ package org.streamrune.test;
 import org.streamrune.core.EventStore;
 
 /**
- * The event-store contract against {@link InMemoryEventStore} in serializing mode, with a command
- * inbox and no saga store: it cannot fence a saga's forward command, which {@code
- * InMemorySagaForwardFenceTest} covers with one.
+ * The event-store contract against {@link InMemoryEventStore}, with a command inbox and no saga
+ * store: it cannot fence a saga's forward command, which {@code InMemorySagaForwardFenceTest}
+ * covers with one.
  */
 class InMemoryEventStoreContractTest extends EventStoreContract {
 
   @Override
   protected EventStore newStore(Setup setup) {
-    return configured(InMemoryEventStore.serializing(setup.registry(), setup.crypto()), setup)
+    return configured(new InMemoryEventStore(setup.registry(), setup.crypto()), setup)
         .withCommandInbox(new InMemoryCommandInbox());
   }
 

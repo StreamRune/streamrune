@@ -26,6 +26,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -55,6 +57,12 @@ import org.streamrune.test.InMemoryEventStore;
  * publisher, and executes commands through the container's command bus.
  */
 class SseLiveFeedTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderEvent.Placed.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final SseAuthorizer ALLOW_ALL = (caller, streamId) -> true;
@@ -318,7 +326,7 @@ class SseLiveFeedTest {
     @Produces
     @Singleton
     public EventStore eventStore() {
-      InMemoryEventStore store = new InMemoryEventStore();
+      InMemoryEventStore store = new InMemoryEventStore(TYPES);
       StreamId stream = StreamId.of(ORDER, AggregateId.of("o-1"));
       store.append(
           stream,

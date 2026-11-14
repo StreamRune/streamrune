@@ -23,11 +23,13 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.QueryHandler;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.projection.Projection;
@@ -48,6 +50,13 @@ import org.streamrune.test.InMemoryOffsetStore;
  * Verifies that the previously-unrecorded StreamRuneMetrics meters now fire at their call sites.
  */
 class MetricsWiringTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(TestEvent.class)
+          .registerEvent(CounterEvent.Incremented.class)
+          .registerState("CounterState", CounterState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("counter");
 
@@ -380,7 +389,7 @@ class MetricsWiringTest {
   @Test
   void commandBusRecordsSnapshotAndReplayAndAppendDurationSeries() {
     int total = 7;
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var metrics = new RecordingStreamRuneMetrics();
     var bus =
         VirtualThreadCommandBus.builder()
@@ -420,7 +429,7 @@ class MetricsWiringTest {
    */
   @Test
   void commandBusRecordsEveryReplayedEventWhenNoSnapshotPolicyIsConfigured() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var metrics = new RecordingStreamRuneMetrics();
     var bus =
         VirtualThreadCommandBus.builder()
@@ -454,7 +463,7 @@ class MetricsWiringTest {
    */
   @Test
   void commandBusSnapshotsWithTheLoadsPurgeGenerationAndDoesNotCountARefusedSave() {
-    var delegate = new InMemoryEventStore();
+    var delegate = new InMemoryEventStore(TYPES);
     var generationsSaved = new ArrayList<Long>();
     EventStore purgedSinceLoad =
         new EventStore() {

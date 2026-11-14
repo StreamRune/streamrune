@@ -20,7 +20,9 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
@@ -51,6 +53,9 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 class ProjectionRunnerHealthTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(TestEvent.class).build();
+
   private static final AggregateType TYPE = AggregateType.of("orders");
 
   private EventStore eventStore;
@@ -58,7 +63,7 @@ class ProjectionRunnerHealthTest {
 
   @BeforeEach
   void setUp() {
-    eventStore = new InMemoryEventStore();
+    eventStore = new InMemoryEventStore(TYPES);
     offsetStore = new InMemoryOffsetStore();
   }
 

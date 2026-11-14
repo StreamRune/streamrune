@@ -7,12 +7,20 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.CausationId;
 import org.streamrune.core.types.GlobalOffset;
 
 /** Runs the provenance contract against {@link InMemoryCommandBus}. */
 class InMemoryCommandBusProvenanceTest extends CommandBusProvenanceContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CommandBusProvenanceContract.Marked.class)
+          .registerState("Marks", CommandBusProvenanceContract.Marks.class)
+          .build();
 
   @Override
   protected CommandBus newBus(EventStore eventStore) {
@@ -32,7 +40,7 @@ class InMemoryCommandBusProvenanceTest extends CommandBusProvenanceContract {
   void theEnvelopesTheBusReturnsCarryTheOriginToo() {
     var cause = new StreamRuneContext.DispatchCause(CausationId.of("evt-1"), ORIGIN);
 
-    try (InMemoryCommandBus bus = bus(new InMemoryEventStore())) {
+    try (InMemoryCommandBus bus = bus(new InMemoryEventStore(TYPES))) {
       CommandBus.CommandResult result =
           ScopedValue.where(StreamRuneContext.CAUSE, cause)
               .call(() -> bus.execute(new Mark("returned-1")));
@@ -51,7 +59,7 @@ class InMemoryCommandBusProvenanceTest extends CommandBusProvenanceContract {
    */
   @Test
   void aContextBoundToNull_executesAsNoContext() {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     InMemoryCommandBus bus = bus(eventStore);
 
     ScopedValue.where(StreamRuneContext.CURRENT, null)

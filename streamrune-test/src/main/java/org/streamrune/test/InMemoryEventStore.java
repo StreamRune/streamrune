@@ -86,18 +86,25 @@ import org.streamrune.crypto.CryptoShreddingModule;
  *       {@link InMemoryEventSubscription} builds on this hook.
  * </ul>
  *
- * <p><b>Serialization modes.</b> The no-arg constructor stores events and snapshot state by
- * reference — fast, but events that Jackson cannot serialize, {@code @Encrypted} field handling,
- * and snapshot type registration are never exercised. {@link #serializing(EventTypeRegistry,
- * CryptoEngine)} (or the {@link #InMemoryEventStore(ObjectMapper, EventTypeRegistry) ObjectMapper
- * constructor}) enables an opt-in serializing mode that mirrors {@code PostgresEventStore}'s
- * store-the-ciphertext / transform-on-read model: every event payload, event metadata, and snapshot
- * state is SERIALIZED to JSON (encrypting {@code @Encrypted} fields) on append/save, and
- * DESERIALIZED — decrypting, {@linkplain #withUpcasters(List) upcasting}, and re-resolving the
- * stored type through the registry — on every read path ({@link #load}, {@link #readStream}, {@link
- * #readGlobalStream}). Because deserialization is deferred to read, the double faithfully
- * reproduces the read-time behaviors a Postgres-backed app would see, so unit tests do not silently
- * lie:
+ * <p><b>Serialization.</b> Like {@code PostgresEventStore}, this store keeps the stored form, not
+ * the objects it is given: every event payload, event metadata, and snapshot state is SERIALIZED to
+ * JSON (encrypting {@code @Encrypted} fields) on append/save, and DESERIALIZED — decrypting,
+ * {@linkplain #withUpcasters(List) upcasting}, and re-resolving the stored type through the {@link
+ * EventTypeRegistry} — on every read path ({@link #load}, {@link #readStream}, {@link
+ * #readGlobalStream}). A read therefore returns new objects equal to, never the same as, the ones
+ * appended. Every event type the test appends, and every snapshot state type it saves, must be
+ * registered, exactly as for the production store:
+ *
+ * <pre>{@code
+ * var registry = SimpleEventTypeRegistry.builder()
+ *     .registerEvent(ItemAdded.class)
+ *     .registerState("CartState", CartState.class)
+ *     .build();
+ * var store = new InMemoryEventStore(registry);
+ * }</pre>
+ *
+ * <p>Because deserialization is deferred to read, the double reproduces the read-time behaviors a
+ * Postgres-backed app would see, so unit tests do not silently lie:
  *
  * <ul>
  *   <li><b>Crypto-shredding on replay</b>: after {@code cryptoEngine.deleteKey(subject)},
@@ -114,16 +121,15 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * (or a {@code @Encrypted} field with no resolvable subject) fails at append; an unregistered or
  * shape-incompatible event type, and a crypto-shredded field, surface at read.
  *
- * <p><b>Tracing.</b> In serializing mode a store given a tracing ({@link
- * #withTracing(StreamRuneTracing)}) starts the event-store spans {@code PostgresEventStore} starts,
- * with the same names, attributes and nesting: {@value TraceAttributes#EVENT_STORE_APPEND} with
- * {@value TraceAttributes#EVENT_STORE_APPEND_SERIALIZE}, {@value TraceAttributes#EVENT_STORE_LOAD}
- * with {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} and {@value
+ * <p><b>Tracing.</b> A store given a tracing ({@link #withTracing(StreamRuneTracing)}) starts the
+ * event-store spans {@code PostgresEventStore} starts, with the same names, attributes and nesting:
+ * {@value TraceAttributes#EVENT_STORE_APPEND} with {@value
+ * TraceAttributes#EVENT_STORE_APPEND_SERIALIZE}, {@value TraceAttributes#EVENT_STORE_LOAD} with
+ * {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD} and {@value
  * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE}, {@value
  * TraceAttributes#EVENT_STORE_SNAPSHOT_SAVE}, and {@value TraceAttributes#EVENT_STORE_READ} for a
  * read that returns events under a span current on its thread. Its outbox entry count is always
- * {@code 0}: this store writes no outbox. In by-reference mode it starts no span: it neither
- * serializes nor does any I/O, so a span would time nothing a deployment has.
+ * {@code 0}: this store writes no outbox.
  *
  * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists,
  * and an append publishes its events to each list in one step, so a read returns all of them or
@@ -175,40 +181,59 @@ public final class InMemoryEventStore implements EventStore {
   private volatile SnapshotMigrationChain migrations = SnapshotMigrationChain.of(null);
 
   /**
-   * Event upcaster chain applied on the read path in serializing mode, mirroring {@code
-   * PostgresEventStore}. {@link UpcasterChain#empty()} (no upcasting) by default; set via {@link
-   * #withUpcasters}. An event's stored schema version is stamped at append time from this chain, so
-   * upcasting is exercised by appending under an empty/older chain and reading under a chain with a
-   * higher current version.
+   * Event upcaster chain applied on the read path, mirroring {@code PostgresEventStore}. {@link
+   * UpcasterChain#empty()} (no upcasting) by default; set via {@link #withUpcasters}. An event's
+   * stored schema version is stamped at append time from this chain, so upcasting is exercised by
+   * appending under an empty/older chain and reading under a chain with a higher current version.
    */
   private volatile UpcasterChain upcasterChain = UpcasterChain.empty();
 
-  /** The tracing of the serializing mode's spans; set by {@link #withTracing}. */
+  /** The tracing of this store's spans; set by {@link #withTracing}. */
   private volatile StreamRuneTracing tracing = StreamRuneTracing.NOOP;
 
-  /** Whether this store starts its spans: serializing mode, with the event-store area on. */
+  /** Whether this store starts its spans: the event-store area is on. */
   private volatile boolean traced;
 
-  /** Both null in by-reference mode, both set in serializing mode. */
   private final ObjectMapper objectMapper;
 
   private final EventTypeRegistry typeRegistry;
 
-  /** Creates a store that keeps events and snapshot state by reference (no serialization). */
-  public InMemoryEventStore() {
-    this(null, null, null);
+  /**
+   * Creates a store with the {@link ObjectMapper} configuration of {@code
+   * PostgresEventStore.create()} without a crypto engine: {@link JavaTimeModule}, no {@code
+   * Encrypted} field handling.
+   *
+   * @param typeRegistry resolves event and state classes on read, exactly as {@code
+   *     PostgresEventStore} does (required)
+   */
+  public InMemoryEventStore(EventTypeRegistry typeRegistry) {
+    this(typeRegistry, null);
   }
 
   /**
-   * Creates a store in serializing mode: every event payload, event metadata, and snapshot state is
-   * serialized through the given {@link ObjectMapper} on append/save and deserialized on read, so
-   * Jackson serialization failures — and the read-time crypto-shred / upcast / retired-type
-   * behaviors — surface in unit tests exactly where {@code PostgresEventStore} would raise them.
+   * Creates a store with the {@link ObjectMapper} configuration of {@code
+   * PostgresEventStore.create()}: {@link JavaTimeModule} always, {@link CryptoShreddingModule} when
+   * a crypto engine is given.
+   *
+   * @param typeRegistry resolves event and state classes on read, exactly as {@code
+   *     PostgresEventStore} does (required)
+   * @param cryptoEngine crypto engine for {@code @Encrypted} field handling (optional, may be null)
+   */
+  public InMemoryEventStore(EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    this(
+        serializingMapper(cryptoEngine),
+        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        null);
+  }
+
+  /**
+   * Creates a store that serializes through the given {@link ObjectMapper} on append/save and
+   * deserializes through it on read — for an application whose production store is given its own
+   * mapper.
    *
    * @param objectMapper the mapper to round-trip with; must be configured like the production one
-   *     (see {@link #serializing(EventTypeRegistry, CryptoEngine)} for the default setup)
-   * @param typeRegistry resolves event and state classes on the deserialization leg, exactly as
-   *     {@code PostgresEventStore} does on read
+   * @param typeRegistry resolves event and state classes on read, exactly as {@code
+   *     PostgresEventStore} does (required)
    */
   public InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
     this(
@@ -241,47 +266,27 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * Creates a store in serializing mode with the same {@link ObjectMapper} configuration as {@code
-   * PostgresEventStore.create()}: {@link JavaTimeModule} always, {@link CryptoShreddingModule} when
-   * a crypto engine is given.
+   * A new store over the same stored data as {@code source} — its events, snapshots and global
+   * offset counter, and the command inbox wired into it — as a deployment restarted with another
+   * registry or crypto engine sees the data. Appends through either store are ordered by one lock.
+   * The new store starts with no upcasters, migrations, saga store, tracing or append listeners;
+   * wire them as on a fresh store. Stored events keep the schema versions they were stamped with,
+   * so the upcaster chain of the new store reads them as a restarted deployment's chain would.
    *
-   * @param typeRegistry resolves event and state classes on the deserialization leg (required)
-   * @param cryptoEngine crypto engine for {@code @Encrypted} field handling (optional, may be null)
-   * @return store that serializes all payloads on append and deserializes them on read
-   */
-  public static InMemoryEventStore serializing(
-      EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
-    return new InMemoryEventStore(serializingMapper(cryptoEngine), typeRegistry);
-  }
-
-  /**
-   * A new serializing store over the same stored data as {@code source} — its events, snapshots and
-   * global offset counter, and the command inbox wired into it — as a deployment restarted with
-   * another registry or crypto engine sees the data. Appends through either store are ordered by
-   * one lock. The new store starts with no upcasters, migrations, saga store, tracing or append
-   * listeners; wire them as on a fresh store. Stored events keep the schema versions they were
-   * stamped with, so the upcaster chain of the new store reads them as a restarted deployment's
-   * chain would.
-   *
-   * @param source a store in serializing mode
+   * @param source the store whose data the new store reads and writes
    * @param typeRegistry resolves event and state classes on read (required)
    * @param cryptoEngine crypto engine for {@code @Encrypted} fields (optional, may be null)
-   * @throws IllegalArgumentException if {@code source} keeps its data by reference
    */
   static InMemoryEventStore sharingStorageOf(
       InMemoryEventStore source, EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     Objects.requireNonNull(source, "source is required");
-    if (source.objectMapper == null) {
-      throw new IllegalArgumentException(
-          "a store that keeps its data by reference cannot be reopened in serializing mode");
-    }
     return new InMemoryEventStore(
         serializingMapper(cryptoEngine),
         Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
         source);
   }
 
-  /** The mapper {@code PostgresEventStore.create()} configures, for the serializing mode. */
+  /** The mapper {@code PostgresEventStore.create()} configures. */
   private static ObjectMapper serializingMapper(CryptoEngine cryptoEngine) {
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
@@ -349,7 +354,7 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * Registers event upcasters applied on the read path in serializing mode, mirroring {@code
+   * Registers event upcasters applied on the read path, mirroring {@code
    * PostgresEventStore.Builder.upcasters(...)}. An event is stamped with its schema version at
    * append time (from the chain then in effect); on read, an event stored below the chain's current
    * version for its type is deserialized to a map, upcast, and rebound to the resolved class. To
@@ -367,14 +372,14 @@ public final class InMemoryEventStore implements EventStore {
 
   /**
    * Starts the event-store spans through {@code tracing} when its {@link TracingArea#EVENT_STORE}
-   * area is on, in serializing mode; see the class javadoc. A by-reference store starts none.
+   * area is on; see the class javadoc.
    *
    * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
    * @return this store, for chaining
    */
   public InMemoryEventStore withTracing(StreamRuneTracing tracing) {
     this.tracing = Objects.requireNonNull(tracing, "tracing is required");
-    this.traced = objectMapper != null && tracing.enabled(TracingArea.EVENT_STORE);
+    this.traced = tracing.enabled(TracingArea.EVENT_STORE);
     return this;
   }
 
@@ -640,7 +645,7 @@ public final class InMemoryEventStore implements EventStore {
 
   private AppendResult appendEvents(
       StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced) {
-    // In serializing mode, serialize payloads BEFORE touching any state: a Jackson failure on the
+    // Serialize payloads BEFORE touching any state: a Jackson failure on the
     // third event must leave nothing appended, mirroring Postgres' transaction rollback.
     List<StoredEvent> toAppend = serialize(streamId, events, traced);
 
@@ -678,9 +683,8 @@ public final class InMemoryEventStore implements EventStore {
    * be called with {@code appendLock} already held; must not acquire it again.
    *
    * @param streamId target stream (not null, pre-validated by callers)
-   * @param toAppend prepared events to append — carrying serialized JSON in serializing mode, or
-   *     the event/metadata objects by reference otherwise; their global offset and version are
-   *     placeholders, stamped here
+   * @param toAppend prepared events to append, carrying their serialized JSON; their global offset
+   *     and version are placeholders, stamped here
    * @param expectedVersion caller's expected stream head
    * @return the result carrying assigned global offsets and the new stream head
    */
@@ -724,8 +728,6 @@ public final class InMemoryEventStore implements EventStore {
               streamId,
               new Version(version),
               template.eventType(),
-              template.event(),
-              template.metadata(),
               template.payloadJson(),
               template.metadataJson(),
               template.schemaVersion()));
@@ -817,7 +819,7 @@ public final class InMemoryEventStore implements EventStore {
       SagaOrigin forwardOf,
       InMemorySagaStore rows,
       boolean traced) {
-    // In serializing mode, serialize payloads BEFORE taking the lock (same as append):
+    // Serialize payloads BEFORE taking the lock (same as append):
     // a Jackson failure on the third event must leave nothing appended.
     List<StoredEvent> toAppend = serialize(streamId, events, traced);
 
@@ -887,8 +889,7 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * Prepares events for storage. In by-reference mode carries the event and metadata objects
-   * directly; in serializing mode SERIALIZES each payload and metadata to JSON (the same
+   * Prepares events for storage: SERIALIZES each payload and metadata to JSON (the same
    * store-the-ciphertext model as {@code PostgresEventStore}) and stamps the current schema version
    * — deserialization, decryption, and upcasting are deferred to the read paths. A Jackson
    * serialization failure (an unmappable payload, or a {@code @Encrypted} field with no resolvable
@@ -899,65 +900,40 @@ public final class InMemoryEventStore implements EventStore {
   private List<StoredEvent> prepareForAppend(StreamId streamId, List<EventEnvelope> events) {
     List<StoredEvent> templates = new ArrayList<>(events.size());
     for (var envelope : events) {
-      if (objectMapper == null) {
-        templates.add(
-            new StoredEvent(
-                envelope.globalOffset(),
-                streamId,
-                envelope.version(),
-                envelope.eventType(),
-                envelope.event(),
-                envelope.metadata(),
-                null,
-                null,
-                0));
-      } else {
-        String payloadJson;
-        String metadataJson;
-        try {
-          payloadJson = objectMapper.writeValueAsString(envelope.event());
-          metadataJson = objectMapper.writeValueAsString(envelope.metadata());
-        } catch (JsonProcessingException e) {
-          throw new EventStoreException(
-              "Failed to serialize event for stream: "
-                  + LogSanitizer.sanitizeForLog(streamId.value()),
-              e);
-        }
-        int schemaVersion = upcasterChain.currentVersion(envelope.eventType());
-        templates.add(
-            new StoredEvent(
-                envelope.globalOffset(),
-                streamId,
-                envelope.version(),
-                envelope.eventType(),
-                null,
-                null,
-                payloadJson,
-                metadataJson,
-                schemaVersion));
+      String payloadJson;
+      String metadataJson;
+      try {
+        payloadJson = objectMapper.writeValueAsString(envelope.event());
+        metadataJson = objectMapper.writeValueAsString(envelope.metadata());
+      } catch (JsonProcessingException e) {
+        throw new EventStoreException(
+            "Failed to serialize event for stream: "
+                + LogSanitizer.sanitizeForLog(streamId.value()),
+            e);
       }
+      int schemaVersion = upcasterChain.currentVersion(envelope.eventType());
+      templates.add(
+          new StoredEvent(
+              envelope.globalOffset(),
+              streamId,
+              envelope.version(),
+              envelope.eventType(),
+              payloadJson,
+              metadataJson,
+              schemaVersion));
     }
     return templates;
   }
 
   /**
-   * Materializes a stored event into an {@link EventEnvelope}. By-reference mode returns the stored
-   * objects directly. Serializing mode DESERIALIZES the stored JSON on every read — resolving the
-   * event class through the registry (so an unregistered type surfaces here, not at append),
-   * upcasting a below-current-version payload through the {@link #withUpcasters upcaster chain},
-   * and decrypting {@code @Encrypted} fields (so a crypto-shredded subject yields {@link
-   * CryptoShreddingModule#REDACTED}) — mirroring {@code PostgresEventStore.toEnvelope}.
+   * Materializes a stored event into an {@link EventEnvelope}: DESERIALIZES the stored JSON on
+   * every read — resolving the event class through the registry (so an unregistered type surfaces
+   * here, not at append), upcasting a below-current-version payload through the {@link
+   * #withUpcasters upcaster chain}, and decrypting {@code @Encrypted} fields (so a crypto-shredded
+   * subject yields {@link CryptoShreddingModule#REDACTED}) — mirroring {@code
+   * PostgresEventStore.toEnvelope}.
    */
   private EventEnvelope toEnvelope(StoredEvent stored) {
-    if (objectMapper == null) {
-      return new EventEnvelope(
-          stored.globalOffset(),
-          stored.streamId(),
-          stored.version(),
-          stored.eventType(),
-          stored.event(),
-          stored.metadata());
-    }
     EventType eventType = stored.eventType();
     Class<?> eventClass = typeRegistry.resolveEventType(eventType);
     try {
@@ -1063,10 +1039,6 @@ public final class InMemoryEventStore implements EventStore {
       throw new IllegalArgumentException(
           "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
     }
-    if (objectMapper == null) {
-      snapshots.put(streamId, new Snapshot(version, snapshotVersion, state, null, null));
-      return true;
-    }
     if (!traced()) {
       return writeSnapshot(streamId, version, state, snapshotVersion);
     }
@@ -1083,10 +1055,10 @@ public final class InMemoryEventStore implements EventStore {
         });
   }
 
-  /** The serializing mode's snapshot write. */
+  /** The snapshot write. */
   private boolean writeSnapshot(
       StreamId streamId, Version version, AggregateState state, int snapshotVersion) {
-    // Serializing mode: validate the simple-name registry contract and store the SERIALIZED form
+    // Validate the simple-name registry contract and store the SERIALIZED form
     // (JSON / ciphertext), exactly like PostgresEventStore.saveSnapshot. Deserialization —
     // including @Encrypted decryption and retired-type resolution — is deferred to load().
     String stateType = state.getClass().getSimpleName();
@@ -1123,7 +1095,7 @@ public final class InMemoryEventStore implements EventStore {
               + LogSanitizer.sanitizeForLog(streamId.value()),
           e);
     }
-    snapshots.put(streamId, new Snapshot(version, snapshotVersion, null, stateJson, stateType));
+    snapshots.put(streamId, new Snapshot(version, snapshotVersion, stateJson, stateType));
     return true;
   }
 
@@ -1148,13 +1120,13 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * Resolves a stored snapshot on the read path. In serializing mode the stored JSON is
-   * deserialized to its ORIGINAL (stored) runtime class — re-running {@code @Encrypted} decryption
-   * (a crypto-shredded subject yields {@link CryptoShreddingModule#REDACTED}) and resolving the
-   * stored {@code state_type} through the registry via the NON-throwing resolver (a retired/renamed
-   * type is discarded → full replay, never a crash). A version mismatch is migrated up through the
-   * registered chain; one the chain cannot bridge is discarded before the state is deserialized,
-   * and so is a retired stored type — mirroring {@code PostgresEventStore.load}.
+   * Resolves a stored snapshot on the read path. The stored JSON is deserialized to its ORIGINAL
+   * (stored) runtime class — re-running {@code @Encrypted} decryption (a crypto-shredded subject
+   * yields {@link CryptoShreddingModule#REDACTED}) and resolving the stored {@code state_type}
+   * through the registry via the NON-throwing resolver (a retired/renamed type is discarded → full
+   * replay, never a crash). A version mismatch is migrated up through the registered chain; one the
+   * chain cannot bridge is discarded before the state is deserialized, and so is a retired stored
+   * type — mirroring {@code PostgresEventStore.load}.
    */
   private ResolvedSnapshot resolveSnapshot(Snapshot snapshot, int expectedSnapshotVersion) {
     boolean compatible =
@@ -1167,33 +1139,29 @@ public final class InMemoryEventStore implements EventStore {
       return ResolvedSnapshot.discard();
     }
 
+    Class<?> resolved = resolveStateTypeOrNull(snapshot.stateType());
+    if (resolved == null) {
+      // Retired/renamed stored type: undeserializable → discard and replay from the beginning.
+      return ResolvedSnapshot.discard();
+    }
     AggregateState storedState;
-    if (objectMapper == null) {
-      storedState = snapshot.state();
-    } else {
-      Class<?> resolved = resolveStateTypeOrNull(snapshot.stateType());
-      if (resolved == null) {
-        // Retired/renamed stored type: undeserializable → discard and replay from the beginning.
-        return ResolvedSnapshot.discard();
+    try {
+      storedState = deserializeSnapshotState(snapshot.stateJson(), resolved);
+    } catch (EventStoreException e) {
+      // Parity with PostgresEventStore: a plain Jackson/IO deserialize failure (a field
+      // renamed/removed without a snapshotVersion bump) means the derived snapshot CACHE is
+      // unreadable — discard it and replay all events from the beginning rather than crashing the
+      // load. A crypto decrypt failure (CryptoOperationException, possibly wrapped by Jackson
+      // into a JsonMappingException) is fail-closed and must still propagate.
+      if (hasCryptoCause(e)) {
+        throw e;
       }
-      try {
-        storedState = deserializeSnapshotState(snapshot.stateJson(), resolved);
-      } catch (EventStoreException e) {
-        // Parity with PostgresEventStore: a plain Jackson/IO deserialize failure (a field
-        // renamed/removed without a snapshotVersion bump) means the derived snapshot CACHE is
-        // unreadable — discard it and replay all events from the beginning rather than crashing the
-        // load. A crypto decrypt failure (CryptoOperationException, possibly wrapped by Jackson
-        // into a JsonMappingException) is fail-closed and must still propagate.
-        if (hasCryptoCause(e)) {
-          throw e;
-        }
-        log.error(
-            "Snapshot is undeserializable; discarding the derived snapshot cache and replaying all"
-                + " events from the beginning (bump the snapshot version when changing"
-                + " aggregate-state shape)",
-            e);
-        return ResolvedSnapshot.discard();
-      }
+      log.error(
+          "Snapshot is undeserializable; discarding the derived snapshot cache and replaying all"
+              + " events from the beginning (bump the snapshot version when changing"
+              + " aggregate-state shape)",
+          e);
+      return ResolvedSnapshot.discard();
     }
 
     if (compatible) {
@@ -1374,14 +1342,9 @@ public final class InMemoryEventStore implements EventStore {
         started);
   }
 
-  /** Whether this store serializes its events: it has an {@link EventTypeRegistry} to read with. */
-  boolean serializes() {
-    return objectMapper != null;
-  }
-
   /**
-   * The mapper this store serializes with, {@code null} when it keeps its events by reference. For
-   * {@link EventStreamFixtures}, which writes the payloads of a serializing store with a copy.
+   * The mapper this store serializes with. For {@link EventStreamFixtures}, which writes the
+   * payloads of a store with a copy.
    */
   ObjectMapper objectMapper() {
     return objectMapper;
@@ -1396,13 +1359,10 @@ public final class InMemoryEventStore implements EventStore {
   }
 
   /**
-   * Binds an event in the stored form of the serializing mode — its payload JSON, its metadata JSON
-   * and the schema version of the payload — the way a read binds a stored event: the registry
-   * resolves the type, the upcaster chain upcasts a payload below its current version, and a
-   * payload above it is refused. For {@link EventStreamFixtures}, whose files hold events in that
-   * form.
-   *
-   * @throws IllegalStateException if this store keeps its events by reference
+   * Binds an event in its stored form — its payload JSON, its metadata JSON and the schema version
+   * of the payload — the way a read binds a stored event: the registry resolves the type, the
+   * upcaster chain upcasts a payload below its current version, and a payload above it is refused.
+   * For {@link EventStreamFixtures}, whose files hold events in that form.
    */
   EventEnvelope bindStoredForm(
       StreamId streamId,
@@ -1411,51 +1371,37 @@ public final class InMemoryEventStore implements EventStore {
       int schemaVersion,
       String payloadJson,
       String metadataJson) {
-    if (!serializes()) {
-      throw new IllegalStateException(
-          "this InMemoryEventStore keeps its events by reference and has no EventTypeRegistry");
-    }
     return toEnvelope(
         new StoredEvent(
             GlobalOffset.initial(),
             streamId,
             version,
             eventType,
-            null,
-            null,
             payloadJson,
             metadataJson,
             schemaVersion));
   }
 
   /**
-   * One stored event. In by-reference mode {@code event}/{@code metadata} hold the objects and the
-   * JSON/schema fields are unused; in serializing mode {@code payloadJson}/{@code
-   * metadataJson}/{@code schemaVersion} hold the serialized form and {@code event}/{@code metadata}
-   * are null — the same store-the-raw-row / deserialize-on-read split {@code PostgresEventStore}
-   * uses.
+   * One stored event: {@code payloadJson}/{@code metadataJson}/{@code schemaVersion} hold the
+   * serialized form — the same store-the-raw-row / deserialize-on-read split {@code
+   * PostgresEventStore} uses.
    */
   private record StoredEvent(
       GlobalOffset globalOffset,
       StreamId streamId,
       Version version,
       EventType eventType,
-      DomainEvent event,
-      EventMetadata metadata,
       String payloadJson,
       String metadataJson,
       int schemaVersion) {}
 
   /**
-   * One stored snapshot. By-reference mode holds {@code state}; serializing mode holds {@code
-   * stateJson} + {@code stateType} (the stored simple name) and deserializes on read.
+   * One stored snapshot: {@code stateJson} + {@code stateType} (the stored simple name),
+   * deserialized on read.
    */
   private record Snapshot(
-      Version version,
-      int snapshotVersion,
-      AggregateState state,
-      String stateJson,
-      String stateType) {}
+      Version version, int snapshotVersion, String stateJson, String stateType) {}
 
   /**
    * The outcome of resolving a stored snapshot on read: the state to seed replay from (null to

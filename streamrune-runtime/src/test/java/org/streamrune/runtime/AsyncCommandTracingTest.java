@@ -13,6 +13,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.AggregateId;
@@ -25,6 +27,12 @@ import org.streamrune.test.InMemoryEventStore;
  * command's are, with no {@code asyncTaskWrapper}.
  */
 class AsyncCommandTracingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Switched.class)
+          .registerState("Lamp", Lamp.class)
+          .build();
 
   @RegisterExtension
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
@@ -58,7 +66,7 @@ class AsyncCommandTracingTest {
 
   private static VirtualThreadCommandBus.Builder lampBus() {
     return VirtualThreadCommandBus.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(
             AggregateType.of("lamp"),
             Switch.class,

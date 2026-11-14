@@ -69,7 +69,7 @@ public class TracingBenchmark {
                 TracingSettings.allEnabled());
       }
       InMemoryEventStore store =
-          InMemoryEventStore.serializing(
+          new InMemoryEventStore(
                   SimpleEventTypeRegistry.builder()
                       .registerEvent("BenchmarkEvent", BenchmarkEvent.class)
                       .registerState("BenchmarkState", BenchmarkState.class)

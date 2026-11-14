@@ -15,6 +15,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
@@ -29,6 +31,8 @@ import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
 
 class SagaRunnerLeaseTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final SubscriptionName LEASE_NAME =
       SubscriptionName.of("saga:" + SagaStepLockFixture.TYPE.value());
@@ -147,7 +151,9 @@ class SagaRunnerLeaseTest {
       UnaryOperator<SagaRunner.Builder<State>> leadershipSetting) {
     InMemorySagaStore rows = new InMemorySagaStore();
     InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox()).withSagaStore(rows);
+        new InMemoryEventStore(TYPES)
+            .withCommandInbox(new InMemoryCommandInbox())
+            .withSagaStore(rows);
     VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

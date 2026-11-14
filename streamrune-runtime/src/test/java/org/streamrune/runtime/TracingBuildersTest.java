@@ -23,6 +23,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
@@ -52,6 +54,13 @@ import org.streamrune.test.InMemoryOffsetStore;
  * switched off none.
  */
 class TracingBuildersTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Switched.class)
+          .registerEvent(Seen.class)
+          .registerState("LampState", LampState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("lamp");
 
@@ -98,7 +107,7 @@ class TracingBuildersTest {
 
   private static VirtualThreadCommandBus.Builder bus(StreamRuneTracing tracing) {
     return VirtualThreadCommandBus.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(TYPE, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
         .tracing(tracing);
   }
@@ -211,7 +220,7 @@ class TracingBuildersTest {
   }
 
   private static InMemoryEventStore storeWithTwoEvents(StreamId stream) {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(stream, List.of(envelope(stream, 1), envelope(stream, 2)), Version.initial());
     return store;
   }
@@ -491,7 +500,7 @@ class TracingBuildersTest {
     var projection = new CountingProjection();
     try (var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(TYPE, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .registerProjection(ProjectionName.of("facade"), projection, AT_LEAST_ONCE_IDEMPOTENT)
             .projectionRunner(runner)
@@ -516,7 +525,7 @@ class TracingBuildersTest {
     var projection = new CountingProjection();
     try (var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .registerProjection(ProjectionName.of("facade"), projection, AT_LEAST_ONCE_IDEMPOTENT)
             .projectionRunner(runner)
             .build()) {

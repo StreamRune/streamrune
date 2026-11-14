@@ -20,7 +20,9 @@ import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -61,6 +63,16 @@ import org.streamrune.test.InMemorySagaStore;
  */
 class SagaDispatchConcurrencyTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerEvent(Charged.class)
+          .registerEvent(Refunded.class)
+          .registerEvent(Touched.class)
+          .registerState("PaymentState", PaymentState.class)
+          .registerState("AccountState", AccountState.class)
+          .build();
+
   private static final AggregateType PAYMENT = AggregateType.of("payment");
   private static final AggregateType ACCOUNT = AggregateType.of("account");
 
@@ -70,7 +82,7 @@ class SagaDispatchConcurrencyTest {
     Duration run = Duration.ofSeconds(Long.getLong("streamrune.test.sagaConcurrencySeconds", 3L));
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();
-    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     var refundsFail = new AtomicBoolean(true);
     ThreadLocal<StreamRuneContext.RequestContext> request = new ThreadLocal<>();
     var bus =

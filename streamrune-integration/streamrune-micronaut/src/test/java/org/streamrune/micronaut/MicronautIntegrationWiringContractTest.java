@@ -34,6 +34,8 @@ import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ContractBeans;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
@@ -70,6 +72,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Execution(ExecutionMode.SAME_THREAD)
 class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ContractBeans.ContractCommandExecuted.class)
+          .registerState("ContractCommandState", ContractBeans.ContractCommandState.class)
+          .build();
 
   /** The property that declares the {@link ApplicationBeans#dataSource()} of a start. */
   static final String DATA_SOURCE = "contract.data-source";
@@ -227,7 +235,7 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     configuration.put("endpoints.health.details-visible", "ANONYMOUS");
     List<Object> singletons = new ArrayList<>();
     if (dataSource == null) {
-      singletons.add(new InMemoryEventStore());
+      singletons.add(new InMemoryEventStore(TYPES));
       singletons.add(new InMemoryOffsetStore());
     } else {
       ApplicationBeans.current = dataSource;

@@ -31,6 +31,8 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.types.UserId;
@@ -49,6 +51,8 @@ import reactor.core.publisher.Mono;
  * /api/sse/order/o-1} over HTTP.
  */
 class SseAuthorizerCallerTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final String SPEC = "SseAuthorizerCallerTest";
   private static final String SUPPORT = "SUPPORT";
@@ -181,7 +185,7 @@ class SseAuthorizerCallerTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     /** Admits only a caller whose captured authority has the support role; records every call. */

@@ -25,7 +25,9 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandInterceptor.CommandContext;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.LockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
@@ -59,6 +61,12 @@ import org.streamrune.test.InMemoryEventStore;
  * <p>A per-thread STACK is the fix: nesting pushes and pops instead of clobbering.
  */
 class CommandInterceptorReentrancyTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ThingEvent.ThingHappened.class)
+          .registerState("ThingState", ThingState.class)
+          .build();
 
   private static final AggregateType AGG = AggregateType.of("agg");
   private static final AggregateType OUTER = AggregateType.of("outer");
@@ -182,7 +190,7 @@ class CommandInterceptorReentrancyTest {
     // The reachability half: no hand-driven callbacks, a real bus whose inline projection
     // dispatches a follow-up command exactly as a process manager does.
     var store = new RecordingAuditStore();
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var busHolder = new CommandBus[1];
     var dispatched = new AtomicBoolean(false);
 
@@ -332,7 +340,7 @@ class CommandInterceptorReentrancyTest {
   @Test
   void inlineProjection_nestedCommandAgainstTheSameAggregate_reentersOnANonReentrantLocker() {
     var nonReentrant = new NonReentrantLocker();
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var busHolder = new CommandBus[1];
     var dispatched = new AtomicBoolean(false);
 
@@ -378,7 +386,7 @@ class CommandInterceptorReentrancyTest {
   @Test
   void nestedDispatchIntoAnotherTypeWithTheSameIdValue_takesItsOwnLock() {
     var locker = new NonReentrantLocker();
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var busHolder = new CommandBus[1];
     var dispatched = new AtomicBoolean(false);
     Projection processManager =
@@ -421,7 +429,7 @@ class CommandInterceptorReentrancyTest {
     // ALREADY held by this same thread. A different aggregate must still go through the real
     // locker and can therefore still genuinely fail if THAT lock is unavailable.
     var nonReentrant = new NonReentrantLocker();
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var busHolder = new CommandBus[1];
     var dispatched = new AtomicBoolean(false);
 
@@ -465,7 +473,7 @@ class CommandInterceptorReentrancyTest {
     // released, the SAME aggregate must go through the real locker again for a later, unrelated
     // command on the same thread — the "already held" marker must not outlive the lock it tracks.
     var nonReentrant = new NonReentrantLocker();
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
 
     var bus =
         VirtualThreadCommandBus.builder()

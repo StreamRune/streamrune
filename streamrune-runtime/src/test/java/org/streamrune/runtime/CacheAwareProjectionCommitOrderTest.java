@@ -20,11 +20,13 @@ import org.streamrune.core.Cacheable;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.LockMode;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.Query;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.Versioned;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
@@ -70,6 +72,9 @@ import org.streamrune.test.InMemoryOffsetStore;
  * load overlapped an eviction.
  */
 class CacheAwareProjectionCommitOrderTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -215,7 +220,7 @@ class CacheAwareProjectionCommitOrderTest {
     var seenInWindow = new AtomicReference<Integer>();
     beforeCommit = () -> seenInWindow.set(bus.dispatch(new CountOrders()));
 
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     StreamId streamId = StreamId.of(TYPE, AggregateId.of("order-1"));
     eventStore.append(streamId, List.of(orderPlaced(streamId, "order-1")), Version.initial());

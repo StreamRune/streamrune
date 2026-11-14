@@ -23,6 +23,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaForwardFencedException;
@@ -50,12 +51,20 @@ import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.test.InMemorySagaStore;
 
 /**
- * The event-store spans of {@link InMemoryEventStore} in its serializing mode, recorded through
- * {@link OpenTelemetryTracing}: each span's name, kind and exact attribute keys, its outcome, its
- * nesting, the error status of a failure, and no span for a read that returns nothing, for a
- * by-reference store, for a switched-off area or for NOOP.
+ * The event-store spans of {@link InMemoryEventStore}, recorded through {@link
+ * OpenTelemetryTracing}: each span's name, kind and exact attribute keys, its outcome, its nesting,
+ * the error status of a failure, and no span for a read that returns nothing, for a switched-off
+ * area or for NOOP.
  */
 class EventStoreTracingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Switched.class)
+          .registerEvent(Renamed.class)
+          .registerEvent(Unwritable.class)
+          .registerState("LampState", LampState.class)
+          .build();
 
   private static final AggregateType LAMP = AggregateType.of("lamp");
   private static final StreamId STREAM = StreamId.of(LAMP, AggregateId.of("l-1"));
@@ -90,7 +99,7 @@ class EventStoreTracingTest {
   }
 
   private static InMemoryEventStore store(StreamRuneTracing tracing) {
-    return InMemoryEventStore.serializing(registry(), null).withTracing(tracing);
+    return new InMemoryEventStore(registry()).withTracing(tracing);
   }
 
   static EventEnvelope event(StreamId stream, DomainEvent payload) {
@@ -542,17 +551,6 @@ class EventStoreTracingTest {
     assertThat(read.getParentSpanId()).isEqualTo(delivery.getSpanId());
     assertThat(string(read, TraceAttributes.READ_KIND)).isEqualTo("STREAM");
     assertThat(delivery.getParentSpanContext().isValid()).isFalse();
-  }
-
-  @Test
-  void aByReferenceStore_startsNoSpan() {
-    InMemoryEventStore store = new InMemoryEventStore().withTracing(tracing());
-    store.append(STREAM, List.of(switched("on")), new Version(0));
-    store.saveSnapshot(STREAM, new Version(1), new LampState(1), 1, 0);
-    store.load(STREAM, 1);
-    store.readGlobalStream(GlobalOffset.initial(), 10);
-
-    assertThat(otelTesting.getSpans()).isEmpty();
   }
 
   @Test

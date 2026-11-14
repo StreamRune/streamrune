@@ -18,7 +18,9 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -30,6 +32,12 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 class InMemoryEventStoreTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Added.class)
+          .registerState("CartState", CartState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
 
@@ -56,7 +64,7 @@ class InMemoryEventStoreTest {
 
   @Test
   void rejectsNullArgumentsLikePostgres() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     assertThrows(
         NullPointerException.class, () -> store.append(null, List.of(), Version.initial()));
@@ -67,7 +75,7 @@ class InMemoryEventStoreTest {
 
   @Test
   void twoAggregateTypesSharingAnIdValue_areTwoIndependentStreams() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId product = StreamId.of(AggregateType.of("product"), AggregateId.of("sku-1"));
     StreamId inventory = StreamId.of(AggregateType.of("inventory"), AggregateId.of("sku-1"));
 
@@ -92,7 +100,7 @@ class InMemoryEventStoreTest {
   // conflict from a failed insert.
   @Test
   void optimisticLockMessageMatchesPostgresWording() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
 
@@ -109,7 +117,7 @@ class InMemoryEventStoreTest {
   // sanitized, as PostgresEventStore's does.
   @Test
   void optimisticLockMessageRendersAForgedStreamIdSanitized() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, new AggregateId("cart-1\n2026-10-04 WARN forged\r\u202e"));
     store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
 
@@ -136,7 +144,7 @@ class InMemoryEventStoreTest {
   // actual head exactly, both for a stale (behind-head) AND a future (beyond-head) value.
   @Test
   void futureExpectedVersionIsRejected() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
 
@@ -165,7 +173,7 @@ class InMemoryEventStoreTest {
   // change cannot silently tighten this without a failing test to update deliberately.
   @Test
   void emptyEventsSucceedsRegardlessOfExpectedVersionMismatch() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
 
@@ -183,7 +191,7 @@ class InMemoryEventStoreTest {
 
   @Test
   void readGlobalStreamIsStrictlyOffsetOrderedUnderConcurrentAppends() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     int writers = 8;
     int eventsPerWriter = 25;
     var start = new CountDownLatch(1);
@@ -219,7 +227,7 @@ class InMemoryEventStoreTest {
     // last delivered offset — the same pattern a projection/subscription checkpoint uses — must
     // walk the entire global stream exactly once, in a contiguous 1-based sequence, regardless of
     // how many streams the events came from or how small the page size is.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     int streamCount = 5;
     int eventsPerStream = 7;
     for (int s = 0; s < streamCount; s++) {
@@ -258,7 +266,7 @@ class InMemoryEventStoreTest {
 
   @Test
   void saveSnapshotValidatesArgumentsLikePostgres() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
     assertThrows(
         NullPointerException.class,

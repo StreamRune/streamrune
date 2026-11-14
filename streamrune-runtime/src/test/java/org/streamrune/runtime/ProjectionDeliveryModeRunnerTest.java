@@ -21,6 +21,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
@@ -46,6 +48,9 @@ import org.streamrune.test.InMemoryProjectionRepository;
  * one INFO line per registration, and the delivery-mode gauge.
  */
 class ProjectionDeliveryModeRunnerTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Ping.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("stream");
 
@@ -84,7 +89,7 @@ class ProjectionDeliveryModeRunnerTest {
   static final ProjectionRepository NULL_MARKER = new InMemoryProjectionRepository();
 
   private static InMemoryEventStore storeWith(int events) {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     for (int i = 1; i <= events; i++) {
       appendPings(store, i, i);
     }
@@ -292,7 +297,7 @@ class ProjectionDeliveryModeRunnerTest {
   @EnumSource(ProjectionErrorStrategy.class)
   void continuousRunner_livePath_checkpointSaveFailure_isRetried_underEveryStrategy(
       ProjectionErrorStrategy strategy) throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var offsets = new FailingOnceOffsetStore(new InMemoryOffsetStore());
     var dlq = new InMemoryProjectionDeadLetterStore();
     var counter = new AtomicInteger();
@@ -346,7 +351,7 @@ class ProjectionDeliveryModeRunnerTest {
   void continuousRunner_livePath_checkpointSaveOutage_doesNotConsumeTheHaltBound()
       throws Exception {
     var continuousLog = captor(ContinuousProjectionRunner.class);
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var offsets = new OutageOffsetStore(new InMemoryOffsetStore(), 2);
     var counter = new AtomicInteger();
     var deliveries = new AtomicInteger();

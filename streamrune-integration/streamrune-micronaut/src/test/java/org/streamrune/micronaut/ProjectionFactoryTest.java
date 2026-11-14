@@ -23,7 +23,9 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
@@ -51,6 +53,9 @@ import org.streamrune.test.InMemoryProjectionRepository;
 
 /** Tests for {@link ProjectionFactory}. */
 class ProjectionFactoryTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Ping.class).build();
 
   // --- Concrete test projections ---
 
@@ -422,7 +427,7 @@ class ProjectionFactoryTest {
   }
 
   private static InMemoryEventStore oneEvent() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var stream = StreamId.of(AggregateType.of("ping"), AggregateId.of("s"));
     store.append(
         stream,

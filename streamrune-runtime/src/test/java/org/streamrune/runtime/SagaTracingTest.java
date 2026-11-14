@@ -21,6 +21,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
@@ -51,6 +53,14 @@ import org.streamrune.test.SagaFixture;
  * dispatches nest under it; none with the saga area off or NOOP.
  */
 class SagaTracingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerEvent(StockReserved.class)
+          .registerState("StockState", StockState.class)
+          .registerState("OrderOpen", OrderOpen.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final AggregateType STOCK = AggregateType.of("stock");
@@ -463,7 +473,7 @@ class SagaTracingTest {
     var sagaStore = new InMemorySagaStore();
     try (var bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore().withCommandInbox(inbox))
+            .eventStore(new InMemoryEventStore(TYPES).withCommandInbox(inbox))
             .commandInbox(inbox)
             .register(
                 STOCK, ReserveStock.class, c -> AggregateId.of(c.orderId()), new StockDecider())
@@ -530,7 +540,7 @@ class SagaTracingTest {
     StreamRuneTracing tracing = tracing();
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

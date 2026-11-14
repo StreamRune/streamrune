@@ -85,8 +85,7 @@ class TracingWithoutOpenTelemetryTest {
 
       Class<?> busType = load(loader, "org.streamrune.runtime.VirtualThreadCommandBus");
       Class<?> storeType = load(loader, "org.streamrune.core.EventStore");
-      Object store =
-          load(loader, "org.streamrune.test.InMemoryEventStore").getConstructor().newInstance();
+      Object store = inMemoryEventStore(loader);
       Object builder = busType.getMethod("builder").invoke(null);
       Class<?> builderType = builder.getClass();
       builderType.getMethod("eventStore", storeType).invoke(builder, store);
@@ -168,11 +167,7 @@ class TracingWithoutOpenTelemetryTest {
       builder
           .getClass()
           .getMethod("eventStore", load(loader, "org.streamrune.core.EventStore"))
-          .invoke(
-              builder,
-              load(loader, "org.streamrune.test.InMemoryEventStore")
-                  .getConstructor()
-                  .newInstance());
+          .invoke(builder, inMemoryEventStore(loader));
       builder.getClass().getMethod("tracing", tracingType).invoke(builder, tracing);
       Object interceptor;
       try (AutoCloseable bus =
@@ -199,8 +194,7 @@ class TracingWithoutOpenTelemetryTest {
       Object noop = tracingType.getField("NOOP").get(null);
       Class<?> storeType = load(loader, "org.streamrune.core.EventStore");
       Class<?> offsetStoreType = load(loader, "org.streamrune.core.projection.OffsetStore");
-      Object store =
-          load(loader, "org.streamrune.test.InMemoryEventStore").getConstructor().newInstance();
+      Object store = inMemoryEventStore(loader);
 
       Class<?> listenerType = load(loader, "org.streamrune.core.subscription.EventListener");
       Class<?> subscriptionName = load(loader, "org.streamrune.core.types.SubscriptionName");
@@ -404,7 +398,7 @@ class TracingWithoutOpenTelemetryTest {
                 .acquireLock(stream, Duration.ofSeconds(1)).close();
 
             InMemoryEventStore store =
-                InMemoryEventStore.serializing(
+                new InMemoryEventStore(
                         SimpleEventTypeRegistry.builder().registerEvent("Switched", Switched.class)
                             .registerState("LampState", LampState.class).build(),
                         null)
@@ -525,6 +519,18 @@ class TracingWithoutOpenTelemetryTest {
 
   private static Class<?> load(ClassLoader loader, String name) throws ClassNotFoundException {
     return Class.forName(name, true, loader);
+  }
+
+  /** An {@code InMemoryEventStore} of {@code loader}, over an empty type registry. */
+  private static Object inMemoryEventStore(ClassLoader loader) throws ReflectiveOperationException {
+    Object registryBuilder =
+        load(loader, "org.streamrune.core.SimpleEventTypeRegistry")
+            .getMethod("builder")
+            .invoke(null);
+    Object registry = registryBuilder.getClass().getMethod("build").invoke(registryBuilder);
+    return load(loader, "org.streamrune.test.InMemoryEventStore")
+        .getConstructor(load(loader, "org.streamrune.core.EventTypeRegistry"))
+        .newInstance(registry);
   }
 
   private static Object proxy(ClassLoader loader, Class<?> type) {

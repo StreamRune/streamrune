@@ -85,7 +85,7 @@ class InMemoryEventStoreReadTransformParityTest {
             .registerEvent("PiiRegistered", PiiRegistered.class)
             .build();
     var crypto = new InMemoryCryptoEngine();
-    var store = InMemoryEventStore.serializing(registry, crypto);
+    var store = new InMemoryEventStore(registry, crypto);
     StreamId s = StreamId.of(TYPE, AggregateId.of("user-1"));
     store.append(
         s,
@@ -112,7 +112,7 @@ class InMemoryEventStoreReadTransformParityTest {
             .registerState("PiiState", PiiState.class)
             .build();
     var crypto = new InMemoryCryptoEngine();
-    var store = InMemoryEventStore.serializing(registry, crypto);
+    var store = new InMemoryEventStore(registry, crypto);
     StreamId s = StreamId.of(TYPE, AggregateId.of("user-1"));
     store.append(
         s,
@@ -138,7 +138,7 @@ class InMemoryEventStoreReadTransformParityTest {
     // Registry resolves "Evolving" to the CURRENT class (V2). The event is appended as a V1 shape.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("Evolving", EvolvingV2.class).build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-1"));
 
     // Append a V1 payload BEFORE any upcaster is configured, so it is stamped schema version 1
@@ -206,7 +206,7 @@ class InMemoryEventStoreReadTransformParityTest {
     // mirroring PostgresEventStore, so the double cannot mask the divergence.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("Evolving", EvolvingV1.class).build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-ahead"));
 
     // Append WITH a chain that reports Evolving currentVersion = 2, so the row is stamped
@@ -234,7 +234,7 @@ class InMemoryEventStoreReadTransformParityTest {
     // mis-bind class, same loud failure.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("Evolving", EvolvingV1.class).build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-ahead-chainless"));
 
     // Stamp schema_version = 2 by appending under a chain that reports Evolving currentVersion = 2
@@ -279,7 +279,7 @@ class InMemoryEventStoreReadTransformParityTest {
             throw new UnknownEventTypeException("state type", stateType, List.of("CurrentState"));
           }
         };
-    var store = InMemoryEventStore.serializing(togglingRegistry, null);
+    var store = new InMemoryEventStore(togglingRegistry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-retired"));
     store.append(
         s,
@@ -318,7 +318,7 @@ class InMemoryEventStoreReadTransformParityTest {
             .registerEvent("Evolving", EvolvingV1.class)
             .registerState("CurrentState", CurrentState.class)
             .build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-live"));
     store.append(s, List.of(envelope(s, 1, new EvolvingV1("a"), "Evolving")), Version.initial());
     store.saveSnapshot(s, new Version(1), new CurrentState("here"), 1);

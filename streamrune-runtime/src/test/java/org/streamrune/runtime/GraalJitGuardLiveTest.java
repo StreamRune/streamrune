@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -16,6 +18,8 @@ import org.streamrune.test.InMemoryEventStore;
  */
 class GraalJitGuardLiveTest {
 
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
+
   private static final boolean REFUSED =
       "refused".equals(System.getProperty("streamrune.test.expectGraalJitGuard", "accepted"));
 
@@ -26,14 +30,17 @@ class GraalJitGuardLiveTest {
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler");
       assertThatThrownBy(
-              () -> VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore()).build())
+              () ->
+                  VirtualThreadCommandBus.builder()
+                      .eventStore(new InMemoryEventStore(TYPES))
+                      .build())
           .as("the bus builder runs the guard")
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler");
       assertThatCode(
               () ->
                   VirtualThreadCommandBus.builder()
-                      .eventStore(new InMemoryEventStore())
+                      .eventStore(new InMemoryEventStore(TYPES))
                       .allowGraalJit(true)
                       .build()
                       .close())
@@ -44,7 +51,7 @@ class GraalJitGuardLiveTest {
       assertThatCode(
               () ->
                   VirtualThreadCommandBus.builder()
-                      .eventStore(new InMemoryEventStore())
+                      .eventStore(new InMemoryEventStore(TYPES))
                       .build()
                       .close())
           .doesNotThrowAnyException();

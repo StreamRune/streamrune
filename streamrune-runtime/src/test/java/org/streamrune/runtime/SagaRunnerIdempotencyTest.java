@@ -14,6 +14,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -41,6 +43,13 @@ import org.streamrune.test.InMemorySagaStore;
  * short-circuits without re-running the decider.
  */
 class SagaRunnerIdempotencyTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderConfirmed.class)
+          .registerEvent(StockEvent.StockReserved.class)
+          .registerState("StockState", StockState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("inventory");
 
@@ -253,7 +262,7 @@ class SagaRunnerIdempotencyTest {
   void redeliveredCorrelatedEvent_commandDispatchedOnce_noSpuriousCompensation() {
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();
-    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
 
     var bus =
         VirtualThreadCommandBus.builder()
@@ -318,7 +327,7 @@ class SagaRunnerIdempotencyTest {
   void twoCommandStep_redelivery_eachCommandAppliedOnce() {
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();
-    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
 
     var bus =
         VirtualThreadCommandBus.builder()

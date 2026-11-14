@@ -10,7 +10,9 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
@@ -51,6 +53,15 @@ import org.streamrune.test.InMemorySagaStore;
  * routes {@link Confirmed} to the saga of the flow the event itself names.
  */
 final class SagaOriginHttpFixture implements AutoCloseable {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(FlowOpened.class)
+          .registerEvent(Prepared.class)
+          .registerEvent(Confirmed.class)
+          .registerEvent(Finished.class)
+          .registerState("FlowAggregate", FlowAggregate.class)
+          .build();
 
   /** How the saga under test routes an event it did not cause. */
   enum Routing {
@@ -197,7 +208,7 @@ final class SagaOriginHttpFixture implements AutoCloseable {
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
   private final InMemorySagaStore sagaStore = new InMemorySagaStore();
   private final InMemoryEventStore eventStore =
-      new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+      new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
   final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
   private final VirtualThreadCommandBus bus;
   private final FlowSaga saga;

@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -24,6 +26,9 @@ import org.streamrune.core.types.Version;
 
 class InMemoryEventStoreAppendWithKeyTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build();
+
   private static final AggregateType TYPE = AggregateType.of("order");
 
   record OrderPlaced(String orderId) implements DomainEvent {}
@@ -36,7 +41,7 @@ class InMemoryEventStoreAppendWithKeyTest {
   @BeforeEach
   void setUp() {
     inbox = new InMemoryCommandInbox();
-    store = new InMemoryEventStore().withCommandInbox(inbox);
+    store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
   }
 
   private EventEnvelope envelope(String id) {
@@ -58,7 +63,7 @@ class InMemoryEventStoreAppendWithKeyTest {
 
   @Test
   void appendWithKey_withNoInboxWired_isUnsupported_beforeItsArgumentsAreChecked() {
-    var unwiredStore = new InMemoryEventStore();
+    var unwiredStore = new InMemoryEventStore(TYPES);
     var ex =
         assertThrows(
             UnsupportedOperationException.class,

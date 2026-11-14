@@ -14,12 +14,20 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.ValidationException;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.test.InMemoryEventStore;
 
 class VirtualThreadCommandBusValidationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ItemCreated.class)
+          .registerState("ItemState", ItemState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("item");
 
@@ -76,7 +84,7 @@ class VirtualThreadCommandBusValidationTest {
 
   @Test
   void shouldValidateCommandBeforeExecution() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var bus = buildBus(eventStore);
 
     // name=null violates @NotBlank — should throw ValidationException
@@ -90,7 +98,7 @@ class VirtualThreadCommandBusValidationTest {
 
   @Test
   void shouldExecuteValidCommand() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var bus = buildBus(eventStore);
 
     var validCommand = new CreateItem(UUID.randomUUID().toString(), "Widget", 10);
@@ -104,7 +112,7 @@ class VirtualThreadCommandBusValidationTest {
 
   @Test
   void shouldFailFastOnValidationBeforeLocker() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var bus = buildBus(eventStore);
 
     // quantity=-1 violates @Positive — validation should fail before locking

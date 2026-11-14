@@ -27,6 +27,8 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
@@ -46,6 +48,9 @@ import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 
 class StreamEventSubscriptionTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
 
@@ -88,7 +93,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceDeliversStreamEventsAndAdvancesOffset() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-42"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
 
@@ -115,7 +120,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceReturnsZeroWhenNoEvents() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new StreamEventSubscription(
             SubscriptionName.of("empty-sub"),
@@ -130,7 +135,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceAdvancesCheckpointPastForeignOnlyPage() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId target = StreamId.of(TYPE, AggregateId.of("cart-target"));
     StreamId other = StreamId.of(TYPE, AggregateId.of("cart-other"));
     // Page 1 (fetchSize=2) contains ONLY foreign events; the target's event is beyond it.
@@ -167,7 +172,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceDrainsABacklogLargerThanFetchSizeInASingleCycle() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId target = StreamId.of(TYPE, AggregateId.of("cart-drain-target"));
     StreamId other = StreamId.of(TYPE, AggregateId.of("cart-drain-other"));
     // 60 foreign events then 5 of the target's — with fetchSize 10 that is 7 pages.
@@ -203,7 +208,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceAbandonsTheDrainWhenClosedMidBacklog() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId target = StreamId.of(TYPE, AggregateId.of("cart-close-target"));
     var all = new java.util.ArrayList<EventEnvelope>();
     for (int i = 1; i <= 50; i++) {
@@ -235,7 +240,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceDoesNotAdvanceCheckpointWhenListenerFails() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-fail"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -261,7 +266,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-resilient"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -300,7 +305,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void pollOnceFiltersOutOtherStreams() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId target = StreamId.of(TYPE, AggregateId.of("cart-1"));
     StreamId other = StreamId.of(TYPE, AggregateId.of("other-1"));
     store.append(target, List.of(envelope(target, 1)), Version.initial());
@@ -325,7 +330,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void startCloseToggleRunning() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new StreamEventSubscription(
             SubscriptionName.of("toggle-sub"),
@@ -350,7 +355,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void startTwiceThrows() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new StreamEventSubscription(
             SubscriptionName.of("twice-sub"),
@@ -368,7 +373,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void streamIdAccessor() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new StreamEventSubscription(
             SubscriptionName.of("accessor-sub"),
@@ -383,7 +388,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void constructorRejectsInvalidArguments() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var os = new InMemoryOffsetStore();
     EventListener listener = e -> {};
     var cfg = fastConfig();
@@ -459,7 +464,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void builderBuildsWithDefaults() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         StreamEventSubscription.builder()
             .subscriptionName(SubscriptionName.of("cart-9-watcher"))
@@ -473,7 +478,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void builderRequiresSubscriptionName() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -487,7 +492,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void twoSubscriptionsOnSameStreamKeepIndependentCheckpoints() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-shared"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
 
@@ -525,7 +530,7 @@ class StreamEventSubscriptionTest {
 
   @Test
   void backgroundPollLoopDeliversEvents() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-bg"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
 
@@ -688,7 +693,7 @@ class StreamEventSubscriptionTest {
     // A SQLException-caused read failure is infrastructure, not poison: the streak resets and the
     // resilient loop's unbounded retry applies — the subscription recovers and delivers even after
     // MORE consecutive failures than the bound.
-    var real = new InMemoryEventStore();
+    var real = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-blip"));
     real.append(s, List.of(envelope(s, 1)), Version.initial());
     var failuresLeft = new AtomicInteger(StreamEventSubscription.DEFAULT_READ_POISON_BOUND + 2);

@@ -29,6 +29,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.streamrune.core.Authorization;
 import org.streamrune.core.AuthorizationException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.StreamId;
@@ -42,6 +44,12 @@ import org.streamrune.test.InMemoryEventStore;
 
 /** Tests for {@link ScopedValueFilter}. */
 class ScopedValueFilterTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(org.streamrune.test.CommandBusProvenanceContract.Marked.class)
+          .registerState("Marks", org.streamrune.test.CommandBusProvenanceContract.Marks.class)
+          .build();
 
   /** A W3C baggage key a client may send to name a causing event; the framework reads none. */
   private static final String CAUSATION_KEY = "streamrune.causation-id";
@@ -840,7 +848,7 @@ class ScopedValueFilterTest {
                     .put(ORIGIN_KEY, "order-saga-42")
                     .build());
 
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

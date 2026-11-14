@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.streamrune.core.Authorization;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.Query;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.StreamRuneContext;
@@ -137,7 +138,8 @@ class SpringMvcAsyncCallerTest {
 
   private static void declare(GenericApplicationContext context) {
     context.registerBean(
-        EventStoreFactory.class, () -> InMemoryEventStoreFactory.builder().build());
+        EventStoreFactory.class,
+        () -> InMemoryEventStoreFactory.builder(context.getBean(EventTypeRegistry.class)).build());
     context.registerBean(OffsetStore.class, InMemoryOffsetStore::new);
     context.registerBean(ContractBeans.RecordingAuditStore.class);
     context.registerBean(

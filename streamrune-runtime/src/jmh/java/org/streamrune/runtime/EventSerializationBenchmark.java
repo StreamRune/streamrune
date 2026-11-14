@@ -36,9 +36,10 @@ import org.streamrune.test.InMemoryEventStore;
 
 /**
  * Event deserialization and upcasting without a database: a load of 100 events from an {@link
- * InMemoryEventStore} in its serializing mode ({@link InMemoryEventStore#serializing}), which
- * stores every event as JSON on append and reads it back the way {@code PostgresEventStore} does:
- * an event stored at the reader's current schema version is bound to its class with {@code
+ * InMemoryEventStore}, which stores every event as JSON on append and reads it back the way {@code
+ * PostgresEventStore} does:
+ *
+ * <p>an event stored at the reader's current schema version is bound to its class with {@code
  * readValue}; an older one is read to a map, run through the {@code UpcasterChain} step by step,
  * and bound with {@code convertValue}. Event metadata is read with {@code readValue} either way.
  *
@@ -97,7 +98,7 @@ public class EventSerializationBenchmark {
     @Setup(Level.Trial)
     public void appendEvents() {
       store =
-          InMemoryEventStore.serializing(
+          new InMemoryEventStore(
               SimpleEventTypeRegistry.builder()
                   .registerEvent(ORDER_RECORDED, OrderRecordedV3.class)
                   .build(),

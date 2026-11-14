@@ -15,6 +15,8 @@ import org.streamrune.core.DeadLetterRetryPolicy;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -44,10 +46,16 @@ import org.streamrune.test.MutableClock;
  */
 class DeadLetterOneEntryPerKeyTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Adjusted.class)
+          .registerState("CounterState", CounterState.class)
+          .build();
+
   private static final AggregateType COUNTER = AggregateType.of("counter");
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore events = new InMemoryEventStore().withCommandInbox(inbox);
+  private final InMemoryEventStore events = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
   private final FaultSchedule outage =
       FaultSchedule.none()
           .throwing(() -> new EventStoreException("connection reset by peer"))
@@ -227,7 +235,7 @@ class DeadLetterOneEntryPerKeyTest {
         VirtualThreadCommandBus.builder()
             .eventStore(
                 new ForwardingEventStore(
-                    new InMemoryEventStore().withCommandInbox(otherInbox), outage))
+                    new InMemoryEventStore(TYPES).withCommandInbox(otherInbox), outage))
             .commandInbox(otherInbox)
             .deadLetterQueue(queue)
             .objectMapper(new ObjectMapper())

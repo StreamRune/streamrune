@@ -29,7 +29,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
- * The span tree of one command on the in-memory serializing store, recorded through {@link
+ * The span tree of one command on the in-memory store, recorded through {@link
  * OpenTelemetryTracing}: {@code command/Switch} holds {@code lock/acquire}, {@code eventstore/load}
  * (with {@code eventstore/snapshot/load} and {@code eventstore/load/deserialize}) and {@code
  * eventstore/append} (with {@code eventstore/append/serialize}); each area switched off removes its
@@ -71,7 +71,7 @@ class CommandSpanTreeTest {
 
   private static void runCommand(StreamRuneTracing tracing) {
     InMemoryEventStore store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
                 SimpleEventTypeRegistry.builder()
                     .registerEvent("Switched", Switched.class)
                     .registerState("LampState", LampState.class)

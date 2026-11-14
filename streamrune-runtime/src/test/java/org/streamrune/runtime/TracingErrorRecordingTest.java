@@ -17,6 +17,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -33,6 +35,12 @@ import org.streamrune.test.InMemoryEventStore;
  * span, the command span included; and the start time a span can be given.
  */
 class TracingErrorRecordingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Switched.class)
+          .registerState("LampState", LampState.class)
+          .build();
 
   private static final String MARKER = "payload-value-4711";
 
@@ -190,7 +198,7 @@ class TracingErrorRecordingTest {
         };
     try (var bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(
                 AggregateType.of("lamp"), Switch.class, c -> AggregateId.of(c.lampId()), failing)
             .tracing(tracing())

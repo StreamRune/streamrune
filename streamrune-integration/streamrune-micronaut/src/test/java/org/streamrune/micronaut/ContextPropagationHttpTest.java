@@ -23,6 +23,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -43,6 +45,12 @@ import org.streamrune.test.InMemoryEventStore;
 @Property(name = "micronaut.security.enabled", value = "false")
 @Property(name = "streamrune.security.trust-user-id-header", value = "true")
 class ContextPropagationHttpTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ProbeEvent.Touched.class)
+          .registerState("ProbeState", ProbeState.class)
+          .build();
 
   private static final Argument<Map<String, String>> MAP =
       Argument.mapOf(String.class, String.class);
@@ -161,7 +169,7 @@ class ContextPropagationHttpTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

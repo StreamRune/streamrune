@@ -24,6 +24,8 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
@@ -69,6 +71,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class ProjectionDeliveryModeCrashIT {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(CrashItSupport.Ping.class).build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -170,7 +175,7 @@ class ProjectionDeliveryModeCrashIT {
     var upsert = new StatusProjection(own, name.value() + "_u"); // idempotent: the honest model
     var failingOnce = new FailingOnceOffsetStore(new PostgresOffsetStore(processorDs));
     var dlq = new PostgresProjectionDeadLetterStore(processorDs);
-    var events = new InMemoryEventStore();
+    var events = new InMemoryEventStore(TYPES);
     CrashItSupport.appendPings(events, 2);
 
     var runner =
@@ -332,7 +337,7 @@ class ProjectionDeliveryModeCrashIT {
     var processorA = new JdbcProjectionRepository(processorDs);
     var memory = new InMemoryProjectionRepository();
     var projection = new CountingProjection(memory, name.value());
-    var events = new InMemoryEventStore();
+    var events = new InMemoryEventStore(TYPES);
     CrashItSupport.appendPings(events, 3);
     var runner =
         new PollingProjectionRunner(

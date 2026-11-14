@@ -50,6 +50,15 @@ import org.streamrune.crypto.CryptoShreddingModule;
 
 class EventStreamFixturesTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerEvent(OrderShipped.class)
+          .registerEvent(OrderCancelled.class)
+          .registerEvent(OrderPriced.class)
+          .registerEvent(CustomerRegistered.class)
+          .build();
+
   record OrderPlaced(String orderId, int quantity) implements DomainEvent {}
 
   record OrderShipped(String orderId) implements DomainEvent {}
@@ -98,7 +107,7 @@ class EventStreamFixturesTest {
 
   /** order 1: placed and shipped; order 2: placed and cancelled — four events on two streams. */
   private static InMemoryEventStore recorded() {
-    var store = InMemoryEventStore.serializing(orders(), null);
+    var store = new InMemoryEventStore(orders());
     store.append(
         ORDER_1, List.of(envelope(ORDER_1, 1, new OrderPlaced("1", 2), 1)), Version.initial());
     store.append(
@@ -149,7 +158,7 @@ class EventStreamFixturesTest {
     Path file = dir.resolve("orders.json");
     EventStreamFixtures.write(original, file);
 
-    var replayed = InMemoryEventStore.serializing(orders(), null);
+    var replayed = new InMemoryEventStore(orders());
     EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
 
     assertEquals(all(original), all(replayed), "offsets, versions, payloads and metadata alike");
@@ -166,7 +175,7 @@ class EventStreamFixturesTest {
       Files.copy(checkedIn, file);
     }
 
-    var replayed = InMemoryEventStore.serializing(orders(), null);
+    var replayed = new InMemoryEventStore(orders());
     EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
 
     assertEquals(Map.of("1", "SHIPPED 2", "2", "CANCELLED 5"), project(all(replayed)));
@@ -197,7 +206,7 @@ class EventStreamFixturesTest {
     Path file = dir.resolve("orders.json");
     EventStreamFixtures.write(recorded(), file);
     var withoutCancellations =
-        InMemoryEventStore.serializing(registry(OrderPlaced.class, OrderShipped.class), null);
+        new InMemoryEventStore(registry(OrderPlaced.class, OrderShipped.class), null);
 
     assertThrows(
         UnknownEventTypeException.class,
@@ -247,7 +256,7 @@ class EventStreamFixturesTest {
         } ]
         """
             .formatted(EventType.fromClass(OrderPlaced.class).value()));
-    var store = InMemoryEventStore.serializing(orders(), null).withUpcasters(List.of(QUANTITY));
+    var store = new InMemoryEventStore(orders()).withUpcasters(List.of(QUANTITY));
 
     EventStreamFixtures.appendTo(store, EventStreamFixtures.read(file));
 
@@ -261,11 +270,9 @@ class EventStreamFixturesTest {
   void aPayloadAboveTheStoresSchemaVersion_isRefused() throws IOException {
     Path file = dir.resolve("v2.json");
     EventStreamFixtures.write(
-        recordedWith(
-            InMemoryEventStore.serializing(orders(), null).withUpcasters(List.of(QUANTITY))),
-        file);
+        recordedWith(new InMemoryEventStore(orders()).withUpcasters(List.of(QUANTITY))), file);
 
-    var olderReader = InMemoryEventStore.serializing(orders(), null);
+    var olderReader = new InMemoryEventStore(orders());
 
     assertThrows(
         EventSchemaAheadException.class,
@@ -286,33 +293,6 @@ class EventStreamFixturesTest {
     assertThrows(
         OptimisticLockException.class,
         () -> EventStreamFixtures.appendTo(recorded(), EventStreamFixtures.read(file)));
-  }
-
-  @Test
-  void appendTo_aStoreThatKeepsEventsByReference_isRefused() throws IOException {
-    Path file = dir.resolve("orders.json");
-    EventStreamFixtures.write(recorded(), file);
-    List<EventStreamFixtures.StoredEvent> events = EventStreamFixtures.read(file);
-
-    var refused =
-        assertThrows(
-            IllegalArgumentException.class,
-            () -> EventStreamFixtures.appendTo(new InMemoryEventStore(), events));
-    assertTrue(refused.getMessage().contains("serializing"), refused.getMessage());
-  }
-
-  @Test
-  void write_ofAStoreThatKeepsEventsByReference_writesTheirJson() throws IOException {
-    var store = new InMemoryEventStore();
-    store.append(
-        ORDER_1, List.of(envelope(ORDER_1, 1, new OrderPlaced("1", 3), 1)), Version.initial());
-    Path file = dir.resolve("by-reference.json");
-
-    EventStreamFixtures.write(store, file);
-
-    EventStreamFixtures.StoredEvent event = EventStreamFixtures.read(file).getFirst();
-    assertEquals(3, event.payload().get("quantity").asInt());
-    assertEquals(1, event.schemaVersion());
   }
 
   /** An amount the application's mapper writes as one string, {@code "12.34 EUR"}. */
@@ -425,7 +405,7 @@ class EventStreamFixturesTest {
   @Test
   void storedMetadataWithASpanIdKey_bindsInASerializingStore_andTheKeyIsDropped()
       throws IOException {
-    var store = InMemoryEventStore.serializing(orders(), null);
+    var store = new InMemoryEventStore(orders());
     String metadata =
         "{\"eventId\":\"event-1\",\"commandId\":\"command-1\",\"traceId\":null,"
             + "\"spanId\":\"b7ad6b7169203331\",\"correlationId\":\"correlation-1\","
@@ -455,7 +435,7 @@ class EventStreamFixturesTest {
   void aStoreWithoutUpcasters_bindsAStoredFormBelowSchemaVersionOneDirectly() {
     // No upcasters: the payload is bound as stored and no chain is asked to upcast from version 0,
     // which an upcaster chain refuses.
-    var store = InMemoryEventStore.serializing(orders(), null);
+    var store = new InMemoryEventStore(orders());
     String metadata =
         "{\"eventId\":\"event-1\",\"commandId\":\"command-1\",\"traceId\":null,"
             + "\"correlationId\":\"correlation-1\",\"causationId\":null,\"userId\":null,"

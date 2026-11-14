@@ -13,6 +13,8 @@ import org.streamrune.core.CommandAuthorizationPolicy;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.AuditStore;
@@ -35,6 +37,12 @@ import org.streamrune.test.InMemoryEventStore;
  * attempt would go UNAUDITED — a silent audit gap. The test asserts the denial IS audited.
  */
 class MicronautInterceptorOrderingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.Created.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   record WidgetCommand(String id) implements Command {}
 
@@ -82,7 +90,7 @@ class MicronautInterceptorOrderingTest {
 
     try (VirtualThreadCommandBus bus =
         module.virtualThreadCommandBus(
-            new InMemoryEventStore(),
+            new InMemoryEventStore(TYPES),
             module.aggregateLocker(
                 StreamRuneMicronautProperties.withDefaults(),
                 org.streamrune.core.tracing.StreamRuneTracing.NOOP),

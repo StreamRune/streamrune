@@ -12,7 +12,9 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -58,6 +60,18 @@ import org.streamrune.test.InMemorySagaStore;
  * dead-letter replayer feeds a quarantined one.
  */
 class SagaContinuationRoutingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(SagaDispatchProvenanceTest.Opened.class)
+          .registerEvent(SagaDispatchProvenanceTest.Advanced.class)
+          .registerEvent(SagaDispatchProvenanceTest.Reserved.class)
+          .registerEvent(SagaDispatchProvenanceTest.Shipped.class)
+          .registerEvent(SagaDispatchProvenanceTest.Released.class)
+          .registerEvent(SagaDispatchProvenanceTest.Audited.class)
+          .registerEvent(SagaDispatchProvenanceTest.Rechecked.class)
+          .registerState("Untouched", SagaDispatchProvenanceTest.Untouched.class)
+          .build();
 
   private static final SagaType TYPE = SagaType.fromClass(FlowState.class);
 
@@ -128,7 +142,7 @@ class SagaContinuationRoutingTest {
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     final InMemorySagaStore sagaStore = new InMemorySagaStore();
     final InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
     final ReserveThenAuditSaga saga = new ReserveThenAuditSaga();
     final VirtualThreadCommandBus bus =

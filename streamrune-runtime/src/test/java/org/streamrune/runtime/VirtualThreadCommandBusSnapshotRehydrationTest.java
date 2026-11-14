@@ -14,6 +14,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
@@ -39,6 +41,12 @@ import org.streamrune.test.InMemoryEventStore;
  * an observably wrong value on the very next command.
  */
 class VirtualThreadCommandBusSnapshotRehydrationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CountingEvent.Incremented.class)
+          .registerState("CountingState", CountingState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("counter");
 
@@ -91,7 +99,7 @@ class VirtualThreadCommandBusSnapshotRehydrationTest {
   void busRehydratesFromSnapshotAcrossBoundaryAndReflectsAllCommands() {
     int k = 3;
     int total = 7; // > k, and crosses the snapshot boundary more than once (snapshots at v3, v6)
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

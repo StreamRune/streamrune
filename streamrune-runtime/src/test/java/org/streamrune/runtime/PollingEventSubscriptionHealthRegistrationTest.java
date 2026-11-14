@@ -10,6 +10,8 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
@@ -24,9 +26,11 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 class PollingEventSubscriptionHealthRegistrationTest {
 
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
+
   private static final String NAME = "orders";
 
-  private final InMemoryEventStore eventStore = new InMemoryEventStore();
+  private final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
   private final InMemoryOffsetStore offsetStore = new InMemoryOffsetStore();
   private final RecordingLeadership leadership = new RecordingLeadership();
   private final SubscriptionHealthContributor contributor =

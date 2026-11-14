@@ -19,7 +19,9 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -39,6 +41,14 @@ import org.streamrune.test.InMemoryEventStore;
  * can make the choice.
  */
 class SagaDispatchOwnershipGuardTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderEvent.OrderPlaced.class)
+          .registerEvent(OrderEvent.OrderConfirmed.class)
+          .registerEvent(OrderEvent.AddressChanged.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -103,7 +113,7 @@ class SagaDispatchOwnershipGuardTest {
   }
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore store = new InMemoryEventStore().withCommandInbox(inbox);
+  private final InMemoryEventStore store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
   private final VirtualThreadCommandBus bus =
       VirtualThreadCommandBus.builder()
           .eventStore(store)

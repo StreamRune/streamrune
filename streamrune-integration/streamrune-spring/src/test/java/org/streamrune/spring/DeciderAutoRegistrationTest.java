@@ -14,12 +14,20 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.VirtualThreadCommandBus;
 
 class DeciderAutoRegistrationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(TestEvent.ItHappened.class)
+          .registerState("TestState", TestState.class)
+          .build();
 
   private static final AggregateType TEST = AggregateType.of("test");
 
@@ -73,7 +81,7 @@ class DeciderAutoRegistrationTest {
     new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> mock(DataSource.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean("first", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
         .withBean("second", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
@@ -122,7 +130,7 @@ class DeciderAutoRegistrationTest {
     new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> mock(DataSource.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean("test", DeciderRegistration.class, DeciderAutoRegistrationTest::registration)
         .withBean(

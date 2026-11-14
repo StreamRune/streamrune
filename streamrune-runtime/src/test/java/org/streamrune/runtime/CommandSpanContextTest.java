@@ -14,6 +14,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -36,6 +38,12 @@ import org.streamrune.test.InMemoryEventStore;
  * tracing, the span context is {@link SpanLink#NONE}.
  */
 class CommandSpanContextTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Switched.class)
+          .registerState("Lamp", Lamp.class)
+          .build();
 
   @RegisterExtension
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
@@ -104,7 +112,7 @@ class CommandSpanContextTest {
   @Test
   void eachEventCarriesTheSpanOfTheCommandThatAppendedIt() {
     List<EventEnvelope> events =
-        run(new InMemoryEventStore(), "l-1", tracing(TracingSettings.allEnabled()));
+        run(new InMemoryEventStore(TYPES), "l-1", tracing(TracingSettings.allEnabled()));
 
     SpanData command = only("command/Switch");
     assertThat(events)
@@ -120,7 +128,7 @@ class CommandSpanContextTest {
   @Test
   void theSpanContextSurvivesTheSerializingStore() {
     InMemoryEventStore store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
             org.streamrune.core.SimpleEventTypeRegistry.builder()
                 .registerEvent("Switched", Switched.class)
                 .registerState("Lamp", Lamp.class)
@@ -137,7 +145,7 @@ class CommandSpanContextTest {
   @Test
   void theDeliverySpan_linksToTheCommandThatAppendedTheEvents() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
-    List<EventEnvelope> events = run(new InMemoryEventStore(), "l-1", tracing);
+    List<EventEnvelope> events = run(new InMemoryEventStore(TYPES), "l-1", tracing);
 
     new TracingEventListener(e -> {}, tracing, SubscriptionName.of("lamps")).onEvents(events);
 
@@ -151,7 +159,7 @@ class CommandSpanContextTest {
     var client =
         StreamRuneContext.RequestContext.fromRequest(
             TraceId.of(CLIENT_TRACE), null, CorrelationId.of("client"), Instant.now(), Map.of());
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
 
     List<EventEnvelope> untraced =
@@ -181,7 +189,7 @@ class CommandSpanContextTest {
   @Test
   void anInterceptorTheApplicationRegisters_withoutTracingOnTheBuilder_writesTheSpanContext() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)
@@ -205,7 +213,7 @@ class CommandSpanContextTest {
   @Test
   void aCommandDispatchedFromAnAfterCallback_writesItsOwnSpan_andTheOuterKeepsTheOuterSpan() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
     var busRef = new java.util.concurrent.atomic.AtomicReference<VirtualThreadCommandBus>();
     org.streamrune.core.CommandInterceptor dispatching =
         new org.streamrune.core.CommandInterceptor() {
@@ -251,7 +259,7 @@ class CommandSpanContextTest {
   @Test
   void anAsyncCommand_writesTheSpanOfItsOwnExecution() {
     StreamRuneTracing tracing = tracing(TracingSettings.allEnabled());
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)
@@ -278,12 +286,12 @@ class CommandSpanContextTest {
   void withTheCommandAreaOff_orNoTracing_theSpanContextIsNone() {
     List<EventEnvelope> areaOff =
         run(
-            new InMemoryEventStore(),
+            new InMemoryEventStore(TYPES),
             "l-off",
             tracing(TracingSettings.builder().area(TracingArea.COMMAND, false).build()));
-    List<EventEnvelope> noop = run(new InMemoryEventStore(), "l-noop", StreamRuneTracing.NOOP);
+    List<EventEnvelope> noop = run(new InMemoryEventStore(TYPES), "l-noop", StreamRuneTracing.NOOP);
     List<EventEnvelope> disabled =
-        run(new InMemoryEventStore(), "l-disabled", tracing(TracingSettings.disabled()));
+        run(new InMemoryEventStore(TYPES), "l-disabled", tracing(TracingSettings.disabled()));
 
     assertThat(areaOff)
         .allSatisfy(e -> assertThat(e.metadata().spanContext()).isSameAs(SpanLink.NONE));

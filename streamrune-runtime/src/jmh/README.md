@@ -120,13 +120,12 @@ and has no benchmark.
 
 ### `TracingBenchmark`
 
-What tracing adds to one command: `VirtualThreadCommandBus.execute` on the serializing
-`InMemoryEventStore`, with the bus, its default locker and the store traced, for three values of the
+What tracing adds to one command: `VirtualThreadCommandBus.execute` on an `InMemoryEventStore`,
+with the bus, its default locker and the store traced, for three values of the
 `tracing` parameter. `NOOP` traces nothing (the default of every builder). `SAMPLER_OFF` is
 `OpenTelemetryTracing` over an SDK whose sampler drops every trace, so the spans start but are not
 recorded. `SAMPLER_ON` records the six spans of the command and hands them to a batch span processor
-whose exporter discards them. Compare `SAMPLER_OFF` and `SAMPLER_ON` with `NOOP`, not with
-`StreamRuneBenchmark.commandBusThroughput`, whose store keeps its events by reference.
+whose exporter discards them. Compare `SAMPLER_OFF` and `SAMPLER_ON` with `NOOP`.
 
 ### `ProjectionRunnerBenchmark`
 
@@ -146,9 +145,10 @@ same processor and projection call from a loop that runs until it is stopped.
 ### `EventSerializationBenchmark`
 
 Event deserialization and upcasting without a database: a load of 100 events from an
-`InMemoryEventStore` in its serializing mode (`InMemoryEventStore.serializing(...)` with
-`withUpcasters(...)`), stored at schema version 3, 2 or 1 and read by a reader that expects version 3
-— 0, 1 or 2 upcast steps per event (`upcastSteps`). The serializing mode reads events the way
+`InMemoryEventStore` with `withUpcasters(...)`, stored at schema version 3, 2 or 1 and read by a
+reader that expects version 3 — 0, 1 or 2 upcast steps per event (`upcastSteps`). The store reads
+events the way
+
 `PostgresEventStore` does: `readValue` for an event at the current version; for an older one
 `readValue` to a map, `UpcasterChain.upcast`, then `convertValue`.
 

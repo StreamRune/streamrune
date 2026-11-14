@@ -36,8 +36,10 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.Query;
 import org.streamrune.core.QueryBus;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.Auditable;
@@ -84,6 +86,15 @@ import org.streamrune.test.InMemorySagaStore;
  */
 @Execution(ExecutionMode.SAME_THREAD)
 class QuarkusRequestContextBindingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Touched.class)
+          .registerEvent(Opened.class)
+          .registerEvent(Prepared.class)
+          .registerEvent(Finished.class)
+          .registerState("Kept", Kept.class)
+          .build();
 
   private RealArcTestContainer arc;
   private QuarkusRestTestServer server;
@@ -307,7 +318,7 @@ class QuarkusRequestContextBindingTest {
     @Produces
     @Singleton
     public EventStore eventStore() {
-      return new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+      return new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     }
 
     @Produces

@@ -20,6 +20,8 @@ import org.streamrune.core.CommandInbox;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -37,6 +39,12 @@ import org.streamrune.test.InMemoryEventStore;
  * result for the wrong command.
  */
 class VirtualThreadCommandBusIdempotencyInterceptorTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.WidgetCreated.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("widget");
 
@@ -120,7 +128,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
   @Test
   void replay_runsInterceptors() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new CountingOneEventDecider();
     var interceptor = new RecordingInterceptor();
     var bus = busWithInbox(store, inbox, decider, interceptor);
@@ -154,7 +162,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
   @Test
   void replay_deniedByAuthInterceptor_doesNotLeakStoredResult() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new CountingOneEventDecider();
     var interceptor = new RecordingInterceptor();
     interceptor.throwOnBeforeCall = new SecurityException("not authorized");
@@ -173,7 +181,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
   @Test
   void replay_vetoingInterceptor_winsOverInbox() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new CountingOneEventDecider();
     var interceptor = new RecordingInterceptor();
     interceptor.vetoOnSecondCall = true;
@@ -232,7 +240,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
     // every interceptor whose before() completed (never after()), and recordCommandFailed() is
     // recorded. Otherwise the OTel scope + audit row from outer interceptors leak and the failure
     // is invisible to metrics precisely during an infra incident.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var metrics = new CountingMetrics();
     var interceptor = new RecordingInterceptor();
     var bus =
@@ -262,7 +270,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
   @Test
   void keyReuseAcrossCommandTypes_throws() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new CountingOneEventDecider();
 
     var busForWidget =
@@ -324,7 +332,7 @@ class VirtualThreadCommandBusIdempotencyInterceptorTest {
   @Test
   void raceWindow_keyReuseAcrossCommandTypes_doesNotReturnIdempotentReplay() {
     var realInbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(realInbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(realInbox);
     // The bus sees a permanently-missing inbox (the pre-commit race window); the store sees the
     // real one, which is where the winner's row actually lands.
     CommandInbox blindInbox =

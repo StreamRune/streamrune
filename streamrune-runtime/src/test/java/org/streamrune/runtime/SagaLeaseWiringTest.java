@@ -15,6 +15,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
@@ -28,6 +30,8 @@ import org.streamrune.test.InMemorySagaStore;
 
 /** The startup report of a saga runner that carries no lease while a real leadership exists. */
 class SagaLeaseWiringTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   record Alpha(SagaStatus status) implements SagaState {}
 
@@ -115,7 +119,9 @@ class SagaLeaseWiringTest {
       Class<S> type, Function<SagaStatus, S> state, SubscriptionLeadership leadership) {
     InMemorySagaStore rows = new InMemorySagaStore();
     InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox()).withSagaStore(rows);
+        new InMemoryEventStore(TYPES)
+            .withCommandInbox(new InMemoryCommandInbox())
+            .withSagaStore(rows);
     VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

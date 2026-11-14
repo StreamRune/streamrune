@@ -31,7 +31,9 @@ import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RequireRole;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.AuditEntry;
@@ -73,6 +75,12 @@ import org.streamrune.test.InMemoryEventStore;
  * VirtualThreadCommandBus} bean, and their {@code Instance<VirtualThreadCommandBus>} keeps the bus.
  */
 class QuarkusApplicationInterceptorWiringTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.Created.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   /** How the deployment is built. */
   enum Removal {
@@ -362,7 +370,7 @@ class QuarkusApplicationInterceptorWiringTest {
     @Produces
     @Singleton
     public EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
   }
 

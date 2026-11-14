@@ -27,6 +27,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -56,6 +58,8 @@ import org.streamrune.test.InMemorySagaStore;
  * with an explicit window keeps it.
  */
 class SagaEventPathRetentionContainerWiringTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   record FakeState(SagaStatus status, String id) implements SagaState {}
 
@@ -349,7 +353,7 @@ class SagaEventPathRetentionContainerWiringTest {
   private static SagaRunner<FakeState> fencedRunner(Boolean named) {
     var sagaStore = new InMemorySagaStore();
     var eventStore =
-        new InMemoryEventStore()
+        new InMemoryEventStore(TYPES)
             .withCommandInbox(new InMemoryCommandInbox())
             .withSagaStore(sagaStore);
     var builder =

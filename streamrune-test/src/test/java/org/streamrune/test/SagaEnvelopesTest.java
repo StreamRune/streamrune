@@ -15,7 +15,9 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -34,6 +36,14 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 
 class SagaEnvelopesTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(StockReserved.class)
+          .registerEvent(Captured.class)
+          .registerEvent(CommandBusProvenanceContract.Marked.class)
+          .registerState("Marks", CommandBusProvenanceContract.Marks.class)
+          .build();
 
   record State(SagaStatus status) implements SagaState {}
 
@@ -92,7 +102,7 @@ class SagaEnvelopesTest {
     // StreamRuneContext.continuing(cause).
     EventEnvelope cause =
         SagaEnvelopes.causedBy(State.class, SAGA_ID, PAYMENT, new StockReserved("order-42"));
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus =
         InMemoryCommandBus.builder()
             .eventStore(eventStore)

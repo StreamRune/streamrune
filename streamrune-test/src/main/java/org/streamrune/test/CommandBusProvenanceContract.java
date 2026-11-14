@@ -26,8 +26,10 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.saga.SagaId;
@@ -74,6 +76,12 @@ import org.streamrune.core.types.Version;
  * fresh {@link InMemoryEventStore} and reads the stored events back.
  */
 public abstract class CommandBusProvenanceContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Marked.class)
+          .registerState("Marks", Marks.class)
+          .build();
 
   /** The contract's command: stores two {@link Marked} events on the aggregate it names. */
   public record Mark(String aggregateId) implements Command {}
@@ -354,7 +362,7 @@ public abstract class CommandBusProvenanceContract {
    */
   @Test
   public void aTaskWrappedInsideASagaDispatch_executesItsCommandAsTheSagasWork() throws Exception {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       StreamRuneContext.RequestContext dispatched =
@@ -397,7 +405,7 @@ public abstract class CommandBusProvenanceContract {
    */
   @Test
   public void aContextBoundToNull_isNoContext() {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       ScopedValue.where(StreamRuneContext.CURRENT, null)
@@ -531,7 +539,7 @@ public abstract class CommandBusProvenanceContract {
   }
 
   private void assertContinuationsCarryTheOrigin(ScopedValue.Carrier ambient) {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       // What a saga's own command stored: the origin at hop 0.
@@ -562,7 +570,7 @@ public abstract class CommandBusProvenanceContract {
   }
 
   private void assertAContinuationOfAnOriginlessEventCarriesNone(ScopedValue.Carrier ambient) {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       // What a user's request stored: a correlation id of the client's choosing, a user, baggage.
@@ -651,7 +659,7 @@ public abstract class CommandBusProvenanceContract {
    * @return the stored events of the command, in stream order
    */
   protected final List<EventEnvelope> storedEventsOf(ScopedValue.Carrier bindings) {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       Mark command = new Mark(AGGREGATE_ID);
@@ -681,7 +689,7 @@ public abstract class CommandBusProvenanceContract {
    * correlation id, and the event store holds no event afterwards, on any stream.
    */
   private void assertRefusedAndNothingStored(ScopedValue.Carrier bindings) {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     CommandBus bus = newBus(eventStore);
     try {
       ReservedCorrelationIdException refused =

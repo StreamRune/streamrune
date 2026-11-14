@@ -20,7 +20,9 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
@@ -66,6 +68,9 @@ import org.streamrune.test.InMemoryProjectionRepository;
 @Measurement(iterations = 5, time = 1)
 @Fork(1)
 public class ProjectionRunnerBenchmark {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build();
 
   static final ProjectionName NAME = ProjectionName.of("order_summary");
   static final AggregateType TYPE = AggregateType.of("order");
@@ -116,7 +121,7 @@ public class ProjectionRunnerBenchmark {
 
     @Setup(Level.Trial)
     public void appendEvents() {
-      var store = new InMemoryEventStore();
+      var store = new InMemoryEventStore(TYPES);
       Map<StreamId, Long> heads = new HashMap<>();
       for (int i = 0; i < batchSize; i++) {
         String customerId = "customer-" + (i % CUSTOMERS);

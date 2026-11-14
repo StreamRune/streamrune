@@ -47,7 +47,7 @@ class InMemoryEventStoreSchemaBumpTest {
   private final AtomicReference<Class<?>> placedClass = new AtomicReference<>(Placed.class);
 
   private final InMemoryEventStore store =
-      InMemoryEventStore.serializing(
+      new InMemoryEventStore(
           new EventTypeRegistry() {
             @Override
             public Class<?> resolveEventType(EventType eventType) {

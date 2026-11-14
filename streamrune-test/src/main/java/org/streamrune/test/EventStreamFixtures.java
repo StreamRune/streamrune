@@ -38,7 +38,7 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * Path file = Path.of("src/test/resources/orders.json");
  * EventStreamFixtures.write(store, file);   // once, then check the file in
  *
- * var replayed = InMemoryEventStore.serializing(typeRegistry, null);
+ * var replayed = new InMemoryEventStore(typeRegistry);
  * EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(file));
  * }</pre>
  *
@@ -55,12 +55,12 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * EventTypeRegistry} resolves the type (an unregistered one fails with the registry's {@code
  * UnknownEventTypeException}), the store's upcaster chain upcasts a payload stored below the type's
  * current schema version, and a payload above it is refused ({@code EventSchemaAheadException}) —
- * and appends each event to its stream at its version. The target is an {@link InMemoryEventStore}
- * in serializing mode ({@link InMemoryEventStore#serializing}), and a fresh one: an event whose
- * stream already holds that version fails with the store's {@code OptimisticLockException}. A file
- * holds payloads as the store reads them, so the fields of an {@code @Encrypted} event are in the
- * clear: append such a file to a store without a crypto engine. A fixture file therefore holds
- * personal data as plain text — record it from synthetic data only, and keep it in test resources.
+ * and appends each event to its stream at its version. The target is a fresh {@link
+ * InMemoryEventStore}: an event whose stream already holds that version fails with the store's
+ * {@code OptimisticLockException}. A file holds payloads as the store reads them, so the fields of
+ * an {@code @Encrypted} event are in the clear: append such a file to a store without a crypto
+ * engine. A fixture file therefore holds personal data as plain text — record it from synthetic
+ * data only, and keep it in test resources.
  */
 public final class EventStreamFixtures {
 
@@ -112,11 +112,9 @@ public final class EventStreamFixtures {
 
   /**
    * Writes every event of {@code store}, in global order, to {@code file}, replacing it. The
-   * payloads of a serializing store are written with a copy of its own {@code ObjectMapper}, so a
-   * payload type the application serializes its own way reads back: the copy sorts map keys, writes
-   * dates in ISO-8601 and leaves out the encrypting writers of a {@link CryptoShreddingModule}. A
-   * store that keeps its events by reference has no mapper: its payloads are written with the
-   * file's own, {@code JavaTimeModule} and the same two formats.
+   * payloads are written with a copy of the store's own {@code ObjectMapper}, so a payload type the
+   * application serializes its own way reads back: the copy sorts map keys, writes dates in
+   * ISO-8601 and leaves out the encrypting writers of a {@link CryptoShreddingModule}.
    *
    * @param store the store whose events to record
    * @param file the file to write; its parent directories are created
@@ -166,19 +164,12 @@ public final class EventStreamFixtures {
    * Appends {@code events} to {@code store}, each to its stream at its version, in the order given:
    * the store binds every payload as it binds a stored event (see the class description).
    *
-   * @param store a store in serializing mode, holding none of the streams yet
+   * @param store a store holding none of the streams yet
    * @param events the events, typically {@link #read} from a file
-   * @throws IllegalArgumentException if {@code store} keeps its events by reference
    */
   public static void appendTo(InMemoryEventStore store, List<StoredEvent> events) {
     Objects.requireNonNull(store, "store is required");
     Objects.requireNonNull(events, "events is required");
-    if (!store.serializes()) {
-      throw new IllegalArgumentException(
-          "appendTo needs an InMemoryEventStore in serializing mode"
-              + " (InMemoryEventStore.serializing(typeRegistry, cryptoEngine)): the store's"
-              + " EventTypeRegistry resolves the event type of each event of the file");
-    }
     for (StoredEvent event : events) {
       EventEnvelope envelope =
           store.bindStoredForm(
@@ -193,14 +184,10 @@ public final class EventStreamFixtures {
   }
 
   /**
-   * The mapper the payloads of {@code store} are written with (see {@link #write}): the file's own
-   * for a store without a mapper, else a copy of the store's that writes {@code @Encrypted} fields
-   * in the clear.
+   * The mapper the payloads of {@code store} are written with (see {@link #write}): a copy of the
+   * store's that writes {@code @Encrypted} fields in the clear.
    */
   private static ObjectMapper payloadMapper(InMemoryEventStore store) {
-    if (!store.serializes()) {
-      return MAPPER;
-    }
     ObjectMapper copy = store.objectMapper().copy();
     if (copy.getSerializerFactory() instanceof BasicSerializerFactory factory
         && encrypts(factory.getFactoryConfig())) {

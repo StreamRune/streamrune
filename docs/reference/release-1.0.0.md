@@ -1440,9 +1440,11 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
 
 - `InMemoryEventStore`: thread-safe, mirrors `PostgresEventStore`'s observable semantics — strict
   optimistic locking, serialized global ordering, snapshots with schema versions (`withMigrations(...)`),
-  upcasting on read (`withUpcasters(...)`); `InMemoryEventStore.serializing(typeRegistry, cryptoEngine)`
-  stores JSON so `@Encrypted` fields, crypto-shredding and type registration are exercised.
+  upcasting on read (`withUpcasters(...)`); like `PostgresEventStore` it stores JSON and reads it
+  back through an `EventTypeRegistry` (`new InMemoryEventStore(typeRegistry, cryptoEngine)`), so
+  `@Encrypted` fields, crypto-shredding and type registration are exercised in every unit test.
   `InMemoryEventStoreFactory` for DI.
+
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),
   `EventStoreFixture`, `ProjectionFixture`, `MutableClock`, `SagaEnvelopes` (metadata and envelopes
@@ -1477,7 +1479,7 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread.
 - `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file (each payload
   as the store's own mapper writes it, `@Encrypted` fields in the clear), read back and appended to
-  a fresh serializing store, which resolves and upcasts each payload as it reads its own.
+  a fresh `InMemoryEventStore`, which resolves and upcasts each payload as it reads its own.
 - Clock seams: `OutboxPoller`, `ContinuousProjectionRunner`, `ScheduledProjectionRunner`,
   `MultiProjectionRunner`, `PollingEventSubscription`, `StreamEventSubscription` and `StreamRune`
   take `clock(Clock)`; with one, the timestamps they record and the durations they measure come

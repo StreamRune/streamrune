@@ -26,7 +26,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
@@ -56,6 +58,9 @@ import org.streamrune.test.InMemoryProjectionRepository;
 /** Tests for {@link ProjectionProducer}. */
 @SuppressWarnings("unchecked")
 class ProjectionProducerTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Ping.class).build();
 
   // --- Concrete test projections ---
 
@@ -995,7 +1000,7 @@ class ProjectionProducerTest {
   }
 
   private static InMemoryEventStore oneEvent() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(
         StreamId.of(AggregateType.of("s"), AggregateId.of("s")),
         List.of(

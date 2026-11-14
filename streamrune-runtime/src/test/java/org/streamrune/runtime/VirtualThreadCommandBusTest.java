@@ -19,6 +19,8 @@ import org.streamrune.core.*;
 import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus.CommandResult;
 import org.streamrune.core.CommandBus.ShortCircuitReason;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -42,6 +44,19 @@ import org.streamrune.test.InMemoryDeadLetterQueue;
 import org.streamrune.test.SagaEnvelopes;
 
 class VirtualThreadCommandBusTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CounterEvent.Incremented.class)
+          .registerEvent(FailingEvent.Failed.class)
+          .registerEvent(ProductCreated.class)
+          .registerEvent(ShipmentReceived.class)
+          .registerState("CounterState", CounterState.class)
+          .registerState("FailingState", FailingState.class)
+          .registerState("PiiFailingState", PiiFailingState.class)
+          .registerState("ProductState", ProductState.class)
+          .registerState("StockState", StockState.class)
+          .build();
 
   private static final AggregateType COUNTER = AggregateType.of("counter");
   private static final AggregateType FAILING = AggregateType.of("failing");
@@ -409,7 +424,7 @@ class VirtualThreadCommandBusTest {
     // silently kept seeding decide() forever. never() must mean "off" on the read side too: the
     // decider must see the aggregate rebuilt purely from its events, never the stale snapshot's
     // claimed count=99 (no events back that value up at all).
-    var store = new org.streamrune.test.InMemoryEventStore();
+    var store = new org.streamrune.test.InMemoryEventStore(TYPES);
     StreamId streamId = StreamId.of(COUNTER, AggregateId.of("counter-1"));
     store.saveSnapshot(streamId, new Version(5), new CounterState(99), 1);
 
@@ -3426,7 +3441,7 @@ class VirtualThreadCommandBusTest {
   @Test
   void twoTypesSharingAnIdValue_snapshotIntoTwoRows() {
     // The real streamrune-test store: the local test store's saveSnapshot is a no-op.
-    var store = new org.streamrune.test.InMemoryEventStore();
+    var store = new org.streamrune.test.InMemoryEventStore(TYPES);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

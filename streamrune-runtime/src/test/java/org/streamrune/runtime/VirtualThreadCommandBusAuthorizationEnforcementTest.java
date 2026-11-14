@@ -13,8 +13,10 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RequirePermission;
 import org.streamrune.core.RequireRole;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -30,6 +32,12 @@ import org.streamrune.test.InMemoryEventStore;
  * was given.
  */
 class VirtualThreadCommandBusAuthorizationEnforcementTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Done.class)
+          .registerState("NoState", NoState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -74,7 +82,7 @@ class VirtualThreadCommandBusAuthorizationEnforcementTest {
 
   private static VirtualThreadCommandBus.Builder busWith(Class<? extends Command> commandType) {
     return VirtualThreadCommandBus.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(TYPE, commandType, cmd -> AggregateId.of("agg-1"), new NoOpDecider<>());
   }
 
@@ -151,7 +159,7 @@ class VirtualThreadCommandBusAuthorizationEnforcementTest {
             .eventStoreFactory(
                 settings -> {
                   storesCreated.incrementAndGet();
-                  return new InMemoryEventStore();
+                  return new InMemoryEventStore(TYPES);
                 })
             .register(TYPE, ShipOrder.class, cmd -> AggregateId.of(cmd.id()), new NoOpDecider<>());
 

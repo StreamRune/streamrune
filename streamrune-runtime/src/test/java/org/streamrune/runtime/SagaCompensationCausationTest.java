@@ -26,7 +26,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -72,6 +74,19 @@ import org.streamrune.test.MutableClock;
  * loop: the runners are driven by their single-pass methods.
  */
 class SagaCompensationCausationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Opened.class)
+          .registerEvent(Advanced.class)
+          .registerEvent(Nudged.class)
+          .registerEvent(Cancelled.class)
+          .registerEvent(Reserved.class)
+          .registerEvent(Shipped.class)
+          .registerEvent(Released.class)
+          .registerEvent(Refunded.class)
+          .registerState("Untouched", Untouched.class)
+          .build();
 
   record Opened(String orderId) implements DomainEvent {}
 
@@ -251,7 +266,7 @@ class SagaCompensationCausationTest {
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     final InMemorySagaStore rows = new InMemorySagaStore(clock);
     final InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(rows);
     final CrashingSagaStore sagaStore = new CrashingSagaStore(rows);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));

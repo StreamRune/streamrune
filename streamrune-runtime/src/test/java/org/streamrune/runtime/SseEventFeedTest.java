@@ -17,6 +17,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -34,6 +36,9 @@ import org.streamrune.test.InMemoryEventStore;
  */
 class SseEventFeedTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Placed.class).build();
+
   private static final Duration FAST = Duration.ofMillis(20);
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final StreamId ORDER_1 = StreamId.of(ORDER, AggregateId.of("o-1"));
@@ -43,7 +48,7 @@ class SseEventFeedTest {
 
   @Test
   void anEventAppendedAfterTheStartReachesTheSubscribersOfItsOwnStreamOnly() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var first = new CopyOnWriteArrayList<EventEnvelope>();
     var second = new CopyOnWriteArrayList<EventEnvelope>();
     try (var publisher = new SseEventPublisher();
@@ -63,7 +68,7 @@ class SseEventFeedTest {
 
   @Test
   void theEventsStoredBeforeTheStartAreNotReplayed() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(ORDER_1, List.of(envelope(ORDER_1, 1, "history")), Version.initial());
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     try (var publisher = new SseEventPublisher();
@@ -80,7 +85,7 @@ class SseEventFeedTest {
 
   @Test
   void aRestartedFeedContinuesFromTheHeadAtItsRestart() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     try (var publisher = new SseEventPublisher();
         var feed = new SseEventFeed(store, publisher, FAST)) {
@@ -103,7 +108,7 @@ class SseEventFeedTest {
 
   @Test
   void closeStopsThePollingThreadAndIsIdempotent() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     try (var publisher = new SseEventPublisher()) {
       var feed = new SseEventFeed(store, publisher, FAST);
@@ -135,7 +140,7 @@ class SseEventFeedTest {
 
   @Test
   void rejectsMissingCollaboratorsAndANonPositiveInterval() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     try (var publisher = new SseEventPublisher()) {
       assertThatThrownBy(() -> new SseEventFeed(null, publisher, FAST))
           .isInstanceOf(IllegalArgumentException.class);
@@ -156,7 +161,7 @@ class SseEventFeedTest {
   void rejectsAPositiveIntervalBelowOneMillisecond() {
     // The polling thread sleeps whole milliseconds: half a millisecond would be no sleep at all,
     // one read of the global stream after another.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     try (var publisher = new SseEventPublisher()) {
       assertThatThrownBy(() -> new SseEventFeed(store, publisher, Duration.ofNanos(500_000)))
           .isInstanceOf(IllegalArgumentException.class)
@@ -200,7 +205,7 @@ class SseEventFeedTest {
 
   @Test
   void anEventThePublisherRefusesDoesNotStopItsPageAndIsNotRetried() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var received = new CopyOnWriteArrayList<EventEnvelope>();
     var publishCalls = new CopyOnWriteArrayList<String>();
     var publisher =
@@ -547,7 +552,7 @@ class SseEventFeedTest {
    */
   private static final class FailingReadsEventStore implements EventStore {
 
-    private final InMemoryEventStore delegate = new InMemoryEventStore();
+    private final InMemoryEventStore delegate = new InMemoryEventStore(TYPES);
     private final AtomicInteger readsToFail = new AtomicInteger();
     private volatile Throwable failure;
     private final List<GlobalOffset> failedReadsAfter = new CopyOnWriteArrayList<>();

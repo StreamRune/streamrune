@@ -23,6 +23,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -67,6 +69,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class ProjectionDeadLetterReplayConcurrencyIT {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(PriceUpdated.class)
+          .registerEvent(StockAdjusted.class)
+          .build();
 
   private static final String APP = "replay-it";
   private static final String ROW = "p-1";
@@ -157,7 +165,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
     final ProductProjection projection = new ProductProjection(repo);
     final PostgresOffsetStore offsets = new PostgresOffsetStore(ds);
     final PostgresProjectionDeadLetterStore deadLetters = new PostgresProjectionDeadLetterStore(ds);
-    final InMemoryEventStore events = new InMemoryEventStore();
+    final InMemoryEventStore events = new InMemoryEventStore(TYPES);
 
     Fixture() {
       events.append(

@@ -331,8 +331,8 @@ public final class org.streamrune.test.EventStoreFixture
   public org.streamrune.test.EventStoreFixture$GivenStage given()
   public org.streamrune.test.EventStoreFixture$WhenStage when()
   public static org.streamrune.core.EventEnvelope event(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.types.EventType, org.streamrune.core.DomainEvent)
-  public static org.streamrune.test.EventStoreFixture store()
   public static org.streamrune.test.EventStoreFixture store(org.streamrune.core.EventStore)
+  public static org.streamrune.test.EventStoreFixture store(org.streamrune.core.EventTypeRegistry)
 
 public final class org.streamrune.test.EventStoreFixture$GivenStage
   public <init>()
@@ -561,8 +561,9 @@ public final class org.streamrune.test.InMemoryDeadLetterQueue implements org.st
   public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
 
 public final class org.streamrune.test.InMemoryEventStore implements org.streamrune.core.EventStore
-  public <init>()
   public <init>(com.fasterxml.jackson.databind.ObjectMapper, org.streamrune.core.EventTypeRegistry)
+  public <init>(org.streamrune.core.EventTypeRegistry)
+  public <init>(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine)
   public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
   public java.lang.Object sagaFenceStorageIdentity()
   public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
@@ -578,7 +579,6 @@ public final class org.streamrune.test.InMemoryEventStore implements org.streamr
   public org.streamrune.test.InMemoryEventStore withSagaStore(org.streamrune.test.InMemorySagaStore)
   public org.streamrune.test.InMemoryEventStore withTracing(org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.test.InMemoryEventStore withUpcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
-  public static org.streamrune.test.InMemoryEventStore serializing(org.streamrune.core.EventTypeRegistry, org.streamrune.core.crypto.CryptoEngine)
   public void addAppendListener(org.streamrune.test.InMemoryEventStore$AppendListener)
   public void removeAppendListener(org.streamrune.test.InMemoryEventStore$AppendListener)
 
@@ -587,11 +587,11 @@ public static interface org.streamrune.test.InMemoryEventStore$AppendListener
 
 public final class org.streamrune.test.InMemoryEventStoreFactory implements org.streamrune.core.EventStoreFactory
   public org.streamrune.core.EventStore create()
-  public static org.streamrune.test.InMemoryEventStoreFactory$Builder builder()
+  public static org.streamrune.test.InMemoryEventStoreFactory$Builder builder(org.streamrune.core.EventTypeRegistry)
 
-public static class org.streamrune.test.InMemoryEventStoreFactory$Builder
-  public <init>()
+public static final class org.streamrune.test.InMemoryEventStoreFactory$Builder
   public org.streamrune.test.InMemoryEventStoreFactory build()
+  public org.streamrune.test.InMemoryEventStoreFactory$Builder cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
 
 public final class org.streamrune.test.InMemoryEventSubscription implements org.streamrune.core.subscription.EventSubscription
   public <init>(org.streamrune.test.InMemoryEventStore, org.streamrune.core.subscription.EventListener)

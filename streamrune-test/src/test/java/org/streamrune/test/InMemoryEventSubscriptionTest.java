@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.saga.SagaId;
@@ -41,11 +43,14 @@ import org.streamrune.core.types.Version;
 
 class InMemoryEventSubscriptionTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
+
   private static final AggregateType TYPE = AggregateType.of("cart");
 
   record Added(String sku) implements DomainEvent {}
 
-  private final InMemoryEventStore store = new InMemoryEventStore();
+  private final InMemoryEventStore store = new InMemoryEventStore(TYPES);
   private final List<EventEnvelope> received = new ArrayList<>();
 
   private EventEnvelope envelope(StreamId id, long v, String sku) {

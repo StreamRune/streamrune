@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.types.AggregateId;
@@ -36,12 +38,15 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 class HybridEventSubscriptionTracingTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Seen.class).build();
+
   record Seen() implements DomainEvent {}
 
   @Test
   void eachDelivery_isTracedAsTheSubscription() throws Exception {
     StreamId stream = StreamId.of(AggregateType.of("lamp"), AggregateId.of("l-1"));
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(stream, List.of(envelope(stream)), Version.initial());
     var tracing = new RecordingTracing();
     var received = new CopyOnWriteArrayList<EventEnvelope>();
@@ -72,7 +77,7 @@ class HybridEventSubscriptionTracingTest {
   void withAHealthContributor_eachDeliveryIsTracedOnce() throws Exception {
     for (boolean ownTracingListener : new boolean[] {false, true}) {
       StreamId stream = StreamId.of(AggregateType.of("lamp"), AggregateId.of("l-2"));
-      var store = new InMemoryEventStore();
+      var store = new InMemoryEventStore(TYPES);
       store.append(stream, List.of(envelope(stream)), Version.initial());
       var offsets = new InMemoryOffsetStore();
       var tracing = new RecordingTracing();

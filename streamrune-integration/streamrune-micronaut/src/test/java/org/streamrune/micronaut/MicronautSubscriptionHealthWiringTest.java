@@ -15,6 +15,8 @@ import jakarta.inject.Singleton;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.runtime.SubscriptionHealthContributor;
@@ -22,6 +24,8 @@ import org.streamrune.test.InMemoryEventStore;
 
 /** The subscription health contributor's lag threshold comes from configuration. */
 class MicronautSubscriptionHealthWiringTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final String SPEC = "subscription-health";
 
@@ -68,7 +72,7 @@ class MicronautSubscriptionHealthWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

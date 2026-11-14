@@ -16,7 +16,9 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
@@ -40,6 +42,9 @@ import org.streamrune.test.InMemoryProjectionDeadLetterStore;
  * dead-letter-and-continue (Continuous no longer halts).
  */
 class ProjectionErrorClassificationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(TestEvent.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("transient");
 
@@ -83,7 +88,7 @@ class ProjectionErrorClassificationTest {
 
   @Test
   void continuous_transientRecovers_noDeadLetter_offsetAdvances() throws Exception {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("transient-stream"));
     eventStore.append(s, List.of(envelope(s, 1, "one")), Version.initial());
@@ -136,7 +141,7 @@ class ProjectionErrorClassificationTest {
 
   @Test
   void continuous_poisonDeadLettersImmediately_noRetryStorm() throws Exception {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("poison-stream"));
     eventStore.append(s, List.of(envelope(s, 1, "bad")), Version.initial());
@@ -188,7 +193,7 @@ class ProjectionErrorClassificationTest {
     // Behavior: under DLQ a POISON chunk is dead-lettered and the runner CONTINUES
     // past it instead of halting. Offsets 1-2 commit, chunk 3-4 is poison (dead-lettered), and
     // chunk 5-6 — which the old halt would never reach — is now processed.
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("continue-stream"));
     eventStore.append(
@@ -257,7 +262,7 @@ class ProjectionErrorClassificationTest {
   @Test
   void continuous_transientBurst_doesNotHalt_staysNonError() throws Exception {
     // A burst of transient failures is retried; the runner must NOT drop into ERROR while retrying.
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("burst-stream"));
     eventStore.append(s, List.of(envelope(s, 1, "one")), Version.initial());

@@ -24,6 +24,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -51,6 +53,12 @@ import org.streamrune.test.InMemoryEventStore;
  */
 public class StreamRuneBenchmark {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(BenchmarkEvent.class)
+          .registerState("BenchmarkState", BenchmarkState.class)
+          .build();
+
   private static final AggregateType TYPE = AggregateType.of("benchmark");
 
   // ===== Command Bus Benchmarks =====
@@ -61,7 +69,7 @@ public class StreamRuneBenchmark {
 
     @Setup(Level.Iteration)
     public void setup() {
-      var store = new InMemoryEventStore();
+      var store = new InMemoryEventStore(TYPES);
       bus =
           VirtualThreadCommandBus.builder()
               .eventStore(store)
@@ -137,7 +145,7 @@ public class StreamRuneBenchmark {
 
     @Setup(Level.Iteration)
     public void setup() {
-      store = new InMemoryEventStore();
+      store = new InMemoryEventStore(TYPES);
       rotateAppendStream();
 
       loadStreamId = StreamId.of(TYPE, AggregateId.of("load-bench-stream"));

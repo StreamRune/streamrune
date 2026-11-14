@@ -25,6 +25,7 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
@@ -336,8 +337,8 @@ class OpenTelemetryAutoConfigurationTest {
   @Configuration
   static class InMemoryEventStoreConfig {
     @Bean
-    EventStoreFactory eventStoreFactory() {
-      return InMemoryEventStoreFactory.builder().build();
+    EventStoreFactory eventStoreFactory(EventTypeRegistry typeRegistry) {
+      return InMemoryEventStoreFactory.builder(typeRegistry).build();
     }
   }
 }

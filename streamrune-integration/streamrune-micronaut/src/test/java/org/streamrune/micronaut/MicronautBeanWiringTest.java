@@ -70,6 +70,12 @@ import org.streamrune.test.InMemoryProjectionRepository;
  */
 class MicronautBeanWiringTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerState("SnapshotProbeState", SnapshotProbeState.class)
+          .registerState("RegistrationProbeState", RegistrationProbeState.class)
+          .build();
+
   @Test
   void contextStarts_andPropertiesBeanIsUnique() {
     try (var ctx = ApplicationContext.run()) {
@@ -1579,7 +1585,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     // Every outbox consumer injects the OutboxStore interface, so the concrete declaration here
@@ -1759,7 +1765,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore customEventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
   }
 
@@ -1824,7 +1830,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -1858,7 +1864,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -1891,7 +1897,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -1917,7 +1923,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -1952,7 +1958,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -2245,7 +2251,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -2288,7 +2294,7 @@ class MicronautBeanWiringTest {
     // nor its default JdbcProjectionRepository, so the proxy below is the ONLY processor candidate.
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton
@@ -2331,7 +2337,7 @@ class MicronautBeanWiringTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

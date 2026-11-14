@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.CircuitBreakerOpenException;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -41,6 +43,12 @@ import org.streamrune.test.MutableClock;
 
 /** Drain rules and drain crash points, pinned as schedules. */
 class SagaDeadLetterReplayerTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(SagaStartFixtures.StartEvent.class)
+          .registerEvent(SagaStartFixtures.Advance.class)
+          .build();
   static final SagaId SAGA = SagaId.of("saga-1");
   static final Duration WINDOW = Duration.ofDays(7);
 
@@ -151,7 +159,7 @@ class SagaDeadLetterReplayerTest {
     // replayer (anchors, windows): every time-based assertion in this file relies on
     // it.
     final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-09-10T00:00:00Z"));
-    final InMemoryEventStore eventStore = new InMemoryEventStore();
+    final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     final InMemorySagaStore sagaStore = new InMemorySagaStore(clock);
     final ForwardingSagaDeadLetterStore dlq =
         new ForwardingSagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore));
