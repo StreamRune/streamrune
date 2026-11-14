@@ -107,7 +107,7 @@ CREATE TABLE projection_dead_letters (
     from_offset     BIGINT NOT NULL,
     to_offset       BIGINT NOT NULL,
     batch_size      INT NOT NULL,
-    error_type      VARCHAR(512) NOT NULL,
+    error_type      TEXT         NOT NULL,
     error_message   TEXT,
     attempts        INT NOT NULL,
     failed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -145,7 +145,7 @@ CREATE TABLE dead_letter_queue (
     -- The stream the command targeted; both NULL when it had none.
     aggregate_type   VARCHAR(32),
     aggregate_id     VARCHAR(255),
-    error_type       VARCHAR(255) NOT NULL,
+    error_type       TEXT        NOT NULL,
     error_message    TEXT,
     attempts         INT         NOT NULL,   -- attempts before the command was dead-lettered
     first_attempt_at TIMESTAMPTZ NOT NULL,
@@ -154,9 +154,9 @@ CREATE TABLE dead_letter_queue (
     last_attempt_at  TIMESTAMPTZ,
     -- Request context of the original command, rebound on replay (NULL = none was bound): events
     -- keep their correlation and authorization re-evaluates as the original user.
-    correlation_id   VARCHAR(255),
-    user_id          VARCHAR(255),
-    trace_id         VARCHAR(255),
+    correlation_id   TEXT,
+    user_id          TEXT,
+    trace_id         TEXT,
     -- The original IdempotencyKey, so a replay and the client's own redelivery dedup on the same
     -- inbox row. NULL for commands that ran unkeyed (replayed under a synthetic key).
     idempotency_key  VARCHAR(512),
@@ -365,7 +365,7 @@ CREATE TABLE saga_dead_letters (
     saga_type               VARCHAR(255) NOT NULL,   -- the quarantining runner's saga type
     event_offset            BIGINT       NOT NULL,
     event_type              VARCHAR(255) NOT NULL,
-    error_type              VARCHAR(512) NOT NULL,
+    error_type              TEXT         NOT NULL,
     error_message           TEXT,
     faulted_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),   -- refreshed by every re-quarantine
     -- First quarantine of this (saga_id, event_offset): kept by the re-quarantine upsert; anchors

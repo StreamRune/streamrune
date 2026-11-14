@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.core.types.StoredLength;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -51,12 +52,7 @@ public interface CommandInbox {
    */
   static String requireCommandType(String commandType) {
     Objects.requireNonNull(commandType, "commandType is required");
-    int length = commandType.codePointCount(0, commandType.length());
-    if (length > MAX_COMMAND_TYPE_LENGTH) {
-      throw new IllegalArgumentException(
-          "commandType is " + length + " characters; at most " + MAX_COMMAND_TYPE_LENGTH);
-    }
-    return commandType;
+    return StoredLength.requireAtMost(commandType, MAX_COMMAND_TYPE_LENGTH, "commandType");
   }
 
   /** Returns the recorded result for {@code key}, or empty if this command was never processed. */

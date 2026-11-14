@@ -117,6 +117,23 @@ class PostgresProjectionDeadLetterStoreTest {
     assertNotNull(e.failedAt());
   }
 
+  /**
+   * {@code error_type} is diagnostic data, so it is {@code TEXT}: a name of any length is stored
+   * and read back, and a projection name as long as {@link ProjectionName} allows fits its column.
+   */
+  @Test
+  void aLongErrorTypeAndTheLongestProjectionName_roundTrip() {
+    var name = ProjectionName.of("p".repeat(ProjectionName.MAX_LENGTH));
+    var errorType = "com.example." + "x".repeat(1000);
+    store.save(
+        new ProjectionDeadLetterEntry(
+            name, GlobalOffset.of(1), GlobalOffset.of(2), 2, errorType, "boom", 1, Instant.now()));
+
+    var e = store.read(name, 10).getFirst();
+    assertEquals(name, e.projectionName());
+    assertEquals(errorType, e.errorType());
+  }
+
   @Test
   void read_filters_by_projection_name() {
     store.save(entry("OrderView", 1, 10));

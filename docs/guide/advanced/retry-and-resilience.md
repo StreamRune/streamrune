@@ -356,8 +356,7 @@ for a causing event, and the runner binds neither, so the events of a replayed c
 
 No entry the command bus writes holds a correlation id in the reserved `streamrune:` form — the form
 saga dispatch binds, `streamrune:saga:<sagaId>`. A command bound to one carries a saga origin, which
-is a bound dispatch cause, so the first rule keeps it out of the queue; that is also why the entry's
-`VARCHAR(255)` correlation column never meets the up to 271 characters of that form. An entry
+is a bound dispatch cause, so the first rule keeps it out of the queue. An entry
 written by other means that holds one is replayed under that id with no saga origin bound, and the
 command bus refuses such a command (`ReservedCorrelationIdException`) before anything is stored: the
 entry fails every attempt and ends as the retry policy ends an exhausted entry.

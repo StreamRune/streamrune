@@ -531,11 +531,8 @@ public final class StreamRuneContext {
      * whatever the identity provider asserted — a JWT {@code sub}, a self-service signup username.
      * "Authenticated" says who sent it, not that it is bounded or charset-safe. It then travels the
      * identical path the other two bounds exist to protect ({@code EventMetadata.userId} into
-     * plaintext, immutable, unshreddable {@code event_stream.metadata}), plus one they share and
-     * one they do not: an identity longer than {@link IdConstraints#MAX_LENGTH} cannot be written
-     * to {@code dead_letter_queue.user_id VARCHAR(255)} at all, and that INSERT failure is caught
-     * and logged rather than propagated — so an accepted command's ONLY recovery channel is
-     * silently never created.
+     * plaintext, immutable, unshreddable {@code event_stream.metadata}, and the command audit), and
+     * it is the field {@code Authorization.requireOwner} authorizes against.
      *
      * <p><b>Why rejected and not truncated.</b> Baggage is truncated on the constructor because it
      * is telemetry: a capped value loses information and breaks nothing. An identity is not
@@ -600,8 +597,8 @@ public final class StreamRuneContext {
         Map<String, String> baggage) {
       // X-Correlation-Id and X-Trace-Id are unauthenticated and
       // reach event_stream.metadata (plaintext, immutable, outside crypto-shredding's reach) on
-      // every event this request produces, audit_log.correlation_id (unbounded TEXT) and the
-      // VARCHAR(255) request-context columns of dead_letter_queue. Unbounded that is a
+      // every event this request produces, audit_log.correlation_id and the request-context
+      // columns of dead_letter_queue (all TEXT, unbounded). Unbounded that is a
       // write-amplified storage-and-disclosure channel with no erasure path; a NUL breaks the jsonb
       // metadata write outright and CR/LF forge log lines. Stopping it HERE stops the write itself,
       // which is the only point at which stopping it accomplishes anything.
@@ -618,17 +615,12 @@ public final class StreamRuneContext {
       if (traceId != null) {
         IdConstraints.requireBoundedAndPrintable(traceId.value(), "traceId");
       }
-      // The third header-sourced value, which this door must not skip either. Same
-      // channels as the two above, plus the one that makes it worse than a disclosure vector: an
-      // identity over MAX_LENGTH cannot be written to dead_letter_queue.user_id VARCHAR(255), and
-      // that INSERT failure is caught and logged inside VirtualThreadCommandBus rather than
-      // propagated — so the accepted command's only recovery channel is silently never created.
-      // The bound is enforced here and NOT on UserId itself: that type is rebuilt from stored
-      // columns by the DLQ, command-audit and event-audit row mappers, and a constructor bound
-      // there would reproduce that same defect exactly, failing every retry of a stored entry whose
-      // user id
-      // the bound refuses (one bound through the plain constructor) deterministically and burning
-      // its whole ladder.
+      // The third header-sourced value, which this door must not skip either: the same channels
+      // as the two above, and the field owner checks authorize against. The bound is enforced
+      // here and NOT on UserId itself: that type is rebuilt from stored columns by the DLQ,
+      // command-audit and event-audit row mappers, and a constructor bound there would fail every
+      // retry of a stored entry whose user id the bound refuses (one bound through the plain
+      // constructor) deterministically, burning its whole ladder.
       if (userId != null) {
         IdConstraints.requireBoundedAndPrintable(userId.value(), "userId");
       }

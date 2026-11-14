@@ -179,10 +179,9 @@ class StreamRuneContextFilterTest {
    * The identity crosses the same door and is now bounded there too. The header arm is the
    * trusted-gateway mode (the only mode that reads the header); the authenticated-principal arm
    * reaches the same {@code fromRequest} call with whatever value the IdP asserted, which is
-   * neither automatically bounded nor charset-safe. An identity over 255 characters cannot be
-   * written to {@code dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs
-   * that INSERT failure — so accepting the request would leave an accepted command with no recovery
-   * channel and no signal. Identical rejection on Spring and Quarkus.
+   * neither automatically bounded nor charset-safe. An identity over 255 characters would be
+   * written into the immutable event metadata of every event the request produces, and owner checks
+   * authorize against it. Identical rejection on Spring and Quarkus.
    */
   @Test
   void buildContext_rejectsAnOversizedOrControlBearingUserId() {

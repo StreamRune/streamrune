@@ -1090,6 +1090,7 @@ public final class InMemoryEventStore implements EventStore {
     // (JSON / ciphertext), exactly like PostgresEventStore.saveSnapshot. Deserialization —
     // including @Encrypted decryption and retired-type resolution — is deferred to load().
     String stateType = state.getClass().getSimpleName();
+    EventStore.requireStateType(stateType);
     Class<?> resolved;
     try {
       resolved = typeRegistry.resolveStateType(stateType);

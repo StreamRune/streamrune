@@ -2542,7 +2542,9 @@ class RabbitMqOutboxPublisherTest {
             Exception.class,
             () ->
                 publisher.publish(
-                    OutboxEntry.pending(OutboxEntryId.of(repeat("i", 256)), "{}", "Event")));
+                    OutboxEntry.pending(
+                        // 128 two-byte characters: within the id bound, 256 UTF-8 bytes.
+                        OutboxEntryId.of(repeat("\u00e9", 128)), "{}", "Event")));
 
     verify(channel, never()).basicPublish(anyString(), anyString(), anyBoolean(), any(), any());
     assertInstanceOf(RabbitMqOutboxPublisher.UnpublishableEntryException.class, thrown);

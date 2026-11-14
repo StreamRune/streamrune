@@ -631,7 +631,7 @@ public final class InMemoryOutboxStore implements OutboxStore {
   @Override
   public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
     Objects.requireNonNull(id, "id is required");
-    Objects.requireNonNull(skippedBy, "skippedBy is required");
+    OutboxStore.requireSkippedBy(skippedBy);
     Objects.requireNonNull(reason, "reason is required");
     synchronized (lock) {
       OutboxEntry e = store.get(id);
