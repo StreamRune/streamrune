@@ -387,7 +387,53 @@ class CommandSpanErrorTest {
 
       assertThat(Span.current().getSpanContext().isValid()).isFalse();
       assertThat(commandSpans()).as("the command span ended").hasSize(1);
-      assertThat(recording.calls).containsExactly("before", "onError:SQLException");
+      assertThat(recording.calls)
+          .as("onError() is given the exception the caller gets")
+          .containsExactly("before", "onError:CommandExecutionException");
+      assertThat(metrics.failed.get()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void anInterruptedExceptionLetOutOfBefore_leavesTheInterruptStatusSet() {
+    CommandInterceptor failing =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext ctx) {
+            sneakyThrow(new InterruptedException("interrupted in a gate"));
+            return true;
+          }
+        };
+    try (VirtualThreadCommandBus bus = bus(failing)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(CommandExecutionException.class)
+          .hasCauseInstanceOf(InterruptedException.class);
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void anUndeclaredCheckedExceptionOfTheIdExtractorIsWrappedAndCountedFailed() {
+    CountingMetrics metrics = new CountingMetrics();
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new InMemoryEventStore())
+            .register(
+                LAMP,
+                Switch.class,
+                c -> {
+                  sneakyThrow(new java.io.IOException("the id could not be read"));
+                  return AggregateId.of(c.lampId());
+                },
+                new LampDecider())
+            .metrics(metrics)
+            .build()) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("Switch")
+          .hasCauseInstanceOf(java.io.IOException.class);
       assertThat(metrics.failed.get()).isEqualTo(1);
     }
   }
