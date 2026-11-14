@@ -54,7 +54,9 @@ jars. In brief:
   that produced them. Under `STRICT_PER_AGGREGATE`, the default ordering mode, the entries of a stream
   are delivered in commit order with at most one in flight, and a terminally failed entry holds its
   stream until an operator replays or skips it; `AVAILABILITY_FIRST` is the explicit choice for
-  consumers that tolerate reordering. Publishers for Kafka, RabbitMQ and HTTP.
+  consumers that tolerate reordering. The relay claims the next batch at once while its batches come
+  back full, so a backlog is not held to one batch per poll interval. Publishers for Kafka, RabbitMQ
+  and HTTP.
 - **Explicit projection delivery modes.** Every projection registration declares
   `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT` — there is no default — and
   the runner checks the declaration against its processor before it reads an event, so at-least-once

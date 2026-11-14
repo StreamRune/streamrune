@@ -214,7 +214,7 @@ class ClockSeamTest {
             .clock(clock)
             .build();
 
-    poller.processBatch();
+    poller.pollCycle();
 
     assertThat(metrics.lastGauge(MetricNames.OUTBOX_BLOCKAGE_AGE_SECONDS))
         .isEqualTo(OptionalLong.of(90));

@@ -423,7 +423,7 @@ class TracingWithoutOpenTelemetryTest {
             outbox.save(OutboxEntry.pending(OutboxEntryId.of("o-1"), "{}", "Switched"));
             OutboxPoller.builder().outboxStore(outbox).publisher(entry -> {})
                 .retryPolicy(new RetryPolicy(3, Duration.ofMillis(50), 2.0, false))
-                .pollInterval(Duration.ofSeconds(60)).tracing(tracing).build().processBatch();
+                .pollInterval(Duration.ofSeconds(60)).tracing(tracing).build().pollCycle();
 
             SagaFixture<OrderState> saga =
                 SagaFixture.of(OrderState.class, b -> b.decider(new OrderSaga())
