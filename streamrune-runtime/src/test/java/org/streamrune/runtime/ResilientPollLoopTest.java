@@ -56,6 +56,11 @@ class ResilientPollLoopTest {
         () ->
             new ResilientPollLoop(
                 "n", running::get, () -> IDLE, Duration.ofSeconds(10), Duration.ofSeconds(1)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ResilientPollLoop(
+                "n", running::get, () -> IDLE, INITIAL_BACKOFF, MAX_BACKOFF, null));
   }
 
   // ==================== Loop behavior ====================
@@ -229,6 +234,112 @@ class ResilientPollLoopTest {
             .filter(e -> e.getFormattedMessage().contains("recovered after 1 consecutive"))
             .count();
     assertEquals(1, recoveries, "the recovery is logged once");
+  }
+
+  /** Runs {@code task} in {@code loop} on a virtual thread and returns the loop's log lines. */
+  private static java.util.List<ch.qos.logback.classic.spi.ILoggingEvent> runLogged(
+      ResilientPollLoop loop, ResilientPollLoop.PollTask task) throws InterruptedException {
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ResilientPollLoop.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    ch.qos.logback.classic.Level level = logger.getLevel();
+    logger.setLevel(ch.qos.logback.classic.Level.INFO);
+    try {
+      Thread t = Thread.ofVirtual().start(() -> loop.run(task));
+      t.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(t.isAlive(), "the loop must end");
+      return java.util.List.copyOf(appender.list);
+    } finally {
+      logger.setLevel(level);
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+  }
+
+  @Test
+  void aPollThatReturnsBecauseOfTheStop_isNoRecovery() throws Exception {
+    var running = new AtomicBoolean(true);
+    var polls = new AtomicInteger();
+    var loop = loop(running);
+
+    // Two failed polls; the third finds the owner's stop before it does any work and returns
+    // with the interrupt handed back, as a relay stopped before its claim does.
+    var events =
+        runLogged(
+            loop,
+            () -> {
+              if (polls.incrementAndGet() <= 2) {
+                throw new RuntimeException("database unreachable");
+              }
+              Thread.currentThread().interrupt();
+            });
+
+    assertEquals(3, polls.get());
+    assertEquals(2, loop.consecutiveFailures(), "a stopped poll does not clear the count");
+    assertTrue(
+        events.stream().noneMatch(e -> e.getFormattedMessage().contains("recovered")),
+        () -> "a stopped poll is not logged as a recovery: " + events);
+  }
+
+  @Test
+  void pollsThatMakeProgressAndThenFail_escalateTheCount_andReportEachChange() throws Exception {
+    var running = new AtomicBoolean(true);
+    var polls = new AtomicInteger();
+    var reported = new java.util.concurrent.CopyOnWriteArrayList<Integer>();
+    var loop =
+        new ResilientPollLoop(
+            "test-loop", running::get, () -> IDLE, INITIAL_BACKOFF, MAX_BACKOFF, reported::add);
+
+    // Each of the first three polls stores something and then fails; the fourth returns.
+    var events =
+        runLogged(
+            loop,
+            () -> {
+              if (polls.incrementAndGet() <= 3) {
+                loop.recordProgress();
+                throw new RuntimeException("failed after progress");
+              }
+              running.set(false);
+            });
+
+    // The backoff follows the failed polls in a row, whatever progress each made before failing.
+    var failureLines =
+        events.stream()
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .filter(m -> m.contains("failed ("))
+            .toList();
+    assertEquals(3, failureLines.size(), failureLines::toString);
+    assertTrue(failureLines.get(0).contains("(1 consecutive failure(s))"), failureLines::toString);
+    assertTrue(failureLines.get(1).contains("(2 consecutive failure(s))"), failureLines::toString);
+    assertTrue(failureLines.get(2).contains("(3 consecutive failure(s))"), failureLines::toString);
+    // Every change of the count reaches the listener: each failure, and each clearing.
+    assertEquals(java.util.List.of(1, 0, 2, 0, 3, 0), reported);
+    assertEquals(0, loop.consecutiveFailures());
+  }
+
+  @Test
+  void aNewRun_clearsTheCountItInherits_andReportsIt() throws Exception {
+    var running = new AtomicBoolean(true);
+    var reported = new java.util.concurrent.CopyOnWriteArrayList<Integer>();
+    var loop =
+        new ResilientPollLoop(
+            "test-loop", running::get, () -> IDLE, INITIAL_BACKOFF, MAX_BACKOFF, reported::add);
+    // The first run ends on a failure that the stop cut short: its count stays.
+    runLogged(
+        loop,
+        () -> {
+          running.set(false);
+          throw new RuntimeException("cut short");
+        });
+    assertEquals(1, loop.consecutiveFailures());
+
+    loop.run(() -> {}); // condition still false: the run only clears what it inherited
+
+    assertEquals(0, loop.consecutiveFailures());
+    assertEquals(java.util.List.of(1, 0), reported);
   }
 
   @Test

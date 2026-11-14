@@ -37,10 +37,11 @@ import org.streamrune.test.InMemoryOutboxStore;
 import org.streamrune.test.MutableClock;
 
 /**
- * One poll cycle of {@link OutboxPoller} keeps claiming while each batch comes back full and every
- * entry of it resolved, and waits for the next interval after a partial batch, a stop, a deadline
- * cut, a transport failure or an in-flight hand-off. The drain is bounded by {@link
- * OutboxPoller#DRAIN_BUDGET_POLL_INTERVALS} poll intervals.
+ * One poll cycle of {@link OutboxPoller} keeps claiming while every entry of each batch resolved
+ * and the batch came back full or delivered an entry of a stream whose queue it can follow. It
+ * waits for the next interval after an empty claim, a partial batch with no queue to follow, a
+ * stop, a deadline cut, a transport failure or an in-flight hand-off. The drain is bounded by
+ * {@link OutboxPoller#DRAIN_BUDGET_POLL_INTERVALS} poll intervals.
  */
 class OutboxPollerDrainTest {
 
@@ -200,6 +201,7 @@ class OutboxPollerDrainTest {
   }
 
   @Test
+  @Timeout(20)
   void aPartialBatchOfNewArrivalsOnly_endsTheCycle() {
     // Each batch writes one entry on a stream no batch has seen: the second batch finds only
     // that arrival, shares no stream with the first, and the cycle ends before a third claim.
@@ -256,6 +258,7 @@ class OutboxPollerDrainTest {
   }
 
   @Test
+  @Timeout(20)
   void anAvailabilityFirstPartialBatch_stillEndsTheCycle() {
     var store =
         new InMemoryOutboxStore(
@@ -284,6 +287,7 @@ class OutboxPollerDrainTest {
   }
 
   @Test
+  @Timeout(20)
   void theDrainBudget_boundsAStreamThatKeepsGettingNewEntries() {
     var store = new InMemoryOutboxStore();
     queue(store, "busy", 1);
@@ -543,9 +547,14 @@ class OutboxPollerDrainTest {
         .toList();
   }
 
-  /** Why each cycle that claimed something ended, from the poller's DEBUG line per cycle. */
+  /**
+   * Why each cycle that claimed something ended, from the poller's DEBUG line per cycle. Only the
+   * cycles {@code body} runs on this thread count, not a relay thread another test left behind.
+   */
   private static List<String> cycleEndsOf(Runnable body) {
+    String self = Thread.currentThread().getName();
     return logsOf(ch.qos.logback.classic.Level.DEBUG, body).stream()
+        .filter(e -> self.equals(e.getThreadName()))
         .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
         .filter(m -> m.startsWith("Outbox relay cycle ended"))
         .map(m -> m.substring(m.lastIndexOf(' ') + 1))
@@ -553,6 +562,7 @@ class OutboxPollerDrainTest {
   }
 
   @Test
+  @Timeout(20)
   void eachCycleThatClaimedSomething_logsWhyItEnded() {
     var deep = backlog(35);
     var sparse = new InMemoryOutboxStore();
@@ -612,6 +622,175 @@ class OutboxPollerDrainTest {
             "TRANSPORT",
             "NOTHING_DELIVERED",
             "EMPTY");
+  }
+
+  @Test
+  @Timeout(20)
+  void theOtherReasonsACycleEnds_areLoggedToo() {
+    var ticker = new AtomicLong();
+    var slow =
+        new RecordingPublisher(
+            entries -> {
+              ticker.addAndGet(Duration.ofSeconds(4).toNanos());
+              return RecordingPublisher.allConfirmed(entries);
+            });
+    var inFlight =
+        new RecordingPublisher(
+            entries ->
+                RecordingPublisher.firstFailed(
+                    entries, new IllegalStateException("confirm timeout"))) {
+          @Override
+          public FailureKind classifyFailure(Exception failure) {
+            return FailureKind.IN_FLIGHT;
+          }
+
+          @Override
+          public Duration inFlightHorizon() {
+            return Duration.ofSeconds(30);
+          }
+        };
+    var interrupted =
+        new RecordingPublisher(
+            entries ->
+                RecordingPublisher.firstFailed(
+                    entries, new IllegalStateException(new InterruptedException("stopped")))) {
+          @Override
+          public Duration inFlightHorizon() {
+            return Duration.ofSeconds(30);
+          }
+        };
+    // The stop arrives while the batch is published; every entry is confirmed.
+    var stopped =
+        new RecordingPublisher(
+            entries -> {
+              Thread.currentThread().interrupt();
+              return RecordingPublisher.allConfirmed(entries);
+            });
+    var cutShort =
+        new RecordingPublisher(entries -> RecordingPublisher.allConfirmed(entries.subList(0, 5)));
+    var poisoned =
+        new RecordingPublisher(
+            entries -> {
+              var confirmed = new LinkedHashSet<OutboxEntryId>();
+              var failed = new LinkedHashMap<OutboxEntryId, Exception>();
+              for (OutboxEntry e : entries) {
+                if (e.id().value().equals("e0")) {
+                  failed.put(e.id(), new IllegalArgumentException("poison"));
+                } else {
+                  confirmed.add(e.id());
+                }
+              }
+              return new OutboxPublisher.BatchResult(confirmed, failed);
+            }) {
+          @Override
+          public FailureKind classifyFailure(Exception failure) {
+            return FailureKind.ENTRY;
+          }
+        };
+    var inner = backlog(30);
+    var claims = new AtomicInteger();
+    var failingSecondClaim =
+        withMethod(
+            inner,
+            "loadPending",
+            args -> {
+              if (claims.incrementAndGet() == 2) {
+                throw new IllegalStateException("database unreachable");
+              }
+              return inner.loadPending((Integer) args[0]);
+            });
+
+    List<String> reasons =
+        cycleEndsOf(
+            () -> {
+              poller(backlog(100), slow)
+                  .pollInterval(Duration.ofSeconds(1))
+                  .drainTicker(ticker::get)
+                  .build()
+                  .pollCycle();
+              poller(backlog(30), inFlight).build().pollCycle();
+              poller(backlog(30), interrupted).build().pollCycle();
+              try {
+                poller(backlog(30), stopped).build().pollCycle();
+              } finally {
+                assertThat(Thread.interrupted()).as("the stop is handed back").isTrue();
+              }
+              poller(backlog(30), cutShort).build().pollCycle();
+              poller(backlog(60), poisoned)
+                  .retryPolicy(new RetryPolicy(10, Duration.ZERO, 2.0, false))
+                  .build()
+                  .pollCycle();
+              var failing = poller(failingSecondClaim, RecordingPublisher.confirmingAll()).build();
+              org.assertj.core.api.Assertions.assertThatThrownBy(failing::pollCycle)
+                  .hasMessageContaining("database unreachable");
+            });
+
+    assertThat(reasons)
+        .containsExactly(
+            "BUDGET", "IN_FLIGHT", "INTERRUPTED", "STOP", "DEADLINE", "RETRY_AT_ONCE", "FAILED");
+  }
+
+  @Test
+  @Timeout(20)
+  void aPartialBatchMixingStreamsAndEntriesWithout_followsWhatItDelivered() {
+    // On an availability-first channel a batch can hold entries of a stream beside entries with
+    // none. Delivering a stream's entry keeps the drain on that stream's queue.
+    var delivering =
+        new InMemoryOutboxStore(
+            Clock.systemUTC(),
+            InMemoryOutboxStore.DEFAULT_CLAIM_LEASE,
+            OutboxOrderingMode.AVAILABILITY_FIRST);
+    for (int i = 0; i < 3; i++) {
+      delivering.save(OutboxEntry.pending(OutboxEntryId.of("n" + i), "{}", "Event"));
+    }
+    queue(delivering, "s", 4);
+    var deliveringAll = RecordingPublisher.confirmingAll();
+    // When only the entries without a stream are delivered and the stream's head is rejected,
+    // nothing follows the batch: the cycle ends on it.
+    var rejecting =
+        new InMemoryOutboxStore(
+            Clock.systemUTC(),
+            InMemoryOutboxStore.DEFAULT_CLAIM_LEASE,
+            OutboxOrderingMode.AVAILABILITY_FIRST);
+    for (int i = 0; i < 3; i++) {
+      rejecting.save(OutboxEntry.pending(OutboxEntryId.of("n" + i), "{}", "Event"));
+    }
+    queue(rejecting, "s", 4);
+    var rejectingTheStream =
+        new RecordingPublisher(
+            entries -> {
+              var confirmed = new LinkedHashSet<OutboxEntryId>();
+              var failed = new LinkedHashMap<OutboxEntryId, Exception>();
+              for (OutboxEntry e : entries) {
+                if (e.streamId() != null) {
+                  failed.put(e.id(), new IllegalArgumentException("unroutable"));
+                } else {
+                  confirmed.add(e.id());
+                }
+              }
+              return new OutboxPublisher.BatchResult(confirmed, failed);
+            }) {
+          @Override
+          public FailureKind classifyFailure(Exception failure) {
+            return FailureKind.ENTRY;
+          }
+        };
+
+    List<String> reasons =
+        cycleEndsOf(
+            () -> {
+              poller(delivering, deliveringAll).build().pollCycle();
+              poller(rejecting, rejectingTheStream)
+                  .retryPolicy(new RetryPolicy(3, Duration.ofMinutes(1), 2.0, false))
+                  .build()
+                  .pollCycle();
+            });
+
+    assertThat(deliveringAll.batches).containsExactly(4, 1, 1, 1);
+    assertThat(count(delivering, OutboxStatus.DELIVERED)).isEqualTo(7);
+    assertThat(rejectingTheStream.batches).containsExactly(4);
+    assertThat(count(rejecting, OutboxStatus.DELIVERED)).isEqualTo(3);
+    assertThat(reasons).containsExactly("EMPTY", "PARTIAL_NO_STREAM");
   }
 
   @Test
@@ -1078,5 +1257,156 @@ class OutboxPollerDrainTest {
     // until the first batch's outcome is stored, and 0 from then on, not only after the cycle.
     assertThat(failuresSeen).containsExactly(1, 0, 0);
     assertThat(gaugeSeen).containsExactly(1L, 0L, 0L);
+  }
+
+  @Test
+  @Timeout(20)
+  void aFailureAfterAStoredBatch_showsOnTheGauge_andTheCountKeepsEscalating() {
+    // Every cycle stores one full batch and then fails at its next claim, three times over.
+    var inner = backlog(30);
+    var claims = new AtomicInteger();
+    var store =
+        withMethod(
+            inner,
+            "loadPending",
+            args -> {
+              if (claims.incrementAndGet() % 2 == 0) {
+                throw new IllegalStateException("database unreachable");
+              }
+              return inner.loadPending((Integer) args[0]);
+            });
+    var gauge = new CopyOnWriteArrayList<Long>();
+    var metrics =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordOutboxRelayDegradation(long consecutiveFailures) {
+            gauge.add(consecutiveFailures);
+          }
+        };
+    var relay = new AtomicReference<OutboxPoller>();
+    var failuresSeen = new CopyOnWriteArrayList<Integer>();
+    var publisher =
+        new RecordingPublisher(
+            entries -> {
+              failuresSeen.add(relay.get().consecutiveFailures());
+              return RecordingPublisher.allConfirmed(entries);
+            });
+    var poller =
+        poller(store, publisher).pollInterval(Duration.ofMillis(50)).metrics(metrics).build();
+    relay.set(poller);
+
+    poller.start();
+    try {
+      // Three failed cycles and the fourth, which finds the backlog delivered.
+      Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> gauge.size() >= 10);
+    } finally {
+      poller.close();
+    }
+
+    // Each cycle starts with the count of the cycles that failed in a row before it, so the
+    // backoff keeps growing although every cycle stored a batch.
+    assertThat(publisher.batches).containsExactly(10, 10, 10);
+    assertThat(failuresSeen).containsExactly(0, 1, 2);
+    // Per cycle: the sample at its start, 0 once its batch is stored, and the new count at once
+    // when it fails, not only when the next cycle samples it.
+    assertThat(gauge.subList(0, 10)).containsExactly(0L, 1L, 1L, 0L, 2L, 2L, 0L, 3L, 3L, 0L);
+  }
+
+  @Test
+  @Timeout(20)
+  void aStopBeforeTheClaim_afterFailedCycles_isNoRecovery() throws Exception {
+    var inner = backlog(30);
+    var claims = new AtomicInteger();
+    var blockedInTheThirdCycle = new CountDownLatch(1);
+    // Every claim fails. In the third cycle the backlog read before the claim waits until the
+    // stop interrupts it, and returns with the interrupt handed back.
+    var failingClaims =
+        withMethod(
+            inner,
+            "loadPending",
+            args -> {
+              claims.incrementAndGet();
+              throw new IllegalStateException("database unreachable");
+            });
+    var store =
+        withMethod(
+            failingClaims,
+            "countByStatus",
+            args -> {
+              if (claims.get() == 2 && blockedInTheThirdCycle.getCount() == 1) {
+                blockedInTheThirdCycle.countDown();
+                try {
+                  Thread.sleep(Duration.ofSeconds(30));
+                } catch (InterruptedException _) {
+                  Thread.currentThread().interrupt();
+                }
+              }
+              return inner.countByStatus((OutboxStatus) args[0]);
+            });
+    var poller =
+        poller(store, RecordingPublisher.confirmingAll())
+            .pollInterval(Duration.ofMillis(20))
+            .metrics(new OutboxPollerTest.RecordingMetrics())
+            .build();
+    var loopLogger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ResilientPollLoop.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    loopLogger.addAppender(appender);
+    var level = loopLogger.getLevel();
+    loopLogger.setLevel(ch.qos.logback.classic.Level.INFO);
+    try {
+      poller.start();
+      assertThat(blockedInTheThirdCycle.await(10, TimeUnit.SECONDS)).isTrue();
+      poller.close();
+    } finally {
+      loopLogger.setLevel(level);
+      loopLogger.detachAppender(appender);
+      appender.stop();
+    }
+
+    assertThat(poller.isAlive()).isFalse();
+    assertThat(claims).as("the stopped cycle claims nothing").hasValue(2);
+    assertThat(poller.consecutiveFailures()).as("the stop clears nothing").isEqualTo(2);
+    assertThat(appender.list)
+        .extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+        .noneMatch(m -> m.contains("recovered"));
+  }
+
+  @Test
+  void anIdTheResultGainsAfterThePublisherReturned_isNotTakenForADelivery() {
+    // A publisher, against its contract, adds an entry to its confirmed set after it returned:
+    // here while the relay marks the batch delivered. That entry was never attempted, so its claim
+    // is released and the cycle ends, instead of the entry staying claimed while the drain goes on.
+    var inner = backlog(30);
+    var late = new AtomicReference<Runnable>(() -> {});
+    var store =
+        withMethod(
+            inner,
+            "markDeliveredAll",
+            args -> {
+              @SuppressWarnings("unchecked")
+              var ids = (java.util.Collection<OutboxEntryId>) args[0];
+              int marked = inner.markDeliveredAll(ids, (String) args[1]);
+              late.get().run();
+              return marked;
+            });
+    var publisher =
+        new RecordingPublisher(
+            entries -> {
+              var confirmed = new LinkedHashSet<OutboxEntryId>();
+              entries.subList(0, entries.size() - 1).forEach(e -> confirmed.add(e.id()));
+              OutboxEntryId last = entries.getLast().id();
+              late.set(() -> confirmed.add(last));
+              return new OutboxPublisher.BatchResult(confirmed, Map.of());
+            });
+
+    poller(store, publisher).build().pollCycle();
+
+    assertThat(publisher.batches).containsExactly(10);
+    assertThat(count(inner, OutboxStatus.DELIVERED)).isEqualTo(9);
+    assertThat(count(inner, OutboxStatus.IN_PROGRESS)).isZero();
+    assertThat(count(inner, OutboxStatus.PENDING)).isEqualTo(21);
   }
 }

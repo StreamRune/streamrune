@@ -391,13 +391,26 @@ public final class OutboxPoller implements AutoCloseable {
     this.claimedBy = builder.store.claimedBy();
     Duration maxBackoff =
         pollInterval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? pollInterval : MAX_FAILURE_BACKOFF;
+    // The degradation gauge hears every change of the failure count at once: a failure after a
+    // stored batch shows on it before the next cycle samples it.
     this.pollLoop =
         new ResilientPollLoop(
             "outbox-poller",
             () -> !Thread.currentThread().isInterrupted(),
             () -> pollInterval,
             pollInterval,
-            maxBackoff);
+            maxBackoff,
+            this::reportRelayDegradation);
+  }
+
+  /** Writes the degradation gauge with the poll loop's new failure count. */
+  private void reportRelayDegradation(int consecutiveFailures) {
+    if (metrics == StreamRuneMetrics.NOOP) {
+      return;
+    }
+    recordMetric(
+        "recordOutboxRelayDegradation",
+        () -> metrics.recordOutboxRelayDegradation(consecutiveFailures));
   }
 
   /**
@@ -432,8 +445,10 @@ public final class OutboxPoller implements AutoCloseable {
   private record PollThread(Thread thread, InterruptDeferral interrupts) {}
 
   /**
-   * Number of consecutive poll-cycle failures; {@code 0} when the last cycle succeeded. A non-zero
-   * value means the relay is degraded — still running, retrying with backoff.
+   * Number of poll cycles that failed in a row; {@code 0} when the last cycle returned, and from
+   * the moment the running cycle stores the outcome of a batch until the next failure. A cycle that
+   * stores a batch and then fails still counts as one more failure in a row. A non-zero value means
+   * the relay is degraded — still running, retrying with backoff.
    */
   public int consecutiveFailures() {
     return pollLoop.consecutiveFailures();
@@ -637,10 +652,9 @@ public final class OutboxPoller implements AutoCloseable {
             : publishAndRecord(pending, claimBase, lease, interrupts);
     // The batch's outcome is stored: the relay works, whatever the outcome was. Clearing the
     // failure count now, rather than when the cycle returns, keeps health and the degradation
-    // gauge from reading degraded through a whole drain after one failed cycle.
-    if (pollLoop.recordProgress()) {
-      recordMetric("recordOutboxRelayDegradation", () -> metrics.recordOutboxRelayDegradation(0));
-    }
+    // gauge (which the poll loop updates on every change) from reading degraded through a whole
+    // drain after one failed cycle.
+    pollLoop.recordProgress();
     drain.failedInPreviousBatch.clear();
     drain.failedInPreviousBatch.addAll(outcome.failed());
     if (outcome.end() != null) {
@@ -794,9 +808,10 @@ public final class OutboxPoller implements AutoCloseable {
   /**
    * Stores the outcome of one batch: confirmed entries are marked delivered, failures go through
    * {@link #recordFailure}, and entries the batch never attempted are released. Runs with {@link
-   * #close()}'s interrupt deferred. Reads the publisher's result once, in one pass over the claimed
-   * entries, and hands back what it found: a publisher that still changes its result afterwards,
-   * against its contract, cannot fail a batch whose outcome is stored.
+   * #close()}'s interrupt deferred. Copies the publisher's confirmed set once and decides every
+   * entry against that copy, in one pass over the claimed entries: an id the publisher adds after
+   * it returned, against its contract, was not marked delivered, so it is not counted as delivered
+   * either; it is released with the never-attempted entries. Hands back what it found.
    *
    * @param stopping whether a stop was requested during the batch: it ends the cycle, and changes
    *     the log wording for the released entries
@@ -811,9 +826,10 @@ public final class OutboxPoller implements AutoCloseable {
       Instant publishDeadline,
       Duration lease,
       boolean stopping) {
-    // One immutable snapshot of the confirmed ids for markDeliveredAll and the streak bookkeeping
-    // below, so any late mutation of the live set from the publisher cannot affect them.
-    var confirmed = List.copyOf(result.confirmed());
+    // One immutable snapshot of the confirmed ids for markDeliveredAll, the pass over the entries
+    // and the streak bookkeeping below, so a late mutation of the live set cannot reach them: an
+    // entry counted as delivered is always one that was marked delivered.
+    Set<OutboxEntryId> confirmed = Set.copyOf(result.confirmed());
     int delivered = 0;
     if (!confirmed.isEmpty()) {
       int transitioned = store.markDeliveredAll(confirmed, claimedBy);
@@ -858,7 +874,7 @@ public final class OutboxPoller implements AutoCloseable {
     // Entries whose publish was cut short by an interrupt: held like IN_FLIGHT, logged apart.
     int interruptedPublishes = 0;
     for (OutboxEntry entry : pending) {
-      if (result.confirmed().contains(entry.id())) {
+      if (confirmed.contains(entry.id())) {
         if (entry.streamId() != null) {
           deliveredStreams.add(entry.streamId());
         }
@@ -951,7 +967,7 @@ public final class OutboxPoller implements AutoCloseable {
       // guard like every identifier the framework renders into a log record.
       int resolvedEntries = pending.size() - unattemptedEntries.size();
       boolean everyResolvedEntryFailedTransport =
-          result.confirmed().isEmpty()
+          confirmed.isEmpty()
               && inFlightFailures == 0
               && entryFailures == 0
               && interruptedPublishes == 0;
@@ -1010,7 +1026,13 @@ public final class OutboxPoller implements AutoCloseable {
     }
     if (!unattemptedEntries.isEmpty()) {
       releaseUnattempted(
-          unattemptedEntries, result, pending.size(), claimBase, publishDeadline, lease, stopping);
+          unattemptedEntries,
+          confirmed.size(),
+          pending.size(),
+          claimBase,
+          publishDeadline,
+          lease,
+          stopping);
     }
     CycleEnd end;
     if (stopping) {
@@ -1037,7 +1059,7 @@ public final class OutboxPoller implements AutoCloseable {
    */
   private void releaseUnattempted(
       List<OutboxEntry> unattemptedEntries,
-      OutboxPublisher.BatchResult result,
+      int confirmedCount,
       int claimed,
       Instant claimBase,
       Instant publishDeadline,
@@ -1047,7 +1069,7 @@ public final class OutboxPoller implements AutoCloseable {
       LOG.info(
           "Outbox relay stopping after delivering {} of {} claimed entries; releasing the {}"
               + " never-attempted claims for the next relay",
-          result.confirmed().size(),
+          confirmedCount,
           claimed,
           unattemptedEntries.size());
     } else {
@@ -1069,7 +1091,7 @@ public final class OutboxPoller implements AutoCloseable {
               + "batchSize (see outbox.md \"Sizing the claim lease\").",
           budgetSeconds,
           lease.toSeconds(),
-          result.confirmed().size(),
+          confirmedCount,
           claimed,
           unattemptedEntries.size());
     }
