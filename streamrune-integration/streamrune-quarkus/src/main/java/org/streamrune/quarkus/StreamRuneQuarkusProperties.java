@@ -313,7 +313,10 @@ public interface StreamRuneQuarkusProperties {
     @WithConverter(StrictBooleanConverter.class)
     boolean enabled();
 
-    /** Number of outbox entries published per poll. */
+    /**
+     * Number of outbox entries the relay claims per batch; one poll claims batch after batch while
+     * a backlog drains.
+     */
     @WithDefault("100")
     int batchSize();
 

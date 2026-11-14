@@ -55,7 +55,8 @@ jars. In brief:
   are delivered in commit order with at most one in flight, and a terminally failed entry holds its
   stream until an operator replays or skips it; `AVAILABILITY_FIRST` is the explicit choice for
   consumers that tolerate reordering. The relay claims the next batch at once while its batches come
-  back full, so a backlog is not held to one batch per poll interval. Publishers for Kafka, RabbitMQ
+  back full or deliver entries of streams with more queued, so a backlog is not held to one batch
+  per poll interval, nor a stream to one entry per poll interval. Publishers for Kafka, RabbitMQ
   and HTTP.
 - **Explicit projection delivery modes.** Every projection registration declares
   `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT` — there is no default — and

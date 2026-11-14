@@ -115,7 +115,8 @@ public record StreamRuneProperties(
 
   /**
    * @param enabled whether outbox polling is enabled (opt-in)
-   * @param batchSize max events per poll cycle
+   * @param batchSize entries the relay claims per batch; one poll claims batch after batch while a
+   *     backlog drains
    * @param flushInterval interval between two polls of the relay
    * @param retentionMaxAge how long to keep delivered outbox entries before the retention sweeper
    *     prunes them; zero or negative disables pruning

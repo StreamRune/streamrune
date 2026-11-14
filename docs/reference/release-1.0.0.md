@@ -896,17 +896,20 @@ license.
   that does not strictly exceed the publisher's in-flight horizon, a store whose `orderingMode()` or
   `claimLease()` returns `null` (a non-positive lease is the explicit opt-out), and a non-positive
   batch size or poll interval.
-- A poll cycle claims the next batch at once while the last one came back full (`batchSize`
-  entries), delivered at least one entry, and every entry of it was confirmed or rejected for
-  itself. A partial or empty batch, a batch that delivered nothing, a batch that claimed again an
-  entry the batch just before it failed (a retry due at once), a stop, a publish cut short by its deadline, a transport failure
-  or an in-flight hand-off ends the cycle, and the relay waits `pollInterval`. One cycle drains for
+- A poll cycle claims the next batch at once while the last one delivered at least one entry,
+  every entry of it was confirmed or rejected for itself, and it came back full (`batchSize`
+  entries) or delivered an entry of a stream, so a stream's queue is delivered in one cycle. An
+  empty batch, a partial batch of entries without a stream or of entries written since a partial
+  batch before it, a batch that delivered nothing, a batch that claimed again an entry the batch
+  just before it failed (a retry due at once), a stop, a publish cut short by its deadline, a
+  transport failure or an in-flight hand-off ends the cycle, and the relay waits `pollInterval`. One cycle drains for
   at most ten poll intervals plus the batch in progress, measured on the monotonic clock. Each batch
   keeps its own claim, publish deadline and `outbox/relay` span; the gauges are sampled once per
   cycle, so they can be up to about eleven poll intervals old while a backlog drains.
 - Stopping the relay mid-batch records the deliveries the broker confirmed, keeps an entry whose
   publish the stop cut short claimed until its lease expires, and returns the untouched entries to
-  `PENDING` at once.
+  `PENDING` at once. A stop during a claim waits for the claim statement and releases the batch it
+  claimed.
 - Status model: `PENDING`, `IN_PROGRESS`, `DELIVERED`, `FAILED` (unresolved until an operator acts),
   `SKIPPED` (terminal, audited with `skipped_at`, `skipped_by`, `skip_reason`). `OutboxStore.delete`
   refuses a `FAILED` row; `findByStatus(status, limit)` is the read-only listing.
