@@ -125,7 +125,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * {@code 0}: this store writes no outbox. In by-reference mode it starts no span: it neither
  * serializes nor does any I/O, so a span would time nothing a deployment has.
  *
- * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists.
+ * <p>Thread-safe: appends are serialized by a single lock, reads operate on copy-on-write lists,
+ * and an append publishes its events to each list in one step, so a read returns all of them or
+ * none.
  */
 public final class InMemoryEventStore implements EventStore {
 
@@ -147,13 +149,14 @@ public final class InMemoryEventStore implements EventStore {
     void onAppend(long lastGlobalOffset);
   }
 
-  private final List<StoredEvent> globalStream = new CopyOnWriteArrayList<>();
-  private final Map<StreamId, List<StoredEvent>> streams = new ConcurrentHashMap<>();
   private static final Logger log = LoggerFactory.getLogger(InMemoryEventStore.class);
 
-  private final Map<StreamId, Snapshot> snapshots = new ConcurrentHashMap<>();
-  private final ReentrantLock appendLock = new ReentrantLock();
-  private final AtomicLong globalOffset = new AtomicLong(0);
+  // The stored data and the lock that orders its appends; shared by a store reopened over it.
+  private final List<StoredEvent> globalStream;
+  private final Map<StreamId, List<StoredEvent>> streams;
+  private final Map<StreamId, Snapshot> snapshots;
+  private final ReentrantLock appendLock;
+  private final AtomicLong globalOffset;
   private final List<AppendListener> appendListeners = new CopyOnWriteArrayList<>();
 
   private volatile InMemoryCommandInbox commandInbox;
@@ -193,8 +196,7 @@ public final class InMemoryEventStore implements EventStore {
 
   /** Creates a store that keeps events and snapshot state by reference (no serialization). */
   public InMemoryEventStore() {
-    this.objectMapper = null;
-    this.typeRegistry = null;
+    this(null, null, null);
   }
 
   /**
@@ -209,8 +211,33 @@ public final class InMemoryEventStore implements EventStore {
    *     {@code PostgresEventStore} does on read
    */
   public InMemoryEventStore(ObjectMapper objectMapper, EventTypeRegistry typeRegistry) {
-    this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
-    this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
+    this(
+        Objects.requireNonNull(objectMapper, "objectMapper is required"),
+        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        null);
+  }
+
+  /**
+   * A store over the stored data of {@code shared}, or over empty storage when it is {@code null}.
+   */
+  private InMemoryEventStore(
+      ObjectMapper objectMapper, EventTypeRegistry typeRegistry, InMemoryEventStore shared) {
+    this.objectMapper = objectMapper;
+    this.typeRegistry = typeRegistry;
+    if (shared == null) {
+      this.globalStream = new CopyOnWriteArrayList<>();
+      this.streams = new ConcurrentHashMap<>();
+      this.snapshots = new ConcurrentHashMap<>();
+      this.appendLock = new ReentrantLock();
+      this.globalOffset = new AtomicLong(0);
+    } else {
+      this.globalStream = shared.globalStream;
+      this.streams = shared.streams;
+      this.snapshots = shared.snapshots;
+      this.appendLock = shared.appendLock;
+      this.globalOffset = shared.globalOffset;
+      this.commandInbox = shared.commandInbox;
+    }
   }
 
   /**
@@ -224,12 +251,44 @@ public final class InMemoryEventStore implements EventStore {
    */
   public static InMemoryEventStore serializing(
       EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    return new InMemoryEventStore(serializingMapper(cryptoEngine), typeRegistry);
+  }
+
+  /**
+   * A new serializing store over the same stored data as {@code source} — its events, snapshots and
+   * global offset counter, and the command inbox wired into it — as a deployment restarted with
+   * another registry or crypto engine sees the data. Appends through either store are ordered by
+   * one lock. The new store starts with no upcasters, migrations, saga store, tracing or append
+   * listeners; wire them as on a fresh store. Stored events keep the schema versions they were
+   * stamped with, so the upcaster chain of the new store reads them as a restarted deployment's
+   * chain would.
+   *
+   * @param source a store in serializing mode
+   * @param typeRegistry resolves event and state classes on read (required)
+   * @param cryptoEngine crypto engine for {@code @Encrypted} fields (optional, may be null)
+   * @throws IllegalArgumentException if {@code source} keeps its data by reference
+   */
+  static InMemoryEventStore sharingStorageOf(
+      InMemoryEventStore source, EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    Objects.requireNonNull(source, "source is required");
+    if (source.objectMapper == null) {
+      throw new IllegalArgumentException(
+          "a store that keeps its data by reference cannot be reopened in serializing mode");
+    }
+    return new InMemoryEventStore(
+        serializingMapper(cryptoEngine),
+        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        source);
+  }
+
+  /** The mapper {@code PostgresEventStore.create()} configures, for the serializing mode. */
+  private static ObjectMapper serializingMapper(CryptoEngine cryptoEngine) {
     var mapper = new ObjectMapper();
     mapper.registerModule(new JavaTimeModule());
     if (cryptoEngine != null) {
       mapper.registerModule(new CryptoShreddingModule(cryptoEngine));
     }
-    return new InMemoryEventStore(mapper, typeRegistry);
+    return mapper;
   }
 
   /** Wires the inbox so {@link #appendWithKey} can dedup. Tests call this after construction. */
@@ -487,6 +546,13 @@ public final class InMemoryEventStore implements EventStore {
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
     Objects.requireNonNull(streamId, "streamId is required");
+    if (expectedSnapshotVersion < EventStore.IGNORE_SNAPSHOT) {
+      throw new IllegalArgumentException(
+          "expectedSnapshotVersion must be >= "
+              + EventStore.IGNORE_SNAPSHOT
+              + " (IGNORE_SNAPSHOT skips reading any snapshot, 0 skips the version check), got "
+              + expectedSnapshotVersion);
+    }
     if (!traced()) {
       return loadHistory(streamId, expectedSnapshotVersion, false);
     }
@@ -580,7 +646,8 @@ public final class InMemoryEventStore implements EventStore {
 
     AppendResult result;
     // Serialize appends across ALL streams so events become visible in strict global_offset
-    // order, mirroring PostgresEventStore's transaction-scoped advisory lock.
+    // order, mirroring PostgresEventStore, whose appends serialize on the row lock of the
+    // single-row global_offset_sequence counter, held until the append commits.
     appendLock.lock();
     try {
       result = appendLocked(streamId, toAppend, expectedVersion);
@@ -646,11 +713,12 @@ public final class InMemoryEventStore implements EventStore {
     }
 
     List<GlobalOffset> globalOffsets = new ArrayList<>();
+    List<StoredEvent> batch = new ArrayList<>(toAppend.size());
     long version = expectedVersion.value();
     for (var template : toAppend) {
       version++;
       GlobalOffset offset = GlobalOffset.of(globalOffset.incrementAndGet());
-      var stored =
+      batch.add(
           new StoredEvent(
               offset,
               streamId,
@@ -660,11 +728,16 @@ public final class InMemoryEventStore implements EventStore {
               template.metadata(),
               template.payloadJson(),
               template.metadataJson(),
-              template.schemaVersion());
-      streamEvents.add(stored);
-      globalStream.add(stored);
+              template.schemaVersion()));
       globalOffsets.add(offset);
     }
+    // Publish the whole append in one step on each list, as a PostgreSQL commit makes all of an
+    // append's rows visible at once: a copy-on-write list replaces its array once per addAll, so a
+    // read (which iterates one array) sees every event of the append or none of them. Adding the
+    // events one at a time let a concurrent load, readStream or readGlobalStream return the first
+    // events of an append without the rest.
+    streamEvents.addAll(batch);
+    globalStream.addAll(batch);
 
     return new AppendResult(List.copyOf(globalOffsets), new Version(version));
   }
@@ -686,7 +759,8 @@ public final class InMemoryEventStore implements EventStore {
    * #withSagaStore} under that saga's read lock, taken after this store's append lock and held
    * until the events and the inbox row are stored.
    *
-   * @throws UnsupportedOperationException if {@code forwardOf} is given and no saga store is wired
+   * @throws UnsupportedOperationException if no command inbox is wired (see {@link
+   *     #withCommandInbox}), or if {@code forwardOf} is given and no saga store is wired
    */
   @Override
   public IdempotentAppendResult appendWithKey(
@@ -696,15 +770,18 @@ public final class InMemoryEventStore implements EventStore {
       IdempotencyKey idempotencyKey,
       String commandType,
       SagaOrigin forwardOf) {
+    // A store without an inbox does not support the keyed append: refused first, before the
+    // arguments are checked, as PostgresEventStore built without a command inbox refuses it.
+    if (commandInbox == null) {
+      throw new UnsupportedOperationException(
+          "No InMemoryCommandInbox wired; call withCommandInbox(...)");
+    }
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
-    Objects.requireNonNull(commandType, "commandType is required");
+    CommandInbox.requireCommandType(commandType);
 
-    if (commandInbox == null) {
-      throw new IllegalStateException("No InMemoryCommandInbox wired; call withCommandInbox(...)");
-    }
     InMemorySagaStore rows = sagaStore;
     if (forwardOf != null && rows == null) {
       throw new UnsupportedOperationException(
@@ -975,6 +1052,7 @@ public final class InMemoryEventStore implements EventStore {
       int snapshotVersion,
       long snapshotPurgeGeneration) {
     Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(version, "version is required");
     if (state == null) {
       throw new IllegalArgumentException("state must not be null");
     }
@@ -989,7 +1067,7 @@ public final class InMemoryEventStore implements EventStore {
       snapshots.put(streamId, new Snapshot(version, snapshotVersion, state, null, null));
       return true;
     }
-    if (!traced() || version == null) {
+    if (!traced()) {
       return writeSnapshot(streamId, version, state, snapshotVersion);
     }
     return inSpan(
@@ -1073,12 +1151,20 @@ public final class InMemoryEventStore implements EventStore {
    * deserialized to its ORIGINAL (stored) runtime class — re-running {@code @Encrypted} decryption
    * (a crypto-shredded subject yields {@link CryptoShreddingModule#REDACTED}) and resolving the
    * stored {@code state_type} through the registry via the NON-throwing resolver (a retired/renamed
-   * type is discarded → full replay, never a crash). A version mismatch is then migrated up through
-   * the registered chain, or discarded if unmigratable — mirroring {@code PostgresEventStore.load}.
+   * type is discarded → full replay, never a crash). A version mismatch is migrated up through the
+   * registered chain; one the chain cannot bridge is discarded before the state is deserialized,
+   * and so is a retired stored type — mirroring {@code PostgresEventStore.load}.
    */
   private ResolvedSnapshot resolveSnapshot(Snapshot snapshot, int expectedSnapshotVersion) {
     boolean compatible =
         expectedSnapshotVersion == 0 || snapshot.snapshotVersion() == expectedSnapshotVersion;
+    if (!compatible && !migrations.canReach(snapshot.snapshotVersion(), expectedSnapshotVersion)) {
+      // A version mismatch no complete migration chain bridges is discarded before the stored
+      // state is read, as PostgresEventStore decides it: a snapshot the load will not use is never
+      // deserialized (nor decrypted), so a crypto failure in it cannot fail the load, and no
+      // migration step runs on it.
+      return ResolvedSnapshot.discard();
+    }
 
     AggregateState storedState;
     if (objectMapper == null) {
@@ -1112,9 +1198,9 @@ public final class InMemoryEventStore implements EventStore {
     if (compatible) {
       return new ResolvedSnapshot(storedState, snapshot.version());
     }
-    // Version mismatch: try to migrate the stored state up to the expected schema version. A
-    // complete chain upgrades the snapshot (only later events replay); a gapped/absent chain
-    // discards it (full replay), mirroring PostgresEventStore and the plain-mismatch baseline.
+    // Version mismatch with a complete chain (checked above): migrate the stored state up to the
+    // expected schema version, so only later events replay. The empty result below stays for
+    // safety; a chain canReach accepted lands on the expected version or throws.
     //
     // SnapshotMigrationChain.migrate() can also THROW — NullPointerException when a
     // step returns null, or IllegalStateException when a step's result does not match its
@@ -1258,6 +1344,7 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+    Objects.requireNonNull(afterOffset, "afterOffset is required");
     boolean traced = traced();
     Instant started = traced ? Instant.now() : null;
     return readEvents(
@@ -1272,6 +1359,8 @@ public final class InMemoryEventStore implements EventStore {
 
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(afterVersion, "afterVersion is required");
     boolean traced = traced();
     Instant started = traced ? Instant.now() : null;
     return readEvents(

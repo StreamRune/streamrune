@@ -909,6 +909,73 @@ it from synthetic data only, and keep it in test resources.
 
 ---
 
+## Proving a storage backend
+
+A backend that stores events in another database implements the storage interfaces of
+`streamrune-core`. For each of them `streamrune-test` holds an abstract JUnit suite with one test per
+promise the interface's javadoc makes: a test class of the backend extends the suite, implements its
+factory hooks, and inherits the tests. The shipped stores run the same suites, so a backend that
+passes behaves as they do: `InMemoryEventStore` (with and without a command inbox) and
+`PostgresEventStore` run `EventStoreContract`, `InMemoryCommandInbox` and `PostgresCommandInbox` run
+`CommandInboxContract`, and `InMemoryOffsetStore`, `InMemoryProjectionRepository` and
+`PostgresOffsetStore` run `OffsetStoreContract`.
+
+```java
+@Testcontainers
+class MyEventStoreContractTest extends EventStoreContract {
+
+  @Override
+  protected EventStore newStore(Setup setup) {
+    emptyTheTables();                                    // empty storage, offsets from 1 again
+    return build(setup);
+  }
+
+  @Override
+  protected EventStore reopen(EventStore store, Setup setup) {
+    return build(setup);                                 // the same tables, another setup
+  }
+
+  private EventStore build(Setup setup) {
+    return new MyEventStore(dataSource, setup.registry(), setup.crypto(), setup.upcasters(),
+        setup.migrations(), new MyCommandInbox(dataSource));
+  }
+}
+```
+
+- `EventStoreContract` — `newStore(setup)` returns an `EventStore` over empty storage with a command
+  inbox, built with a `Setup`: the type registry, crypto engine, upcasters and snapshot migrations
+  of a deployment (`Setup.defaults()` resolves the suite's types and has no crypto, upcasters or
+  migrations). `reopen(store, setup)` returns a new store over the same data as `store`, built with
+  a possibly different setup, as a deployment restarted with another configuration sees what it
+  stored before. It covers version assignment, strict conflict detection (an expected version behind or beyond the
+  head), the empty append, atomicity (also of appends racing for one version), the absence of
+  idempotence by default, the reads, the global head (also while appends run concurrently),
+  snapshots, `appendWithKey` and reopening over stored data. The suite appends
+  `EventStoreContract.ContractEvent` under the event type `ContractEvent` and saves
+  `EventStoreContract.ContractState` snapshots: a registry-backed store resolves both through the
+  registry of its `Setup`. The javadoc lets a store leave four capabilities out, answering them with
+  `UnsupportedOperationException`; a store that does overrides `supportsIdempotentAppend()`,
+  `supportsSnapshots()`, `supportsSnapshotSchemaVersions()` or `supportsLastGlobalOffset()` to return
+  `false`, and the suite checks the refusal instead. A store whose snapshots a `SnapshotPurger`
+  purges overrides `purgeSnapshot(streamId)` to purge one and return `true`, which runs the purge
+  generation cases. The saga forward fence has its own suite, `SagaForwardFenceContract`.
+- `CommandInboxContract` — `newStore()` returns an `Inboxed` pair: an empty `CommandInbox` and the
+  event store whose `appendWithKey` writes its rows (the inbox has no write method of its own).
+  `setProcessedAt(inboxed, key, processedAt)` moves a recorded row's processed time, so the
+  retention cases age rows without waiting. It covers the recorded result of a processed command,
+  the zero-event command, a failed keyed append that records nothing, and `deleteProcessedBefore`.
+- `OffsetStoreContract` — `newStore()` returns an `OffsetStore`. It covers reads, saves, per-name
+  isolation, `reset` and the monotonic guard; a store without the guard overrides
+  `guardsAgainstRegression()` to return `false`.
+
+`InMemoryEventStoreContractTest`, `InMemoryCommandInboxContractTest` and
+`InMemoryOffsetStoreContractTest` in `streamrune-test`, and their `Postgres…ContractTest`
+counterparts in `streamrune-postgres`, show the factory hooks for the shipped stores. A store that
+keeps snapshots overrides `load(StreamId, int)` to honour `EventStore.IGNORE_SNAPSHOT`, also when it
+has no snapshot schema versions: the interface's default would read the snapshot.
+
+---
+
 ## The kit, type by type
 
 Every public type of `streamrune-test` (package `org.streamrune.test`):
@@ -950,6 +1017,9 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `SagaStoreContract` | The contract suite of every `SagaStore`: the recovery state a saga runner, step executor and replayer depend on. |
 | `SagaDeadLetterStoreContract` | The contract suite of every `SagaDeadLetterStore`: stored facts win, and the shield decides what retention removes. |
 | `SagaForwardFenceContract` | The contract suite of an `EventStore` that fences a saga's forward command against the rows of a `SagaStore`. |
+| `EventStoreContract` | The contract suite of every `EventStore`: versions, conflicts, atomicity, reads, the global head, snapshots and the idempotent append; extend it to prove a custom store. |
+| `CommandInboxContract` | The contract suite of every `CommandInbox`, written through the keyed append of its event store: the recorded result and retention. |
+| `OffsetStoreContract` | The contract suite of every `OffsetStore`: reads, saves, `reset` and the monotonic guard. |
 | `NativeReflectionTypes` | Derives from code the StreamRune types a GraalVM native image registers for reflection; the integrations' native-hint tests compare their hints with it. |
 | `ShippedMigrationScripts` | Lists the Flyway migration scripts StreamRune ships, from the class path, so a native-image test can check each is a registered resource. |
 | `UnregisteredSealedTypes` | Builds a sealed type that looks like one a native image did not register (`isSealed()` with no permitted subclasses), to test the code that refuses it. |

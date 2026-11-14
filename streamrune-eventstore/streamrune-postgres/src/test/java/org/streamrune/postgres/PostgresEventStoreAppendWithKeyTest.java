@@ -1,6 +1,5 @@
 package org.streamrune.postgres;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -126,67 +125,6 @@ class PostgresEventStoreAppendWithKeyTest {
             null,
             null,
             Instant.now()));
-  }
-
-  @Test
-  void appendWithKeySameKeyTwiceAppendsOnce() throws Exception {
-    StreamId streamId = TestStreams.stream("stream-idempotent");
-    IdempotencyKey key = IdempotencyKey.of("cmd-idem-1");
-    List<EventEnvelope> events = List.of(envelope(streamId, 1));
-
-    // First call: events are appended
-    IdempotentAppendResult first =
-        store.appendWithKey(streamId, events, Version.initial(), key, "TestCommand");
-    assertFalse(first.alreadyApplied());
-    assertEquals(1, first.globalOffsets().size());
-    assertEquals(new Version(1), first.finalVersion());
-
-    // Second call: no new events, returns prior result
-    IdempotentAppendResult second =
-        store.appendWithKey(streamId, events, Version.initial(), key, "TestCommand");
-    assertTrue(second.alreadyApplied());
-    assertEquals(first.globalOffsets(), second.globalOffsets());
-    assertEquals(first.finalVersion(), second.finalVersion());
-
-    // event_stream has exactly 1 row for this stream
-    try (var conn = dataSource.getConnection();
-        var ps =
-            conn.prepareStatement(
-                "SELECT COUNT(*) FROM event_stream WHERE aggregate_type = ? AND aggregate_id = ?")) {
-      ps.setString(1, streamId.aggregateType().value());
-      ps.setString(2, streamId.aggregateId().value());
-      try (var rs = ps.executeQuery()) {
-        rs.next();
-        assertEquals(1, rs.getLong(1));
-      }
-    }
-  }
-
-  // A replay of an already-claimed key must keep returning the ORIGINAL
-  // outcome even after later, unrelated appends moved the stream head well past what this key's
-  // expectedVersion named — the strict head check lives inside insertEvents, and a replay
-  // (tryClaim returns false, claimLost) never reaches insertEvents at all; see appendWithKey.
-  @Test
-  void appendWithKeyReplay_afterStreamHeadMoved_stillReturnsOriginalResult() throws Exception {
-    StreamId streamId = TestStreams.stream("stream-replay-head-moved");
-    IdempotencyKey key = IdempotencyKey.of("cmd-idem-head-moved");
-    List<EventEnvelope> events = List.of(envelope(streamId, 1));
-
-    IdempotentAppendResult first =
-        store.appendWithKey(streamId, events, Version.initial(), key, "TestCommand");
-    assertFalse(first.alreadyApplied());
-
-    // Move the stream head with a later, unrelated (unkeyed) append.
-    store.append(streamId, List.of(envelope(streamId, 2)), new Version(1));
-
-    // Replaying the ORIGINAL key with its ORIGINAL (now long-stale) expectedVersion must still
-    // succeed and return exactly the original outcome — never an OptimisticLockException, even
-    // though Version.initial() no longer matches the actual head (2).
-    IdempotentAppendResult replay =
-        store.appendWithKey(streamId, events, Version.initial(), key, "TestCommand");
-    assertTrue(replay.alreadyApplied());
-    assertEquals(first.finalVersion(), replay.finalVersion());
-    assertEquals(first.globalOffsets(), replay.globalOffsets());
   }
 
   @Test
@@ -497,59 +435,6 @@ class PostgresEventStoreAppendWithKeyTest {
 
       assertTrue(result.alreadyApplied());
       assertTrue(result.globalOffsets().isEmpty());
-    }
-  }
-
-  @Test
-  void appendWithKeyZeroEventsClaimsKey() throws Exception {
-    StreamId streamId = TestStreams.stream("stream-zero");
-    IdempotencyKey key = IdempotencyKey.of("cmd-zero-1");
-
-    IdempotentAppendResult result =
-        store.appendWithKey(streamId, List.of(), Version.initial(), key, "ZeroCommand");
-
-    assertFalse(result.alreadyApplied());
-    assertTrue(result.globalOffsets().isEmpty());
-    assertEquals(Version.initial(), result.finalVersion());
-
-    // Key was recorded
-    var inboxRow = commandInbox.find(key);
-    assertTrue(inboxRow.isPresent());
-    assertTrue(inboxRow.get().globalOffsets().isEmpty());
-    assertEquals(streamId, inboxRow.get().streamId());
-  }
-
-  @Test
-  void appendWithKey_eventInsertFails_rollsBackClaimToo() throws Exception {
-    StreamId streamId = TestStreams.stream("stream-atomic-rollback");
-    IdempotencyKey key = IdempotencyKey.of("atomic-test");
-
-    // Seed the stream at version 1 so that a second insert at version 1 causes a
-    // (aggregate_type, aggregate_id, version) unique violation (23505) during insertEvents.
-    store.append(streamId, List.of(envelope(streamId, 1)), Version.initial());
-
-    // appendWithKey with expectedVersion=0 will try to insert version 1 again → 23505 →
-    // the method rolls back the whole transaction (claim + event insert) and throws.
-    assertThatThrownBy(
-            () ->
-                store.appendWithKey(
-                    streamId, List.of(envelope(streamId, 1)), Version.initial(), key, "SomeCmd"))
-        .isInstanceOf(OptimisticLockException.class);
-
-    // The crux: the inbox claim was rolled back together with the failed event insert.
-    // The key must NOT be left in command_inbox, so a real retry could still proceed.
-    assertTrue(
-        commandInbox.find(key).isEmpty(),
-        "inbox claim must be rolled back on event-insert failure");
-
-    try (var conn = dataSource.getConnection();
-        var ps =
-            conn.prepareStatement("SELECT COUNT(*) FROM command_inbox WHERE idempotency_key = ?")) {
-      ps.setString(1, key.value());
-      try (var rs = ps.executeQuery()) {
-        rs.next();
-        assertEquals(0L, rs.getLong(1), "command_inbox must have 0 rows for key after rollback");
-      }
     }
   }
 

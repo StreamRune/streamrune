@@ -15,16 +15,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
@@ -148,26 +141,6 @@ class PostgresEventStoreTest {
         testMetadata());
   }
 
-  @Test
-  void appendAndLoadEvents() {
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId, List.of(envelope(streamId, 1, new TestEvent("hello"))), Version.initial());
-
-    AggregateHistory history = store.load(streamId);
-
-    assertEquals(1, history.version().value());
-    assertEquals(1, history.events().size());
-    assertNull(history.snapshotState());
-
-    EventEnvelope loaded = history.events().getFirst();
-    assertEquals(TestStreams.stream("stream-1"), loaded.streamId());
-    assertEquals(1, loaded.version().value());
-    assertEquals("TestEvent", loaded.eventType().value());
-    assertInstanceOf(TestEvent.class, loaded.event());
-    assertEquals("hello", ((TestEvent) loaded.event()).value());
-  }
-
   record OrderSagaState(SagaStatus status) implements SagaState {}
 
   @Test
@@ -283,44 +256,6 @@ class PostgresEventStoreTest {
         "one character more cannot form a stream, so it never reaches the column");
   }
 
-  @Test
-  void loadReturnsLargeStreamsCompleteAndOrderedAcrossFetchBatches() {
-    // 1100 events > 2x the driver fetch size (500): the result set spans multiple driver
-    // fetch batches on the streaming load path. Everything must arrive, in version order.
-    StreamId streamId = TestStreams.stream("large-stream");
-    int count = 1100;
-    var envelopes = new java.util.ArrayList<EventEnvelope>(count);
-    for (int i = 1; i <= count; i++) {
-      envelopes.add(envelope(streamId, i, new TestEvent("v" + i)));
-    }
-    store.append(streamId, envelopes, Version.initial());
-
-    AggregateHistory history = store.load(streamId);
-
-    assertEquals(count, history.events().size());
-    assertEquals(count, history.version().value());
-    assertEquals("v1", ((TestEvent) history.events().getFirst().event()).value());
-    assertEquals("v" + count, ((TestEvent) history.events().getLast().event()).value());
-    for (int i = 0; i < count; i++) {
-      assertEquals(i + 1, history.events().get(i).version().value());
-    }
-  }
-
-  @Test
-  void optimisticLockFailsOnVersionConflict() {
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId, List.of(envelope(streamId, 1, new TestEvent("first"))), Version.initial());
-
-    assertThrows(
-        OptimisticLockException.class,
-        () ->
-            store.append(
-                streamId,
-                List.of(envelope(streamId, 1, new TestEvent("conflict"))),
-                Version.initial()));
-  }
-
   // CONTRACT CHANGE: before this fix, an expectedVersion beyond the
   // current head succeeded and left a permanent version gap (the store only detected a conflict
   // via the (aggregate_type, aggregate_id, version) unique constraint, which a future version never
@@ -369,56 +304,6 @@ class PostgresEventStoreTest {
                     Version.initial()));
     assertTrue(ex.getMessage().contains("expected version 0"), ex.getMessage());
     assertTrue(ex.getMessage().contains("actual head is 2"), ex.getMessage());
-  }
-
-  @Test
-  @Timeout(30)
-  void concurrentAppendersWithSameExpectedVersion_exactlyOneWins() throws Exception {
-    StreamId streamId = TestStreams.stream("stream-concurrent-same-version");
-    store.append(
-        streamId, List.of(envelope(streamId, 1, new TestEvent("seed"))), Version.initial());
-
-    int attempts = 8;
-    var start = new CountDownLatch(1);
-    var succeeded = new AtomicInteger();
-    var conflicted = new AtomicInteger();
-    ExecutorService pool = Executors.newFixedThreadPool(attempts);
-    try {
-      List<Future<?>> futures = new java.util.ArrayList<>();
-      for (int i = 0; i < attempts; i++) {
-        int idx = i;
-        futures.add(
-            pool.submit(
-                () -> {
-                  start.await();
-                  try {
-                    store.append(
-                        streamId,
-                        List.of(envelope(streamId, 2, new TestEvent("racer-" + idx))),
-                        new Version(1));
-                    succeeded.incrementAndGet();
-                  } catch (OptimisticLockException _) {
-                    conflicted.incrementAndGet();
-                  }
-                  return null;
-                }));
-      }
-      start.countDown();
-      for (Future<?> f : futures) {
-        f.get(20, TimeUnit.SECONDS);
-      }
-    } finally {
-      pool.shutdown();
-    }
-
-    assertEquals(
-        1, succeeded.get(), "exactly one concurrent appender at the same expectedVersion must win");
-    assertEquals(attempts - 1, conflicted.get());
-
-    // Per-stream and global order are consistent: exactly one event landed at version 2.
-    AggregateHistory history = store.load(streamId);
-    assertEquals(2, history.events().size());
-    assertEquals(2, history.version().value());
   }
 
   @Test
@@ -488,56 +373,6 @@ class PostgresEventStoreTest {
     assertEquals(2, history.events().size());
     assertEquals(1, history.events().getFirst().version().value());
     assertEquals(5, history.events().getLast().version().value());
-  }
-
-  @Test
-  void snapshotReducesEventReplay() {
-    // Append 3 events
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId,
-        List.of(
-            envelope(streamId, 1, new TestEvent("e1")),
-            envelope(streamId, 2, new TestEvent("e2")),
-            envelope(streamId, 3, new TestEvent("e3"))),
-        Version.initial());
-
-    // Save snapshot at version 2
-    store.saveSnapshot(streamId, new Version(2), new TestState("snapshot-state"));
-
-    // Load should return snapshot + only event at version 3
-    AggregateHistory history = store.load(streamId);
-
-    assertNotNull(history.snapshotState());
-    assertInstanceOf(TestState.class, history.snapshotState());
-    assertEquals("snapshot-state", ((TestState) history.snapshotState()).value());
-    assertEquals(3, history.version().value());
-    assertEquals(1, history.events().size());
-    assertEquals(3, history.events().getFirst().version().value());
-  }
-
-  @Test
-  void ignoreSnapshotNeverUsesTheSnapshot() {
-    // EventStore.IGNORE_SNAPSHOT (the read-side counterpart of SnapshotPolicy.never())
-    // must skip the snapshot entirely — unlike expectedSnapshotVersion == 0 ("skip the version
-    // check, use anything"), which would still hand back this exact snapshot.
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId,
-        List.of(
-            envelope(streamId, 1, new TestEvent("e1")),
-            envelope(streamId, 2, new TestEvent("e2")),
-            envelope(streamId, 3, new TestEvent("e3"))),
-        Version.initial());
-    store.saveSnapshot(streamId, new Version(2), new TestState("snapshot-state"));
-
-    AggregateHistory history = store.load(streamId, EventStore.IGNORE_SNAPSHOT);
-
-    assertNull(history.snapshotState(), "IGNORE_SNAPSHOT must never hand back a snapshot state");
-    assertEquals(
-        3, history.events().size(), "every event must replay, not just the post-snapshot ones");
-    assertEquals(3, history.version().value());
-    assertEquals(0, history.lastSnapshotVersion().value());
   }
 
   @Test
@@ -640,102 +475,6 @@ class PostgresEventStoreTest {
         "a SECOND (and every later) load under IGNORE_SNAPSHOT must cost only readRawEvents' own"
             + " connection — the legacy-snapshot probe must not run again for the life of this"
             + " store instance");
-  }
-
-  @Test
-  void emptyStreamReturnsEmptyHistory() {
-    AggregateHistory history = store.load(TestStreams.stream("nonexistent"));
-
-    assertEquals(0, history.version().value());
-    assertTrue(history.events().isEmpty());
-    assertNull(history.snapshotState());
-  }
-
-  @Test
-  void readGlobalStreamReturnsEventsAfterOffset() {
-    StreamId streamId1 = TestStreams.stream("stream-1");
-    StreamId streamId2 = TestStreams.stream("stream-2");
-    store.append(
-        streamId1,
-        List.of(
-            envelope(streamId1, 1, new TestEvent("a")), envelope(streamId1, 2, new TestEvent("b"))),
-        Version.initial());
-    store.append(streamId2, List.of(envelope(streamId2, 1, new TestEvent("c"))), Version.initial());
-
-    // Read all from offset 0
-    List<EventEnvelope> all = store.readGlobalStream(GlobalOffset.initial(), 100);
-    assertEquals(3, all.size());
-
-    // Read after first event
-    GlobalOffset firstOffset = all.getFirst().globalOffset();
-    List<EventEnvelope> afterFirst = store.readGlobalStream(firstOffset, 100);
-    assertEquals(2, afterFirst.size());
-
-    // Read after last event
-    GlobalOffset lastOffset = all.getLast().globalOffset();
-    List<EventEnvelope> afterLast = store.readGlobalStream(lastOffset, 100);
-    assertTrue(afterLast.isEmpty());
-  }
-
-  @Test
-  void readGlobalStreamRespectsMaxCount() {
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId,
-        List.of(
-            envelope(streamId, 1, new TestEvent("a")),
-            envelope(streamId, 2, new TestEvent("b")),
-            envelope(streamId, 3, new TestEvent("c"))),
-        Version.initial());
-
-    List<EventEnvelope> limited = store.readGlobalStream(GlobalOffset.initial(), 2);
-    assertEquals(2, limited.size());
-  }
-
-  @Test
-  void readGlobalStreamReturnsEmptyWhenNoEvents() {
-    List<EventEnvelope> result = store.readGlobalStream(GlobalOffset.initial(), 100);
-    assertTrue(result.isEmpty());
-  }
-
-  @Test
-  void lastGlobalOffsetReturnsZeroWhenEmpty() {
-    assertEquals(GlobalOffset.of(0), store.lastGlobalOffset());
-  }
-
-  @Test
-  void lastGlobalOffsetReturnsHighestAssignedOffset() {
-    StreamId streamId = TestStreams.stream("stream-head");
-    var result =
-        store.append(
-            streamId,
-            List.of(
-                envelope(streamId, 1, new TestEvent("a")),
-                envelope(streamId, 2, new TestEvent("b"))),
-            Version.initial());
-
-    GlobalOffset expectedHead = result.globalOffsets().getLast();
-    assertEquals(expectedHead, store.lastGlobalOffset());
-  }
-
-  @Test
-  void appendMultipleEventsInBatch() {
-    StreamId streamId = TestStreams.stream("stream-1");
-    store.append(
-        streamId,
-        List.of(
-            envelope(streamId, 1, new TestEvent("a")),
-            envelope(streamId, 2, new TestEvent("b")),
-            envelope(streamId, 3, new TestEvent("c"))),
-        Version.initial());
-
-    AggregateHistory history = store.load(streamId);
-
-    assertEquals(3, history.version().value());
-    assertEquals(3, history.events().size());
-    assertEquals("a", ((TestEvent) history.events().getFirst().event()).value());
-    assertEquals("b", ((TestEvent) history.events().get(1).event()).value());
-    assertEquals("c", ((TestEvent) history.events().get(2).event()).value());
   }
 
   @Test

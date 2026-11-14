@@ -15,7 +15,6 @@ import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
-import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -175,21 +174,6 @@ class InMemoryEventStoreSerializingTest {
   }
 
   @Test
-  void unregisteredEventTypeFailsOnRead() {
-    // The EventTypeRegistry is read-side only (nothing validates the event type at append), so an
-    // unregistered type appends fine and surfaces UnknownEventTypeException only on read — matching
-    // PostgresEventStore, whose append writes the event_type name without resolving the class.
-    var emptyRegistry = SimpleEventTypeRegistry.builder().build();
-    var store = InMemoryEventStore.serializing(emptyRegistry, null);
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-
-    store.append(
-        s, List.of(envelope(s, 1, new Added("A", Instant.EPOCH), "Added")), Version.initial());
-
-    assertThrows(UnknownEventTypeException.class, () -> store.load(s));
-  }
-
-  @Test
   void encryptedFieldsRoundTripThroughTheCryptoModule() {
     var store = InMemoryEventStore.serializing(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("user-1"));
@@ -296,5 +280,14 @@ class InMemoryEventStoreSerializingTest {
 
     assertEquals(original, loaded, "an encrypted event must round-trip its other components");
     assertEquals(2, loaded.total().scale(), "BigDecimal scale must survive the load");
+  }
+
+  @Test
+  void aStoreKeepingItsDataByReferenceCannotBeReopenedSerializing() {
+    var byReference = new InMemoryEventStore();
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> InMemoryEventStore.sharingStorageOf(byReference, registry, null));
   }
 }

@@ -1,8 +1,6 @@
 package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -59,92 +57,20 @@ class InMemoryEventStoreAppendWithKeyTest {
   }
 
   @Test
-  void firstAppend_returnsNotAlreadyApplied_andEventsAreVisible() {
-    var result =
-        store.appendWithKey(streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder");
-
-    assertFalse(result.alreadyApplied());
-    assertEquals(1, result.globalOffsets().size());
-    assertEquals(1, result.finalVersion().value());
-
-    // Events visible in the global stream
-    var globalEvents = store.readGlobalStream(GlobalOffset.of(0), 100);
-    assertEquals(1, globalEvents.size());
-
-    // Inbox entry is recorded
-    assertTrue(inbox.find(key).isPresent());
-    assertEquals(key, inbox.find(key).get().key());
-  }
-
-  @Test
-  void secondAppend_sameKey_returnsAlreadyApplied_streamDoesNotGrow() {
-    // First call
-    var first =
-        store.appendWithKey(streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder");
-    assertFalse(first.alreadyApplied());
-    long globalSizeAfterFirst = store.readGlobalStream(GlobalOffset.of(0), 100).size();
-
-    // Second call with same key (different events — should be ignored)
-    var second =
-        store.appendWithKey(
-            streamId, List.of(envelope("B"), envelope("C")), new Version(1), key, "PlaceOrder");
-
-    assertTrue(second.alreadyApplied());
-    assertEquals(first.globalOffsets(), second.globalOffsets());
-    assertEquals(first.finalVersion(), second.finalVersion());
-
-    // Stream did NOT grow
-    long globalSizeAfterSecond = store.readGlobalStream(GlobalOffset.of(0), 100).size();
-    assertEquals(globalSizeAfterFirst, globalSizeAfterSecond);
-  }
-
-  @Test
-  void zeroEventAppend_claimsKey_secondCallReturnsAlreadyApplied() {
-    var result = store.appendWithKey(streamId, List.of(), Version.initial(), key, "NoOpCommand");
-
-    assertFalse(result.alreadyApplied());
-    assertTrue(result.globalOffsets().isEmpty());
-
-    // Key is claimed
-    assertTrue(inbox.find(key).isPresent());
-    assertTrue(inbox.find(key).get().globalOffsets().isEmpty());
-
-    // Second call — alreadyApplied
-    var second =
-        store.appendWithKey(
-            streamId, List.of(envelope("A")), Version.initial(), key, "NoOpCommand");
-    assertTrue(second.alreadyApplied());
-    assertTrue(second.globalOffsets().isEmpty());
-  }
-
-  @Test
-  void appendWithKey_withNoInboxWired_throwsIllegalStateException() {
+  void appendWithKey_withNoInboxWired_isUnsupported_beforeItsArgumentsAreChecked() {
     var unwiredStore = new InMemoryEventStore();
+    var ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () ->
+                unwiredStore.appendWithKey(
+                    streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder"));
+    assertEquals("No InMemoryCommandInbox wired; call withCommandInbox(...)", ex.getMessage());
     assertThrows(
-        IllegalStateException.class,
-        () ->
-            unwiredStore.appendWithKey(
-                streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder"));
-  }
-
-  @Test
-  void twoDistinctKeys_bothProceed_independentResults() {
-    var key2 = IdempotencyKey.of("cmd-xyz-456");
-
-    var r1 =
-        store.appendWithKey(streamId, List.of(envelope("A")), Version.initial(), key, "PlaceOrder");
-    var r2 =
-        store.appendWithKey(streamId, List.of(envelope("B")), new Version(1), key2, "PlaceOrder");
-
-    assertFalse(r1.alreadyApplied());
-    assertFalse(r2.alreadyApplied());
-    assertEquals(1, r1.globalOffsets().size());
-    assertEquals(1, r2.globalOffsets().size());
-    // Different offsets assigned
-    assertNotEquals(r1.globalOffsets(), r2.globalOffsets());
-
-    assertTrue(inbox.find(key).isPresent());
-    assertTrue(inbox.find(key2).isPresent());
+        UnsupportedOperationException.class,
+        () -> unwiredStore.appendWithKey(null, null, null, null, null),
+        "the missing inbox is reported before a missing argument");
+    assertTrue(unwiredStore.readStream(streamId, Version.initial(), 10).isEmpty());
   }
 
   /**

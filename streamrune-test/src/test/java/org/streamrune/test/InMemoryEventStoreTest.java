@@ -2,9 +2,6 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,7 +18,6 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
-import org.streamrune.core.EventStore;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -59,30 +55,6 @@ class InMemoryEventStoreTest {
   }
 
   @Test
-  void appendsAndLoadsEvents() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-
-    var result = store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
-    assertEquals(1, result.globalOffsets().size());
-    assertEquals(1, result.finalVersion().value());
-
-    var history = store.load(s);
-    assertEquals(1, history.events().size());
-    assertEquals(1, history.version().value());
-    assertNull(history.snapshotState());
-  }
-
-  @Test
-  void emptyEventsReturnsExpectedVersion() {
-    var store = new InMemoryEventStore();
-    var result =
-        store.append(StreamId.of(TYPE, AggregateId.of("cart-1")), List.of(), Version.initial());
-    assertTrue(result.globalOffsets().isEmpty());
-    assertEquals(0, result.finalVersion().value());
-  }
-
-  @Test
   void rejectsNullArgumentsLikePostgres() {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
@@ -91,17 +63,6 @@ class InMemoryEventStoreTest {
     assertThrows(NullPointerException.class, () -> store.append(s, null, Version.initial()));
     assertThrows(NullPointerException.class, () -> store.append(s, List.of(), null));
     assertThrows(NullPointerException.class, () -> store.load(null));
-  }
-
-  @Test
-  void throwsOptimisticLockOnVersionMismatch() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-    store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
-
-    assertThrows(
-        OptimisticLockException.class,
-        () -> store.append(s, List.of(envelope(s, 1, "B")), Version.initial()));
   }
 
   @Test
@@ -221,36 +182,6 @@ class InMemoryEventStoreTest {
   }
 
   @Test
-  void multiEventAppendThrowsWhenAnyComputedVersionCollides() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-    store.append(
-        s,
-        List.of(envelope(s, 1, "A"), envelope(s, 2, "B"), envelope(s, 3, "C")),
-        Version.initial());
-
-    // expectedVersion 2 computes versions 3 and 4; version 3 already exists.
-    assertThrows(
-        OptimisticLockException.class,
-        () -> store.append(s, List.of(envelope(s, 3, "X"), envelope(s, 4, "Y")), new Version(2)));
-  }
-
-  @Test
-  void readGlobalStreamReturnsOrderedEvents() {
-    var store = new InMemoryEventStore();
-    StreamId a = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    StreamId b = StreamId.of(TYPE, AggregateId.of("cart-b"));
-    store.append(a, List.of(envelope(a, 1, "X")), Version.initial());
-    store.append(b, List.of(envelope(b, 1, "Y")), Version.initial());
-    store.append(a, List.of(envelope(a, 2, "Z")), new Version(1));
-
-    List<EventEnvelope> all = store.readGlobalStream(GlobalOffset.initial(), 100);
-    assertEquals(3, all.size());
-    assertEquals(1, all.getFirst().globalOffset().value());
-    assertEquals(3, all.get(2).globalOffset().value());
-  }
-
-  @Test
   void readGlobalStreamIsStrictlyOffsetOrderedUnderConcurrentAppends() throws Exception {
     var store = new InMemoryEventStore();
     int writers = 8;
@@ -280,54 +211,6 @@ class InMemoryEventStoreTest {
     for (int i = 0; i < offsets.size(); i++) {
       assertEquals(i + 1L, offsets.get(i), "offsets must be strictly increasing and gap-free");
     }
-  }
-
-  /**
-   * The head is the offset of a completed append, as the PostgreSQL store's is the highest
-   * committed offset: an event that becomes readable after {@code lastGlobalOffset()} returned has
-   * a greater offset. A reader that moves its position to the head without reading (the Server-Sent
-   * Events feed while nobody is subscribed) relies on it.
-   */
-  @Test
-  void theHeadNeverNamesAnOffsetWhoseEventIsNotReadableYet() throws Exception {
-    var store = new InMemoryEventStore();
-    StreamId stream = StreamId.of(TYPE, AggregateId.of("cart-head"));
-    var stop = new java.util.concurrent.atomic.AtomicBoolean();
-    Thread writer =
-        Thread.ofPlatform()
-            .start(
-                () -> {
-                  for (int i = 0; !stop.get(); i++) {
-                    store.append(stream, List.of(envelope(stream, i + 1, "X")), new Version(i));
-                  }
-                });
-    try {
-      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
-      while (System.nanoTime() < deadline) {
-        long head = store.lastGlobalOffset().value();
-        if (head > 0) {
-          List<EventEnvelope> atHead = store.readGlobalStream(GlobalOffset.of(head - 1), 1);
-          assertEquals(
-              List.of(head),
-              atHead.stream().map(e -> e.globalOffset().value()).toList(),
-              "the event at the reported head is readable");
-        }
-      }
-    } finally {
-      stop.set(true);
-      writer.join(10_000);
-    }
-  }
-
-  @Test
-  void readGlobalStreamRespectsMaxCount() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "X")), Version.initial());
-    store.append(s, List.of(envelope(s, 2, "Y")), new Version(1));
-    store.append(s, List.of(envelope(s, 3, "Z")), new Version(2));
-
-    assertEquals(2, store.readGlobalStream(GlobalOffset.initial(), 2).size());
   }
 
   @Test
@@ -374,117 +257,6 @@ class InMemoryEventStoreTest {
   }
 
   @Test
-  void readStreamFiltersByVersion() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A"), envelope(s, 2, "B")), Version.initial());
-
-    assertEquals(2, store.readStream(s, Version.initial(), 100).size());
-    assertEquals(1, store.readStream(s, new Version(1), 100).size());
-    assertEquals(0, store.readStream(s, new Version(2), 100).size());
-  }
-
-  @Test
-  void readStreamRespectsMaxCount() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A"), envelope(s, 2, "B")), Version.initial());
-
-    assertEquals(1, store.readStream(s, Version.initial(), 1).size());
-  }
-
-  @Test
-  void saveSnapshotPrunesReplayedEvents() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(
-        s,
-        List.of(envelope(s, 1, "A"), envelope(s, 2, "B"), envelope(s, 3, "C")),
-        Version.initial());
-
-    store.saveSnapshot(s, new Version(2), new CartState(2));
-    var history = store.load(s);
-
-    assertInstanceOf(CartState.class, history.snapshotState());
-    assertEquals(1, history.events().size());
-    assertEquals(3, history.events().getFirst().version().value());
-    assertEquals(3, history.version().value());
-    assertEquals(2, history.lastSnapshotVersion().value());
-  }
-
-  @Test
-  void loadWithMatchingSnapshotVersionUsesSnapshot() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A"), envelope(s, 2, "B")), Version.initial());
-    store.saveSnapshot(s, new Version(2), new CartState(2), 3);
-
-    var history = store.load(s, 3);
-    assertInstanceOf(CartState.class, history.snapshotState());
-    assertEquals(0, history.events().size());
-    assertEquals(2, history.version().value());
-  }
-
-  @Test
-  void loadWithMismatchedSnapshotVersionIgnoresSnapshotAndReplaysAllEvents() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A"), envelope(s, 2, "B")), Version.initial());
-    store.saveSnapshot(s, new Version(2), new CartState(2), 3);
-
-    var history = store.load(s, 4);
-    assertNull(history.snapshotState());
-    assertEquals(2, history.events().size());
-    assertEquals(2, history.version().value());
-    assertEquals(0, history.lastSnapshotVersion().value());
-  }
-
-  @Test
-  void loadWithZeroSnapshotVersionSkipsTheCheck() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
-    store.saveSnapshot(s, new Version(1), new CartState(1), 7);
-
-    var history = store.load(s, 0);
-    assertInstanceOf(CartState.class, history.snapshotState());
-  }
-
-  @Test
-  void loadWithIgnoreSnapshotNeverUsesTheSnapshot() {
-    // EventStore.IGNORE_SNAPSHOT (the read-side counterpart of SnapshotPolicy.never())
-    // must not use the snapshot even though it would match ANY version — unlike 0, it never even
-    // looks the snapshot up. A stream that switched to never() with a leftover snapshot must
-    // replay fully from events, not silently rehydrate the old snapshot.
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(
-        s,
-        List.of(envelope(s, 1, "A"), envelope(s, 2, "B"), envelope(s, 3, "C")),
-        Version.initial());
-    store.saveSnapshot(s, new Version(2), new CartState(2), 7);
-
-    var history = store.load(s, EventStore.IGNORE_SNAPSHOT);
-
-    assertNull(history.snapshotState(), "IGNORE_SNAPSHOT must never hand back a snapshot state");
-    assertEquals(
-        3, history.events().size(), "every event must replay, not just the post-snapshot ones");
-    assertEquals(3, history.version().value());
-    assertEquals(0, history.lastSnapshotVersion().value());
-  }
-
-  @Test
-  void defaultSaveSnapshotStoresSchemaVersionOne() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A")), Version.initial());
-    store.saveSnapshot(s, new Version(1), new CartState(1));
-
-    assertNotNull(store.load(s, 1).snapshotState());
-    assertNull(store.load(s, 2).snapshotState());
-  }
-
-  @Test
   void saveSnapshotValidatesArgumentsLikePostgres() {
     var store = new InMemoryEventStore();
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
@@ -495,27 +267,6 @@ class InMemoryEventStoreTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> store.saveSnapshot(s, new Version(1), new CartState(1), 0));
-  }
-
-  @Test
-  void lastGlobalOffsetTracksTheHighestAssignedOffset() {
-    var store = new InMemoryEventStore();
-    assertEquals(GlobalOffset.of(0), store.lastGlobalOffset());
-
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-a"));
-    store.append(s, List.of(envelope(s, 1, "A"), envelope(s, 2, "B")), Version.initial());
-    assertEquals(GlobalOffset.of(2), store.lastGlobalOffset());
-
-    store.append(s, List.of(envelope(s, 3, "C")), new Version(2));
-    assertEquals(GlobalOffset.of(3), store.lastGlobalOffset());
-  }
-
-  @Test
-  void loadReturnsEmptyForUnknownStream() {
-    EventStore store = new InMemoryEventStore();
-    var history = store.load(StreamId.of(TYPE, AggregateId.of("missing")));
-    assertTrue(history.events().isEmpty());
-    assertEquals(0, history.version().value());
   }
 
   // hasCryptoCause must walk the cause chain with a depth bound so a cyclic chain

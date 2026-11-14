@@ -768,6 +768,13 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
     Objects.requireNonNull(streamId, "streamId is required");
+    if (expectedSnapshotVersion < EventStore.IGNORE_SNAPSHOT) {
+      throw new IllegalArgumentException(
+          "expectedSnapshotVersion must be >= "
+              + EventStore.IGNORE_SNAPSHOT
+              + " (IGNORE_SNAPSHOT skips reading any snapshot, 0 skips the version check), got "
+              + expectedSnapshotVersion);
+    }
     if (!traced) {
       return loadHistory(streamId, expectedSnapshotVersion);
     }
@@ -1854,6 +1861,7 @@ public final class PostgresEventStore implements EventStore {
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    CommandInbox.requireCommandType(commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =
         mappedOutboxEntries != null ? mappedOutboxEntries : outboxEntriesOf(events);
