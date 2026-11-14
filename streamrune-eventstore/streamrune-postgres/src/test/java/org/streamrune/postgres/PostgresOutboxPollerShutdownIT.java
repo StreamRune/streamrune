@@ -308,10 +308,20 @@ class PostgresOutboxPollerShutdownIT {
     insertBacklog(50, 20);
     var published = Collections.synchronizedList(new ArrayList<String>());
     var publishedByRelay = new ArrayList<List<String>>();
+    // Two relays started together claim the same heads at once: one takes them, the other's claim
+    // skips the locked rows and comes back empty, and it may keep colliding until the first has
+    // drained everything. So each relay's first publish waits, bounded, for the other's: the relay
+    // that claimed first then holds its batch in a publish, not in a claim, and the other's next
+    // claim takes the next heads. From there on the two compete freely.
+    var firstPublish = List.of(new CountDownLatch(1), new CountDownLatch(1));
+    var waitedInVain = new CopyOnWriteArrayList<String>();
     var relays = new ArrayList<OutboxPoller>();
     for (int r = 0; r < 2; r++) {
       var mine = new CopyOnWriteArrayList<String>();
       publishedByRelay.add(mine);
+      CountDownLatch own = firstPublish.get(r);
+      CountDownLatch other = firstPublish.get(1 - r);
+      String relayName = "relay " + r;
       relays.add(
           OutboxPoller.builder()
               .outboxStore(
@@ -322,7 +332,13 @@ class PostgresOutboxPollerShutdownIT {
               .publisher(
                   new OutboxPublisher() {
                     @Override
-                    public void publish(OutboxEntry entry) {
+                    public void publish(OutboxEntry entry) throws InterruptedException {
+                      if (own.getCount() == 1) {
+                        own.countDown();
+                        if (!other.await(10, TimeUnit.SECONDS)) {
+                          waitedInVain.add(relayName);
+                        }
+                      }
                       mine.add(entry.id().value());
                       published.add(entry.id().value());
                     }
@@ -342,6 +358,10 @@ class PostgresOutboxPollerShutdownIT {
     assertEquals("1000", countWithStatus("DELIVERED"));
     assertEquals("0", countWithStatus("IN_PROGRESS"));
     assertEachStreamInOrderOnce(List.copyOf(published), 50, 20);
+    assertEquals(
+        List.of(),
+        waitedInVain,
+        "each relay's first publish saw the other relay publish within 10 s");
     for (int r = 0; r < 2; r++) {
       assertFalse(publishedByRelay.get(r).isEmpty(), "relay " + r + " took part in the drain");
     }
