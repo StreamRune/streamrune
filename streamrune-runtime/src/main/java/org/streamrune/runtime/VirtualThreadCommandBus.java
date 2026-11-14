@@ -654,10 +654,26 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       // the command's span and the trace context it made current on this thread, the audit
       // user, a circuit breaker's in-flight count — until after() or onError() releases it. Once
       // a callback phase ran, on any path, it is not run a second time.
-      if (callbacks != null && !callbacks.delivered) {
-        callbacks.failed(e);
-        recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
+      if (callbacks != null && callbacks.afterDelivered) {
+        // The command committed and its after phase ran: the Error is an after() callback's (or
+        // of what follows the commit). The command is counted neither failed nor succeeded.
+        throw e;
       }
+      if (callbacks != null && !callbacks.delivered) {
+        try {
+          callbacks.failed(e);
+        } catch (Error callbackError) {
+          // notifyOnError keeps an Error it was delivering primary; this is the last line of
+          // defence so that the work's own Error is the one the caller sees.
+          if (callbackError != e) {
+            e.addSuppressed(callbackError);
+          }
+        }
+      }
+      // Every Error that leaves a command which did not commit counts as a failed command:
+      // before the interceptor chain, inside it, in the work, or in an onError() callback of a
+      // failure whose handler had not counted it yet.
+      recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
       throw e;
     } finally {
       try {
@@ -846,6 +862,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     /** Whether {@code after()} or {@code onError()} was started for this execution. */
     private boolean delivered;
 
+    /** Whether it was {@code after()}: the command's outcome was decided as a success. */
+    private boolean afterDelivered;
+
     InterceptorCallbacks(CommandContext beforeCtx) {
       this.beforeCtx = beforeCtx;
     }
@@ -854,6 +873,7 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
     @Override
     public void accept(CommandResult result) {
       delivered = true;
+      afterDelivered = true;
       notifyAfter(withResult(beforeCtx, result), completedBefores);
     }
 
@@ -867,7 +887,10 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
   /**
    * Invokes onError() in reverse registration order on the first {@code count} interceptors (those
    * whose before() completed). Exceptions are logged and swallowed so a throwing callback neither
-   * suppresses the original failure nor starves sibling interceptors.
+   * suppresses the original failure nor starves sibling interceptors. An {@link Error} a callback
+   * throws never drops the failure being delivered: when that failure is an {@code Error} itself it
+   * stays the primary one and the callback's is suppressed on it; when it is an exception, the
+   * callback's {@code Error} is thrown after the loop with the failure suppressed on it.
    */
   private void notifyOnError(CommandContext ctx, Throwable error, int count) {
     Error callbackError = null;
@@ -885,9 +908,23 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         callbackError = firstError(callbackError, e);
       }
     }
-    if (callbackError != null) {
-      throw callbackError;
+    if (callbackError == null) {
+      return;
     }
+    if (error instanceof Error) {
+      // The work's own Error stays the one that propagates: the caller rethrows it, with what
+      // the callbacks threw suppressed on it.
+      if (callbackError != error) {
+        error.addSuppressed(callbackError);
+      }
+      return;
+    }
+    // The work failed with an exception and a callback with an Error: the Error propagates, as an
+    // Error of any interceptor callback does, and carries the work's failure.
+    if (callbackError != error) {
+      callbackError.addSuppressed(error);
+    }
+    throw callbackError;
   }
 
   /**
@@ -1490,28 +1527,78 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
    * unaffected and still acquires its own lock through the real locker.
    */
   private AutoCloseable acquireLockTimed(StreamId streamId, long startNanos) {
+    Set<StreamId> held = heldStreamLocks.get();
+    if (held.contains(streamId)) {
+      recordLockWait(startNanos);
+      return NOOP_LOCK;
+    }
+    AutoCloseable real;
     try {
-      Set<StreamId> held = heldStreamLocks.get();
-      if (held.contains(streamId)) {
-        return NOOP_LOCK;
+      real = locker.acquireLock(streamId, lockTimeout);
+    } catch (Throwable notAcquired) {
+      try {
+        recordLockWait(startNanos);
+      } catch (Error metricsError) {
+        notAcquired.addSuppressed(metricsError);
       }
-      AutoCloseable real = locker.acquireLock(streamId, lockTimeout);
-      held.add(streamId);
-      Thread owner = Thread.currentThread();
-      return () -> {
-        try {
-          real.close();
-        } finally {
-          held.remove(streamId);
-          // Drop the thread's (now empty) set so a pooled thread keeps nothing between commands;
-          // only on the owning thread, whose set this is.
-          if (held.isEmpty() && Thread.currentThread() == owner) {
-            heldStreamLocks.remove();
-          }
+      throw notAcquired;
+    }
+    // The lock is held and the caller's try-with-resources does not own it yet: whatever is thrown
+    // from here to the return — an Error of the metrics backend, an OutOfMemoryError of the
+    // handle's allocation — releases it first. A lock dropped here would stay held for good.
+    boolean registered = false;
+    try {
+      recordLockWait(startNanos);
+      registered = held.add(streamId);
+      return new HeldStreamLock(real, held, streamId, Thread.currentThread());
+    } catch (Throwable afterAcquisition) {
+      try {
+        real.close();
+      } catch (Throwable releaseFailure) {
+        if (releaseFailure != afterAcquisition) {
+          afterAcquisition.addSuppressed(releaseFailure);
         }
-      };
-    } finally {
-      recordMetric(() -> metrics.recordLockWait(System.nanoTime() - startNanos), "recordLockWait");
+      }
+      if (registered) {
+        held.remove(streamId);
+      }
+      if (held.isEmpty()) {
+        heldStreamLocks.remove();
+      }
+      throw afterAcquisition;
+    }
+  }
+
+  private void recordLockWait(long startNanos) {
+    recordMetric(() -> metrics.recordLockWait(System.nanoTime() - startNanos), "recordLockWait");
+  }
+
+  /** A stream lock this thread holds through the real locker; closing it releases the lock. */
+  private final class HeldStreamLock implements AutoCloseable {
+    private final AutoCloseable real;
+    private final Set<StreamId> held;
+    private final StreamId streamId;
+    private final Thread owner;
+
+    HeldStreamLock(AutoCloseable real, Set<StreamId> held, StreamId streamId, Thread owner) {
+      this.real = real;
+      this.held = held;
+      this.streamId = streamId;
+      this.owner = owner;
+    }
+
+    @Override
+    public void close() throws Exception {
+      try {
+        real.close();
+      } finally {
+        held.remove(streamId);
+        // Drop the thread's (now empty) set so a pooled thread keeps nothing between commands;
+        // only on the owning thread, whose set this is.
+        if (held.isEmpty() && Thread.currentThread() == owner) {
+          heldStreamLocks.remove();
+        }
+      }
     }
   }
 

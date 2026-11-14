@@ -153,7 +153,8 @@ public interface CommandInterceptor {
    * throws: the remaining member still runs, and any secondary failure is attached as a suppressed
    * exception of the one that propagates (the bus logs and isolates it). An {@link Error} a member
    * throws is handled the same way, so the other member still releases what its {@code before()}
-   * opened.
+   * opened; when one member throws an {@code Error} and the other an exception, the {@code Error}
+   * is the one that propagates, with the exception suppressed on it.
    */
   static CommandInterceptor compose(CommandInterceptor first, CommandInterceptor second) {
     return new CommandInterceptor() {
@@ -170,7 +171,7 @@ public interface CommandInterceptor {
           try {
             first.onError(ctx, e);
           } catch (RuntimeException | Error onErrorFailure) {
-            e.addSuppressed(onErrorFailure);
+            throw bothFailures(e, onErrorFailure);
           }
           throw e;
         }
@@ -184,7 +185,7 @@ public interface CommandInterceptor {
           try {
             first.after(ctx);
           } catch (RuntimeException | Error alsoFailed) {
-            e.addSuppressed(alsoFailed);
+            throw bothFailures(e, alsoFailed);
           }
           throw e;
         }
@@ -199,13 +200,38 @@ public interface CommandInterceptor {
           try {
             first.onError(ctx, error);
           } catch (RuntimeException | Error alsoFailed) {
-            e.addSuppressed(alsoFailed);
+            throw bothFailures(e, alsoFailed);
           }
           throw e;
         }
         first.onError(ctx, error);
       }
     };
+  }
+
+  /**
+   * Throws the one of two failures of a composed interceptor that propagates, with the other
+   * suppressed on it: {@code primary}, the one thrown first, unless only {@code secondary} is an
+   * {@link Error} — an {@code Error} is never demoted to the suppressed exception of a {@link
+   * RuntimeException}, which the bus would log and swallow. The same throwable twice is thrown as
+   * it is.
+   *
+   * @return never; declared so that a caller can write {@code throw bothFailures(...)}
+   */
+  private static RuntimeException bothFailures(Throwable primary, Throwable secondary) {
+    Throwable thrown = primary;
+    Throwable suppressed = secondary;
+    if (secondary instanceof Error && !(primary instanceof Error)) {
+      thrown = secondary;
+      suppressed = primary;
+    }
+    if (suppressed != thrown) {
+      thrown.addSuppressed(suppressed);
+    }
+    if (thrown instanceof Error error) {
+      throw error;
+    }
+    throw (RuntimeException) thrown;
   }
 
   /** Returns a no-op interceptor that does nothing. */
