@@ -159,7 +159,9 @@ and an event type you forgot to register — or one Jackson cannot serialize —
 instead of production. Build the store from the registry your application gives
 `PostgresEventStore`, or from one that registers what the test appends:
 `new InMemoryEventStore(typeRegistry)`, or `new InMemoryEventStore(typeRegistry, cryptoEngine)`
-with an `InMemoryCryptoEngine` to exercise crypto-shredding.
+with an `InMemoryCryptoEngine` to exercise crypto-shredding. As `PostgresEventStore` does, the store
+refuses a registry that holds an `@Encrypted` type when it has no crypto engine: building it throws
+an `IllegalStateException` naming the field, because the field would be stored as plaintext.
 
 ```java
 package com.example.order;
@@ -933,8 +935,8 @@ replay unchanged. `appendTo` binds each payload as the store binds a stored one:
 store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
 `write` serializes the payloads with a copy of the store's own `ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
-reads back, and leaves the fields of an `@Encrypted` event in the clear: append such a file to a
-store without a crypto engine. A fixture file therefore holds personal data as plain text — record
+reads back, and leaves the fields of an `@Encrypted` event in the clear: the file holds
+them as plain text, and a store with a crypto engine encrypts them when the file is appended. A fixture file therefore holds personal data as plain text — record
 it from synthetic data only, and keep it in test resources.
 
 ---

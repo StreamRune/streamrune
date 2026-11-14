@@ -1,5 +1,6 @@
 package org.streamrune.test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -112,6 +113,10 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       stores nothing, so a stream never has a version gap.
  *   <li><b>Empty appends.</b> An empty event list stores nothing and returns {@code new
  *       AppendResult(List.of(), expectedVersion)} without consulting the head.
+ *   <li><b>Encrypted types need a crypto engine.</b> A store built with a registry that holds an
+ *       {@code @Encrypted} type and no crypto engine refuses it, with an {@link
+ *       IllegalStateException} naming the field, before it stores anything: it would write the
+ *       field as plaintext.
  *   <li><b>Atomicity.</b> A multi-event append stores all of its events or none, also when several
  *       race for one version, and its events become readable together: while appends run, no read
  *       returns some events of one append without the others.
@@ -733,6 +738,24 @@ public abstract class EventStoreContract {
 
     assertEquals(new AppendResult(List.of(), new Version(2)), result);
     assertEquals(2, stored(A).size());
+  }
+
+  // ── Encrypted types without a crypto engine ─────────────────────────────────────────────────
+
+  @Test
+  public void anEncryptedTypeWithoutACryptoEngineIsRefusedWhenTheStoreIsBuilt() {
+    IllegalStateException refused =
+        assertThrows(IllegalStateException.class, () -> newStore(secretTypes(null)));
+
+    assertTrue(
+        refused.getMessage().contains("@Encrypted"),
+        "the refusal names the cause, an @Encrypted field with no crypto engine: "
+            + refused.getMessage());
+  }
+
+  @Test
+  public void anEncryptedTypeWithACryptoEngineIsAccepted() {
+    assertDoesNotThrow(() -> newStore(secretTypes(new UnavailableKeyStore())));
   }
 
   // ── Atomicity ───────────────────────────────────────────────────────────────────────────────
@@ -2781,8 +2804,9 @@ public abstract class EventStoreContract {
   }
 
   /**
-   * The default setup with the types holding {@code @Encrypted} fields registered too; a store may
-   * refuse such a registry without a crypto engine, so it is always given one.
+   * The default setup with the types holding {@code @Encrypted} fields registered too; a store
+   * refuses such a registry without a crypto engine, so the cases that use one pass a {@code
+   * crypto}.
    */
   private static Setup secretTypes(CryptoEngine crypto) {
     return Setup.defaults()

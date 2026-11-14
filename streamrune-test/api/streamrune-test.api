@@ -273,6 +273,8 @@ public abstract class org.streamrune.test.EventStoreContract
   public void anAppendStoresAnOutboxEntryForEachOfItsEvents()
   public void anEmptyAppendStoresNothingAndReturnsTheExpectedVersion()
   public void anEmptyAppendToAnExistingStreamStoresNothing()
+  public void anEncryptedTypeWithACryptoEngineIsAccepted()
+  public void anEncryptedTypeWithoutACryptoEngineIsRefusedWhenTheStoreIsBuilt()
   public void anErasedSubjectsTombstoneAUsableSnapshotRejectsFailsTheLoad()
   public void anErasedSubjectsTombstoneTheClassRejectsIsAnEventDeserializationException()
   public void anEventAppendedBeforeItsUpcasterExistedIsStoredAtVersionOneWhateverItsPayload()

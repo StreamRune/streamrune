@@ -53,6 +53,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
+import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.runtime.GuardedTracing;
 
@@ -211,6 +212,8 @@ public final class InMemoryEventStore implements EventStore {
    *
    * @param typeRegistry resolves event and state classes on read, exactly as {@code
    *     PostgresEventStore} does (required)
+   * @throws IllegalStateException if a registered type carries {@code @Encrypted}: without a crypto
+   *     engine its field would be stored as plaintext, which {@code PostgresEventStore} refuses too
    */
   public InMemoryEventStore(EventTypeRegistry typeRegistry) {
     this(typeRegistry, null);
@@ -223,12 +226,16 @@ public final class InMemoryEventStore implements EventStore {
    *
    * @param typeRegistry resolves event and state classes on read, exactly as {@code
    *     PostgresEventStore} does (required)
-   * @param cryptoEngine crypto engine for {@code @Encrypted} field handling (optional, may be null)
+   * @param cryptoEngine crypto engine for {@code @Encrypted} field handling; {@code null} only when
+   *     no registered type carries {@code @Encrypted}
+   * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
+   *     carries {@code @Encrypted}, as {@code PostgresEventStore} refuses it
    */
   public InMemoryEventStore(EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     this(
         serializingMapper(cryptoEngine),
-        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        requireCryptoConfig(
+            Objects.requireNonNull(typeRegistry, "typeRegistry is required"), cryptoEngine),
         null);
   }
 
@@ -281,15 +288,37 @@ public final class InMemoryEventStore implements EventStore {
    *
    * @param source the store whose data the new store reads and writes
    * @param typeRegistry resolves event and state classes on read (required)
-   * @param cryptoEngine crypto engine for {@code @Encrypted} fields (optional, may be null)
+   * @param cryptoEngine crypto engine for {@code @Encrypted} fields; {@code null} only when no
+   *     registered type carries {@code @Encrypted}
+   * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
+   *     carries {@code @Encrypted}
    */
   static InMemoryEventStore sharingStorageOf(
       InMemoryEventStore source, EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
     Objects.requireNonNull(source, "source is required");
     return new InMemoryEventStore(
         serializingMapper(cryptoEngine),
-        Objects.requireNonNull(typeRegistry, "typeRegistry is required"),
+        requireCryptoConfig(
+            Objects.requireNonNull(typeRegistry, "typeRegistry is required"), cryptoEngine),
         source);
+  }
+
+  /**
+   * Refuses a registry with an {@code @Encrypted} type when there is no crypto engine, as {@code
+   * PostgresEventStore} does when it is built: the store's mapper would write the field as
+   * plaintext. Returns {@code typeRegistry}.
+   *
+   * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
+   *     carries {@code @Encrypted}
+   * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and {@code
+   *     typeRegistry} does not list its types
+   */
+  private static EventTypeRegistry requireCryptoConfig(
+      EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
+    if (cryptoEngine == null) {
+      CryptoConfigValidator.validate(typeRegistry.registeredTypes(), null);
+    }
+    return typeRegistry;
   }
 
   /** The mapper {@code PostgresEventStore.create()} configures. */

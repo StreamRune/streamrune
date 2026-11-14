@@ -1444,7 +1444,8 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   upcasting on read (`withUpcasters(...)`); like `PostgresEventStore` it stores JSON and reads it
   back through an `EventTypeRegistry` (`new InMemoryEventStore(typeRegistry, cryptoEngine)`), so
   `@Encrypted` fields, crypto-shredding and type registration are exercised in every unit test.
-  `InMemoryEventStoreFactory` for DI.
+  Also like `PostgresEventStore`, it refuses a registry with an `@Encrypted` type and no crypto
+  engine when it is built (`IllegalStateException`). `InMemoryEventStoreFactory` for DI.
 
 - Fixtures: `DeciderFixture` (`given(...)` / `when(...)` / `expectEvents`, `expectNoEvents`,
   `expectException`, `expectFailedWith`, `expectState`, `expectStateMatches`, `expectProduced`),
