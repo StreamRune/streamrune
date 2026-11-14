@@ -111,62 +111,36 @@ class PostgresDeadLetterQueueTest {
   }
 
   /**
-   * Why the ingress bound on {@code userId} is 255 and not a round number someone liked. {@code
-   * dead_letter_queue.user_id} is {@code VARCHAR(255)}, so an identity longer than that cannot be
-   * written to the recovery channel AT ALL: the INSERT fails, {@code VirtualThreadCommandBus}
-   * catches the failure and logs it (the original command failure is what propagates to the
-   * caller), and an already-accepted business command ends up with no dead-letter row and therefore
-   * no replay.
-   *
-   * <p>This test pins the coupling in the direction that matters: {@code IdConstraints.MAX_LENGTH}
-   * is not an arbitrary ceiling, it is this column's width, and widening one without the other
-   * re-opens the silent-loss chain. The ingress door now rejects such an identity before a command
-   * is ever accepted, which is the only point at which anything can be done about it.
+   * The request-context columns and {@code error_type} are recovery and diagnostic data, so they
+   * are {@code TEXT}: a length limit there could only lose the dead-letter row, the command's one
+   * recovery channel. An identity longer than the ingress bound (one that entered through a path
+   * that never crosses the request edge) and an over-long exception class name are stored and read
+   * back verbatim.
    */
   @Test
-  void anIdentityLongerThanTheColumnCannotBeDeadLetteredAtAll() {
-    var overLong = "u".repeat(org.streamrune.core.types.IdConstraints.MAX_LENGTH + 1);
-    var req =
+  void overLongContextValuesAndErrorTypeAreStoredVerbatim() {
+    var longUser = "u".repeat(1000);
+    var longTrace = "t".repeat(1000);
+    var longErrorType = "com.example." + "e".repeat(1000);
+    dlq.publish(
         new DeadLetterQueue.DeadLetterPublishRequest(
             "{}",
             "PlaceOrder",
             CommandId.of("44444444-4444-4444-4444-444444444444"),
             TestStreams.stream("order-4"),
-            "Err",
+            longErrorType,
             "boom",
             1,
             Instant.parse("2026-01-01T00:00:00Z"),
             null,
-            UserId.of(overLong),
-            null,
-            null);
-
-    assertThrows(
-        org.streamrune.core.EventStoreException.class,
-        () -> dlq.publish(req),
-        "an over-column identity must not be silently storable");
-    assertEquals(
-        0L,
-        dlq.countPending(),
-        "no recovery row exists — this is the silent-loss chain the ingress bound closes");
-
-    // Exactly at the bound it stores, so the ingress ceiling is the largest identity the recovery
-    // channel can actually carry — not one character more, not one fewer.
-    dlq.publish(
-        new DeadLetterQueue.DeadLetterPublishRequest(
-            "{}",
-            "PlaceOrder",
-            CommandId.of("55555555-5555-5555-5555-555555555555"),
-            TestStreams.stream("order-5"),
-            "Err",
-            "boom",
-            1,
-            Instant.parse("2026-01-01T00:00:00Z"),
-            null,
-            UserId.of("u".repeat(org.streamrune.core.types.IdConstraints.MAX_LENGTH)),
-            null,
+            UserId.of(longUser),
+            org.streamrune.core.types.TraceId.of(longTrace),
             null));
-    assertEquals(1L, dlq.countPending());
+
+    var entry = dlq.read(10).getFirst();
+    assertEquals(longUser, entry.userId().value());
+    assertEquals(longTrace, entry.traceId().value());
+    assertEquals(longErrorType, entry.errorType());
   }
 
   /**
@@ -1297,17 +1271,16 @@ class PostgresDeadLetterQueueTest {
   }
 
   /**
-   * {@code dead_letter_queue.correlation_id} is {@code VARCHAR(255)}, the width of the request
-   * edge's bound. The correlation id saga dispatch binds — the saga id behind the 16-character
-   * {@code streamrune:saga:} prefix — fits it only for a saga id of at most 239 characters. The
-   * command bus therefore never publishes an entry with one: a command dispatched with a dispatch
-   * cause bound is not dead-lettered, and a reserved correlation id bound without an origin is
-   * refused before the command runs. This pins the column's side of that rule: a longer value is
-   * not storable.
+   * The correlation id saga dispatch binds is the saga id behind the 16-character {@code
+   * streamrune:saga:} prefix, so up to 271 characters. {@code dead_letter_queue.correlation_id} is
+   * {@code TEXT} and stores the longest one verbatim.
    */
   @Test
-  void theReservedCorrelationIdOfTheLongestSagaId_doesNotFitTheColumn() {
-    var tooLong =
+  void theReservedCorrelationIdOfTheLongestSagaId_isStoredVerbatim() {
+    var longest =
+        CorrelationId.of(
+            "streamrune:saga:" + "s".repeat(org.streamrune.core.saga.SagaId.MAX_LENGTH));
+    dlq.publish(
         new DeadLetterQueue.DeadLetterPublishRequest(
             "{}",
             "ReserveStock",
@@ -1317,30 +1290,13 @@ class PostgresDeadLetterQueueTest {
             "msg",
             1,
             Instant.now(),
-            CorrelationId.of("streamrune:saga:" + "s".repeat(255)),
-            null,
-            null,
-            null);
-
-    assertThrows(org.streamrune.core.EventStoreException.class, () -> dlq.publish(tooLong));
-    assertEquals(0L, dlq.countPending());
-
-    dlq.publish(
-        new DeadLetterQueue.DeadLetterPublishRequest(
-            "{}",
-            "ReserveStock",
-            CommandId.of("c0000000-0000-0000-0000-00000000000b"),
-            TestStreams.stream("order-11"),
-            "Err",
-            "msg",
-            1,
-            Instant.now(),
-            CorrelationId.of("streamrune:saga:" + "s".repeat(239)),
+            longest,
             null,
             null,
             null));
-    assertEquals(
-        255, dlq.read(10).getFirst().correlationId().value().length(), "the column's width");
+
+    assertEquals(longest, dlq.read(10).getFirst().correlationId());
+    assertEquals(271, longest.value().length());
   }
 
   @Test

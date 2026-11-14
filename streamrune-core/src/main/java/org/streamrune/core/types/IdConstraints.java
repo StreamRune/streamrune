@@ -8,20 +8,17 @@ package org.streamrune.core.types;
  * request filter turns them into a {@link CorrelationId} / {@link TraceId} with no validation
  * beyond "not blank". Those values reach {@code event_stream.metadata} (plaintext, immutable,
  * outside crypto-shredding's reach) on every event a request produces, {@code
- * audit_log.correlation_id} (an unbounded {@code TEXT} column) and the {@code VARCHAR(255)}
- * request-context columns of {@code dead_letter_queue}. Unbounded, that is a write-amplified
- * storage-and-disclosure channel with no erasure path; a NUL additionally breaks the {@code jsonb}
- * metadata write outright, and CR/LF forge log lines.
+ * audit_log.correlation_id} and the request-context columns of {@code dead_letter_queue} (all
+ * unbounded {@code TEXT}). Unbounded, that is a write-amplified storage-and-disclosure channel with
+ * no erasure path; a NUL additionally breaks the {@code jsonb} metadata write outright, and CR/LF
+ * forge log lines.
  *
  * <p><b>Three values cross that door, not two.</b> {@link UserId} does too, and is bounded there on
  * the same terms. "Already authenticated" is not "bounded and charset-safe": in header-identity
  * mode ({@code X-User-Id} with no resolver wired, or {@code trust-user-id-header=true}) the value
  * is client-supplied outright, and in authenticated mode it is whatever the identity provider
  * asserted — a JWT {@code sub}, a self-service signup username. It reaches every channel listed
- * above, plus one that makes it worse than a disclosure vector: an identity longer than {@link
- * #MAX_LENGTH} cannot be written to {@code dead_letter_queue.user_id VARCHAR(255)} at all, and that
- * INSERT failure is caught and logged inside {@code VirtualThreadCommandBus} rather than propagated
- * — so an already-accepted command's ONLY recovery channel is silently never created. Enforced at
+ * above, and it is the field {@code Authorization.requireOwner} authorizes against. Enforced at
  * {@code fromRequest} and NOT in {@link UserId}'s constructor, for the reason the whole section
  * below gives: that type is rebuilt from stored columns by the DLQ, command-audit and event-audit
  * row mappers.
@@ -73,15 +70,16 @@ package org.streamrune.core.types;
  * things, and none of them is this check. (1) The door is fed exclusively by values already at rest
  * in stores the framework itself wrote — never by a socket read; every path that reads a header
  * goes through {@code fromRequest}. (2) The write those values came from is already committed, so
- * rejecting them now prevents nothing and only destroys the recovery path. (3) The persisted length
- * arm is enforced by the schema: {@code dead_letter_queue}'s context columns are {@code
- * VARCHAR(255)} and {@code saga_state.saga_id} is {@code VARCHAR(255)}, which {@code SagaId}
- * mirrors at construction. (4) The one residual the bound names that a stored value can still reach
- * — CR/LF forging a log line — was never closed by checking here anyway: the id has already been
- * read out of the row, and in {@code SagaTimeoutRunner}'s case already interpolated into a {@code
- * WARNING}, before any context is built. Rejecting on this path makes that strictly worse, by
- * turning one stored row into a failure logged on every poll cycle. Log forging is a property of
- * the SINK and belongs to the {@code LogSanitizer} policy, which is applied per sink.
+ * rejecting them now prevents nothing and only destroys the recovery path. (3) The length of a
+ * stored value is bounded where it is a key: {@code saga_state.saga_id} is {@code VARCHAR(255)},
+ * which {@code SagaId} mirrors at construction. {@code dead_letter_queue}'s context columns are
+ * {@code TEXT}: they are recovery data, and a length limit there could only lose the entry. (4) The
+ * one residual the bound names that a stored value can still reach — CR/LF forging a log line — was
+ * never closed by checking here anyway: the id has already been read out of the row, and in {@code
+ * SagaTimeoutRunner}'s case already interpolated into a {@code WARNING}, before any context is
+ * built. Rejecting on this path makes that strictly worse, by turning one stored row into a failure
+ * logged on every poll cycle. Log forging is a property of the SINK and belongs to the {@code
+ * LogSanitizer} policy, which is applied per sink.
  *
  * <p>The one honest consequence of accepting these values: a replay re-emits a stored id the bound
  * would refuse into the metadata of the new events it produces. That is a one-for-one re-emission
@@ -141,11 +139,13 @@ public final class IdConstraints {
 
   /**
    * Maximum length of a header-sourced identifier and of a client-supplied aggregate id. Matches
-   * the {@code VARCHAR(255)} columns these ids are persisted into (e.g. {@code
-   * dead_letter_queue.correlation_id} / {@code user_id} / {@code trace_id} and {@code
-   * event_stream.aggregate_id} in the PostgreSQL event-store schema), and is an order of magnitude
-   * above any legitimate value — a W3C trace id is 32 hex characters and a generated correlation id
-   * is a 36-character UUID.
+   * the {@code VARCHAR(255)} {@code aggregate_id} columns of the PostgreSQL event-store schema
+   * (e.g. {@code event_stream.aggregate_id}), and is an order of magnitude above any legitimate
+   * value — a W3C trace id is 32 hex characters and a generated correlation id is a 36-character
+   * UUID. The columns that store the header-sourced ids are unbounded ({@code
+   * event_stream.metadata}, and {@code TEXT} in the audit and dead-letter tables); for them the
+   * bound keeps an unauthenticated header from writing an arbitrarily large value into the
+   * immutable log.
    *
    * <p>Counted in UTF-16 code units ({@link String#length()}), the "characters" of the failure
    * message. PostgreSQL counts a {@code VARCHAR(n)} in characters, which in a UTF8 database are

@@ -235,10 +235,9 @@ class StreamRuneRequestFilterTest {
    * The identity crosses the same door. Both arms are covered — the header arm ({@code
    * trust-user-id-header=true}, the trusted-gateway mode) and the authenticated-principal arm,
    * whose value is whatever the IdP asserted and is therefore neither automatically bounded nor
-   * charset-safe. An identity over 255 characters cannot be written to {@code
-   * dead_letter_queue.user_id VARCHAR(255)} at all, and the bus catches and logs that INSERT
-   * failure — so accepting the request would leave an accepted command with no recovery channel and
-   * no signal. Identical on Spring and Micronaut.
+   * charset-safe. An identity over 255 characters would be written into the immutable event
+   * metadata of every event the request produces, and owner checks authorize against it. Identical
+   * on Spring and Micronaut.
    */
   @Test
   void anOverlongUserId_isAnswered400() {

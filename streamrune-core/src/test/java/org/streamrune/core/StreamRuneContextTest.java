@@ -321,11 +321,7 @@ class StreamRuneContextTest {
    * whatever the identity provider asserted, which is not the same thing as charset-safe or
    * bounded. Either way it travels the identical path the correlation/trace bound exists to protect
    * — {@code EventMetadata.userId} into plaintext, immutable, unshreddable {@code
-   * event_stream.metadata} — plus one channel those two share and one they do not: {@code
-   * dead_letter_queue.user_id VARCHAR(255)}, where an over-long identity makes the INSERT fail.
-   * That failure is caught and logged by {@code VirtualThreadCommandBus} (the original command
-   * failure is what propagates), so an accepted command's only recovery channel was silently never
-   * created.
+   * event_stream.metadata} — and it is the field owner checks authorize against.
    *
    * <p><b>Rejected, never truncated.</b> Truncation is the right answer for baggage (telemetry: a
    * capped value loses information and breaks nothing) and the wrong answer for an identity: {@code

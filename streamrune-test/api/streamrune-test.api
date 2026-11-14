@@ -939,7 +939,7 @@ public abstract class org.streamrune.test.SagaDeadLetterStoreContract
   protected static org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry entry(org.streamrune.core.saga.SagaId, long, java.time.Instant)
   protected void row(org.streamrune.core.saga.SagaId, org.streamrune.core.saga.SagaStatus)
   public <init>()
-  public void anEntryWithTheLongestNames_isStoredFoundAndDiscarded()
+  public void anEntryWithTheLongestNamesAndALongErrorType_isStoredFoundAndDiscarded()
   public void clearShieldIfDrained_clearsOnlyWhenNoNamedAndNoResolvedEntryExists()
   public void clearShieldIfDrained_rejectsANullSagaIdOrType_andLeavesTheShield()
   public void countFaultedBacklog_countsShieldedOrFaultedOwners_rowlessNamed_andResolvedNull()

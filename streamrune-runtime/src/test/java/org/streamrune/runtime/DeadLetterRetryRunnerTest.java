@@ -1722,8 +1722,8 @@ class DeadLetterRetryRunnerTest {
     // Repro (chain A). A command that ran under a context built with the plain
     // RequestContext constructor (which does not run the ingress check) carries correlation id
     // "corr\r\nFORGED"; it failed transiently and was dead-lettered, and
-    // dead_letter_queue.correlation_id is VARCHAR(255) (event-store baseline), so a control
-    // character is perfectly storable.
+    // dead_letter_queue.correlation_id is TEXT (event-store baseline), so a control character is
+    // perfectly storable.
     //
     // replayContextFrom() rebuilds a RequestContext from those stored columns. If the ingress bound
     // runs there, EVERY retry throws IllegalArgumentException before the bus is ever called, the
