@@ -3,16 +3,21 @@ package org.streamrune.runtime;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
@@ -24,25 +29,40 @@ import org.streamrune.core.outbox.OutboxStore;
  */
 class OutboxPollerRestartRaceTest {
 
+  private static final OutboxPublisher.BatchResult NOTHING_PUBLISHED =
+      new OutboxPublisher.BatchResult(Set.of(), Map.of());
+
+  /** A store whose every claim returns the same single entry. */
+  private static OutboxStore storeWithOneEntry() {
+    OutboxStore store = mock(OutboxStore.class);
+    when(store.claimedBy()).thenReturn("test-relay");
+    when(store.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
+    when(store.claimLease()).thenReturn(Duration.ofMinutes(4));
+    when(store.loadPending(anyInt()))
+        .thenReturn(List.of(OutboxEntry.pending(OutboxEntryId.of("e1"), "{}", "Event")));
+    return store;
+  }
+
   @Test
   void closeJoinsPollThreadSoRestartDoesNotLeakADuplicateRelay() throws Exception {
     var pollThread = new AtomicReference<Thread>();
     var entered = new CountDownLatch(1);
-    OutboxStore blockingStore = mock(OutboxStore.class);
-    when(blockingStore.claimedBy()).thenReturn("test-relay");
-    when(blockingStore.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
-    when(blockingStore.claimLease()).thenReturn(Duration.ofMinutes(4));
-    when(blockingStore.loadPending(anyInt()))
-        .thenAnswer(RestartRaceTestSupport.parkThenSlowShutdown(pollThread, entered, List.of()));
+    // The poll thread parks in a publish, where close()'s interrupt reaches it; a claim runs with
+    // the interrupt held back.
+    OutboxStore store = storeWithOneEntry();
+    OutboxPublisher blockingPublisher = mock(OutboxPublisher.class);
+    when(blockingPublisher.publishBatch(any(), any(), any()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkThenSlowShutdown(pollThread, entered, NOTHING_PUBLISHED));
 
     var poller =
         OutboxPoller.builder()
-            .outboxStore(blockingStore)
-            .publisher(mock(OutboxPublisher.class))
+            .outboxStore(store)
+            .publisher(blockingPublisher)
             .pollInterval(Duration.ofSeconds(1))
             .build();
     poller.start();
-    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered loadPending");
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered the publish");
 
     poller.close();
 
@@ -60,22 +80,23 @@ class OutboxPollerRestartRaceTest {
     // provably times out while the (slow-shutdown) poll thread is still alive.
     var pollThread = new AtomicReference<Thread>();
     var entered = new CountDownLatch(1);
-    OutboxStore blockingStore = mock(OutboxStore.class);
-    when(blockingStore.claimedBy()).thenReturn("test-relay");
-    when(blockingStore.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
-    when(blockingStore.claimLease()).thenReturn(Duration.ofMinutes(4));
-    when(blockingStore.loadPending(anyInt()))
-        .thenAnswer(RestartRaceTestSupport.parkThenSlowShutdown(pollThread, entered, List.of()));
+    // The poll thread parks in a publish, where close()'s interrupt reaches it; a claim runs with
+    // the interrupt held back.
+    OutboxStore store = storeWithOneEntry();
+    OutboxPublisher blockingPublisher = mock(OutboxPublisher.class);
+    when(blockingPublisher.publishBatch(any(), any(), any()))
+        .thenAnswer(
+            RestartRaceTestSupport.parkThenSlowShutdown(pollThread, entered, NOTHING_PUBLISHED));
 
     var poller =
         OutboxPoller.builder()
-            .outboxStore(blockingStore)
-            .publisher(mock(OutboxPublisher.class))
+            .outboxStore(store)
+            .publisher(blockingPublisher)
             .pollInterval(Duration.ofSeconds(1))
             .closeJoinTimeoutMs(100) // join times out well before the 500ms slow shutdown
             .build();
     poller.start();
-    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered loadPending");
+    assertTrue(entered.await(5, TimeUnit.SECONDS), "poll thread should have entered the publish");
     assertTrue(poller.isStarted());
 
     poller.close(); // join(100ms) times out; the poll thread is still winding down (alive)

@@ -21,7 +21,8 @@ import org.slf4j.LoggerFactory;
  * it.
  *
  * <p>The consecutive-failure counter is exposed via {@link #consecutiveFailures()} so owners can
- * report a degraded (but still running) status while the loop is in backoff-retry.
+ * report a degraded (but still running) status while the loop is in backoff-retry. It is reset when
+ * a poll returns, or earlier by the poll itself through {@link #recordProgress()}.
  *
  * <p>An {@link Error} is different: it is not retryable, so the loop logs it by name at ERROR and
  * rethrows — the loop stops, and the owner decides what a dead thread means.
@@ -117,13 +118,7 @@ final class ResilientPollLoop {
     while (keepRunning.getAsBoolean()) {
       try {
         task.poll();
-        if (consecutiveFailures.get() > 0) {
-          logger.info(
-              "Poll loop '{}' recovered after {} consecutive failure(s)",
-              name,
-              consecutiveFailures.get());
-        }
-        consecutiveFailures.set(0);
+        recordProgress();
         Thread.sleep(idleDelay.get());
       } catch (InterruptedException _) {
         Thread.currentThread().interrupt();
@@ -235,6 +230,25 @@ final class ResilientPollLoop {
       cause = cause.getCause() == cause ? null : cause.getCause();
     }
     return text.toString();
+  }
+
+  /**
+   * Records that the running poll made progress part of the way through: a long poll whose first
+   * steps succeeded, such as an outbox relay that stored the outcome of a batch and goes on to the
+   * next. The failure count, and the degraded state {@link #consecutiveFailures()} reports from it,
+   * clear at once instead of when the poll returns, and the recovery is logged here rather than
+   * after the poll. Called on the loop's own thread from inside the poll task; a call with no
+   * failure counted does nothing.
+   *
+   * @return whether this call cleared a failure count above zero
+   */
+  boolean recordProgress() {
+    int failures = consecutiveFailures.getAndSet(0);
+    if (failures == 0) {
+      return false;
+    }
+    logger.info("Poll loop '{}' recovered after {} consecutive failure(s)", name, failures);
+    return true;
   }
 
   /** Number of consecutive poll failures; {@code 0} when the last poll succeeded. */

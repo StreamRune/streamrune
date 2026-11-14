@@ -184,6 +184,54 @@ class ResilientPollLoopTest {
   }
 
   @Test
+  void progressInsideAPoll_clearsTheFailureCount_andLogsTheRecoveryOnce() throws Exception {
+    var running = new AtomicBoolean(true);
+    var polls = new AtomicInteger();
+    var loop = loop(running);
+    var seenAfterProgress = new java.util.concurrent.CopyOnWriteArrayList<Integer>();
+    var cleared = new java.util.concurrent.CopyOnWriteArrayList<Boolean>();
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ResilientPollLoop.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    ch.qos.logback.classic.Level level = logger.getLevel();
+    logger.setLevel(ch.qos.logback.classic.Level.INFO);
+    try {
+      Thread t =
+          Thread.ofVirtual()
+              .start(
+                  () ->
+                      loop.run(
+                          () -> {
+                            if (polls.incrementAndGet() == 1) {
+                              throw new RuntimeException("transient");
+                            }
+                            // A long poll that made progress part of the way through.
+                            cleared.add(loop.recordProgress());
+                            seenAfterProgress.add(loop.consecutiveFailures());
+                            cleared.add(loop.recordProgress());
+                            running.set(false);
+                          }));
+      t.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(t.isAlive());
+    } finally {
+      logger.setLevel(level);
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+
+    assertEquals(java.util.List.of(0), seenAfterProgress, "cleared inside the poll");
+    assertEquals(java.util.List.of(true, false), cleared, "only the first progress clears it");
+    long recoveries =
+        appender.list.stream()
+            .filter(e -> e.getFormattedMessage().contains("recovered after 1 consecutive"))
+            .count();
+    assertEquals(1, recoveries, "the recovery is logged once");
+  }
+
+  @Test
   void resetsFailureCounterAtStartOfRun() {
     var running = new AtomicBoolean(false); // condition false — run() returns immediately
     var loop = loop(running);
