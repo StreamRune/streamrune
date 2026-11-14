@@ -9,13 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
@@ -477,5 +481,96 @@ class InMemoryEventSubscriptionTest {
   void appendListenerRegistrationRejectsNull() {
     assertThrows(NullPointerException.class, () -> store.addAppendListener(null));
     assertThrows(NullPointerException.class, () -> store.removeAppendListener(null));
+  }
+
+  private static final StreamId STREAM = StreamId.of(TYPE, AggregateId.of("cart-x"));
+
+  private static boolean joined(Thread thread, Duration timeout) throws InterruptedException {
+    return thread.join(timeout);
+  }
+
+  @Test
+  void anAppendFromAnotherThreadDuringADeliveryDoesNotWait_andItsEventIsDelivered()
+      throws Exception {
+    List<String> delivered = new CopyOnWriteArrayList<>();
+    AtomicBoolean workerReturned = new AtomicBoolean();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              for (EventEnvelope e : events) {
+                String sku = ((Added) e.event()).sku();
+                delivered.add(sku);
+                if (sku.equals("first")) {
+                  Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
+                  try {
+                    workerReturned.set(joined(worker, Duration.ofSeconds(5)));
+                  } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                  }
+                }
+              }
+            });
+    sub.start();
+
+    append(STREAM, 1, "first");
+
+    assertTrue(workerReturned.get(), "the worker's append returned inside the delivery");
+    assertEquals(List.of("first", "second"), delivered);
+    assertEquals(2, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void aFailedBatchIsNotRedeliveredByAnAppendThatArrivedDuringIt() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (calls.incrementAndGet() == 1) {
+                Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
+                try {
+                  joined(worker, Duration.ofSeconds(5));
+                } catch (InterruptedException interrupted) {
+                  Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("first batch fails");
+              }
+            });
+    sub.start();
+
+    append(STREAM, 1, "first");
+
+    assertEquals(1, calls.get());
+    assertEquals(1, sub.deliveryFailureCount());
+    sub.poll();
+    assertEquals(2, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void aPollWaitsForADeliveryInProgressOnAnotherThread() throws Exception {
+    CountDownLatch inListener = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              inListener.countDown();
+              try {
+                release.await(5, TimeUnit.SECONDS);
+              } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+              }
+            });
+    sub.start();
+    Thread appender = Thread.ofVirtual().start(() -> append(STREAM, 1, "first"));
+    assertTrue(inListener.await(5, TimeUnit.SECONDS));
+
+    Thread poller = Thread.ofVirtual().start(sub::poll);
+    assertFalse(joined(poller, Duration.ofMillis(200)), "poll waits");
+    release.countDown();
+
+    assertTrue(joined(poller, Duration.ofSeconds(5)));
+    assertTrue(joined(appender, Duration.ofSeconds(5)));
   }
 }

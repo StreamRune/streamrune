@@ -650,6 +650,8 @@ assertEquals(1, captured.sagaOrigin().hop());
 assertEquals(CausationId.of(initiated.metadata().eventId().value()), captured.causationId());
 ```
 
+`InMemoryEventSubscription` delivers on the appending thread. An append made by a second thread while a delivery is in progress returns before its event is delivered: the delivery in progress delivers it, in offset order, before the call that started that delivery returns. `poll()` waits for a delivery in progress and then delivers everything pending.
+
 ### A hand-written `CommandBus` double is a bus of your own
 
 Every shipped command bus and query bus begins a dispatch with

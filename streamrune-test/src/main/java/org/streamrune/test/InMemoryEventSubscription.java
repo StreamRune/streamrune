@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.ScopedValueReads;
@@ -47,8 +48,11 @@ import org.streamrune.core.types.GlobalOffset;
  * (it executes a command, as a saga runner or a process manager does) or calls {@link #poll()}, the
  * delivery in progress on that thread picks the new events up after the batch in hand is
  * acknowledged, and delivers them before the outermost {@code append} returns. Every event is
- * delivered once, in offset order. An append made by another thread waits for the delivery in
- * progress, so a listener must not block on work it handed to another thread that appends.
+ * delivered once, in offset order. An append made by another thread while a delivery is in progress
+ * does not wait for it: it returns at once, and the delivery in progress delivers its events, in
+ * offset order, before the call that started that delivery returns. A listener may therefore block
+ * on work it handed to another thread that appends. {@link #poll()} and {@link #start()} do wait
+ * for a delivery in progress, and then deliver everything pending.
  *
  * <p><b>What the listener finds bound.</b> A production subscription calls its listener on a thread
  * of its own, where no request context, saga flag or dispatch cause is bound. This subscription
@@ -77,8 +81,8 @@ import org.streamrune.core.types.GlobalOffset;
  *       still holds, where in production it waits for the lock to be released.
  * </ul>
  *
- * <p>Thread-safe; concurrent appends deliver batches in strict offset order (delivery is serialized
- * on an internal lock).
+ * <p>Thread-safe; batches are delivered in strict offset order, one delivery at a time (delivery is
+ * serialized on an internal lock).
  */
 public final class InMemoryEventSubscription implements EventSubscription {
 
@@ -95,8 +99,9 @@ public final class InMemoryEventSubscription implements EventSubscription {
   private final AtomicLong droppedNotifications = new AtomicLong();
   private final AtomicLong deliveryFailures = new AtomicLong();
 
-  private final Object deliveryLock = new Object();
-  private long lastDeliveredOffset; // guarded by deliveryLock
+  private final ReentrantLock deliveryLock = new ReentrantLock();
+  private final AtomicBoolean deliveryRequested = new AtomicBoolean();
+  private volatile long lastDeliveredOffset; // written under deliveryLock
   private volatile Thread deliveringThread; // written under deliveryLock
 
   /** Creates a subscription delivering batches of at most 100 events. */
@@ -132,7 +137,7 @@ public final class InMemoryEventSubscription implements EventSubscription {
     eventStore.addAppendListener(appendListener);
     // Mirror the production poll-after-LISTEN: events appended before start (whose
     // notifications were necessarily missed) are caught up immediately.
-    deliverPending();
+    deliverPending(true);
   }
 
   @Override
@@ -166,14 +171,12 @@ public final class InMemoryEventSubscription implements EventSubscription {
     if (!running) {
       throw new IllegalStateException("Subscription is not running");
     }
-    deliverPending();
+    deliverPending(true);
   }
 
   /** Returns the highest global offset acknowledged by the listener so far. */
   public long lastDeliveredOffset() {
-    synchronized (deliveryLock) {
-      return lastDeliveredOffset;
-    }
+    return lastDeliveredOffset;
   }
 
   /** Returns how many notifications were discarded while dropping was enabled. */
@@ -196,37 +199,61 @@ public final class InMemoryEventSubscription implements EventSubscription {
       droppedNotifications.incrementAndGet();
       return; // dropped notifications are never redelivered (at-most-once)
     }
-    deliverPending();
+    deliverPending(false);
   }
 
-  private void deliverPending() {
+  private void deliverPending(boolean wait) {
     if (Thread.currentThread() == deliveringThread) {
       // Called from inside the listener (its own append, or a poll): the loop below is already
       // running on this thread and reads the new events once the batch in hand is acknowledged.
       return;
     }
-    synchronized (deliveryLock) {
-      deliveringThread = Thread.currentThread();
+    deliveryRequested.set(true);
+    if (wait) {
+      deliveryLock.lock();
+    } else if (!deliveryLock.tryLock()) {
+      return; // the delivery in progress sees the request after it releases the lock
+    }
+    while (true) {
+      boolean failed;
       try {
-        while (true) {
-          List<EventEnvelope> batch =
-              eventStore.readGlobalStream(GlobalOffset.of(lastDeliveredOffset), batchSize);
-          if (batch.isEmpty()) {
-            return;
-          }
-          try {
-            deliver(batch);
-          } catch (RuntimeException _) {
-            // EventListener contract: checkpoint NOT advanced; the same batch is redelivered on
-            // the next notification or poll().
-            deliveryFailures.incrementAndGet();
-            return;
-          }
-          lastDeliveredOffset = batch.getLast().globalOffset().value();
-        }
+        deliveryRequested.set(false);
+        failed = !drainPending();
       } finally {
-        deliveringThread = null;
+        deliveryLock.unlock();
       }
+      if (failed) {
+        deliveryRequested.set(false); // a failed batch waits for the next notification or poll
+        return;
+      }
+      if (!deliveryRequested.get() || !deliveryLock.tryLock()) {
+        return;
+      }
+    }
+  }
+
+  /** Reads and delivers pages until none is pending; false when the listener threw. */
+  private boolean drainPending() {
+    deliveringThread = Thread.currentThread();
+    try {
+      while (true) {
+        List<EventEnvelope> batch =
+            eventStore.readGlobalStream(GlobalOffset.of(lastDeliveredOffset), batchSize);
+        if (batch.isEmpty()) {
+          return true;
+        }
+        try {
+          deliver(batch);
+        } catch (RuntimeException _) {
+          // EventListener contract: checkpoint NOT advanced; the same batch is redelivered on
+          // the next notification or poll().
+          deliveryFailures.incrementAndGet();
+          return false;
+        }
+        lastDeliveredOffset = batch.getLast().globalOffset().value();
+      }
+    } finally {
+      deliveringThread = null;
     }
   }
 
