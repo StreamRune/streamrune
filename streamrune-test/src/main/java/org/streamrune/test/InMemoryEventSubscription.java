@@ -57,10 +57,10 @@ import org.streamrune.core.types.GlobalOffset;
  * that fails leaves them pending with its batch. When the listener waits for the threads it handed
  * work to, their events are delivered before the listener's own delivery returns. That work must
  * not call {@link #poll()}, which waits for the delivery the listener is part of and would
- * deadlock, and must not need a lock that the appending thread holds, such as the aggregate lock of
- * the command that appended the event: that lock is held until the delivery returns, and the
- * listener waits for the work. {@link #poll()} and {@link #start()} do wait for a delivery in
- * progress, and then deliver everything pending.
+ * deadlock, and must not need a lock that the thread running the listener holds, such as the
+ * aggregate lock of the command whose append started the delivery: that lock is held until the
+ * delivery returns, and the listener waits for the work. {@link #poll()} and {@link #start()} do
+ * wait for a delivery in progress, and then deliver everything pending.
  *
  * <p><b>What the listener finds bound.</b> A production subscription calls its listener on a thread
  * of its own, where no request context, saga flag or dispatch cause is bound. This subscription
@@ -86,8 +86,8 @@ import org.streamrune.core.types.GlobalOffset;
  *       own in production.
  *   <li>Everything else the calling thread holds stays visible to the listener: scoped values other
  *       than the three above, thread-locals, and locks. A command the listener executes on the
- *       stream of the command that appended the event re-enters the stream lock that command still
- *       holds, where in production it waits for the lock to be released.
+ *       stream of the command whose append started the delivery re-enters the stream lock that
+ *       command still holds, where in production it waits for the lock to be released.
  * </ul>
  *
  * <p>Thread-safe; batches are delivered in strict offset order, one delivery at a time (delivery is
