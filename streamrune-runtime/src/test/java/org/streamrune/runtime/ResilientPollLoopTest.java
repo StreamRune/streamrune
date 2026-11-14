@@ -229,11 +229,22 @@ class ResilientPollLoopTest {
 
     assertEquals(java.util.List.of(0), seenAfterProgress, "cleared inside the poll");
     assertEquals(java.util.List.of(true, false), cleared, "only the first progress clears it");
+    long progress =
+        appender.list.stream()
+            .filter(
+                e ->
+                    e.getFormattedMessage()
+                        .startsWith("Poll loop 'test-loop' made progress after 1 failed poll(s)"))
+            .count();
+    assertEquals(1, progress, "the progress is logged once");
     long recoveries =
         appender.list.stream()
-            .filter(e -> e.getFormattedMessage().contains("recovered after 1 consecutive"))
+            .filter(
+                e ->
+                    e.getFormattedMessage()
+                        .startsWith("Poll loop 'test-loop' recovered after 1 consecutive"))
             .count();
-    assertEquals(1, recoveries, "the recovery is logged once");
+    assertEquals(1, recoveries, "the recovery is logged once, when the poll returns");
   }
 
   /** Runs {@code task} in {@code loop} on a virtual thread and returns the loop's log lines. */
@@ -280,7 +291,10 @@ class ResilientPollLoopTest {
     assertEquals(3, polls.get());
     assertEquals(2, loop.consecutiveFailures(), "a stopped poll does not clear the count");
     assertTrue(
-        events.stream().noneMatch(e -> e.getFormattedMessage().contains("recovered")),
+        events.stream()
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .filter(m -> m.contains("'test-loop'"))
+            .noneMatch(m -> m.contains("recovered") || m.contains("made progress")),
         () -> "a stopped poll is not logged as a recovery: " + events);
   }
 
@@ -306,11 +320,12 @@ class ResilientPollLoopTest {
             });
 
     // The backoff follows the failed polls in a row, whatever progress each made before failing.
-    var failureLines =
+    var lines =
         events.stream()
             .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
-            .filter(m -> m.contains("failed ("))
+            .filter(m -> m.startsWith("Poll loop 'test-loop' "))
             .toList();
+    var failureLines = lines.stream().filter(m -> m.contains("failed (")).toList();
     assertEquals(3, failureLines.size(), failureLines::toString);
     assertTrue(failureLines.get(0).contains("(1 consecutive failure(s))"), failureLines::toString);
     assertTrue(failureLines.get(1).contains("(2 consecutive failure(s))"), failureLines::toString);
@@ -318,6 +333,64 @@ class ResilientPollLoopTest {
     // Every change of the count reaches the listener: each failure, and each clearing.
     assertEquals(java.util.List.of(1, 0, 2, 0, 3, 0), reported);
     assertEquals(0, loop.consecutiveFailures());
+    // The progress inside a failing poll is not called a recovery: the run of failures goes on.
+    var progressLines = lines.stream().filter(m -> m.contains("made progress after")).toList();
+    // The first poll had no failure before it to clear.
+    assertEquals(2, progressLines.size(), lines::toString);
+    assertTrue(progressLines.get(0).contains("after 1 failed poll(s) in a row"), lines::toString);
+    assertTrue(progressLines.get(1).contains("after 2 failed poll(s) in a row"), lines::toString);
+    var recoveries = lines.stream().filter(m -> m.contains("recovered after")).toList();
+    assertEquals(
+        java.util.List.of("Poll loop 'test-loop' recovered after 3 consecutive failure(s)"),
+        recoveries);
+  }
+
+  @Test
+  void aListenerThatThrows_isLogged_andTheLoopKeepsCountingAndRetrying() throws Exception {
+    var running = new AtomicBoolean(true);
+    var polls = new AtomicInteger();
+    var loop =
+        new ResilientPollLoop(
+            "test-loop",
+            running::get,
+            () -> IDLE,
+            INITIAL_BACKOFF,
+            MAX_BACKOFF,
+            count -> {
+              throw new IllegalStateException("gauge backend down");
+            });
+
+    var events =
+        runLogged(
+            loop,
+            () -> {
+              if (polls.incrementAndGet() <= 2) {
+                throw new RuntimeException("database unreachable");
+              }
+              running.set(false);
+            });
+
+    assertEquals(3, polls.get(), "the loop survives the listener and retries");
+    assertEquals(0, loop.consecutiveFailures());
+    var lines =
+        events.stream()
+            .filter(e -> e.getFormattedMessage().startsWith("Poll loop 'test-loop' "))
+            .toList();
+    // The polls' own failures are still logged, with the poll's exception.
+    var failures =
+        lines.stream().filter(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR).toList();
+    assertEquals(2, failures.size(), lines::toString);
+    assertTrue(failures.get(1).getFormattedMessage().contains("(2 consecutive failure(s))"));
+    assertEquals("database unreachable", failures.get(1).getThrowableProxy().getMessage());
+    // Each report the listener refused: 1, 2, and the clearing to 0.
+    var refused =
+        lines.stream()
+            .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .toList();
+    assertEquals(3, refused.size(), lines::toString);
+    assertTrue(refused.get(0).contains("could not report its failure count 1"), refused::toString);
+    assertTrue(refused.get(2).contains("could not report its failure count 0"), refused::toString);
   }
 
   @Test

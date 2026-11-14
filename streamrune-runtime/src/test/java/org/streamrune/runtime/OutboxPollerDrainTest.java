@@ -1371,7 +1371,62 @@ class OutboxPollerDrainTest {
     assertThat(poller.consecutiveFailures()).as("the stop clears nothing").isEqualTo(2);
     assertThat(appender.list)
         .extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
-        .noneMatch(m -> m.contains("recovered"));
+        .filteredOn(m -> m.startsWith("Poll loop 'outbox-poller' "))
+        .noneMatch(m -> m.contains("recovered") || m.contains("made progress"));
+  }
+
+  @Test
+  @Timeout(20)
+  void aGaugeThatThrows_whileCyclesFail_neitherStopsNorHidesTheRelay() {
+    // The degradation gauge is written from the poll loop's failure path too: a metrics backend
+    // that throws there must cost a log line, not the relay thread.
+    var inner = backlog(30);
+    var claims = new AtomicInteger();
+    var store =
+        withMethod(
+            inner,
+            "loadPending",
+            args -> {
+              if (claims.incrementAndGet() <= 2) {
+                throw new IllegalStateException("database unreachable");
+              }
+              return inner.loadPending((Integer) args[0]);
+            });
+    var gaugeCalls = new AtomicInteger();
+    var metrics =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordOutboxRelayDegradation(long consecutiveFailures) {
+            gaugeCalls.incrementAndGet();
+            throw new IllegalStateException("metrics backend down");
+          }
+        };
+    var relay = new AtomicReference<OutboxPoller>();
+    var failuresSeen = new CopyOnWriteArrayList<Integer>();
+    var publisher =
+        new RecordingPublisher(
+            entries -> {
+              failuresSeen.add(relay.get().consecutiveFailures());
+              return RecordingPublisher.allConfirmed(entries);
+            });
+    var poller =
+        poller(store, publisher).pollInterval(Duration.ofMillis(20)).metrics(metrics).build();
+    relay.set(poller);
+
+    poller.start();
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(10))
+          .until(() -> count(inner, OutboxStatus.DELIVERED) == 30);
+      assertThat(poller.isAlive()).isTrue();
+    } finally {
+      poller.close();
+    }
+
+    // Two failed cycles were counted although every gauge write threw, then the drain went on.
+    assertThat(failuresSeen).first().isEqualTo(2);
+    assertThat(gaugeCalls.get()).isGreaterThanOrEqualTo(4);
+    assertThat(poller.consecutiveFailures()).isZero();
   }
 
   @Test

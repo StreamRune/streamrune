@@ -445,10 +445,11 @@ public final class OutboxPoller implements AutoCloseable {
   private record PollThread(Thread thread, InterruptDeferral interrupts) {}
 
   /**
-   * Number of poll cycles that failed in a row; {@code 0} when the last cycle returned, and from
-   * the moment the running cycle stores the outcome of a batch until the next failure. A cycle that
-   * stores a batch and then fails still counts as one more failure in a row. A non-zero value means
-   * the relay is degraded — still running, retrying with backoff.
+   * Number of poll cycles that failed in a row; {@code 0} once a cycle completes, and from the
+   * moment the running cycle stores the outcome of a batch until the next failure. A cycle that
+   * stores a batch and then fails still counts as one more failure in a row; a cycle that the stop
+   * ends before its claim clears nothing. A non-zero value means the relay is degraded — still
+   * running, retrying with backoff.
    */
   public int consecutiveFailures() {
     return pollLoop.consecutiveFailures();
@@ -721,9 +722,8 @@ public final class OutboxPoller implements AutoCloseable {
             SpanLink.NONE);
     try {
       BatchOutcome outcome = publishAndRecord(pending, claimBase, lease, interrupts);
-      scope.setAttribute(
-          TraceAttributes.OUTBOX_PUBLISHED, (long) outcome.result().confirmed().size());
-      scope.setAttribute(TraceAttributes.OUTBOX_FAILED, (long) outcome.result().failed().size());
+      scope.setAttribute(TraceAttributes.OUTBOX_PUBLISHED, (long) outcome.confirmed());
+      scope.setAttribute(TraceAttributes.OUTBOX_FAILED, (long) outcome.failed().size());
       scope.recordSuccess();
       return outcome;
     } catch (Throwable t) {
@@ -735,10 +735,11 @@ public final class OutboxPoller implements AutoCloseable {
   }
 
   /**
-   * What one batch came to: the publisher's result; {@code end}, why the batch ends the cycle, or
-   * {@code null} when it resolved; the entries it failed; and the streams it delivered. A batch
-   * resolved when at least one entry was confirmed and marked delivered, every other claimed entry
-   * failed for itself alone (an ENTRY rejection, a terminal {@code FAILED}, a lease lost to another
+   * What one batch came to: how many entries the copy of the publisher's confirmed set held, which
+   * every decision and the batch's span read; {@code end}, why the batch ends the cycle, or {@code
+   * null} when it resolved; the entries it failed; and the streams it delivered. A batch resolved
+   * when at least one entry was confirmed and marked delivered, every other claimed entry failed
+   * for itself alone (an ENTRY rejection, a terminal {@code FAILED}, a lease lost to another
    * relay), and no stop was requested while it ran. A batch that delivered nothing has not
    * resolved: rejections with no delivery beside them are no evidence of a healthy transport (an
    * exchange missing after a deploy, a receiver answering 404 to everything), and draining would
@@ -748,10 +749,7 @@ public final class OutboxPoller implements AutoCloseable {
    * cycle ends and the relay waits its poll interval.
    */
   private record BatchOutcome(
-      OutboxPublisher.BatchResult result,
-      CycleEnd end,
-      Set<OutboxEntryId> failed,
-      Set<StreamId> deliveredStreams) {}
+      int confirmed, CycleEnd end, Set<OutboxEntryId> failed, Set<StreamId> deliveredStreams) {}
 
   /** Publishes one claimed, non-empty batch and stores its outcome. */
   private BatchOutcome publishAndRecord(
@@ -1050,7 +1048,7 @@ public final class OutboxPoller implements AutoCloseable {
     } else {
       end = null;
     }
-    return new BatchOutcome(result, end, failedIds, deliveredStreams);
+    return new BatchOutcome(confirmed.size(), end, failedIds, deliveredStreams);
   }
 
   /**

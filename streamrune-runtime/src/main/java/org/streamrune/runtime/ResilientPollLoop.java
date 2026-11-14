@@ -28,7 +28,8 @@ import org.slf4j.LoggerFactory;
  * reports: the backoff follows the polls that failed in a row, so a poll that makes progress and
  * then fails still backs off longer than the failed poll before it. A poll that returns because its
  * owner's stop interrupted the thread is no evidence of a recovery and clears nothing. An owner
- * that keeps the counter in a gauge can pass a listener that hears every change at once.
+ * that keeps the counter in a gauge can pass a listener that hears every change at once; a listener
+ * that throws is logged at WARN and does not end the loop.
  *
  * <p>An {@link Error} is different: it is not retryable, so the loop logs it by name at ERROR and
  * rethrows — the loop stops, and the owner decides what a dead thread means.
@@ -76,14 +77,12 @@ final class ResilientPollLoop {
   private final Duration maxBackoff;
   private final IntConsumer failureCountListener;
 
-  /** What {@link #consecutiveFailures()} reports; cleared by progress. */
-  private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
-
   /**
-   * Polls that failed in a row; drives the backoff. Cleared only when a poll returns. Read and
-   * written on the loop's own thread only.
+   * What {@link #consecutiveFailures()} reports: the polls that failed in a row, cleared by
+   * progress. The backoff follows its own count, local to each {@link #run(PollTask)}, which
+   * progress does not clear.
    */
-  private int failedPollsInARow;
+  private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
 
   /**
    * Creates a resilient poll loop.
@@ -108,8 +107,9 @@ final class ResilientPollLoop {
    * Creates a resilient poll loop that reports every change of {@link #consecutiveFailures()}.
    *
    * @param failureCountListener called on the loop's thread with the new count whenever it changes:
-   *     after a failed poll, and when progress or a returned poll clears it (required; must not
-   *     throw)
+   *     after a failed poll, when progress or a returned poll clears it, and when a run starts with
+   *     a count left by the run before (required). A {@link RuntimeException} it throws is logged
+   *     at WARN and the loop goes on
    * @see #ResilientPollLoop(String, BooleanSupplier, Supplier, Duration, Duration)
    */
   ResilientPollLoop(
@@ -151,9 +151,11 @@ final class ResilientPollLoop {
    * thread is interrupted.
    */
   void run(PollTask task) {
-    failedPollsInARow = 0;
+    // The polls of this run that failed in a row: the backoff's input. Local, so a run that is
+    // still unwinding on an old thread cannot race a new run of the same loop.
+    int failedPollsInARow = 0;
     if (consecutiveFailures.getAndSet(0) != 0) {
-      failureCountListener.accept(0);
+      reportFailureCount(0);
     }
     while (keepRunning.getAsBoolean()) {
       try {
@@ -162,8 +164,16 @@ final class ResilientPollLoop {
         // before it did any work (a relay stopped before its claim): no evidence that the failure
         // is over. The sleep below ends the loop.
         if (!Thread.currentThread().isInterrupted()) {
-          failedPollsInARow = 0;
-          recordProgress();
+          if (consecutiveFailures.getAndSet(0) != 0) {
+            reportFailureCount(0);
+          }
+          if (failedPollsInARow > 0) {
+            logger.info(
+                "Poll loop '{}' recovered after {} consecutive failure(s)",
+                name,
+                failedPollsInARow);
+            failedPollsInARow = 0;
+          }
         }
         Thread.sleep(idleDelay.get());
       } catch (InterruptedException _) {
@@ -172,7 +182,7 @@ final class ResilientPollLoop {
       } catch (RuntimeException e) {
         int failures = ++failedPollsInARow;
         consecutiveFailures.set(failures);
-        failureCountListener.accept(failures);
+        reportFailureCount(failures);
         Duration backoff = backoffDelay(failures);
         // Read once, before logging, and reuse below for the retry decision. keepRunning may
         // already be false by the time we get here (e.g. a terminal read-poison signal sets it
@@ -284,10 +294,10 @@ final class ResilientPollLoop {
    * Records that the running poll made progress part of the way through: a long poll whose first
    * steps succeeded, such as an outbox relay that stored the outcome of a batch and goes on to the
    * next. The count {@link #consecutiveFailures()} reports, and the degraded state read from it,
-   * clear at once instead of when the poll returns, and the recovery is logged here rather than
-   * after the poll. The backoff is not reset: if the poll still fails, it counts as one more
-   * failure in a row. Called on the loop's own thread from inside the poll task; a call with no
-   * failure counted does nothing.
+   * clear at once instead of when the poll returns, and the progress is logged here. The run of
+   * failures is not over until the poll returns: if it still fails, that is one more failure in a
+   * row, and the backoff grows; once it returns, the loop logs the recovery. Called on the loop's
+   * own thread from inside the poll task; a call with no failure counted does nothing.
    *
    * @return whether this call cleared a failure count above zero
    */
@@ -296,14 +306,31 @@ final class ResilientPollLoop {
     if (failures == 0) {
       return false;
     }
-    failureCountListener.accept(0);
-    logger.info("Poll loop '{}' recovered after {} consecutive failure(s)", name, failures);
+    reportFailureCount(0);
+    logger.info(
+        "Poll loop '{}' made progress after {} failed poll(s) in a row; reported healthy again,"
+            + " and a failure before this poll ends still counts as the next in the row",
+        name,
+        failures);
     return true;
   }
 
   /**
-   * Number of polls that failed in a row; {@code 0} when the last poll returned, or when the
-   * running poll has reported progress since the last failure.
+   * Hands the new failure count to the listener. A listener that throws must not end the loop, nor
+   * hide the failure of the poll that is being counted: it is logged here and the loop goes on.
+   */
+  private void reportFailureCount(int count) {
+    try {
+      failureCountListener.accept(count);
+    } catch (RuntimeException e) {
+      logger.warn(
+          "Poll loop '{}' could not report its failure count {}; the loop goes on", name, count, e);
+    }
+  }
+
+  /**
+   * Number of polls that failed in a row; {@code 0} when the last poll returned (unless the owner's
+   * stop ended it), or when the running poll has reported progress since the last failure.
    */
   int consecutiveFailures() {
     return consecutiveFailures.get();
