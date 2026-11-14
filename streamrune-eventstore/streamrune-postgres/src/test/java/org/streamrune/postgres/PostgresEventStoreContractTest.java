@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
@@ -51,7 +52,7 @@ class PostgresEventStoreContractTest extends EventStoreContract {
   protected EventStore newStore(Setup setup) {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("TRUNCATE event_stream, command_inbox, snapshot_store");
+      stmt.execute("TRUNCATE event_stream, command_inbox, snapshot_store, outbox_events");
       stmt.execute("UPDATE global_offset_sequence SET next_value = 0 WHERE id = 1");
     } catch (SQLException e) {
       throw new IllegalStateException(e);
@@ -80,7 +81,19 @@ class PostgresEventStoreContractTest extends EventStoreContract {
         .upcasters(setup.upcasters())
         .migrations(setup.migrations())
         .commandInbox(new PostgresCommandInbox(source))
+        .outboxStore(new PostgresOutboxStore(source))
+        .outboxEventMapper(OUTBOX_MAPPER)
         .build();
+  }
+
+  @Override
+  protected boolean supportsTransactionalOutbox() {
+    return true;
+  }
+
+  @Override
+  protected OutboxStore outboxOf(EventStore store) {
+    return new PostgresOutboxStore(dataSource);
   }
 
   @Override

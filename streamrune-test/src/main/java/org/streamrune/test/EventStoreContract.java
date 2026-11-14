@@ -56,6 +56,11 @@ import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxStatus;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanLink;
@@ -186,6 +191,9 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       stored before, under the same offsets and versions, and continues every stream and the
  *       global order. It reads them with its own setup: its upcasters, migrations, registry and
  *       crypto engine.
+ *   <li><b>Transactional outbox.</b> For a store that {@link #supportsTransactionalOutbox()}: an
+ *       append stores the entries of its events with them, and an append that is refused or
+ *       replayed stores none.
  *   <li><b>Several instances.</b> For a store that {@link #supportsMultipleInstances()}: the
  *       concurrency cases hold with their workers split over two instances over the same data, the
  *       second one opened by {@link #reopen(EventStore, Setup)} and used alongside the first: one
@@ -274,6 +282,26 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * Whether the store writes outbox entries with its appends (Transactional outbox in the {@link
+   * EventStore} javadoc); {@code false} by default, since no method of the SPI reaches the outbox
+   * and the suite cannot see the entries without {@link #outboxOf(EventStore)}. A store that
+   * returns {@code true} is built by {@link #newStore(Setup)} and {@link #reopen(EventStore,
+   * Setup)} with {@link #OUTBOX_MAPPER}, over empty outbox storage in the case of {@code newStore}.
+   */
+  protected boolean supportsTransactionalOutbox() {
+    return false;
+  }
+
+  /**
+   * The {@link OutboxStore} the relay reads the entries {@code store} writes through; called only
+   * when {@link #supportsTransactionalOutbox()}. The suite reads it with {@link
+   * OutboxStore#findByStatus}, which claims nothing.
+   */
+  protected OutboxStore outboxOf(EventStore store) {
+    throw new UnsupportedOperationException("the store writes no outbox entries");
+  }
+
+  /**
    * Purges the snapshot of {@code streamId} as the store's {@code SnapshotPurger} does, raising the
    * stream's purge generation, and returns {@code true}. The default returns {@code false}: the
    * store keeps no purge record, so the purge cases are skipped and the case of a store without a
@@ -358,6 +386,19 @@ public abstract class EventStoreContract {
     }
   }
 
+  /**
+   * The outbox mapper of a store that {@link #supportsTransactionalOutbox()}: one pending entry per
+   * event, under the event's id, with the event's type as its payload type and the event's stream.
+   */
+  public static final OutboxEventMapper OUTBOX_MAPPER =
+      event ->
+          List.of(
+              OutboxEntry.pending(
+                  OutboxEntryId.of(event.metadata().eventId().value()),
+                  "{}",
+                  event.eventType().value(),
+                  event.streamId()));
+
   /** The event type name the contract's events are stored under. */
   public static final EventType EVENT_TYPE = new EventType("ContractEvent");
 
@@ -425,6 +466,20 @@ public abstract class EventStoreContract {
 
   protected List<EventEnvelope> global() {
     return store.readGlobalStream(GlobalOffset.initial(), 10_000);
+  }
+
+  /**
+   * The ids of the pending outbox entries of {@code store}, in the order the store returns them.
+   */
+  protected List<String> outboxIds(EventStore store) {
+    return outboxOf(store).findByStatus(OutboxStatus.PENDING, 10_000).stream()
+        .map(entry -> entry.id().value())
+        .toList();
+  }
+
+  /** The ids of {@code events}, as their outbox entries carry them. */
+  protected static List<String> entryIds(List<EventEnvelope> events) {
+    return events.stream().map(e -> e.metadata().eventId().value()).toList();
   }
 
   protected static List<Long> versions(List<EventEnvelope> events) {
@@ -2186,6 +2241,43 @@ public abstract class EventStoreContract {
         () -> appendWithKey(A, 0, 1, IdempotencyKey.of("key-unsupported"), COMMAND_TYPE));
 
     assertTrue(stored(A).isEmpty());
+  }
+
+  // ── Transactional outbox ────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void anAppendStoresAnOutboxEntryForEachOfItsEvents() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+
+    store.append(A, events(A, 1, 2), Version.initial());
+    store.append(B, events(B, 1, 1), Version.initial());
+
+    assertEquals(Set.copyOf(entryIds(global())), Set.copyOf(outboxIds(store)));
+    assertEquals(3, outboxIds(store).size());
+  }
+
+  @Test
+  public void anAppendRefusedForItsVersionStoresNoOutboxEntry() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    assertThrows(
+        OptimisticLockException.class, () -> store.append(A, events(A, 1, 2), Version.initial()));
+
+    assertEquals(entryIds(stored(A)), outboxIds(store));
+  }
+
+  @Test
+  public void aReplayedKeyStoresNoOutboxEntry() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-outbox");
+    appendWithKey(A, 0, 2, key, COMMAND_TYPE);
+
+    assertTrue(appendWithKey(A, 0, 2, key, COMMAND_TYPE).alreadyApplied());
+
+    assertEquals(Set.copyOf(entryIds(stored(A))), Set.copyOf(outboxIds(store)));
+    assertEquals(2, outboxIds(store).size());
   }
 
   // ── Reopening over the same data ────────────────────────────────────────────────────────────
