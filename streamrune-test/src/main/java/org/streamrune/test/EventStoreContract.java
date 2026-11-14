@@ -1545,6 +1545,38 @@ public abstract class EventStoreContract {
   }
 
   @Test
+  public void appendRefusesANullExpectedVersionWhateverTheEventListAndStoresNothing() {
+    var refusedEmpty =
+        assertThrows(NullPointerException.class, () -> store.append(A, List.of(), null));
+    var refusedFilled =
+        assertThrows(NullPointerException.class, () -> store.append(A, events(A, 1, 2), null));
+
+    assertEquals("expectedVersion is required", refusedEmpty.getMessage());
+    assertEquals("expectedVersion is required", refusedFilled.getMessage());
+    assertTrue(global().isEmpty());
+  }
+
+  @Test
+  public void appendWithKeyRefusesANullExpectedVersionWhateverTheEventListAndClaimsNothing() {
+    assumeTrue(supportsIdempotentAppend(), "the store does not implement appendWithKey");
+    IdempotencyKey key = IdempotencyKey.of("key-null-expected-version");
+
+    var refusedEmpty =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, List.of(), null, key, COMMAND_TYPE));
+    var refusedFilled =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, events(A, 1, 2), null, key, COMMAND_TYPE));
+
+    assertEquals("expectedVersion is required", refusedEmpty.getMessage());
+    assertEquals("expectedVersion is required", refusedFilled.getMessage());
+    assertTrue(global().isEmpty());
+    assertFalse(appendWithKey(A, 0, 1, key, COMMAND_TYPE).alreadyApplied(), "the key is unclaimed");
+  }
+
+  @Test
   public void loadRefusesANullStream() {
     assertThrows(NullPointerException.class, () -> store.load(null));
     assertThrows(NullPointerException.class, () -> store.load(null, 0));

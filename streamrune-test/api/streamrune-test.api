@@ -287,6 +287,8 @@ public abstract class org.streamrune.test.EventStoreContract
   public void anUpcasterReturningDataTheClassCannotBindFailsWithAnEventDeserializationException()
   public void anUpcasterThatThrowsFailsTheReadWithAnEventDeserializationException()
   public void appendRefusesANullArgumentAndStoresNothing()
+  public void appendRefusesANullExpectedVersionWhateverTheEventListAndStoresNothing()
+  public void appendWithKeyRefusesANullExpectedVersionWhateverTheEventListAndClaimsNothing()
   public void appendingTheSameEnvelopeTwiceStoresTwoEvents()
   public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceAcrossInstances() throws java.lang.Exception
   public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset() throws java.lang.Exception

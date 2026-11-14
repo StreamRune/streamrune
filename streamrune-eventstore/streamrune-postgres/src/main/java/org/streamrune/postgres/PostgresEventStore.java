@@ -1439,6 +1439,7 @@ public final class PostgresEventStore implements EventStore {
    * @return the append result with assigned global offsets and the new stream version
    * @throws IllegalStateException if outboxEntries is non-empty and no outbox store was configured
    * @throws IllegalArgumentException if outboxEntries is non-empty and events is empty
+   * @throws NullPointerException if streamId, events, expectedVersion or outboxEntries is null
    */
   public AppendResult append(
       StreamId streamId,
@@ -1563,6 +1564,7 @@ public final class PostgresEventStore implements EventStore {
       boolean traced) {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     Objects.requireNonNull(outboxEntries, "outboxEntries is required");
     if (!outboxEntries.isEmpty() && outboxStore == null) {
       throw new IllegalStateException(
@@ -1863,6 +1865,7 @@ public final class PostgresEventStore implements EventStore {
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     CommandInbox.requireCommandType(commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =

@@ -227,6 +227,9 @@ public interface EventStore {
    * @param events the events to append
    * @param expectedVersion the expected current version for optimistic locking
    * @return result containing the assigned global offsets for each event and the final version
+   * @throws NullPointerException if {@code streamId}, {@code events} or {@code expectedVersion} is
+   *     {@code null}: a {@code null} {@code expectedVersion} is refused for an empty {@code events}
+   *     list as for a non-empty one, before anything is stored
    */
   AppendResult append(StreamId streamId, List<EventEnvelope> events, Version expectedVersion);
 
@@ -557,6 +560,8 @@ public interface EventStore {
    * CommandInbox#requireCommandType} before they write anything, so a longer one claims no key and
    * stores no event.
    *
+   * @throws NullPointerException if {@code streamId}, {@code events}, {@code expectedVersion} or
+   *     {@code idempotencyKey} is {@code null}, also for an empty {@code events} list
    * @throws IllegalArgumentException if {@code idempotencyKey} is already recorded against a
    *     different command type or a different stream, or if {@code commandType} is longer than
    *     {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
