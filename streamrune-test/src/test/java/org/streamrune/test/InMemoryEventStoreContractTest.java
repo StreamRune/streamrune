@@ -27,4 +27,10 @@ class InMemoryEventStoreContractTest extends EventStoreContract {
   static InMemoryEventStore configured(InMemoryEventStore store, Setup setup) {
     return store.withUpcasters(setup.upcasters()).withMigrations(setup.migrations());
   }
+
+  /** The in-memory storage belongs to the process that holds it: there is no second instance. */
+  @Override
+  protected boolean supportsMultipleInstances() {
+    return false;
+  }
 }

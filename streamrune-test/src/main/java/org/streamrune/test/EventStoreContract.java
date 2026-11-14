@@ -186,6 +186,11 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       stored before, under the same offsets and versions, and continues every stream and the
  *       global order. It reads them with its own setup: its upcasters, migrations, registry and
  *       crypto engine.
+ *   <li><b>Several instances.</b> For a store that {@link #supportsMultipleInstances()}: the
+ *       concurrency cases hold with their workers split over two instances over the same data, the
+ *       second one opened by {@link #reopen(EventStore, Setup)} and used alongside the first: one
+ *       version raced, distinct streams, the order of an append's offsets, paging by checkpoint,
+ *       atomic visibility, the global head and one key raced.
  * </ol>
  *
  * <p>The contract appends {@link ContractEvent}s under {@link #EVENT_TYPE} and saves {@link
@@ -219,6 +224,11 @@ public abstract class EventStoreContract {
    * order. Nothing stored is rewritten: each event keeps the schema version it was appended with,
    * so the new store's upcasters, migrations, registry and crypto engine apply to it on read as
    * they would in that deployment. It must not empty the storage.
+   *
+   * <p>When {@link #supportsMultipleInstances()}, an {@code …AcrossInstances} case keeps using
+   * {@code store} alongside the new store, as two processes of one deployment over one database:
+   * the new store must then share no state with {@code store} but the storage, as a store built in
+   * another process would not.
    */
   protected abstract EventStore reopen(EventStore store, Setup setup);
 
@@ -248,6 +258,18 @@ public abstract class EventStoreContract {
 
   /** Whether the store reports {@code lastGlobalOffset()}; {@code true} by default. */
   protected boolean supportsLastGlobalOffset() {
+    return true;
+  }
+
+  /**
+   * Whether several instances of the store can run over the same storage, as the processes of one
+   * deployment do (Several instances in the {@link EventStore} javadoc); {@code true} by default.
+   * The {@code …AcrossInstances} cases then open a second instance with {@link #reopen(EventStore,
+   * Setup)} and split the workers of each concurrency case between the two. A store whose storage
+   * belongs to the instance that holds it, as an in-process store's does, returns {@code false},
+   * and those cases are skipped: there is no second process to race.
+   */
+  protected boolean supportsMultipleInstances() {
     return true;
   }
 
@@ -352,9 +374,33 @@ public abstract class EventStoreContract {
 
   protected EventStore store;
 
+  /**
+   * The second instance an {@code …AcrossInstances} case runs half of its workers on, opened over
+   * the data of {@link #store} by {@link #withSecondInstance()}; {@link #store} itself otherwise.
+   */
+  private EventStore peer;
+
   @BeforeEach
   void freshStore() {
     store = newStore(Setup.defaults());
+    peer = store;
+  }
+
+  /**
+   * The store the {@code n}th worker of a concurrency case calls: {@link #store} for an even {@code
+   * n}, the second instance for an odd one. Readers of a case call the second instance.
+   */
+  private EventStore instance(int n) {
+    return n % 2 == 0 ? store : peer;
+  }
+
+  /**
+   * Opens a second instance over the data of {@link #store}, used alongside it as another process
+   * of the deployment would, or skips the case for a store whose storage belongs to one instance.
+   */
+  private void withSecondInstance() {
+    assumeTrue(supportsMultipleInstances(), "the store's storage belongs to one instance");
+    peer = reopen(store, Setup.defaults());
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -586,6 +632,17 @@ public abstract class EventStoreContract {
     assertEquals(1, global().size());
   }
 
+  /**
+   * {@link #multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch()} with its workers split
+   * over two instances of one store.
+   */
+  @Test
+  public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatchAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch();
+  }
+
   @Test
   public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch() throws Exception {
     int racers = 8;
@@ -595,6 +652,7 @@ public abstract class EventStoreContract {
       List<Future<Boolean>> outcomes = new ArrayList<>();
       for (int r = 0; r < racers; r++) {
         String batch = "racer-" + r;
+        EventStore racer = instance(r);
         outcomes.add(
             pool.submit(
                 () -> {
@@ -610,7 +668,7 @@ public abstract class EventStoreContract {
                                       new ContractEvent(batch + "#" + v)))
                           .toList();
                   try {
-                    store.append(A, envelopes, Version.initial());
+                    racer.append(A, envelopes, Version.initial());
                     return true;
                   } catch (OptimisticLockException e) {
                     return false;
@@ -640,6 +698,17 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void noReadReturnsPartOfAnAppendWhileMultiEventAppendsRunAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun();
+  }
+
+  /**
    * Writers append batches of three events to streams of their own while readers read through
    * {@link EventStore#readGlobalStream}, {@link EventStore#readStream} and {@link EventStore#load}
    * as fast as they can. An append's events become readable together, so no read returns the first
@@ -659,6 +728,7 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("batches-" + w));
+      EventStore writer = instance(w);
       streams.add(stream);
       work.add(
           () -> {
@@ -676,7 +746,7 @@ public abstract class EventStoreContract {
                                     EVENT_TYPE,
                                     new ContractEvent(batch + "#" + i)))
                         .toList();
-                store.append(stream, envelopes, new Version(head));
+                writer.append(stream, envelopes, new Version(head));
               }
             } finally {
               writing.countDown();
@@ -688,7 +758,7 @@ public abstract class EventStoreContract {
         () -> {
           GlobalOffset cursor = GlobalOffset.initial();
           while (writing.getCount() > 0 && !Thread.currentThread().isInterrupted()) {
-            List<EventEnvelope> read = store.readGlobalStream(cursor, maxCount);
+            List<EventEnvelope> read = peer.readGlobalStream(cursor, maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readGlobalStream", read, batchSize, violations);
             }
@@ -704,7 +774,7 @@ public abstract class EventStoreContract {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             StreamId stream = streams.get(n % streams.size());
             List<EventEnvelope> read =
-                store.readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
+                peer.readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readStream", read, batchSize, violations);
             }
@@ -718,10 +788,7 @@ public abstract class EventStoreContract {
         () -> {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             recordPartialBatches(
-                "load",
-                store.load(streams.get(n % streams.size())).events(),
-                batchSize,
-                violations);
+                "load", peer.load(streams.get(n % streams.size())).events(), batchSize, violations);
           }
           return null;
         });
@@ -757,6 +824,17 @@ public abstract class EventStoreContract {
   // ── Concurrent appends ──────────────────────────────────────────────────────────────────────
 
   /**
+   * {@link #concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset()} with its
+   * workers split over two instances of one store.
+   */
+  @Test
+  public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset();
+  }
+
+  /**
    * Writers append to streams of their own at the same time. Every event is stored once, under an
    * offset no other event has, and each stream holds its events as versions {@code 1..n} in the
    * order its writer appended them, under the offsets its appends returned.
@@ -771,6 +849,7 @@ public abstract class EventStoreContract {
     int expected = 0;
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("distinct-" + w));
+      EventStore writer = instance(w);
       int size = 1 + w % 3;
       expected += size * appendsEach;
       work.add(
@@ -778,7 +857,7 @@ public abstract class EventStoreContract {
             List<AppendResult> mine = new ArrayList<>();
             for (int i = 0; i < appendsEach; i++) {
               long head = (long) i * size;
-              mine.add(store.append(stream, events(stream, head + 1, size), new Version(head)));
+              mine.add(writer.append(stream, events(stream, head + 1, size), new Version(head)));
             }
             results.put(stream, mine);
             return null;
@@ -811,6 +890,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend()} with its workers
+   * split over two instances of one store.
+   */
+  @Test
+  public void theOffsetsOfAnAppendFollowTheOrderOfItsEventsAcrossInstances() throws Exception {
+    withSecondInstance();
+    theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend();
+  }
+
+  /**
    * Within one append offsets follow the order of its events, also while other appends run: the
    * event read at each offset an append returned is the event given at that position. That the
    * offsets of one append are contiguous is not promised, so nothing is asserted about other
@@ -826,12 +915,13 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("ordered-" + w));
+      EventStore writer = instance(w);
       work.add(
           () -> {
             for (int i = 0; i < appendsEach; i++) {
               long head = (long) i * size;
               List<EventEnvelope> given = events(stream, head + 1, size);
-              appended.add(new Appended(given, store.append(stream, given, new Version(head))));
+              appended.add(new Appended(given, writer.append(stream, given, new Version(head))));
             }
             return null;
           });
@@ -1028,6 +1118,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce()} with its workers
+   * split over two instances of one store.
+   */
+  @Test
+  public void aReaderPagingByCheckpointReadsEveryEventOnceAcrossInstances() throws Exception {
+    withSecondInstance();
+    aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce();
+  }
+
+  /**
    * A reader pages through {@link EventStore#readGlobalStream} from its checkpoint, the offset of
    * the last event it read, in small pages while writers append, and drains to an empty read once
    * they are done: it reads every appended event exactly once, in increasing offset order.
@@ -1041,11 +1141,12 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("paged-" + w));
+      EventStore writer = instance(w);
       work.add(
           () -> {
             for (int i = 0; i < appendsEach; i++) {
               List<EventEnvelope> given = events(stream, 2L * i + 1, 2);
-              store.append(stream, given, new Version(2L * i));
+              writer.append(stream, given, new Version(2L * i));
               appended.addAll(eventIds(given));
             }
             return null;
@@ -1055,7 +1156,7 @@ public abstract class EventStoreContract {
     GlobalOffset[] checkpoint = {GlobalOffset.initial()};
     Runnable readPage =
         () -> {
-          List<EventEnvelope> page = store.readGlobalStream(checkpoint[0], pageSize);
+          List<EventEnvelope> page = peer.readGlobalStream(checkpoint[0], pageSize);
           if (!page.isEmpty()) {
             read.addAll(page);
             checkpoint[0] = page.getLast().globalOffset();
@@ -1368,6 +1469,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void nothingBecomesReadableAtOrBelowAHeadAcrossInstances() throws Exception {
+    withSecondInstance();
+    nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun();
+  }
+
+  /**
    * Writers append to their own streams while a reader repeatedly reads the head and then every
    * readable event at or below it. Once all writers are done, the events at or below each head the
    * reader saw must be exactly the ones it read right after: none became readable later. A store
@@ -1385,12 +1496,13 @@ public abstract class EventStoreContract {
       List<Future<?>> done = new ArrayList<>();
       for (int w = 0; w < writers; w++) {
         StreamId stream = StreamId.of(ORDER, AggregateId.of("writer-" + w));
+        EventStore writer = instance(w);
         done.add(
             pool.submit(
                 () -> {
                   start.await();
                   for (int i = 0; i < appendsEach; i++) {
-                    store.append(stream, events(stream, i + 1, 1), new Version(i));
+                    writer.append(stream, events(stream, i + 1, 1), new Version(i));
                   }
                   return null;
                 }));
@@ -1403,7 +1515,7 @@ public abstract class EventStoreContract {
         if (System.nanoTime() > deadline) {
           fail("the writers did not finish within 60 seconds");
         }
-        long head = store.lastGlobalOffset().value();
+        long head = peer.lastGlobalOffset().value();
         List<Long> readable =
             global().stream().map(e -> e.globalOffset().value()).filter(o -> o <= head).toList();
         samples.add(new Sample(head, readable));
@@ -1914,14 +2026,23 @@ public abstract class EventStoreContract {
     ExecutorService pool = Executors.newFixedThreadPool(streams.size());
     try {
       List<Future<KeyedOutcome>> futures = new ArrayList<>();
-      for (StreamId stream : streams) {
+      for (int r = 0; r < streams.size(); r++) {
+        StreamId stream = streams.get(r);
+        EventStore racer = instance(r);
         futures.add(
             pool.submit(
                 () -> {
                   start.await();
                   try {
                     return new KeyedOutcome(
-                        stream, appendWithKey(stream, 0, events, key, COMMAND_TYPE), null);
+                        stream,
+                        racer.appendWithKey(
+                            stream,
+                            events(stream, 1, events),
+                            Version.initial(),
+                            key,
+                            COMMAND_TYPE),
+                        null);
                   } catch (IllegalArgumentException e) {
                     return new KeyedOutcome(stream, null, e);
                   }
@@ -1937,6 +2058,17 @@ public abstract class EventStoreContract {
     } finally {
       pool.shutdownNow();
     }
+  }
+
+  /**
+   * {@link #concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream()} with its workers split
+   * over two instances of one store.
+   */
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStreamAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream();
   }
 
   /**
@@ -1976,6 +2108,16 @@ public abstract class EventStoreContract {
     }
     assertEquals(2, global().size(), "only the winner's events are stored");
     assertEquals(winner.result().globalOffsets(), offsets(stored(winner.streamId())));
+  }
+
+  /**
+   * {@link #concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnceAcrossInstances() throws Exception {
+    withSecondInstance();
+    concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce();
   }
 
   @Test

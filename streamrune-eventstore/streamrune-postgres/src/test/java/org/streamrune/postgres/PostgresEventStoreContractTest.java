@@ -33,11 +33,17 @@ class PostgresEventStoreContractTest extends EventStoreContract {
 
   @BeforeAll
   static void initSchema() {
-    dataSource = new PGSimpleDataSource();
-    dataSource.setUrl(PG.getJdbcUrl());
-    dataSource.setUser(PG.getUsername());
-    dataSource.setPassword(PG.getPassword());
+    dataSource = connections();
     new PostgresEventStoreFactory(dataSource, Setup.defaults().registry()).create();
+  }
+
+  /** A data source of its own over the container's database: one process's connections. */
+  private static PGSimpleDataSource connections() {
+    var connections = new PGSimpleDataSource();
+    connections.setUrl(PG.getJdbcUrl());
+    connections.setUser(PG.getUsername());
+    connections.setPassword(PG.getPassword());
+    return connections;
   }
 
   /** Empties the tables and rewinds the offset counter, as a freshly created database has it. */
@@ -53,20 +59,27 @@ class PostgresEventStoreContractTest extends EventStoreContract {
     return build(setup);
   }
 
-  /** A new store over the same database; nothing is emptied. */
+  /**
+   * A new store over the same database, with a data source of its own, as another process would
+   * build it; nothing is emptied.
+   */
   @Override
   protected EventStore reopen(EventStore store, Setup setup) {
-    return build(setup);
+    return build(connections(), setup);
   }
 
   private static EventStore build(Setup setup) {
+    return build(dataSource, setup);
+  }
+
+  private static EventStore build(PGSimpleDataSource source, Setup setup) {
     return PostgresEventStore.builder()
-        .dataSource(dataSource)
+        .dataSource(source)
         .typeRegistry(setup.registry())
         .cryptoEngine(setup.crypto())
         .upcasters(setup.upcasters())
         .migrations(setup.migrations())
-        .commandInbox(new PostgresCommandInbox(dataSource))
+        .commandInbox(new PostgresCommandInbox(source))
         .build();
   }
 
