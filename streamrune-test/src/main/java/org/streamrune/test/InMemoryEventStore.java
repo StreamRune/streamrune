@@ -87,6 +87,11 @@ import org.streamrune.runtime.GuardedTracing;
  *       {@link InMemoryEventSubscription} builds on this hook.
  * </ul>
  *
+ * <p><b>One process.</b> Unlike {@code PostgresEventStore}, the stored data lives in the heap of
+ * the process that holds the store and ends with it, so an append interrupted by the death of that
+ * process leaves nothing to start over from, and no other process reaches the data. The store
+ * provides neither Interrupted writes nor Several instances of the {@link EventStore} javadoc.
+ *
  * <p><b>Serialization.</b> Like {@code PostgresEventStore}, this store keeps the stored form, not
  * the objects it is given: every event payload, event metadata, and snapshot state is SERIALIZED to
  * JSON (encrypting {@code @Encrypted} fields) on append/save, and DESERIALIZED — decrypting,

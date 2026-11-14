@@ -52,6 +52,12 @@ class MinimalEventStoreContractTest extends EventStoreContract {
     return false;
   }
 
+  /** The in-memory storage belongs to the process that holds it: there is no second instance. */
+  @Override
+  protected boolean supportsMultipleInstances() {
+    return false;
+  }
+
   /** Events through an in-memory store; every default method of the interface left in place. */
   private record MinimalEventStore(InMemoryEventStore events) implements EventStore {
 

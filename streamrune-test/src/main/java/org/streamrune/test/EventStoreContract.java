@@ -15,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -56,6 +57,11 @@ import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxStatus;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanLink;
@@ -186,6 +192,20 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       stored before, under the same offsets and versions, and continues every stream and the
  *       global order. It reads them with its own setup: its upcasters, migrations, registry and
  *       crypto engine.
+ *   <li><b>Transactional outbox.</b> For a store that {@link #supportsTransactionalOutbox()}: an
+ *       append stores the entries of its events with them, and an append that is refused or
+ *       replayed stores none.
+ *   <li><b>Interrupted writes.</b> For a store that {@link #supportsCrashInjection()}: a write
+ *       killed at a {@link CrashPoint} before it is durable leaves nothing of itself for the
+ *       restarted store to read (no event, recorded key or outbox entry, the earlier snapshot
+ *       kept), the next append takes offsets above the head and paging still visits every event
+ *       once; one killed after it is durable is stored whole; a keyed append repeated with its key
+ *       after either stores its events once.
+ *   <li><b>Several instances.</b> For a store that {@link #supportsMultipleInstances()}: the
+ *       concurrency cases hold with their workers split over two instances over the same data, the
+ *       second one opened by {@link #reopen(EventStore, Setup)} and used alongside the first: one
+ *       version raced, distinct streams, the order of an append's offsets, paging by checkpoint,
+ *       atomic visibility, the global head and one key raced.
  * </ol>
  *
  * <p>The contract appends {@link ContractEvent}s under {@link #EVENT_TYPE} and saves {@link
@@ -211,7 +231,8 @@ public abstract class EventStoreContract {
 
   /**
    * A new store instance over the same data as {@code store}, built with {@code setup} in place of
-   * the setup {@code store} was built with; {@code store} is not used again by the case.
+   * the setup {@code store} was built with; outside the {@code …AcrossInstances} cases, {@code
+   * store} is not used again by the case.
    *
    * <p>It models a deployment restarted with another configuration over the same database: the new
    * store reads every event, snapshot, purge record and command-inbox row {@code store} stored,
@@ -219,6 +240,11 @@ public abstract class EventStoreContract {
    * order. Nothing stored is rewritten: each event keeps the schema version it was appended with,
    * so the new store's upcasters, migrations, registry and crypto engine apply to it on read as
    * they would in that deployment. It must not empty the storage.
+   *
+   * <p>When {@link #supportsMultipleInstances()}, an {@code …AcrossInstances} case keeps using
+   * {@code store} alongside the new store, as two processes of one deployment over one database:
+   * the new store must then share no state with {@code store} but the storage, as a store built in
+   * another process would not.
    */
   protected abstract EventStore reopen(EventStore store, Setup setup);
 
@@ -249,6 +275,86 @@ public abstract class EventStoreContract {
   /** Whether the store reports {@code lastGlobalOffset()}; {@code true} by default. */
   protected boolean supportsLastGlobalOffset() {
     return true;
+  }
+
+  /**
+   * Whether several instances of the store can run over the same storage, as the processes of one
+   * deployment do (Several instances in the {@link EventStore} javadoc); {@code true} by default.
+   * The {@code …AcrossInstances} cases then open a second instance with {@link #reopen(EventStore,
+   * Setup)} and split the workers of each concurrency case between the two. A store whose storage
+   * belongs to the instance that holds it, as an in-process store's does, returns {@code false},
+   * and those cases are skipped: there is no second process to race.
+   */
+  protected boolean supportsMultipleInstances() {
+    return true;
+  }
+
+  /**
+   * Whether the store writes outbox entries with its appends (Transactional outbox in the {@link
+   * EventStore} javadoc); {@code false} by default, since no method of the SPI reaches the outbox
+   * and the suite cannot see the entries without {@link #outboxOf(EventStore)}. A store that
+   * returns {@code true} is built by {@link #newStore(Setup)} and {@link #reopen(EventStore,
+   * Setup)} with {@link #OUTBOX_MAPPER}, over empty outbox storage in the case of {@code newStore}.
+   */
+  protected boolean supportsTransactionalOutbox() {
+    return false;
+  }
+
+  /**
+   * Whether the suite can make a write of the store die at each {@link CrashPoint} with {@link
+   * #crashAt(EventStore, CrashPoint)}; {@code false} by default, since dying the way a killed
+   * process dies takes a hook into the store's storage that only its own test can give. A store
+   * that returns {@code true} provides Interrupted writes of the {@link EventStore} javadoc, and
+   * the crash cases check it.
+   */
+  protected boolean supportsCrashInjection() {
+    return false;
+  }
+
+  /**
+   * Arms {@code store} so that its next write that reaches {@code point} dies there as it would if
+   * the process running it were killed: the storage loses the write's session, as it loses a dead
+   * process's, and the call throws. Only that write dies; the suite then opens the store a
+   * restarted process would, with {@link #reopen(EventStore, Setup)}, and checks what the write
+   * left; it does not judge what the call throws. Called only when {@link
+   * #supportsCrashInjection()}: with {@link CrashPoint#AFTER_KEY_CLAIM} only when {@link
+   * #supportsIdempotentAppend()}, with {@link CrashPoint#AFTER_FIRST_OUTBOX_WRITE} only when {@link
+   * #supportsTransactionalOutbox()}, with the two snapshot points only when {@link
+   * #supportsSnapshots()}.
+   */
+  protected void crashAt(EventStore store, CrashPoint point) {
+    throw new UnsupportedOperationException("the suite cannot crash a write of the store");
+  }
+
+  /**
+   * A point inside a write of a store at which the process running it can die. A store maps each to
+   * the moment of its own write that matches the description; a store whose write has no such
+   * moment kills it at the next one it has.
+   */
+  public enum CrashPoint {
+    /** A keyed append has claimed its key, not yet durably; nothing else of it is written. */
+    AFTER_KEY_CLAIM,
+    /** An append has taken the global offsets of its events; none of its events is written. */
+    AFTER_OFFSET_RESERVATION,
+    /** An append has written the first of its events and not the others. */
+    AFTER_FIRST_EVENT_WRITE,
+    /** An append has written its events and the first of its outbox entries, and is not durable. */
+    AFTER_FIRST_OUTBOX_WRITE,
+    /** An append is durable; its caller never learns so and sees the call fail. */
+    AFTER_COMMIT,
+    /** A snapshot save is writing the snapshot and is not durable. */
+    DURING_SNAPSHOT_SAVE,
+    /** A snapshot save is durable; its caller never learns so and sees the call fail. */
+    AFTER_SNAPSHOT_COMMIT
+  }
+
+  /**
+   * The {@link OutboxStore} the relay reads the entries {@code store} writes through; called only
+   * when {@link #supportsTransactionalOutbox()}. The suite reads it with {@link
+   * OutboxStore#findByStatus}, which claims nothing.
+   */
+  protected OutboxStore outboxOf(EventStore store) {
+    throw new UnsupportedOperationException("the store writes no outbox entries");
   }
 
   /**
@@ -336,6 +442,19 @@ public abstract class EventStoreContract {
     }
   }
 
+  /**
+   * The outbox mapper of a store that {@link #supportsTransactionalOutbox()}: one pending entry per
+   * event, under the event's id, with the event's type as its payload type and the event's stream.
+   */
+  public static final OutboxEventMapper OUTBOX_MAPPER =
+      event ->
+          List.of(
+              OutboxEntry.pending(
+                  OutboxEntryId.of(event.metadata().eventId().value()),
+                  "{}",
+                  event.eventType().value(),
+                  event.streamId()));
+
   /** The event type name the contract's events are stored under. */
   public static final EventType EVENT_TYPE = new EventType("ContractEvent");
 
@@ -352,9 +471,38 @@ public abstract class EventStoreContract {
 
   protected EventStore store;
 
+  /**
+   * The second instance an {@code …AcrossInstances} case runs half of its workers on, opened over
+   * the data of {@link #store} by {@link #withSecondInstance()}; {@code null} otherwise.
+   */
+  private EventStore second;
+
   @BeforeEach
   void freshStore() {
     store = newStore(Setup.defaults());
+    second = null;
+  }
+
+  /** The second instance when a case opened one, {@link #store} otherwise. */
+  private EventStore peer() {
+    return second != null ? second : store;
+  }
+
+  /**
+   * The store the {@code n}th worker of a concurrency case calls: {@link #store} for an even {@code
+   * n}, the second instance for an odd one. Readers of a case call the second instance.
+   */
+  private EventStore instance(int n) {
+    return n % 2 == 0 ? store : peer();
+  }
+
+  /**
+   * Opens a second instance over the data of {@link #store}, used alongside it as another process
+   * of the deployment would, or skips the case for a store whose storage belongs to one instance.
+   */
+  private void withSecondInstance() {
+    assumeTrue(supportsMultipleInstances(), "the store's storage belongs to one instance");
+    second = reopen(store, Setup.defaults());
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -379,6 +527,20 @@ public abstract class EventStoreContract {
 
   protected List<EventEnvelope> global() {
     return store.readGlobalStream(GlobalOffset.initial(), 10_000);
+  }
+
+  /**
+   * The ids of the pending outbox entries of {@code store}, in the order the store returns them.
+   */
+  protected List<String> outboxIds(EventStore store) {
+    return outboxOf(store).findByStatus(OutboxStatus.PENDING, 10_000).stream()
+        .map(entry -> entry.id().value())
+        .toList();
+  }
+
+  /** The ids of {@code events}, as their outbox entries carry them. */
+  protected static List<String> entryIds(List<EventEnvelope> events) {
+    return events.stream().map(e -> e.metadata().eventId().value()).toList();
   }
 
   protected static List<Long> versions(List<EventEnvelope> events) {
@@ -586,6 +748,17 @@ public abstract class EventStoreContract {
     assertEquals(1, global().size());
   }
 
+  /**
+   * {@link #multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch()} with its workers split
+   * over two instances of one store.
+   */
+  @Test
+  public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatchAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch();
+  }
+
   @Test
   public void multiEventAppendsRacingForOneVersionStoreExactlyOneWholeBatch() throws Exception {
     int racers = 8;
@@ -595,6 +768,7 @@ public abstract class EventStoreContract {
       List<Future<Boolean>> outcomes = new ArrayList<>();
       for (int r = 0; r < racers; r++) {
         String batch = "racer-" + r;
+        EventStore racer = instance(r);
         outcomes.add(
             pool.submit(
                 () -> {
@@ -610,7 +784,7 @@ public abstract class EventStoreContract {
                                       new ContractEvent(batch + "#" + v)))
                           .toList();
                   try {
-                    store.append(A, envelopes, Version.initial());
+                    racer.append(A, envelopes, Version.initial());
                     return true;
                   } catch (OptimisticLockException e) {
                     return false;
@@ -640,6 +814,17 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void noReadReturnsPartOfAnAppendWhileMultiEventAppendsRunAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    noReadReturnsPartOfAnAppendWhileMultiEventAppendsRun();
+  }
+
+  /**
    * Writers append batches of three events to streams of their own while readers read through
    * {@link EventStore#readGlobalStream}, {@link EventStore#readStream} and {@link EventStore#load}
    * as fast as they can. An append's events become readable together, so no read returns the first
@@ -659,6 +844,7 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("batches-" + w));
+      EventStore writer = instance(w);
       streams.add(stream);
       work.add(
           () -> {
@@ -676,7 +862,7 @@ public abstract class EventStoreContract {
                                     EVENT_TYPE,
                                     new ContractEvent(batch + "#" + i)))
                         .toList();
-                store.append(stream, envelopes, new Version(head));
+                writer.append(stream, envelopes, new Version(head));
               }
             } finally {
               writing.countDown();
@@ -688,7 +874,7 @@ public abstract class EventStoreContract {
         () -> {
           GlobalOffset cursor = GlobalOffset.initial();
           while (writing.getCount() > 0 && !Thread.currentThread().isInterrupted()) {
-            List<EventEnvelope> read = store.readGlobalStream(cursor, maxCount);
+            List<EventEnvelope> read = peer().readGlobalStream(cursor, maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readGlobalStream", read, batchSize, violations);
             }
@@ -704,7 +890,8 @@ public abstract class EventStoreContract {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             StreamId stream = streams.get(n % streams.size());
             List<EventEnvelope> read =
-                store.readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
+                peer()
+                    .readStream(stream, cursors.getOrDefault(stream, Version.initial()), maxCount);
             if (read.size() < maxCount) {
               recordPartialBatches("readStream", read, batchSize, violations);
             }
@@ -719,7 +906,7 @@ public abstract class EventStoreContract {
           for (int n = 0; writing.getCount() > 0 && !Thread.currentThread().isInterrupted(); n++) {
             recordPartialBatches(
                 "load",
-                store.load(streams.get(n % streams.size())).events(),
+                peer().load(streams.get(n % streams.size())).events(),
                 batchSize,
                 violations);
           }
@@ -757,6 +944,17 @@ public abstract class EventStoreContract {
   // ── Concurrent appends ──────────────────────────────────────────────────────────────────────
 
   /**
+   * {@link #concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset()} with its
+   * workers split over two instances of one store.
+   */
+  @Test
+  public void concurrentAppendsToDistinctStreamsStoreEveryEventOnceAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    concurrentAppendsToDistinctStreamsStoreEveryEventOnceUnderItsOwnOffset();
+  }
+
+  /**
    * Writers append to streams of their own at the same time. Every event is stored once, under an
    * offset no other event has, and each stream holds its events as versions {@code 1..n} in the
    * order its writer appended them, under the offsets its appends returned.
@@ -771,6 +969,7 @@ public abstract class EventStoreContract {
     int expected = 0;
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("distinct-" + w));
+      EventStore writer = instance(w);
       int size = 1 + w % 3;
       expected += size * appendsEach;
       work.add(
@@ -778,7 +977,7 @@ public abstract class EventStoreContract {
             List<AppendResult> mine = new ArrayList<>();
             for (int i = 0; i < appendsEach; i++) {
               long head = (long) i * size;
-              mine.add(store.append(stream, events(stream, head + 1, size), new Version(head)));
+              mine.add(writer.append(stream, events(stream, head + 1, size), new Version(head)));
             }
             results.put(stream, mine);
             return null;
@@ -811,6 +1010,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend()} with its workers
+   * split over two instances of one store.
+   */
+  @Test
+  public void theOffsetsOfAnAppendFollowTheOrderOfItsEventsAcrossInstances() throws Exception {
+    withSecondInstance();
+    theOffsetsOfAnAppendFollowTheOrderOfItsEventsWhileOthersAppend();
+  }
+
+  /**
    * Within one append offsets follow the order of its events, also while other appends run: the
    * event read at each offset an append returned is the event given at that position. That the
    * offsets of one append are contiguous is not promised, so nothing is asserted about other
@@ -826,12 +1035,13 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("ordered-" + w));
+      EventStore writer = instance(w);
       work.add(
           () -> {
             for (int i = 0; i < appendsEach; i++) {
               long head = (long) i * size;
               List<EventEnvelope> given = events(stream, head + 1, size);
-              appended.add(new Appended(given, store.append(stream, given, new Version(head))));
+              appended.add(new Appended(given, writer.append(stream, given, new Version(head))));
             }
             return null;
           });
@@ -1028,6 +1238,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce()} with its workers
+   * split over two instances of one store.
+   */
+  @Test
+  public void aReaderPagingByCheckpointReadsEveryEventOnceAcrossInstances() throws Exception {
+    withSecondInstance();
+    aReaderPagingByCheckpointWhileWritersAppendReadsEveryEventOnce();
+  }
+
+  /**
    * A reader pages through {@link EventStore#readGlobalStream} from its checkpoint, the offset of
    * the last event it read, in small pages while writers append, and drains to an empty read once
    * they are done: it reads every appended event exactly once, in increasing offset order.
@@ -1041,11 +1261,12 @@ public abstract class EventStoreContract {
     List<Callable<?>> work = new ArrayList<>();
     for (int w = 0; w < writers; w++) {
       StreamId stream = StreamId.of(ORDER, AggregateId.of("paged-" + w));
+      EventStore writer = instance(w);
       work.add(
           () -> {
             for (int i = 0; i < appendsEach; i++) {
               List<EventEnvelope> given = events(stream, 2L * i + 1, 2);
-              store.append(stream, given, new Version(2L * i));
+              writer.append(stream, given, new Version(2L * i));
               appended.addAll(eventIds(given));
             }
             return null;
@@ -1055,7 +1276,7 @@ public abstract class EventStoreContract {
     GlobalOffset[] checkpoint = {GlobalOffset.initial()};
     Runnable readPage =
         () -> {
-          List<EventEnvelope> page = store.readGlobalStream(checkpoint[0], pageSize);
+          List<EventEnvelope> page = peer().readGlobalStream(checkpoint[0], pageSize);
           if (!page.isEmpty()) {
             read.addAll(page);
             checkpoint[0] = page.getLast().globalOffset();
@@ -1368,6 +1589,16 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void nothingBecomesReadableAtOrBelowAHeadAcrossInstances() throws Exception {
+    withSecondInstance();
+    nothingBecomesReadableAtOrBelowAHeadWhileAppendsRun();
+  }
+
+  /**
    * Writers append to their own streams while a reader repeatedly reads the head and then every
    * readable event at or below it. Once all writers are done, the events at or below each head the
    * reader saw must be exactly the ones it read right after: none became readable later. A store
@@ -1385,12 +1616,13 @@ public abstract class EventStoreContract {
       List<Future<?>> done = new ArrayList<>();
       for (int w = 0; w < writers; w++) {
         StreamId stream = StreamId.of(ORDER, AggregateId.of("writer-" + w));
+        EventStore writer = instance(w);
         done.add(
             pool.submit(
                 () -> {
                   start.await();
                   for (int i = 0; i < appendsEach; i++) {
-                    store.append(stream, events(stream, i + 1, 1), new Version(i));
+                    writer.append(stream, events(stream, i + 1, 1), new Version(i));
                   }
                   return null;
                 }));
@@ -1403,7 +1635,7 @@ public abstract class EventStoreContract {
         if (System.nanoTime() > deadline) {
           fail("the writers did not finish within 60 seconds");
         }
-        long head = store.lastGlobalOffset().value();
+        long head = peer().lastGlobalOffset().value();
         List<Long> readable =
             global().stream().map(e -> e.globalOffset().value()).filter(o -> o <= head).toList();
         samples.add(new Sample(head, readable));
@@ -1914,14 +2146,23 @@ public abstract class EventStoreContract {
     ExecutorService pool = Executors.newFixedThreadPool(streams.size());
     try {
       List<Future<KeyedOutcome>> futures = new ArrayList<>();
-      for (StreamId stream : streams) {
+      for (int r = 0; r < streams.size(); r++) {
+        StreamId stream = streams.get(r);
+        EventStore racer = instance(r);
         futures.add(
             pool.submit(
                 () -> {
                   start.await();
                   try {
                     return new KeyedOutcome(
-                        stream, appendWithKey(stream, 0, events, key, COMMAND_TYPE), null);
+                        stream,
+                        racer.appendWithKey(
+                            stream,
+                            events(stream, 1, events),
+                            Version.initial(),
+                            key,
+                            COMMAND_TYPE),
+                        null);
                   } catch (IllegalArgumentException e) {
                     return new KeyedOutcome(stream, null, e);
                   }
@@ -1940,6 +2181,17 @@ public abstract class EventStoreContract {
   }
 
   /**
+   * {@link #concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream()} with its workers split
+   * over two instances of one store.
+   */
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStreamAcrossInstances()
+      throws Exception {
+    withSecondInstance();
+    concurrentKeyedAppendsOfOneKeyStoreOnceAndRefuseAnotherStream();
+  }
+
+  /**
    * Concurrent executions of one key all miss a caller's look-up of the inbox, so the store alone
    * decides: exactly one stores its events; one presented on the winner's stream is answered with
    * the winner's result, one presented on another stream is refused, and nothing is stored twice.
@@ -1949,7 +2201,7 @@ public abstract class EventStoreContract {
     assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
     List<StreamId> streams = new ArrayList<>();
     for (int r = 0; r < 8; r++) {
-      streams.add(r % 2 == 0 ? A : B);
+      streams.add(r % 4 < 2 ? A : B);
     }
 
     List<KeyedOutcome> outcomes = raceOneKey(IdempotencyKey.of("key-raced"), streams, 2);
@@ -1976,6 +2228,16 @@ public abstract class EventStoreContract {
     }
     assertEquals(2, global().size(), "only the winner's events are stored");
     assertEquals(winner.result().globalOffsets(), offsets(stored(winner.streamId())));
+  }
+
+  /**
+   * {@link #concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce()} with its workers split over two
+   * instances of one store.
+   */
+  @Test
+  public void concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnceAcrossInstances() throws Exception {
+    withSecondInstance();
+    concurrentKeyedAppendsOfOneKeyOnOneStreamStoreOnce();
   }
 
   @Test
@@ -2044,6 +2306,267 @@ public abstract class EventStoreContract {
         () -> appendWithKey(A, 0, 1, IdempotencyKey.of("key-unsupported"), COMMAND_TYPE));
 
     assertTrue(stored(A).isEmpty());
+  }
+
+  // ── Interrupted writes ──────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void anAppendKilledAfterTakingItsOffsetsLeavesNothing() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_OFFSET_RESERVATION, null);
+  }
+
+  @Test
+  public void anAppendKilledAfterItsFirstEventLeavesNothing() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_FIRST_EVENT_WRITE, null);
+  }
+
+  @Test
+  public void anAppendKilledAfterItsFirstOutboxEntryLeavesNothing() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_FIRST_OUTBOX_WRITE, null);
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterClaimingItsKeyLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_KEY_CLAIM, IdempotencyKey.of("key-killed-claim"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterTakingItsOffsetsLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_OFFSET_RESERVATION, IdempotencyKey.of("key-killed-offsets"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItsFirstEventLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_FIRST_EVENT_WRITE, IdempotencyKey.of("key-killed-event"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItsFirstOutboxEntryLeavesNothingAndItsRetryStoresOnce() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_FIRST_OUTBOX_WRITE, IdempotencyKey.of("key-killed-outbox"));
+  }
+
+  @Test
+  public void anAppendKilledAfterItIsDurableIsStoredWhole() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    killed(CrashPoint.AFTER_COMMIT, () -> store.append(A, events(A, 2, 3), new Version(1)));
+
+    assertStoredWhole();
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItIsDurableIsStoredWholeAndItsRetryIsAReplay() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-killed-durable");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    killed(
+        CrashPoint.AFTER_COMMIT,
+        () -> store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE));
+
+    assertStoredWhole();
+    List<GlobalOffset> stored = offsets(stored(A)).subList(1, 4);
+    var retry = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+    assertTrue(retry.alreadyApplied(), "the key was recorded with the events");
+    assertEquals(stored, retry.globalOffsets());
+    assertEquals(new Version(4), retry.finalVersion());
+    assertStoredWhole();
+  }
+
+  @Test
+  public void aSnapshotSaveKilledBeforeItIsDurableKeepsTheEarlierSnapshot() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+    store.saveSnapshot(A, new Version(1), new ContractState("at-1"));
+
+    killed(
+        CrashPoint.DURING_SNAPSHOT_SAVE,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    AggregateHistory history = store.load(A);
+    assertEquals(new ContractState("at-1"), history.snapshotState());
+    assertEquals(List.of(2L), versions(history.events()));
+    store.saveSnapshot(A, new Version(2), new ContractState("at-2"));
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+    assertTrue(store.load(A).events().isEmpty());
+  }
+
+  @Test
+  public void aFirstSnapshotSaveKilledBeforeItIsDurableLeavesNone() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    killed(
+        CrashPoint.DURING_SNAPSHOT_SAVE,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    AggregateHistory history = store.load(A);
+    assertNull(history.snapshotState());
+    assertEquals(List.of(1L, 2L), versions(history.events()));
+  }
+
+  @Test
+  public void aSnapshotSaveKilledAfterItIsDurableIsUsedAndSavesAgain() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    killed(
+        CrashPoint.AFTER_SNAPSHOT_COMMIT,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+    assertTrue(store.load(A).events().isEmpty());
+    store.saveSnapshot(A, new Version(2), new ContractState("at-2"));
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+  }
+
+  /**
+   * Runs {@code write} on {@link #store} armed to die at {@code point}, checks that the call fails,
+   * and replaces {@link #store} with the store a restarted process opens over the same data. What
+   * the call throws is not judged: the caller of a killed process sees nothing at all, and a driver
+   * whose connection dies mid-statement may raise an {@link Error}.
+   */
+  private void killed(CrashPoint point, Runnable write) {
+    crashAt(store, point);
+    assertThrows(Throwable.class, write::run, "the write died at " + point);
+    store = reopen(store, Setup.defaults());
+  }
+
+  /**
+   * Over a stream holding one event, an append of three more events, keyed with {@code key} when it
+   * is not {@code null}, dies at {@code point}: the restarted store reads none of the three, has no
+   * outbox entry and no recorded key for them, keeps its head, takes the offsets of the next append
+   * above it and pages through every event once; the append run again stores the three once, and a
+   * keyed one run a third time is a replay.
+   */
+  private void assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+      CrashPoint point, IdempotencyKey key) {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(key == null || supportsIdempotentAppend(), "the store has no command inbox");
+    AppendResult first = store.append(A, events(A, 1, 1), Version.initial());
+    GlobalOffset head = first.globalOffsets().getLast();
+    Runnable append =
+        key == null
+            ? () -> store.append(A, events(A, 2, 3), new Version(1))
+            : () -> store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+
+    killed(point, append);
+
+    assertEquals(List.of("order-A@1"), values(stored(A)), "readStream returns none of the three");
+    assertEquals(List.of("order-A@1"), values(store.load(A).events()), "load returns none");
+    assertEquals(first.globalOffsets(), offsets(global()), "readGlobalStream returns none");
+    if (supportsLastGlobalOffset()) {
+      assertEquals(head, store.lastGlobalOffset(), "the head did not move");
+    }
+    if (supportsTransactionalOutbox()) {
+      assertEquals(entryIds(stored(A)), outboxIds(store), "no outbox entry of the three");
+    }
+
+    AppendResult other = store.append(B, events(B, 1, 1), Version.initial());
+    assertTrue(
+        other.globalOffsets().getFirst().value() > head.value(), "the next offsets lie above");
+    if (key == null) {
+      store.append(A, events(A, 2, 3), new Version(1));
+    } else {
+      var retry = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+      assertFalse(retry.alreadyApplied(), "the key was not recorded");
+      assertEquals(offsets(stored(A)).subList(1, 4), retry.globalOffsets());
+      var replay = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+      assertTrue(replay.alreadyApplied());
+      assertEquals(retry.globalOffsets(), replay.globalOffsets());
+    }
+    assertEquals(List.of(1L, 2L, 3L, 4L), versions(stored(A)), "the rerun stored the three once");
+    List<EventEnvelope> storedEvents = new ArrayList<>(stored(A));
+    storedEvents.addAll(stored(B));
+    List<GlobalOffset> expected =
+        offsets(storedEvents).stream()
+            .sorted(Comparator.comparingLong(GlobalOffset::value))
+            .toList();
+    assertEquals(expected, pagedByCheckpoint(), "paging visits every stored event once, in order");
+    if (supportsTransactionalOutbox()) {
+      assertEquals(Set.copyOf(entryIds(storedEvents)), Set.copyOf(outboxIds(store)));
+      assertEquals(5, outboxIds(store).size(), "each event has one outbox entry");
+    }
+  }
+
+  /**
+   * After an append of three events over a stream of one died once it was durable: the restarted
+   * store reads the four events, and the outbox holds one entry for each.
+   */
+  private void assertStoredWhole() {
+    assertEquals(
+        List.of("order-A@1", "order-A@2", "order-A@3", "order-A@4"),
+        values(stored(A)),
+        "the durable append is stored whole");
+    assertEquals(4, global().size());
+    if (supportsLastGlobalOffset()) {
+      assertEquals(offsets(global()).getLast(), store.lastGlobalOffset());
+    }
+    if (supportsTransactionalOutbox()) {
+      assertEquals(Set.copyOf(entryIds(stored(A))), Set.copyOf(outboxIds(store)));
+      assertEquals(4, outboxIds(store).size(), "each event has one outbox entry");
+    }
+  }
+
+  /** The offsets a reader paging by checkpoint, two events a page, reads until a page is empty. */
+  private List<GlobalOffset> pagedByCheckpoint() {
+    List<GlobalOffset> read = new ArrayList<>();
+    GlobalOffset checkpoint = GlobalOffset.initial();
+    for (List<EventEnvelope> page = store.readGlobalStream(checkpoint, 2);
+        !page.isEmpty();
+        page = store.readGlobalStream(checkpoint, 2)) {
+      read.addAll(offsets(page));
+      checkpoint = page.getLast().globalOffset();
+    }
+    return read;
+  }
+
+  // ── Transactional outbox ────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void anAppendStoresAnOutboxEntryForEachOfItsEvents() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+
+    store.append(A, events(A, 1, 2), Version.initial());
+    store.append(B, events(B, 1, 1), Version.initial());
+
+    assertEquals(Set.copyOf(entryIds(global())), Set.copyOf(outboxIds(store)));
+    assertEquals(3, outboxIds(store).size());
+  }
+
+  @Test
+  public void anAppendRefusedForItsVersionStoresNoOutboxEntry() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    assertThrows(
+        OptimisticLockException.class, () -> store.append(A, events(A, 1, 2), Version.initial()));
+
+    assertEquals(entryIds(stored(A)), outboxIds(store));
+  }
+
+  @Test
+  public void aReplayedKeyStoresNoOutboxEntry() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-outbox");
+    appendWithKey(A, 0, 2, key, COMMAND_TYPE);
+
+    assertTrue(appendWithKey(A, 0, 2, key, COMMAND_TYPE).alreadyApplied());
+
+    assertEquals(Set.copyOf(entryIds(stored(A))), Set.copyOf(outboxIds(store)));
+    assertEquals(2, outboxIds(store).size());
   }
 
   // ── Reopening over the same data ────────────────────────────────────────────────────────────

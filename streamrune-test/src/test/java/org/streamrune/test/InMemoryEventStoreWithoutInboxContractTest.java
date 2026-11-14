@@ -26,4 +26,10 @@ class InMemoryEventStoreWithoutInboxContractTest extends EventStoreContract {
   protected boolean supportsIdempotentAppend() {
     return false;
   }
+
+  /** The in-memory storage belongs to the process that holds it: there is no second instance. */
+  @Override
+  protected boolean supportsMultipleInstances() {
+    return false;
+  }
 }
