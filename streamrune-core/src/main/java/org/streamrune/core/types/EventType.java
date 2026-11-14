@@ -32,11 +32,7 @@ public record EventType(@JsonValue String value) {
     if (value == null || value.isBlank()) {
       throw new IllegalArgumentException("EventType name must not be blank");
     }
-    int length = value.codePointCount(0, value.length());
-    if (length > MAX_LENGTH) {
-      throw new IllegalArgumentException(
-          "EventType name is " + length + " characters; at most " + MAX_LENGTH);
-    }
+    StoredLength.requireAtMost(value, MAX_LENGTH, "EventType name");
   }
 
   /**

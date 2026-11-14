@@ -38,6 +38,9 @@ import org.streamrune.core.types.ProjectionName;
  *       read afterwards is the greatest one saved. The shipped stores apply it; a store without it
  *       overrides {@link #guardsAgainstRegression()} to return {@code false}, and the guard's cases
  *       are skipped.
+ *   <li>A name as long as {@link ProjectionName} allows, {@value ProjectionName#MAX_LENGTH}
+ *       characters counted in code points, ASCII or supplementary-plane, keeps its offset like any
+ *       other.
  * </ol>
  */
 public abstract class OffsetStoreContract {
@@ -62,6 +65,19 @@ public abstract class OffsetStoreContract {
   @BeforeEach
   void freshStore() {
     store = newStore();
+  }
+
+  @Test
+  public void aNameOfTheLongestLengthKeepsItsOffset() {
+    ProjectionName ascii = ProjectionName.of("p".repeat(ProjectionName.MAX_LENGTH));
+    ProjectionName supplementary =
+        ProjectionName.of("\uD83D\uDE00".repeat(ProjectionName.MAX_LENGTH));
+
+    store.saveOffset(ascii, GlobalOffset.of(7));
+    store.saveOffset(supplementary, GlobalOffset.of(9));
+
+    assertEquals(GlobalOffset.of(7), store.getLastOffset(ascii));
+    assertEquals(GlobalOffset.of(9), store.getLastOffset(supplementary));
   }
 
   @Test

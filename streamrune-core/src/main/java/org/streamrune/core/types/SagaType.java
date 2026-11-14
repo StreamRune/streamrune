@@ -15,12 +15,25 @@ import com.fasterxml.jackson.annotation.JsonValue;
  */
 public record SagaType(@JsonValue String value) {
 
-  /** Creates a new SagaType with the given value. */
+  /**
+   * The longest saga type name, in code points: the width of the {@code saga_state.saga_type} and
+   * {@code saga_dead_letters.saga_type} columns. A longer one is refused on construction, so a saga
+   * type that is accepted here is stored by every saga store.
+   */
+  public static final int MAX_LENGTH = 255;
+
+  /**
+   * Creates a new SagaType with the given value.
+   *
+   * @throws IllegalArgumentException if {@code value} is blank or longer than {@value #MAX_LENGTH}
+   *     characters (code points); the message states the length and does not echo the value
+   */
   @JsonCreator
   public SagaType {
     if (value == null || value.isBlank()) {
       throw new IllegalArgumentException("SagaType value must not be blank");
     }
+    StoredLength.requireAtMost(value, MAX_LENGTH, "SagaType value");
   }
 
   /**
@@ -32,12 +45,6 @@ public record SagaType(@JsonValue String value) {
   public static SagaType of(String value) {
     return new SagaType(value);
   }
-
-  /**
-   * The longest saga type name the PostgreSQL schema stores: {@code saga_state.saga_type} and
-   * {@code saga_dead_letters.saga_type} are {@code VARCHAR(255)}.
-   */
-  private static final int MAX_DERIVED_LENGTH = 255;
 
   /**
    * Creates a SagaType from a Class using its <b>fully-qualified</b> name ({@link
@@ -60,21 +67,11 @@ public record SagaType(@JsonValue String value) {
    *
    * @param clazz the class to derive the saga type name from
    * @return a SagaType with the fully-qualified class name
-   * @throws IllegalArgumentException if the fully-qualified name is longer than 255 characters (it
-   *     would not fit the {@code saga_type} column)
+   * @throws IllegalArgumentException if the fully-qualified name is longer than {@value
+   *     #MAX_LENGTH} characters (it would not fit the {@code saga_type} columns)
    */
   public static SagaType fromClass(Class<?> clazz) {
-    String name = clazz.getName();
-    if (name.length() > MAX_DERIVED_LENGTH) {
-      throw new IllegalArgumentException(
-          "saga state class name is "
-              + name.length()
-              + " characters long; the saga_type column holds at most "
-              + MAX_DERIVED_LENGTH
-              + ": "
-              + name);
-    }
-    return new SagaType(name);
+    return new SagaType(clazz.getName());
   }
 
   @Override

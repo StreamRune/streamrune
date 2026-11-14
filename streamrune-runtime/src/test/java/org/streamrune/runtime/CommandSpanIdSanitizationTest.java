@@ -66,12 +66,12 @@ class CommandSpanIdSanitizationTest {
   }
 
   @Test
-  void idsLongerThanTheCap_areCutThere_andAnIdOfTheIngressMaximumIsWhole() {
+  void idsLongerThanTheCap_areCutThere_andIdsOfTheirMaximumAreWhole() {
     String longest = "a".repeat(255);
-    SpanData span = spanFor(new CommandId("c".repeat(300)), AggregateId.of(longest));
+    String longestCommandId = "c".repeat(CommandId.MAX_LENGTH);
+    SpanData span = spanFor(new CommandId(longestCommandId), AggregateId.of(longest));
 
-    assertThat(attribute(span, TraceAttributes.COMMAND_ID))
-        .isEqualTo("c".repeat(LogSanitizer.MAX_TRACE_LENGTH) + "...");
+    assertThat(attribute(span, TraceAttributes.COMMAND_ID)).isEqualTo(longestCommandId);
     assertThat(attribute(span, TraceAttributes.AGGREGATE_ID)).isEqualTo(longest);
     // orders:<255 characters> is 262 characters long.
     assertThat(attribute(span, TraceAttributes.STREAM_ID))

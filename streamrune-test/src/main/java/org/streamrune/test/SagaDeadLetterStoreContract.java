@@ -23,7 +23,8 @@ import org.streamrune.test.SagaStoreContract.ContractState;
 
 /**
  * The dead-letter contract both shipped stores honour: stored facts win, the shield is the
- * retention rule.
+ * retention rule. A saga type, saga id and event type as long as core allows are stored, found and
+ * discarded like any other.
  */
 public abstract class SagaDeadLetterStoreContract {
 
@@ -116,6 +117,29 @@ public abstract class SagaDeadLetterStoreContract {
     assertEquals(30L, folded.getFirst().eventOffset().value());
     assertEquals(T0.plusSeconds(10), folded.getFirst().faultedAt());
     assertEquals(31L, folded.get(1).eventOffset().value());
+  }
+
+  @Test
+  public void anEntryWithTheLongestNames_isStoredFoundAndDiscarded() {
+    SagaId longestId = SagaId.of("i".repeat(SagaId.MAX_LENGTH));
+    SagaType longestType = SagaType.of("\uD83D\uDE00".repeat(SagaType.MAX_LENGTH));
+    EventType longestEvent = EventType.of("e".repeat(EventType.MAX_LENGTH));
+    store.publish(
+        new SagaDeadLetterEntry(
+            longestId,
+            longestType,
+            GlobalOffset.of(10L),
+            longestEvent,
+            "java.lang.RuntimeException",
+            "boom",
+            T0));
+
+    var found = store.findBySaga(longestId);
+    assertEquals(1, found.size());
+    assertEquals(longestType, found.get(0).sagaType());
+    assertEquals(longestEvent, found.get(0).eventType());
+    assertTrue(store.discard(longestId, longestType, GlobalOffset.of(10L)));
+    assertTrue(store.findBySaga(longestId).isEmpty());
   }
 
   @Test

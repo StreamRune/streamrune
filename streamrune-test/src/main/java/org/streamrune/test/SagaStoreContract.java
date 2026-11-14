@@ -29,7 +29,9 @@ import org.streamrune.core.types.SagaType;
  * The recorded-recovery-state contract every {@link SagaStore} must honour. Run by {@code
  * InMemorySagaStoreContractTest} and {@code PostgresSagaStoreContractTest}: a store that passes
  * here can drive {@code SagaStepExecutor}, {@code SagaRunner} and {@code SagaDeadLetterReplayer};
- * the two shipped stores cannot diverge unnoticed.
+ * the two shipped stores cannot diverge unnoticed. A saga type and a saga id as long as core allows
+ * ({@value SagaType#MAX_LENGTH} and {@value SagaId#MAX_LENGTH} characters) are stored and read back
+ * like any other.
  */
 public abstract class SagaStoreContract {
 
@@ -85,6 +87,24 @@ public abstract class SagaStoreContract {
     assertNull(row.lastAppliedOffset());
     assertNull(row.lastReplayedOffset());
     assertEquals(SagaStatus.RUNNING, row.effectiveStatus());
+  }
+
+  @Test
+  public void aSagaTypeAndIdOfTheLongestLength_areStoredAndReadBack() {
+    SagaId longestId = SagaId.of("i".repeat(SagaId.MAX_LENGTH));
+    SagaType ascii = SagaType.of("t".repeat(SagaType.MAX_LENGTH));
+    SagaType wide = SagaType.of("\uD83D\uDE00".repeat(SagaType.MAX_LENGTH));
+    SagaId wideId = SagaId.of("contract-saga-wide");
+
+    store.create(longestId, ascii, EVOLVED, SagaStatus.RUNNING);
+    store.create(wideId, wide, EVOLVED, SagaStatus.RUNNING);
+
+    assertEquals(
+        SagaStatus.RUNNING,
+        store.load(longestId, ascii, ContractState.class).orElseThrow().effectiveStatus());
+    assertEquals(
+        SagaStatus.RUNNING,
+        store.load(wideId, wide, ContractState.class).orElseThrow().effectiveStatus());
   }
 
   @Test

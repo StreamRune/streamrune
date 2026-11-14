@@ -3,7 +3,9 @@ package org.streamrune.core.outbox;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import org.streamrune.core.types.StoredLength;
 
 /**
  * Persistence contract for outbox entries.
@@ -21,6 +23,30 @@ import java.util.Optional;
  * source event, as {@code PostgresEventStore} and {@code PostgresOutboxStore} do.
  */
 public interface OutboxStore {
+
+  /**
+   * The longest {@code skippedBy}, in code points: the width of the {@code
+   * outbox_events.skipped_by} column. A longer one is refused by {@link #requireSkippedBy} before
+   * anything is written.
+   */
+  int MAX_SKIPPED_BY_LENGTH = 255;
+
+  /**
+   * Checks the operator name of a skip: present and at most {@value #MAX_SKIPPED_BY_LENGTH}
+   * characters, counted in code points as the {@code skipped_by VARCHAR(255)} column counts it.
+   * Every {@link #skipFailed} implementation calls it before it writes anything, and {@link
+   * OutboxEntry.SkipRecord} calls it on construction.
+   *
+   * @param skippedBy who skipped the entry
+   * @return {@code skippedBy}
+   * @throws NullPointerException if {@code skippedBy} is {@code null}
+   * @throws IllegalArgumentException if it is longer than {@value #MAX_SKIPPED_BY_LENGTH}
+   *     characters; the message states the length and the maximum and does not echo the value
+   */
+  static String requireSkippedBy(String skippedBy) {
+    Objects.requireNonNull(skippedBy, "skippedBy is required");
+    return StoredLength.requireAtMost(skippedBy, MAX_SKIPPED_BY_LENGTH, "skippedBy");
+  }
 
   /**
    * Persists a new outbox entry. If an entry with the same {@link OutboxEntryId} already exists,

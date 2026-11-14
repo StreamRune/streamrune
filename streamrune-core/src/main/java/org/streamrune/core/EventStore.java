@@ -1,10 +1,12 @@
 package org.streamrune.core;
 
 import java.util.List;
+import java.util.Objects;
 import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.StoredLength;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
@@ -101,6 +103,31 @@ import org.streamrune.core.types.Version;
  * </ul>
  */
 public interface EventStore {
+
+  /**
+   * The longest snapshot state type name, in code points: the width of the {@code
+   * snapshot_store.state_type} column. A longer one is refused by {@link #requireStateType} before
+   * anything is written.
+   */
+  int MAX_STATE_TYPE_LENGTH = 255;
+
+  /**
+   * Checks the type name a snapshot is stored under: present and at most {@value
+   * #MAX_STATE_TYPE_LENGTH} characters, counted in code points as the {@code state_type
+   * VARCHAR(255)} column counts it. Every {@link #saveSnapshot(StreamId, Version, AggregateState,
+   * int, long)} implementation that stores a type name calls it before it writes anything, and
+   * {@link SimpleEventTypeRegistry.Builder#registerState} calls it on registration.
+   *
+   * @param stateType the state type name
+   * @return {@code stateType}
+   * @throws NullPointerException if {@code stateType} is {@code null}
+   * @throws IllegalArgumentException if it is longer than {@value #MAX_STATE_TYPE_LENGTH}
+   *     characters; the message states the length and the maximum and does not echo the value
+   */
+  static String requireStateType(String stateType) {
+    Objects.requireNonNull(stateType, "stateType is required");
+    return StoredLength.requireAtMost(stateType, MAX_STATE_TYPE_LENGTH, "stateType");
+  }
 
   /**
    * Loads the aggregate history. If a snapshot exists, returns the snapshot state together with
@@ -347,6 +374,8 @@ public interface EventStore {
    * storing nothing, a state whose type name does not resolve or resolves to another class: the
    * snapshot could not be read back as the class it was saved from. A stored type that does not
    * resolve when the stream is loaded discards the snapshot (see {@link #load(StreamId, int)}).
+   * Such a store first checks the type name with {@link #requireStateType}: a name longer than
+   * {@value #MAX_STATE_TYPE_LENGTH} characters is refused with {@link IllegalArgumentException}.
    *
    * @param streamId the stream to snapshot
    * @param version the event version at which the snapshot was taken
@@ -355,8 +384,8 @@ public interface EventStore {
    * @param snapshotPurgeGeneration the purge generation of the load {@code state} was built from
    * @return {@code true} if the snapshot was stored, {@code false} if the stream's snapshot was
    *     purged since the load and nothing was written
-   * @throws IllegalArgumentException if {@code snapshotVersion < 1} or {@code
-   *     snapshotPurgeGeneration < 0}
+   * @throws IllegalArgumentException if {@code snapshotVersion < 1}, {@code snapshotPurgeGeneration
+   *     < 0}, or the state's type name is longer than {@value #MAX_STATE_TYPE_LENGTH} characters
    * @throws EventStoreException if the state's type does not resolve in the store's registry as its
    *     own class
    */

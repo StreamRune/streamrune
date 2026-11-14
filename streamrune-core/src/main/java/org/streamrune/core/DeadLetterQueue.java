@@ -41,7 +41,9 @@ public interface DeadLetterQueue {
    *
    * @param commandPayload serialized command payload (JSON string); must not be null
    * @param commandType fully-qualified class name ({@link Class#getName()}) of the command; must
-   *     not be null or blank
+   *     not be null or blank, and at most {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
+   *     ({@link CommandInbox#requireCommandType}), the width of {@code
+   *     dead_letter_queue.command_type}
    * @param commandId unique ID of the command; must not be null
    * @param streamId the stream the command targeted — its aggregate type and id — or {@code null}
    *     if not applicable
@@ -85,6 +87,7 @@ public interface DeadLetterQueue {
       if (commandType.isBlank()) {
         throw new IllegalArgumentException("commandType must not be blank");
       }
+      CommandInbox.requireCommandType(commandType);
       Objects.requireNonNull(commandId, "commandId is required");
       Objects.requireNonNull(errorType, "errorType is required");
       if (errorType.isBlank()) {
@@ -137,7 +140,9 @@ public interface DeadLetterQueue {
    *
    * @param commandId unique identifier for this entry; must not be null
    * @param commandType fully-qualified class name ({@link Class#getName()}) of the command; must
-   *     not be null or blank
+   *     not be null or blank, and at most {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
+   *     ({@link CommandInbox#requireCommandType}), the width of {@code
+   *     dead_letter_queue.command_type}
    * @param commandPayload serialized command payload (JSON string); must not be null
    * @param streamId the stream the command targeted — its aggregate type and id — or {@code null}
    *     if not applicable
@@ -189,6 +194,7 @@ public interface DeadLetterQueue {
       if (commandType.isBlank()) {
         throw new IllegalArgumentException("commandType must not be blank");
       }
+      CommandInbox.requireCommandType(commandType);
       Objects.requireNonNull(commandPayload, "commandPayload is required");
       Objects.requireNonNull(errorType, "errorType is required");
       if (errorType.isBlank()) {

@@ -284,6 +284,8 @@ public interface org.streamrune.core.EventStore
   public default void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState)
   public default void saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int)
   public static final int IGNORE_SNAPSHOT = -1
+  public static final int MAX_STATE_TYPE_LENGTH = 255
+  public static java.lang.String requireStateType(java.lang.String)
 
 public static final record org.streamrune.core.EventStore$AppendResult
   public <init>(java.util.List<org.streamrune.core.types.GlobalOffset>, org.streamrune.core.types.Version)
@@ -904,6 +906,7 @@ public final record org.streamrune.core.outbox.OutboxEntry
   public org.streamrune.core.outbox.OutboxStatus status()
   public org.streamrune.core.tracing.SpanLink traceLink()
   public org.streamrune.core.types.StreamId streamId()
+  public static final int MAX_PAYLOAD_TYPE_LENGTH = 255
   public static org.streamrune.core.outbox.OutboxEntry pending(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String)
   public static org.streamrune.core.outbox.OutboxEntry pending(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String, org.streamrune.core.types.StreamId)
 
@@ -922,6 +925,7 @@ public final record org.streamrune.core.outbox.OutboxEntryId
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.outbox.OutboxEntryId of(java.lang.String)
 
 public interface org.streamrune.core.outbox.OutboxEntrySpans
@@ -995,6 +999,8 @@ public interface org.streamrune.core.outbox.OutboxStore
   public default long countByStatus(org.streamrune.core.outbox.OutboxStatus)
   public default org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
   public default org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
+  public static final int MAX_SKIPPED_BY_LENGTH = 255
+  public static java.lang.String requireSkippedBy(java.lang.String)
 
 public static final record org.streamrune.core.outbox.OutboxStore$BlockageSample
   public <init>(long, java.time.Instant, long)
@@ -1582,6 +1588,7 @@ public final record org.streamrune.core.types.CommandId
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.types.CommandId of(java.lang.String)
 
 public final record org.streamrune.core.types.CorrelationId
@@ -1648,6 +1655,7 @@ public final record org.streamrune.core.types.ProjectionName
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.types.ProjectionName of(java.lang.String)
 
 public final record org.streamrune.core.types.SagaType
@@ -1656,6 +1664,7 @@ public final record org.streamrune.core.types.SagaType
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.types.SagaType fromClass(java.lang.Class<?>)
   public static org.streamrune.core.types.SagaType of(java.lang.String)
 
@@ -1666,6 +1675,9 @@ public final record org.streamrune.core.types.SpanId
   public java.lang.String toString()
   public java.lang.String value()
   public static org.streamrune.core.types.SpanId of(java.lang.String)
+
+public final class org.streamrune.core.types.StoredLength
+  public static java.lang.String requireAtMost(java.lang.String, int, java.lang.String)
 
 public final record org.streamrune.core.types.StreamId
   public <init>(org.streamrune.core.types.AggregateType, org.streamrune.core.types.AggregateId)
@@ -1694,6 +1706,7 @@ public final record org.streamrune.core.types.SubscriptionName
   public final int hashCode()
   public java.lang.String toString()
   public java.lang.String value()
+  public static final int MAX_LENGTH = 255
   public static org.streamrune.core.types.SubscriptionName of(java.lang.String)
 
 public final record org.streamrune.core.types.TraceId

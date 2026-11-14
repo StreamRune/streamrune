@@ -115,9 +115,13 @@ public final class SimpleEventTypeRegistry implements EventTypeRegistry {
     /**
      * Registers a state type name to its Java class.
      *
+     * @throws IllegalArgumentException if the name is longer than {@value
+     *     EventStore#MAX_STATE_TYPE_LENGTH} characters ({@link EventStore#requireStateType}): a
+     *     snapshot could not be stored under it
      * @throws IllegalStateException if the state type name is already registered
      */
     public Builder registerState(String name, Class<?> type) {
+      EventStore.requireStateType(name);
       if (stateTypes.containsKey(name)) {
         throw new IllegalStateException("Duplicate state type: " + name);
       }

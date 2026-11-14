@@ -31,8 +31,12 @@ import org.streamrune.core.types.TraceId;
  * stores cannot diverge in outcome: every status transition, both modes' head rules, the delete
  * guard (delete refuses FAILED), retention (never deletes FAILED), the strict null-aggregate
  * rejection, position-preserving replay, the audited skip, the blockage sample, the read-only
- * lookups and the trace link an entry carries. Cases where the mode matters exist once per mode and
- * share a helper, so a reader sees both behaviours side by side.
+ * lookups, the trace link an entry carries, and entry ids, payload types and skip operators as long
+ * as core allows ({@value OutboxEntryId#MAX_LENGTH}, {@value OutboxEntry#MAX_PAYLOAD_TYPE_LENGTH}
+ * and {@value OutboxStore#MAX_SKIPPED_BY_LENGTH} characters, counted in code points) stored and
+ * read back unchanged, and a longer operator refused before anything is written. Cases where the
+ * mode matters exist once per mode and share a helper, so a reader sees both behaviours side by
+ * side.
  */
 public abstract class OutboxStoreContract {
 
@@ -240,6 +244,51 @@ public abstract class OutboxStoreContract {
     assertNotNull(skipped.processedAt(), "the FAILED timestamp is kept");
     assertEquals(10, skipped.attempts(), "the ladder record is kept");
     assertEquals(List.of("n1"), claimIds(store), "the successor is claimable after the skip");
+  }
+
+  @Test
+  public void idsAndPayloadTypesOfTheLongestLength_areStoredAndReadBack() {
+    var store = newStore(OutboxOrderingMode.AVAILABILITY_FIRST);
+    String asciiId = "i".repeat(OutboxEntryId.MAX_LENGTH);
+    String asciiType = "t".repeat(OutboxEntry.MAX_PAYLOAD_TYPE_LENGTH);
+    String wideId = "\uD83D\uDE00".repeat(OutboxEntryId.MAX_LENGTH);
+    String wideType = "\uD83D\uDE01".repeat(OutboxEntry.MAX_PAYLOAD_TYPE_LENGTH);
+    store.save(OutboxEntry.pending(OutboxEntryId.of(asciiId), "{\"k\":1}", asciiType));
+    store.save(OutboxEntry.pending(OutboxEntryId.of(wideId), "{\"k\":2}", wideType));
+
+    assertEquals(asciiType, store.findById(OutboxEntryId.of(asciiId)).orElseThrow().payloadType());
+    assertEquals(wideType, store.findById(OutboxEntryId.of(wideId)).orElseThrow().payloadType());
+    var claimed = store.loadPending(10);
+    assertEquals(2, claimed.size());
+    for (OutboxEntry entry : claimed) {
+      assertTrue(store.markDelivered(entry.id(), store.claimedBy()));
+    }
+    assertEquals(OutboxStatus.DELIVERED, statusOf(store, asciiId));
+    assertEquals(OutboxStatus.DELIVERED, statusOf(store, wideId));
+  }
+
+  @Test
+  public void skip_recordsAnOperatorOfTheLongestLength_andRefusesALongerOne() {
+    var store = newStore(OutboxOrderingMode.STRICT_PER_AGGREGATE);
+    store.save(pending("n0", A));
+    store.save(pending("m0", B));
+    String ascii = "o".repeat(OutboxStore.MAX_SKIPPED_BY_LENGTH);
+    String wide = "\uD83D\uDE00".repeat(OutboxStore.MAX_SKIPPED_BY_LENGTH);
+    var claimed = claimIds(store);
+    assertEquals(2, claimed.size());
+    for (String id : claimed) {
+      assertTrue(store.markFailed(OutboxEntryId.of(id), 10, "poison", store.claimedBy()));
+    }
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> store.skipFailed(OutboxEntryId.of("n0"), ascii + "o", "too long"));
+    assertEquals(OutboxStatus.FAILED, statusOf(store, "n0"), "a refused skip writes nothing");
+
+    assertTrue(store.skipFailed(OutboxEntryId.of("n0"), ascii, "r"));
+    assertTrue(store.skipFailed(OutboxEntryId.of("m0"), wide, "r"));
+    assertEquals(ascii, store.findById(OutboxEntryId.of("n0")).orElseThrow().skip().skippedBy());
+    assertEquals(wide, store.findById(OutboxEntryId.of("m0")).orElseThrow().skip().skippedBy());
   }
 
   @Test

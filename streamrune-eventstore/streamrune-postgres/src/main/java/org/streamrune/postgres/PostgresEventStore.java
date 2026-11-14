@@ -2459,6 +2459,7 @@ public final class PostgresEventStore implements EventStore {
       long snapshotPurgeGeneration) {
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     String stateType = state.getClass().getSimpleName();
+    EventStore.requireStateType(stateType);
     Class<?> resolved;
     try {
       resolved = typeRegistry.resolveStateType(stateType);

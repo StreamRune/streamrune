@@ -38,7 +38,7 @@ public final class OutboxFailedReplayer {
 
   private static final Logger LOG = LoggerFactory.getLogger(OutboxFailedReplayer.class);
 
-  static final int MAX_SKIPPED_BY_LENGTH = 255;
+  static final int MAX_SKIPPED_BY_LENGTH = OutboxStore.MAX_SKIPPED_BY_LENGTH;
   static final int MAX_REASON_LENGTH = 2000;
 
   /** Outcome of {@link #replay(OutboxEntryId)}. */

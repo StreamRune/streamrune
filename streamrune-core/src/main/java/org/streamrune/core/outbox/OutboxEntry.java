@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.Objects;
 import org.streamrune.core.tracing.SpanLink;
+import org.streamrune.core.types.StoredLength;
 import org.streamrune.core.types.StreamId;
 
 /**
@@ -11,7 +12,9 @@ import org.streamrune.core.types.StreamId;
  *
  * <p>Use the {@link #pending} factories to create a new entry ready for delivery. The {@code
  * payload} is a JSON string (produced by the caller) and {@code payloadType} names the event type
- * for receivers.
+ * for receivers. {@code payloadType} is at most {@value #MAX_PAYLOAD_TYPE_LENGTH} characters,
+ * counted in code points as the {@code outbox_events.payload_type VARCHAR(255)} column counts it,
+ * so an entry that is accepted here is stored by every outbox store.
  *
  * <p>{@code streamId} names the stream whose delivery order the consumer depends on — normally the
  * event's own stream. On a {@link OutboxOrderingMode#STRICT_PER_AGGREGATE} channel it is mandatory
@@ -57,17 +60,38 @@ public record OutboxEntry(
    * {@code skippedAt} is the resolution time.
    */
   public record SkipRecord(Instant skippedAt, String skippedBy, String reason) {
+    /**
+     * Creates the skip audit.
+     *
+     * @throws IllegalArgumentException if {@code skippedBy} is longer than {@value
+     *     OutboxStore#MAX_SKIPPED_BY_LENGTH} characters (code points); see {@link
+     *     OutboxStore#requireSkippedBy}
+     */
     public SkipRecord {
       Objects.requireNonNull(skippedAt, "skippedAt is required");
-      Objects.requireNonNull(skippedBy, "skippedBy is required");
+      OutboxStore.requireSkippedBy(skippedBy);
       Objects.requireNonNull(reason, "reason is required");
     }
   }
 
+  /**
+   * The longest {@code payloadType}, in code points: the width of the {@code payload_type} column.
+   */
+  public static final int MAX_PAYLOAD_TYPE_LENGTH = 255;
+
+  /**
+   * Creates the entry.
+   *
+   * @throws IllegalArgumentException if {@code payloadType} is longer than {@value
+   *     #MAX_PAYLOAD_TYPE_LENGTH} characters (code points), the message stating the length and not
+   *     echoing the value; if {@code attempts} is negative; or if {@code skip} is present on an
+   *     entry that is not {@code SKIPPED}, or missing on one that is
+   */
   public OutboxEntry {
     Objects.requireNonNull(id, "id is required");
     Objects.requireNonNull(payload, "payload is required");
     Objects.requireNonNull(payloadType, "payloadType is required");
+    StoredLength.requireAtMost(payloadType, MAX_PAYLOAD_TYPE_LENGTH, "payloadType");
     Objects.requireNonNull(status, "status is required");
     Objects.requireNonNull(createdAt, "createdAt is required");
     traceLink = traceLink == null ? SpanLink.NONE : traceLink;

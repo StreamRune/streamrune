@@ -940,6 +940,7 @@ public final class PostgresOutboxStore implements OutboxStore {
     if (reason == null) {
       throw new IllegalArgumentException("reason is required");
     }
+    OutboxStore.requireSkippedBy(skippedBy);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SKIP_FAILED)) {
       ps.setString(1, skippedBy);
