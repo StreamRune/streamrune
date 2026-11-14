@@ -37,8 +37,10 @@ import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
@@ -63,6 +65,12 @@ import org.streamrune.test.InMemoryEventStore;
  * the saga compensate a step that had in fact succeeded.
  */
 class VirtualThreadCommandBusKeyedDuplicateTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderConfirmed.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -288,7 +296,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   @Test
   void lockSerializedDuplicate_receivesRecordedOutcome_deciderRunsOnce() throws Exception {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new ConfirmDecider();
     var locker = new RendezvousLocker();
     var interceptor = new CountingInterceptor();
@@ -335,7 +343,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   @Test
   void deciderRejectionAfterConcurrentCommit_isAnsweredFromTheInbox() throws Exception {
     var inbox = new InMemoryCommandInbox();
-    var inMemory = new InMemoryEventStore().withCommandInbox(inbox);
+    var inMemory = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var secondLoaderInsideLoad = new CountDownLatch(1);
     var firstWriterCommitted = new CountDownLatch(1);
     var loads = new AtomicInteger();
@@ -407,7 +415,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   @Test
   void retryAttempt_findsKeyRecordedBetweenAttempts_returnsReplayWithoutRedeciding() {
     var inbox = new InMemoryCommandInbox();
-    var inMemory = new InMemoryEventStore().withCommandInbox(inbox);
+    var inMemory = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var appends = new AtomicInteger();
     var store =
         new ForwardingEventStore(inMemory) {
@@ -445,7 +453,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   @Test
   void deciderRejection_withNoRecordedKey_propagates() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var decider = new ConfirmDecider();
     var bus = bus(store, inbox, new LocalStripedLocker(16), decider);
 
@@ -468,7 +476,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
     var inMemoryInbox = new InMemoryCommandInbox();
     var decider = new ConfirmDecider();
     CommandInbox failingAfterRejection = inboxFailingAfterRejection(inMemoryInbox, decider);
-    var store = new InMemoryEventStore().withCommandInbox(inMemoryInbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inMemoryInbox);
     var bus = bus(store, failingAfterRejection, new LocalStripedLocker(16), decider);
 
     bus.execute(new ConfirmOrder("o-5")); // confirmed, unkeyed
@@ -495,7 +503,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   void deciderRejection_whenInboxLookupFails_isNeverDeadLettered() {
     var inMemoryInbox = new InMemoryCommandInbox();
     var decider = new ConfirmDecider();
-    var store = new InMemoryEventStore().withCommandInbox(inMemoryInbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inMemoryInbox);
     var dlq = new InMemoryDeadLetterQueue();
     var interceptor = new CountingInterceptor();
     var bus =
@@ -520,7 +528,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
   void deciderRejection_whenInboxLookupFails_isNotDeadLetteredEvenByAPermissivePredicate() {
     var inMemoryInbox = new InMemoryCommandInbox();
     var decider = new ConfirmDecider();
-    var store = new InMemoryEventStore().withCommandInbox(inMemoryInbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inMemoryInbox);
     var dlq = new InMemoryDeadLetterQueue();
     var bus =
         VirtualThreadCommandBus.builder()
@@ -577,7 +585,7 @@ class VirtualThreadCommandBusKeyedDuplicateTest {
     var interceptor = new CountingInterceptor();
     var bus =
         busWithDeadLetterQueue(
-            new InMemoryEventStore(),
+            new InMemoryEventStore(TYPES),
             recordedBetweenPreCheckAndLock,
             decider,
             new InMemoryDeadLetterQueue(),

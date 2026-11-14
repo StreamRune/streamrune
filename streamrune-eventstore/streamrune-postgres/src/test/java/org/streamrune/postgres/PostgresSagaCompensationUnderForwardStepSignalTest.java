@@ -28,6 +28,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -73,6 +74,15 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class PostgresSagaCompensationUnderForwardStepSignalTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Opened.class)
+          .registerEvent(Reserved.class)
+          .registerEvent(Released.class)
+          .registerEvent(Refunded.class)
+          .registerState("Untouched", Untouched.class)
+          .build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -226,7 +236,7 @@ class PostgresSagaCompensationUnderForwardStepSignalTest {
     SagaStore sagaStore =
         new PostgresSagaStore(dataSource, new ObjectMapper().registerModule(new JavaTimeModule()));
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    var eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     SagaId sagaId = SagaId.of("order-saga-" + UUID.randomUUID());
     var metrics = new ReportCountingMetrics();
     var saga = new OrderSaga();

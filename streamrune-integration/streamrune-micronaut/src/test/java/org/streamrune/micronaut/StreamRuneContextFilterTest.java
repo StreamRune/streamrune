@@ -28,6 +28,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.StreamId;
@@ -41,6 +43,12 @@ import org.streamrune.test.InMemoryEventStore;
 
 /** Tests for {@link StreamRuneContextFilter}. */
 class StreamRuneContextFilterTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(org.streamrune.test.CommandBusProvenanceContract.Marked.class)
+          .registerState("Marks", org.streamrune.test.CommandBusProvenanceContract.Marks.class)
+          .build();
 
   /** A W3C baggage key a client may send to name a causing event; the framework reads none. */
   private static final String CAUSATION_KEY = "streamrune.causation-id";
@@ -671,7 +679,7 @@ class StreamRuneContextFilterTest {
                     .put(ORIGIN_KEY, "order-saga-42")
                     .build());
 
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     try (var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

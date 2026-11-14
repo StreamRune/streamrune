@@ -14,6 +14,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
@@ -28,6 +30,12 @@ import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
 
 class StreamRuneFacadeTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Evt.Incd.class)
+          .registerState("State", State.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("counter");
 
@@ -86,7 +94,7 @@ class StreamRuneFacadeTest {
 
   @Test
   void executeDelegatesToCommandBus() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     try (var streamRune = buildStreamRune(store)) {
       withCtx(() -> streamRune.execute(new Cmd.Inc("counter-1")));
       assertEquals(1, store.load(StreamId.of(TYPE, AggregateId.of("counter-1"))).events().size());
@@ -95,7 +103,7 @@ class StreamRuneFacadeTest {
 
   @Test
   void facadeDelegatesIdempotentExecutionCapabilityAndKeyedExecute() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     try (var streamRune = buildStreamRune(store)) {
       // The facade must report the SAME keyed-execution capability as the bus it wraps (here no
       // CommandInbox → false), not the CommandBus interface default.
@@ -118,7 +126,7 @@ class StreamRuneFacadeTest {
     // StreamRune.close() delegates to VirtualThreadCommandBus.close(), which is idempotent
     // per the AutoCloseable convention: a repeated close() waits for any remaining in-flight
     // commands and returns instead of throwing.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var streamRune = buildStreamRune(store);
     streamRune.close();
     assertDoesNotThrow(streamRune::close);
@@ -126,7 +134,7 @@ class StreamRuneFacadeTest {
 
   @Test
   void startAndStopProjectionsWithoutRegistered() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     try (var streamRune = buildStreamRune(store)) {
       assertDoesNotThrow(streamRune::startProjections);
       assertDoesNotThrow(streamRune::stopProjections);
@@ -149,7 +157,7 @@ class StreamRuneFacadeTest {
       }
     }
 
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var streamRune =
         StreamRune.builder()
             .eventStore(store)
@@ -175,7 +183,7 @@ class StreamRuneFacadeTest {
   @Test
   void commandInbox_reachesTheBus_soAKeyedCommandRunsOnceAndItsRepeatIsAReplay() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     try (var streamRune =
         StreamRune.builder()
             .eventStore(store)

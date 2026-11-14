@@ -55,6 +55,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ConfigurationOracle;
@@ -80,6 +82,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * a request without a principal is anonymous.
  */
 class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ContractBeans.ContractCommandExecuted.class)
+          .registerState("ContractCommandState", ContractBeans.ContractCommandState.class)
+          .build();
 
   /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
   private static PostgreSQLContainer postgres;
@@ -173,7 +181,7 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
       GenericApplicationContext context, DataSource dataSource, Set<Class<?>> extraBeans) {
     if (dataSource == null) {
       context.registerBean(
-          EventStoreFactory.class, () -> InMemoryEventStoreFactory.builder().build());
+          EventStoreFactory.class, () -> InMemoryEventStoreFactory.builder(TYPES).build());
       context.registerBean(OffsetStore.class, InMemoryOffsetStore::new);
     } else {
       context.registerBean("dataSource", DataSource.class, () -> dataSource);

@@ -17,7 +17,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -47,6 +49,13 @@ import org.streamrune.test.InMemorySagaStore;
  * hooks at the right points, without changing any existing propagation/exception semantics.
  */
 class SagaMetricsEmissionTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Start.class)
+          .registerEvent(StockEvent.StockReserved.class)
+          .registerState("StockState", StockState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("inventory");
 
@@ -872,7 +881,7 @@ class SagaMetricsEmissionTest {
   @Test
   void inboxReplayHit_recordedOnPreCheckHit() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
 
     var bus =
         VirtualThreadCommandBus.builder()

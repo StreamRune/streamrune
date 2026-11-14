@@ -16,6 +16,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.metrics.MetricNames;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
@@ -46,6 +48,12 @@ import org.streamrune.test.RecordingStreamRuneMetrics;
  */
 class ClockSeamTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerState("Order", Order.class)
+          .build();
+
   record OrderPlaced(String orderId) implements DomainEvent {}
 
   record PlaceOrder(String orderId) implements Command {}
@@ -57,7 +65,7 @@ class ClockSeamTest {
       StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
 
   private static InMemoryEventStore storeWithOneOrder() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(
         ORDER_1,
         List.of(
@@ -184,7 +192,7 @@ class ClockSeamTest {
     var clock = MutableClock.startingAt(START);
     var runner =
         ScheduledProjectionRunner.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .offsetStore(new InMemoryOffsetStore())
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
             .register(
@@ -223,7 +231,7 @@ class ClockSeamTest {
   @Test
   void streamRune_handsItsClockToTheCommandBus() {
     var clock = MutableClock.startingAt(START);
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     Decider<PlaceOrder, Order, OrderPlaced> decider =
         new Decider<>() {
           @Override

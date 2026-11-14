@@ -27,6 +27,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -56,6 +58,12 @@ import org.streamrune.test.MutableClock;
  * </ul>
  */
 class DeadLetterReplaySafetyTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(StockEvent.StockAdjusted.class)
+          .registerState("Stock", Stock.class)
+          .build();
 
   private static final AggregateType PRODUCT = AggregateType.of("product");
   private static final Duration INBOX_WINDOW = Duration.ofDays(7);
@@ -192,7 +200,9 @@ class DeadLetterReplaySafetyTest {
 
     Harness(boolean withInbox, int appendFailures, DeadLetterRetryPolicy policy) {
       store =
-          withInbox ? new InMemoryEventStore().withCommandInbox(inbox) : new InMemoryEventStore();
+          withInbox
+              ? new InMemoryEventStore(TYPES).withCommandInbox(inbox)
+              : new InMemoryEventStore(TYPES);
       var busBuilder =
           VirtualThreadCommandBus.builder()
               .eventStore(new FailingAppends(store, appendFailures))

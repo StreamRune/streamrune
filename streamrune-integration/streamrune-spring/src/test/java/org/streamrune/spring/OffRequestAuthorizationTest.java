@@ -32,7 +32,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RequireRole;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
@@ -76,6 +78,12 @@ import org.streamrune.test.InMemoryEventStore;
  * loss.
  */
 class OffRequestAuthorizationTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderArchived.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
 
@@ -128,7 +136,7 @@ class OffRequestAuthorizationTest {
 
   private final InMemoryCommandInbox commandInbox = new InMemoryCommandInbox();
   private final InMemoryEventStore eventStore =
-      new InMemoryEventStore().withCommandInbox(commandInbox);
+      new InMemoryEventStore(TYPES).withCommandInbox(commandInbox);
   private final InMemoryDeadLetterQueue deadLetterQueue = new InMemoryDeadLetterQueue();
 
   private static final String[] PROPERTIES = {

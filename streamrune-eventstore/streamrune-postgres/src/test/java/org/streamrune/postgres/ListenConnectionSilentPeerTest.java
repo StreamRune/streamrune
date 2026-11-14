@@ -27,6 +27,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
@@ -59,6 +60,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @Testcontainers
 @Timeout(120)
 class ListenConnectionSilentPeerTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Added.class)
+          .registerState("CartState", CartState.class)
+          .build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -182,7 +189,7 @@ class ListenConnectionSilentPeerTest {
   @Test
   void aHybridSubscriptionReportsItsPushPathDeadUntilItHasReplacedAVanishedConnection()
       throws Exception {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     OffsetStore offsetStore = mock(OffsetStore.class);
     when(offsetStore.getLastOffset(any())).thenReturn(GlobalOffset.initial());
     var health = new SubscriptionHealthContributor(eventStore, offsetStore);

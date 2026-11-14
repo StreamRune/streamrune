@@ -21,10 +21,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.LockMode;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.Versioned;
 import org.streamrune.core.projection.AtomicBatchProcessor;
@@ -50,6 +52,9 @@ import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 
 class ProjectionAutoConfigTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Ping.class).build();
 
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
@@ -1192,7 +1197,7 @@ class ProjectionAutoConfigTest {
   static class EventsConfig {
     @Bean
     EventStore eventStore() {
-      var store = new InMemoryEventStore();
+      var store = new InMemoryEventStore(TYPES);
       store.append(
           StreamId.of(AggregateType.of("ping"), AggregateId.of("s")),
           List.of(

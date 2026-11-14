@@ -12,6 +12,8 @@ import org.springframework.context.annotation.Configuration;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.DeadLetterRetentionSweeper;
 import org.streamrune.runtime.DeadLetterRetryRunner;
@@ -25,13 +27,15 @@ import org.streamrune.runtime.DeadLetterRetryRunner;
  */
 class DeadLetterRetentionSweeperWiringAutoConfigurationTest {
 
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
+
   private final DeadLetterQueue deadLetterQueue = mock(DeadLetterQueue.class);
 
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
-          .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+          .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
           .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore);
 
   @Test

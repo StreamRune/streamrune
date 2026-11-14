@@ -177,11 +177,14 @@ All three — `PostgresEventStore.create(...)`, `initializeSchema()` and the fac
 refuse a server older than PostgreSQL 17 with `UnsupportedServerVersionException` before they
 write anything.
 
-For testing, use the in-memory store (no database, no registry required — it keeps events by reference):
+For testing, use the in-memory store. It needs no database, but it stores events the way
+PostgreSQL does — as JSON, read back through the same registry — so an event type you forgot to
+register, or one Jackson cannot serialize, fails the unit test instead of production:
 
 ```java
-InMemoryEventStore eventStore = new InMemoryEventStore();
+InMemoryEventStore eventStore = new InMemoryEventStore(typeRegistry);
 ```
+
 
 ---
 

@@ -206,7 +206,7 @@ class InMemoryEventStoreReadClassificationTest {
     // PostgresEventStore.toEnvelope.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("VEvent", VEventV2.class).build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("stream-throwing-upcast"));
     // Append while chainless (stamped schema_version 1), then register the v2 chain — the read
     // takes the upcast branch (see withUpcasters' javadoc).
@@ -232,7 +232,7 @@ class InMemoryEventStoreReadClassificationTest {
     // in stored data.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("VEvent", VEventV2.class).build();
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("stream-malformed-upcast"));
     store.append(
         s, List.of(envelope(s, 1, new EventType("VEvent"), new VEvent("x"))), Version.initial());
@@ -259,7 +259,7 @@ class InMemoryEventStoreReadClassificationTest {
     // the PLAIN EventStoreException — transient infrastructure, never the deterministic subtype.
     var registry =
         SimpleEventTypeRegistry.builder().registerEvent("Secret", SecretEvent.class).build();
-    var store = InMemoryEventStore.serializing(registry, new DecryptFailingEngine());
+    var store = new InMemoryEventStore(registry, new DecryptFailingEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("stream-secret-transient"));
     store.append(
         s,
@@ -287,7 +287,7 @@ class InMemoryEventStoreReadClassificationTest {
             .registerEvent("Validated", ValidatedSecretEvent.class)
             .build();
     var engine = new InMemoryCryptoEngine();
-    var store = InMemoryEventStore.serializing(registry, engine);
+    var store = new InMemoryEventStore(registry, engine);
     StreamId s = StreamId.of(TYPE, AggregateId.of("stream-validated-forget"));
     store.append(
         s,
@@ -319,7 +319,7 @@ class InMemoryEventStoreReadClassificationTest {
             .registerState("ValidatedState", ValidatedState.class)
             .build();
     var engine = new InMemoryCryptoEngine();
-    var store = InMemoryEventStore.serializing(registry, engine);
+    var store = new InMemoryEventStore(registry, engine);
     StreamId s = StreamId.of(TYPE, AggregateId.of("snap-validated-forget"));
     store.saveSnapshot(s, new Version(1), new ValidatedState("subj-3", "carol@example.com"));
     engine.deleteKey(SubjectId.of("subj-3"));
@@ -337,7 +337,7 @@ class InMemoryEventStoreReadClassificationTest {
     // PLAIN EventStoreException — fail-closed preserved, still transient for every classifier.
     var registry =
         SimpleEventTypeRegistry.builder().registerState("SecretState", SecretState.class).build();
-    var store = InMemoryEventStore.serializing(registry, new DecryptFailingEngine());
+    var store = new InMemoryEventStore(registry, new DecryptFailingEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("snap-secret-transient"));
     store.saveSnapshot(s, new Version(1), new SecretState("subj-4", "top-secret"));
 
@@ -365,7 +365,7 @@ class InMemoryEventStoreReadClassificationTest {
     var registry =
         SimpleEventTypeRegistry.builder().registerState("CartState", CartState.class).build();
     var store =
-        InMemoryEventStore.serializing(registry, null)
+        new InMemoryEventStore(registry)
             .withMigrations(
                 List.of(
                     throwingStep(
@@ -386,7 +386,7 @@ class InMemoryEventStoreReadClassificationTest {
     var registry =
         SimpleEventTypeRegistry.builder().registerState("CartState", CartState.class).build();
     var store =
-        InMemoryEventStore.serializing(registry, null)
+        new InMemoryEventStore(registry)
             .withMigrations(
                 List.of(
                     throwingStep(

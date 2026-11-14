@@ -20,7 +20,9 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaId;
@@ -71,6 +73,19 @@ import org.streamrune.test.MutableClock;
  * forward command of the delivery under test. Nothing waits on a clock.
  */
 class SagaCompensationUnderForwardStepSignalTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Opened.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Advanced.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Cancelled.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Nudged.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Reserved.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Shipped.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Released.class)
+          .registerEvent(SagaEpisodeStampReadFromRowTest.Refunded.class)
+          .registerState("Untouched", SagaEpisodeStampReadFromRowTest.Untouched.class)
+          .build();
 
   private static final String ORDER = "42";
   private static final SagaId SAGA = SagaId.of("order-saga-" + ORDER);
@@ -147,7 +162,7 @@ class SagaCompensationUnderForwardStepSignalTest {
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     final InMemorySagaStore rows = new InMemorySagaStore(clock);
     final InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(rows);
     final HookedSagaStore sagaStore = new HookedSagaStore(rows);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));

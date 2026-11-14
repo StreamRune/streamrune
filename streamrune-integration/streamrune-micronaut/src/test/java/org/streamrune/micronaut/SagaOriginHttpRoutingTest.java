@@ -24,6 +24,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.types.CorrelationId;
@@ -56,6 +58,8 @@ import org.streamrune.test.InMemoryEventStore;
 @Property(name = "spec.name", value = "SagaOriginHttpRoutingTest")
 @Property(name = "micronaut.security.enabled", value = "false")
 class SagaOriginHttpRoutingTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final String VICTIM = "victim";
   private static final String ATTACKER = "attacker";
@@ -116,7 +120,7 @@ class SagaOriginHttpRoutingTest {
   static class ModuleBeans {
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
   }
 

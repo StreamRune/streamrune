@@ -18,7 +18,9 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.NoDeciderException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -28,6 +30,17 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 
 class InMemoryCommandBusTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CartId.class)
+          .registerEvent(CreateCart.class)
+          .registerEvent(ItemAdded.class)
+          .registerEvent(ProductCreated.class)
+          .registerEvent(StockReceived.class)
+          .registerState("CartState", CartState.class)
+          .registerState("Marker", Marker.class)
+          .build();
 
   private static final AggregateType CART = AggregateType.of("cart");
 
@@ -144,7 +157,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void shouldExecuteCommandAndReturnEvents() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus =
         InMemoryCommandBus.builder()
             .eventStore(eventStore)
@@ -180,7 +193,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void shouldReturnEmptyEventsForIdempotentCommand() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus =
         InMemoryCommandBus.builder()
             .eventStore(eventStore)
@@ -205,7 +218,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void shouldThrowNoDeciderExceptionForUnknownCommand() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus =
         InMemoryCommandBus.builder()
             .eventStore(eventStore)
@@ -247,7 +260,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void shouldBeCloseable() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus =
         InMemoryCommandBus.builder()
             .eventStore(eventStore)
@@ -284,7 +297,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void resultEnvelopesCarryStoreAssignedVersionsAndOffsets() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus = busWithTwoEventDecider(eventStore);
 
     var first = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
@@ -309,7 +322,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void eventsOfOneCommandShareCorrelationIdAndCommandId() {
-    var commandBus = busWithTwoEventDecider(new InMemoryEventStore());
+    var commandBus = busWithTwoEventDecider(new InMemoryEventStore(TYPES));
 
     var result = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1"));
 
@@ -330,7 +343,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void boundStreamRuneContextPropagatesIntoMetadata() {
-    var commandBus = busWithTwoEventDecider(new InMemoryEventStore());
+    var commandBus = busWithTwoEventDecider(new InMemoryEventStore(TYPES));
 
     var correlationId = CorrelationId.of("corr-42");
     var userId = UserId.of("user-7");
@@ -356,7 +369,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void aCommandExecutedInsideContinuing_storesTheCausingEventsIdAsTheCausationId() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var commandBus = busWithTwoEventDecider(eventStore);
     var first = commandBus.execute(new CreateWithItemCmd("cart-1", "SKU-1")).envelopes().getFirst();
 
@@ -376,7 +389,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void guardRunsBeforeDecide_aRejectingGuardPropagates_andAppendsNothing() {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var guardCalls = new java.util.concurrent.atomic.AtomicInteger();
     Decider<AddItemCmd, CartState, DomainEvent> guardedDecider =
         new Decider<>() {
@@ -479,7 +492,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void twoAggregateTypesSharingAnIdValue_writeTwoStreams() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var bus =
         InMemoryCommandBus.builder()
             .eventStore(store)
@@ -505,7 +518,7 @@ class InMemoryCommandBusTest {
   void registrationFollowsTheSameRuleAsTheRealBus_andFailsAtTheCall() {
     var builder =
         InMemoryCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(
                 new InMemoryCommandBus.DeciderRegistration<>(
                     PRODUCT, ProductCmd.class, c -> AggregateId.of(c.id()), new ProductDecider()));
@@ -540,7 +553,7 @@ class InMemoryCommandBusTest {
   @Test
   void registrationRefusesATypeOutsideTheSyntax_atTheCall() {
     var lenient = new AggregateType("Product");
-    var builder = InMemoryCommandBus.builder().eventStore(new InMemoryEventStore());
+    var builder = InMemoryCommandBus.builder().eventStore(new InMemoryEventStore(TYPES));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -562,7 +575,7 @@ class InMemoryCommandBusTest {
 
   @Test
   void anExtractorThatReturnsNullFailsBeforeAnythingIsLoaded() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var bus =
         InMemoryCommandBus.builder()
             .eventStore(store)

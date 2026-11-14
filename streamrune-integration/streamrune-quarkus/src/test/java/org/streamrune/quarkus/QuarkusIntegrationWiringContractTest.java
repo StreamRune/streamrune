@@ -57,6 +57,8 @@ import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ConfigurationDocs;
@@ -97,6 +99,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Execution(ExecutionMode.SAME_THREAD)
 class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ContractBeans.ContractCommandExecuted.class)
+          .registerState("ContractCommandState", ContractBeans.ContractCommandState.class)
+          .build();
 
   /**
    * Every class of the module's main sources that Quarkus makes a bean, other than the JAX-RS
@@ -270,7 +278,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     @Produces
     @Singleton
     public EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Produces

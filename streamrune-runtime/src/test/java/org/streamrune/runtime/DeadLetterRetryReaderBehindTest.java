@@ -582,7 +582,7 @@ class DeadLetterRetryReaderBehindTest {
   void endToEnd_aCommandDeadLetteredOnAnOldReplicaReplaysAfterTheUpgrade() {
     var inbox = new InMemoryCommandInbox();
     var store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
                 SimpleEventTypeRegistry.builder().registerEvent(StockReserved.class).build(), null)
             .withCommandInbox(inbox);
     var bus =

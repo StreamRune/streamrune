@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -19,6 +21,9 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 class ForwardingEventStoreTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(OrderPlaced.class).build();
 
   record OrderPlaced(String orderId) implements DomainEvent {}
 
@@ -55,7 +60,7 @@ class ForwardingEventStoreTest {
 
   @Test
   void failOnce_failsTheFirstAppendBeforeItIsStored_andTheSecondSucceeds() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var faults = FaultSchedule.none().failOnce("append");
     var forwarding = new ForwardingEventStore(store, faults);
 
@@ -73,7 +78,7 @@ class ForwardingEventStoreTest {
 
   @Test
   void crashAfter_leavesTheEventStored_andThrows() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var forwarding = new ForwardingEventStore(store, FaultSchedule.none().crashAfter("append"));
 
     assertThrows(
@@ -87,7 +92,7 @@ class ForwardingEventStoreTest {
   @Test
   void theDefaultMethods_reachTheDelegatesImplementation() {
     var rows = new InMemorySagaStore();
-    var store = new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox());
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(new InMemoryCommandInbox());
     store.withSagaStore(rows);
     var forwarding = new ForwardingEventStore(store);
 
@@ -111,6 +116,6 @@ class ForwardingEventStoreTest {
 
     assertThrows(
         IllegalArgumentException.class,
-        () -> new ForwardingEventStore(new InMemoryEventStore(), misspelled));
+        () -> new ForwardingEventStore(new InMemoryEventStore(TYPES), misspelled));
   }
 }

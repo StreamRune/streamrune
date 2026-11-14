@@ -29,9 +29,11 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.LockException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoMappingException;
@@ -75,6 +77,14 @@ import org.streamrune.test.InMemorySagaStore;
  */
 class SagaForwardDispatchClassificationTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderConfirmed.class)
+          .registerEvent(StockReserved.class)
+          .registerEvent(StockReleased.class)
+          .registerState("StockState", StockState.class)
+          .build();
+
   private static final AggregateType TYPE = AggregateType.of("inventory");
 
   // =========================================================================
@@ -106,7 +116,7 @@ class SagaForwardDispatchClassificationTest {
 
     var inbox = new InMemoryCommandInbox();
     var sagaStore = new InMemorySagaStore();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+    var eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

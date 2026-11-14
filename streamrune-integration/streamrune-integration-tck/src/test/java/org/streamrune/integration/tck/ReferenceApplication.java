@@ -27,6 +27,7 @@ import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.DeadLetterRetryPolicy;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
@@ -87,6 +88,12 @@ import org.streamrune.test.InMemoryOffsetStore;
  * application that breaks its rule.
  */
 final class ReferenceApplication implements Application {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ContractBeans.ContractCommandExecuted.class)
+          .registerState("ContractCommandState", ContractBeans.ContractCommandState.class)
+          .build();
 
   /** The rules the reference application keeps unless told to break one. */
   enum Rule {
@@ -409,10 +416,10 @@ final class ReferenceApplication implements Application {
    */
   private EventStore eventStore() {
     if (dataSource == null) {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
     var store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
             SimpleEventTypeRegistry.builder()
                 .registerEvent(ContractBeans.ContractCommandExecuted.class)
                 .build(),

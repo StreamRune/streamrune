@@ -19,6 +19,8 @@ import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -41,6 +43,12 @@ import org.streamrune.test.InMemoryEventStore;
  * while {@code CURRENT} is bound, and a {@code null} answer leaves the dispatch without a context.
  */
 class VirtualThreadCommandBusUnboundRequestContextTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Touched.class)
+          .registerState("Nothing", Nothing.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("unbound_probe");
 
@@ -71,7 +79,7 @@ class VirtualThreadCommandBusUnboundRequestContextTest {
   }
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore store = new InMemoryEventStore().withCommandInbox(inbox);
+  private final InMemoryEventStore store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
   private final AtomicInteger asked = new AtomicInteger();
   private final List<Thread> askedOn = new CopyOnWriteArrayList<>();
   private final List<StreamRuneContext.RequestContext> seenByInterceptor =

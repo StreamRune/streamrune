@@ -13,6 +13,8 @@ import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -35,6 +37,13 @@ import org.streamrune.test.InMemoryEventStore;
  * bindings.
  */
 class SagaDispatchOfferProvenanceTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(VirtualThreadCommandBusForwardFenceTest.Shipped.class)
+          .registerState(
+              "ShipmentState", VirtualThreadCommandBusForwardFenceTest.ShipmentState.class)
+          .build();
 
   private static final SagaType SAGA = SagaType.of("org.example.FulfilmentState");
   private static final SagaOrigin HANDED = SagaOrigin.dispatchedBy(SAGA, SagaId.of("handed"));
@@ -170,7 +179,7 @@ class SagaDispatchOfferProvenanceTest {
   @Test
   void theEventsOfAHandedSagasCommand_areBuiltFromTheHandedSaga() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

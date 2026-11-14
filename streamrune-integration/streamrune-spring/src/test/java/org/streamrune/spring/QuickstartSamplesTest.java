@@ -56,6 +56,16 @@ import org.streamrune.test.InMemoryEventStore;
  */
 class QuickstartSamplesTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerEvent(OrderConfirmed.class)
+          .registerEvent(OrderCancelled.class)
+          .registerEvent(CustomerRegistered.class)
+          .registerState("OrderState", OrderState.class)
+          .registerState("CustomerState", CustomerState.class)
+          .build();
+
   // ---- Section 3: domain events ----
 
   sealed interface OrderEvent extends DomainEvent
@@ -146,7 +156,7 @@ class QuickstartSamplesTest {
 
   @Test
   void section6_oneRegistrationOfTheSealedRootHandlesEveryCommandItPermits() {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(section5TypeRegistry());
 
     StreamRune streamRune =
         StreamRune.builder()
@@ -223,7 +233,9 @@ class QuickstartSamplesTest {
     // Built, not started: the offset store of the sample reads PostgreSQL once the runner runs.
     StreamRune streamRune =
         section7Builder(
-                new InMemoryEventStore(), mock(DataSource.class), (orderId, productId, qty) -> {})
+                new InMemoryEventStore(TYPES),
+                mock(DataSource.class),
+                (orderId, productId, qty) -> {})
             .build();
 
     streamRune.close();
@@ -235,7 +247,7 @@ class QuickstartSamplesTest {
 
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(
                 ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
             .registerProjection(
@@ -293,7 +305,7 @@ class QuickstartSamplesTest {
     return new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> mock(DataSource.class))
-        .withBean(EventStoreFactory.class, () -> InMemoryEventStore::new);
+        .withBean(EventStoreFactory.class, () -> () -> new InMemoryEventStore(TYPES));
   }
 
   @Test
@@ -430,7 +442,7 @@ class QuickstartSamplesTest {
 
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .cryptoEngine(crypto)
             .register(
                 ORDER,

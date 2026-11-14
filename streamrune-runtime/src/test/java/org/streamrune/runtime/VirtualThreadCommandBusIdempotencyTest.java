@@ -13,6 +13,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus.CommandResult;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.IdempotencyKey;
@@ -25,6 +27,12 @@ import org.streamrune.test.InMemoryEventStore;
  * atomic append, zero-event key recording, and missing-inbox guard.
  */
 class VirtualThreadCommandBusIdempotencyTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.WidgetCreated.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("widget");
 
@@ -96,7 +104,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void idempotentExecute_secondCallShortCircuits_streamGrowsByOne() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new OneEventDecider());
 
     var cmd = new WidgetCommand("w-1");
@@ -123,7 +131,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void keyedReplay_carriesTheTypedStream() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new OneEventDecider());
 
     var cmd = new WidgetCommand("w-typed");
@@ -144,7 +152,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void unkeyedExecute_calledTwice_streamGrowsByTwo() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new OneEventDecider());
 
     var cmd = new WidgetCommand("w-2");
@@ -161,7 +169,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void zeroEventDecider_keyedExecute_keyRecordedAndSecondShortCircuits() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new ZeroEventDecider());
 
     var cmd = new WidgetCommand("w-3");
@@ -191,7 +199,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void keyCollisionAcrossCallers_differentAggregate_isRejectedNotReplayed() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new OneEventDecider());
 
     var sharedKey = IdempotencyKey.of("order-create-12345");
@@ -224,7 +232,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   @Test
   void scopedKeys_isolateCallersSharingOneClientSuppliedKey() {
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus = busWithInbox(store, inbox, new OneEventDecider());
 
     String clientHeader = "order-create-12345";
@@ -245,7 +253,7 @@ class VirtualThreadCommandBusIdempotencyTest {
   /** execute(cmd, key) with no inbox configured → IllegalStateException. */
   @Test
   void executeWithKey_noInboxConfigured_throwsIllegalStateException() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

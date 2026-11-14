@@ -26,7 +26,9 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -64,6 +66,9 @@ import org.streamrune.test.SagaEnvelopes;
  * cannot observe a wiring gap.
  */
 class SagaEventPathRetentionWiringTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Nudged.class).build();
 
   record FakeState(SagaStatus status, String id) implements SagaState {}
 
@@ -284,7 +289,7 @@ class SagaEventPathRetentionWiringTest {
   private static SagaRunner<FakeState> fencedRunner(Boolean named) {
     var sagaStore = new InMemorySagaStore();
     var eventStore =
-        new InMemoryEventStore()
+        new InMemoryEventStore(TYPES)
             .withCommandInbox(new InMemoryCommandInbox())
             .withSagaStore(sagaStore);
     var builder =

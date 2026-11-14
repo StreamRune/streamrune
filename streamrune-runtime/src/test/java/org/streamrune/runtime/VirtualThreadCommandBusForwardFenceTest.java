@@ -21,7 +21,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
@@ -50,6 +52,12 @@ import org.streamrune.test.InMemorySagaStore;
  * not counted by the circuit breaker, audited as refused.
  */
 class VirtualThreadCommandBusForwardFenceTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Shipped.class)
+          .registerState("ShipmentState", ShipmentState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("shipment");
   private static final SagaOrigin ORIGIN =
@@ -86,7 +94,7 @@ class VirtualThreadCommandBusForwardFenceTest {
   /** Records the saga origin of every keyed append; stores through an in-memory store. */
   static final class RecordingEventStore implements EventStore {
     final InMemoryEventStore inner =
-        new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox());
+        new InMemoryEventStore(TYPES).withCommandInbox(new InMemoryCommandInbox());
     final List<SagaOrigin> forwardOf = Collections.synchronizedList(new ArrayList<>());
     final Object rows = new Object();
 
@@ -272,7 +280,7 @@ class VirtualThreadCommandBusForwardFenceTest {
             .build();
     assertSame(store.rows, facade.sagaFenceStorageIdentity(), "the facade asks its bus");
     assertNull(
-        bus(new InMemoryEventStore(), decider).build().sagaFenceStorageIdentity(),
+        bus(new InMemoryEventStore(TYPES), decider).build().sagaFenceStorageIdentity(),
         "a store that cannot fence");
   }
 
@@ -293,7 +301,7 @@ class VirtualThreadCommandBusForwardFenceTest {
     rows.claimCompensating(
         ORIGIN.sagaId(), ORIGIN.sagaType(), new FulfillmentState(SagaStatus.COMPENSATING), 1L);
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(rows);
     var breaker = new CircuitBreakerCommandInterceptor(5, Duration.ofSeconds(30));
     List<AuditEntry> audit = Collections.synchronizedList(new ArrayList<>());
     AuditStore auditStore = audit::add;
@@ -366,7 +374,7 @@ class VirtualThreadCommandBusForwardFenceTest {
         ORIGIN.sagaId(), ORIGIN.sagaType(), new FulfillmentState(SagaStatus.COMPENSATING), 1L);
     var inbox = new InMemoryCommandInbox();
     var store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
                 org.streamrune.core.SimpleEventTypeRegistry.builder()
                     .registerEvent("Shipped", Shipped.class)
                     .registerState("ShipmentState", ShipmentState.class)

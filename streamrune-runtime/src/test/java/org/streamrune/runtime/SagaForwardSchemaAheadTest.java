@@ -316,7 +316,7 @@ class SagaForwardSchemaAheadTest {
     final InMemorySagaStore sagaStore = new InMemorySagaStore();
     final InMemoryDeadLetterQueue deadLetterQueue = new InMemoryDeadLetterQueue();
     final InMemoryEventStore store =
-        InMemoryEventStore.serializing(
+        new InMemoryEventStore(
                 SimpleEventTypeRegistry.builder()
                     .registerEvent(OrderPlaced.class)
                     .registerEvent(PaymentCharged.class)

@@ -18,6 +18,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -29,6 +31,12 @@ import org.streamrune.test.InMemoryEventStore;
 /** Performance tests for StreamRune framework. */
 class PerformanceTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(TestEvent.class)
+          .registerState("TestState", TestState.class)
+          .build();
+
   private static final AggregateType TYPE = AggregateType.of("test");
 
   private EventStore store;
@@ -36,7 +44,7 @@ class PerformanceTest {
 
   @BeforeEach
   void setup() {
-    store = new InMemoryEventStore();
+    store = new InMemoryEventStore(TYPES);
 
     bus =
         VirtualThreadCommandBus.builder()
@@ -223,7 +231,8 @@ class PerformanceTest {
     IO.println("Avg: " + String.format("%.2f", avgMicros) + " µs");
     IO.println("P99: " + (p99 / 1000.0) + " µs");
 
-    assertTrue(avgMicros < 500, "Average load latency should be under 500µs");
+    // The store deserializes each of the 100 events on every load, as PostgresEventStore does.
+    assertTrue(avgMicros < 2000, "Average load latency should be under 2ms");
   }
 
   // ===== Concurrent Load Tests =====

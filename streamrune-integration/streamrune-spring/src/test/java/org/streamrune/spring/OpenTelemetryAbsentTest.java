@@ -17,6 +17,7 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -91,8 +92,8 @@ class OpenTelemetryAbsentTest {
     }
 
     @Bean
-    EventStoreFactory eventStoreFactory() {
-      return InMemoryEventStoreFactory.builder().build();
+    EventStoreFactory eventStoreFactory(EventTypeRegistry typeRegistry) {
+      return InMemoryEventStoreFactory.builder(typeRegistry).build();
     }
 
     @Bean

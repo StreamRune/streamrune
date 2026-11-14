@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
@@ -39,13 +41,16 @@ import org.streamrune.test.ScriptedSubscriptionLeadership;
  */
 class ProjectionRunnerLeaseRoleTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Placed.class).build();
+
   record Placed(String orderId) implements DomainEvent {}
 
   private static final ProjectionName ORDERS = ProjectionName.of("orders");
   private static final StreamId ORDER_1 =
       StreamId.of(AggregateType.of("order"), AggregateId.of("1"));
 
-  private final InMemoryEventStore eventStore = new InMemoryEventStore();
+  private final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
   private final InMemoryOffsetStore offsetStore = new InMemoryOffsetStore();
   private final SubscriptionHealthContributor contributor =
       new SubscriptionHealthContributor(eventStore, offsetStore, 100);

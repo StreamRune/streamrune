@@ -18,7 +18,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
 import org.streamrune.core.saga.SagaId;
@@ -47,6 +49,13 @@ import org.streamrune.test.InMemorySagaStore;
  * an integration's default reaches only the runners whose builder named nothing.
  */
 class SagaForwardFenceBuilderTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Opened.class)
+          .registerEvent(Reserved.class)
+          .registerState("Untouched", Untouched.class)
+          .build();
 
   record Opened(String orderId) implements DomainEvent {}
 
@@ -118,7 +127,7 @@ class SagaForwardFenceBuilderTest {
   /** A bus over an in-memory event store wired, or not, with the saga rows it fences against. */
   private VirtualThreadCommandBus busFencingAgainst(InMemorySagaStore fencedRows) {
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    var eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     if (fencedRows != null) {
       eventStore.withSagaStore(fencedRows);
     }

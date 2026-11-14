@@ -22,6 +22,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.types.AggregateId;
@@ -43,6 +45,18 @@ import org.streamrune.test.InMemoryDeadLetterQueue;
  */
 class DeadLetterWiringAutoConfigurationTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(PiiFailingEvent.class)
+          .registerEvent(FailingEvent.class)
+          .registerEvent(SucceedingEvent.class)
+          .registerEvent(PiiCapturingEvent.class)
+          .registerState("PiiFailingState", PiiFailingState.class)
+          .registerState("FailingState", FailingState.class)
+          .registerState("SucceedingState", SucceedingState.class)
+          .registerState("PiiCapturingState", PiiCapturingState.class)
+          .build();
+
   private static final AggregateType TYPE = AggregateType.of("test");
 
   private final DeadLetterQueue deadLetterQueue = mock(DeadLetterQueue.class);
@@ -52,7 +66,7 @@ class DeadLetterWiringAutoConfigurationTest {
           .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
-          .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+          .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
           .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
           .withBean(DeadLetterQueue.class, () -> deadLetterQueue);
 
@@ -202,7 +216,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS, "streamrune.dead-letter.max-retries=1")
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> queue)
         .withBean(
@@ -273,7 +287,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
@@ -323,7 +337,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
@@ -372,7 +386,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(
             "piiDeciderRegistrationNoCrypto",
@@ -401,7 +415,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
         .withBean(
@@ -439,7 +453,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withUserConfiguration(PrimaryCryptoEngineConfig.class)
@@ -545,7 +559,7 @@ class DeadLetterWiringAutoConfigurationTest {
         // on a real JDBC connection this unit-style test does not have. Without it,
         // supportsIdempotentExecution() is false and the unkeyed execute(command) path is used —
         // exactly like the existing commandBusPublishesFailedCommandsToDeadLetterQueue test above.
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withBean(
@@ -618,7 +632,7 @@ class DeadLetterWiringAutoConfigurationTest {
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         // No DataSource bean, as in autoConfiguredRunnerResolvesCommandTypeFromDeciderRegistry:
         // the replay takes the unkeyed execute(command) path.
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withBean(
@@ -683,7 +697,7 @@ class DeadLetterWiringAutoConfigurationTest {
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(EventStore.class, org.streamrune.test.InMemoryEventStore::new)
+        .withBean(EventStore.class, () -> new org.streamrune.test.InMemoryEventStore(TYPES))
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
         .withBean(DeadLetterQueue.class, () -> realDlq)
         .withBean(CryptoEngine.class, () -> cryptoEngine)

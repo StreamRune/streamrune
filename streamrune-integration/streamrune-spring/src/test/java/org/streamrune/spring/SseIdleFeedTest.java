@@ -39,6 +39,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -63,6 +65,12 @@ import org.streamrune.test.InMemoryEventStore;
  * the {@link CommandBus} bean.
  */
 class SseIdleFeedTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderEvent.Placed.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
 
@@ -166,7 +174,7 @@ class SseIdleFeedTest {
   /** An in-memory event store that counts the reads of event payloads and the reads of the head. */
   static final class CountedReadsEventStore implements EventStore {
 
-    private final InMemoryEventStore delegate = new InMemoryEventStore();
+    private final InMemoryEventStore delegate = new InMemoryEventStore(TYPES);
     private final AtomicInteger payloadReads = new AtomicInteger();
     private final AtomicInteger headReads = new AtomicInteger();
 

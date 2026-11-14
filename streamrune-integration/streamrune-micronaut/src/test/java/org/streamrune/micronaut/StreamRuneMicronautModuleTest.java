@@ -15,6 +15,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.QueryBus;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
@@ -38,6 +39,16 @@ import org.streamrune.test.InMemoryCryptoEngine;
 
 /** Tests for {@link StreamRuneMicronautModule}. */
 class StreamRuneMicronautModuleTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(FailingEvent.class)
+          .registerEvent(PiiEvent.class)
+          .registerEvent(RegistryTestEvent.class)
+          .registerState("FailingState", FailingState.class)
+          .registerState("PiiState", PiiState.class)
+          .registerState("RegistryTestState", RegistryTestState.class)
+          .build();
 
   /** Properties stating that the application stores no snapshots (the forget's opt-out). */
   private static final StreamRuneMicronautProperties NO_SNAPSHOTS = noSnapshots();
@@ -263,7 +274,7 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
     var metrics = new CountingMetrics();
-    var eventStore = new org.streamrune.test.InMemoryEventStore();
+    var eventStore = new org.streamrune.test.InMemoryEventStore(TYPES);
     var locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),
@@ -337,7 +348,7 @@ class StreamRuneMicronautModuleTest {
     var inbox = new org.streamrune.test.InMemoryCommandInbox();
     var bus =
         module.virtualThreadCommandBus(
-            new org.streamrune.test.InMemoryEventStore().withCommandInbox(inbox),
+            new org.streamrune.test.InMemoryEventStore(TYPES).withCommandInbox(inbox),
             module.aggregateLocker(properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             properties,
             null,
@@ -1129,7 +1140,7 @@ class StreamRuneMicronautModuleTest {
     var defaults = StreamRuneMicronautProperties.withDefaults();
     var bus =
         module.virtualThreadCommandBus(
-            new org.streamrune.test.InMemoryEventStore(),
+            new org.streamrune.test.InMemoryEventStore(TYPES),
             module.aggregateLocker(defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             defaults,
             null,
@@ -1169,7 +1180,7 @@ class StreamRuneMicronautModuleTest {
     var executed = new java.util.concurrent.atomic.AtomicBoolean(false);
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
     var objectMapper = new ObjectMapper();
-    var eventStore = new org.streamrune.test.InMemoryEventStore();
+    var eventStore = new org.streamrune.test.InMemoryEventStore(TYPES);
     var locker =
         module.aggregateLocker(
             StreamRuneMicronautProperties.withDefaults(),

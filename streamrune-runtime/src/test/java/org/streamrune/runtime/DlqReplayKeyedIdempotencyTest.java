@@ -20,6 +20,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
@@ -46,6 +48,12 @@ import org.streamrune.test.InMemoryEventStore;
  * original key persisted on the DLQ entry and used on replay, it passes.
  */
 class DlqReplayKeyedIdempotencyTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.WidgetCreated.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("widget");
 
@@ -160,7 +168,7 @@ class DlqReplayKeyedIdempotencyTest {
   @Test
   void keyedCommand_failsThenDlqReplaysThenClientRedelivers_eventsProducedExactlyOnce() {
     var inbox = new InMemoryCommandInbox();
-    var backing = new InMemoryEventStore().withCommandInbox(inbox);
+    var backing = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     // Fail the FIRST appendWithKey (the initial keyed execute), succeed on the DLQ replay.
     var faultStore = new FailFirstAppendEventStore(backing, 1);
     var dlq = new InMemoryDeadLetterQueue();

@@ -20,8 +20,10 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -57,6 +59,12 @@ import org.streamrune.test.SagaEnvelopes;
  */
 class ReservedCorrelationIdDeadLetterTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Charged.class)
+          .registerState("Payment", Payment.class)
+          .build();
+
   /** The command of every case: its decider always fails with an infrastructure fault. */
   public record Charge(String paymentId) implements Command {}
 
@@ -72,7 +80,8 @@ class ReservedCorrelationIdDeadLetterTest {
   private static final SagaId LONGEST_SAGA = SagaId.of("s".repeat(SagaId.MAX_LENGTH));
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-  private final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+  private final InMemoryEventStore eventStore =
+      new InMemoryEventStore(TYPES).withCommandInbox(inbox);
   private final InMemoryDeadLetterQueue deadLetters = new InMemoryDeadLetterQueue();
   private final VirtualThreadCommandBus bus =
       VirtualThreadCommandBus.builder()

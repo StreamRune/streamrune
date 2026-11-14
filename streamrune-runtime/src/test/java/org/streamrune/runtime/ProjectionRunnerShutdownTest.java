@@ -19,7 +19,9 @@ import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
@@ -47,6 +49,9 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ProjectionRunnerShutdownTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Happened.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("thing");
 
@@ -146,7 +151,7 @@ class ProjectionRunnerShutdownTest {
   }
 
   private static InMemoryEventStore storeWithOneEvent() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("thing-1"));
     store.append(
         s,
@@ -229,7 +234,7 @@ class ProjectionRunnerShutdownTest {
     var runner =
         ContinuousProjectionRunner.builder()
             .atomicProcessor(fencingCapable())
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .offsetStore(offsets)
             .fetchSize(100)
             .batchSize(50)

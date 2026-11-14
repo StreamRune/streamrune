@@ -32,7 +32,9 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -102,6 +104,13 @@ import org.streamrune.test.SagaEnvelopes;
  */
 class ListenerContinuationTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Captured.class)
+          .registerEvent(PaymentInitiated.class)
+          .registerState("Payment", Payment.class)
+          .build();
+
   // ==== The listener's hop and its crash points ====
 
   /** The command the listener dispatches. */
@@ -148,7 +157,7 @@ class ListenerContinuationTest {
     final AtomicInteger failuresLeft = new AtomicInteger();
     final AtomicBoolean rejecting = new AtomicBoolean();
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     final InMemoryDeadLetterQueue dlq = new InMemoryDeadLetterQueue();
     final VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()

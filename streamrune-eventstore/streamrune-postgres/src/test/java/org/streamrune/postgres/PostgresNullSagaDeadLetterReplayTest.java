@@ -22,6 +22,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
@@ -66,6 +67,13 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class PostgresNullSagaDeadLetterReplayTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Trigger.class)
+          .registerEvent(WorkDone.class)
+          .registerState("WorkState", WorkState.class)
+          .build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -338,7 +346,7 @@ class PostgresNullSagaDeadLetterReplayTest {
       stmt.execute("DELETE FROM saga_dead_letters");
       stmt.execute("DELETE FROM saga_state");
     }
-    eventStore = new InMemoryEventStore();
+    eventStore = new InMemoryEventStore(TYPES);
     // The dead-letter store's retention guard AND its conditional
     // shield clear (clearShieldIfDrained) read and write saga_state at the DEAD-LETTER store, so
     // the
@@ -350,7 +358,7 @@ class PostgresNullSagaDeadLetterReplayTest {
     sagaStore = new CreateCrashSagaStore(postgresSagaStore);
     dlq = new PostgresSagaDeadLetterStore(dataSource);
     inbox = new InMemoryCommandInbox();
-    workStore = new InMemoryEventStore().withCommandInbox(inbox);
+    workStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(workStore)

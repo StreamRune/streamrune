@@ -18,6 +18,8 @@ import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.IdempotencyKey;
@@ -40,6 +42,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class KeyedDeadLetterSameMomentIT {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Adjusted.class)
+          .registerState("CounterState", CounterState.class)
+          .build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -131,7 +139,7 @@ class KeyedDeadLetterSameMomentIT {
             .failAlways("append");
     return VirtualThreadCommandBus.builder()
         .eventStore(
-            new ForwardingEventStore(new InMemoryEventStore().withCommandInbox(inbox), outage))
+            new ForwardingEventStore(new InMemoryEventStore(TYPES).withCommandInbox(inbox), outage))
         .commandInbox(inbox)
         .deadLetterQueue(queue)
         .objectMapper(new ObjectMapper())

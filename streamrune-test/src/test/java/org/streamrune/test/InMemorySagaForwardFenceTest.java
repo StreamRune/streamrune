@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
@@ -27,9 +29,16 @@ import org.streamrune.core.types.Version;
 /** The forward fence of {@link InMemoryEventStore} against an {@link InMemorySagaStore}. */
 class InMemorySagaForwardFenceTest extends SagaForwardFenceContract {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(SagaForwardFenceContract.FenceEvent.class)
+          .build();
+
   private final InMemorySagaStore rows = new InMemorySagaStore();
   private final InMemoryEventStore events =
-      new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox()).withSagaStore(rows);
+      new InMemoryEventStore(TYPES)
+          .withCommandInbox(new InMemoryCommandInbox())
+          .withSagaStore(rows);
 
   @Override
   protected EventStore eventStore() {
@@ -95,7 +104,7 @@ class InMemorySagaForwardFenceTest extends SagaForwardFenceContract {
 
   @Test
   void aFencedAppendWithoutAWiredSagaStoreIsUnsupported() {
-    var unwired = new InMemoryEventStore().withCommandInbox(new InMemoryCommandInbox());
+    var unwired = new InMemoryEventStore(TYPES).withCommandInbox(new InMemoryCommandInbox());
 
     var ex =
         assertThrows(
@@ -117,7 +126,7 @@ class InMemorySagaForwardFenceTest extends SagaForwardFenceContract {
   void withSagaStoreRequiresAStore() {
     var ex =
         assertThrows(
-            NullPointerException.class, () -> new InMemoryEventStore().withSagaStore(null));
+            NullPointerException.class, () -> new InMemoryEventStore(TYPES).withSagaStore(null));
     assertEquals("sagaStore is required", ex.getMessage());
   }
 

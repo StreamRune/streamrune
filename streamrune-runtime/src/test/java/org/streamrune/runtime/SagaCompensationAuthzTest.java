@@ -17,8 +17,10 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RequireRole;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.UserAuthority;
 import org.streamrune.core.UserRoleResolver;
@@ -45,6 +47,12 @@ import org.streamrune.test.SagaEnvelopes;
  * directly (not saga-owned) with no user is rejected.
  */
 class SagaCompensationAuthzTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(PaymentRefunded.class)
+          .registerState("RefundState", RefundState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("payment");
 
@@ -88,7 +96,7 @@ class SagaCompensationAuthzTest {
     // Saga dispatch executes with an idempotency key → the keyed append path needs the same
     // inbox wired into the event store AND the bus.
     var inbox = new InMemoryCommandInbox();
-    EventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    EventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     return VirtualThreadCommandBus.builder()
         .eventStore(eventStore)
         .locker(new LocalStripedLocker(16))

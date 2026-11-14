@@ -15,6 +15,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandAuthorizationPolicy;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.AuditStore;
@@ -37,6 +39,12 @@ import org.streamrune.test.InMemoryEventStore;
  * attempt would go UNAUDITED. The test asserts the denial IS audited.
  */
 class QuarkusInterceptorOrderingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(WidgetEvent.Created.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
 
   record WidgetCommand(String id) implements Command {}
 
@@ -84,7 +92,7 @@ class QuarkusInterceptorOrderingTest {
 
     try (VirtualThreadCommandBus bus =
         producers.virtualThreadCommandBus(
-            new InMemoryEventStore(),
+            new InMemoryEventStore(TYPES),
             producers.aggregateLocker(
                 TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),

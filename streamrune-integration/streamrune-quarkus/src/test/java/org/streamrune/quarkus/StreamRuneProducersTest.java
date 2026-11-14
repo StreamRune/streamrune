@@ -19,6 +19,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.QueryBus;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.UserRoleResolver;
@@ -33,6 +34,17 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /** Tests for {@link StreamRuneProducers}. */
 class StreamRuneProducersTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(FailingEvent.class)
+          .registerEvent(PiiEvent.class)
+          .registerEvent(RegistryTestEvent.class)
+          .registerState("FailingState", FailingState.class)
+          .registerState("PiiState", PiiState.class)
+          .registerState("SnapshotProbeState", SnapshotProbeState.class)
+          .registerState("RegistryTestState", RegistryTestState.class)
+          .build();
 
   @Test
   void eventTypeRegistryProducesDefaultEmpty() {
@@ -1536,7 +1548,7 @@ class StreamRuneProducersTest {
 
     var bus =
         producers.virtualThreadCommandBus(
-            new org.streamrune.test.InMemoryEventStore(),
+            new org.streamrune.test.InMemoryEventStore(TYPES),
             producers.aggregateLocker(
                 TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             TestProperties.defaults(),
@@ -1588,7 +1600,7 @@ class StreamRuneProducersTest {
     var properties = TestProperties.of(Map.of("streamrune.dead-letter.max-retries", "1"));
     var bus =
         producers.virtualThreadCommandBus(
-            new org.streamrune.test.InMemoryEventStore().withCommandInbox(inbox),
+            new org.streamrune.test.InMemoryEventStore(TYPES).withCommandInbox(inbox),
             producers.aggregateLocker(
                 properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP),
             properties,
@@ -1729,7 +1741,7 @@ class StreamRuneProducersTest {
     var executed = new java.util.concurrent.atomic.AtomicBoolean(false);
     var dlq = new org.streamrune.test.InMemoryDeadLetterQueue();
     var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-    var eventStore = new org.streamrune.test.InMemoryEventStore();
+    var eventStore = new org.streamrune.test.InMemoryEventStore(TYPES);
 
     var commandBus =
         producers.virtualThreadCommandBus(

@@ -151,6 +151,16 @@ Use `InMemoryEventStore` from the `streamrune-test` module to run end-to-end com
 pipelines without a database. Create a fresh store in `@BeforeEach` so tests do not
 share state.
 
+The store keeps what `PostgresEventStore` keeps: every event, its metadata and every snapshot state
+is serialized to JSON on append (encrypting `@Encrypted` fields when the store is given a
+`CryptoEngine`) and deserialized on every read, through an `EventTypeRegistry` and the upcasters
+you give it. A read therefore returns objects equal to the ones appended, never the same instances,
+and an event type you forgot to register — or one Jackson cannot serialize — fails the unit test
+instead of production. Build the store from the registry your application gives
+`PostgresEventStore`, or from one that registers what the test appends:
+`new InMemoryEventStore(typeRegistry)`, or `new InMemoryEventStore(typeRegistry, cryptoEngine)`
+with an `InMemoryCryptoEngine` to exercise crypto-shredding.
+
 ```java
 package com.example.order;
 
@@ -159,6 +169,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CommandBus.CommandResult;
 import org.streamrune.core.DomainException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.runtime.StreamRune;
@@ -167,6 +179,14 @@ import org.streamrune.test.InMemoryEventStore;
 class OrderIntegrationTest {
 
   private static final AggregateType ORDER = AggregateType.of("order");
+
+  // Every event type the deciders append, and the state type for snapshots.
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder()
+      .registerEvent(OrderEvent.OrderCreated.class)
+      .registerEvent(OrderEvent.OrderConfirmed.class)
+      .registerEvent(OrderEvent.OrderCancelled.class)
+      .registerState("OrderState", OrderState.class)
+      .build();
 
   private StreamRune streamRune;
 
@@ -177,7 +197,7 @@ class OrderIntegrationTest {
     // decider's own command type — not one of its records. The registration also names the
     // aggregate type, so the events land in streams like "order:ord-1".
     streamRune = StreamRune.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(switch (cmd) {
               case OrderCommand.CreateOrder c  -> c.orderId();
               case OrderCommand.ConfirmOrder c -> c.orderId();
@@ -229,7 +249,10 @@ class OrderIntegrationTest {
 
 `EventStoreFixture` provides a fluent given/when/then DSL for testing event store
 operations directly — optimistic lock checks, event counts, and append semantics —
-without going through the command bus.
+without going through the command bus. `EventStoreFixture.store(TYPES)` runs it over a fresh
+`InMemoryEventStore` that reads through the registry `TYPES` of the previous section;
+`EventStoreFixture.store(eventStore)` runs it over a store of your own.
+
 
 The fixture is available from `streamrune-test`. The static `event(...)` factory takes a
 typed `EventType` and a typed `Version` (there is no bare-int or bare-String overload):
@@ -263,7 +286,7 @@ void append_throwsOptimisticLockException_onVersionConflict() {
   // given: one event already appended (stream now at version 1)
   // when:  a second append claims the stale initial version
   // then:  OptimisticLockException is thrown
-  EventStoreFixture.store()
+  EventStoreFixture.store(TYPES)
       .given()
           .append(streamId, List.of(
               EventStoreFixture.event(streamId, new Version(1), EventType.of("OrderCreated"),
@@ -287,7 +310,7 @@ append expects the stream to be at version 1 (the version left by the seeded eve
 void append_persistsEvents_andCountMatches() {
   var streamId = StreamId.of(ORDER, AggregateId.of("ord-2"));
 
-  EventStoreFixture.store()
+  EventStoreFixture.store(TYPES)
       .given()
           .append(streamId, List.of(
               EventStoreFixture.event(streamId, new Version(1), EventType.of("OrderCreated"),
@@ -312,7 +335,7 @@ version or inspect it directly:
 void load_reportsCurrentVersion() {
   var streamId = StreamId.of(ORDER, AggregateId.of("ord-4"));
 
-  EventStoreFixture.store()
+  EventStoreFixture.store(TYPES)
       .given()
           .append(streamId, List.of(
               EventStoreFixture.event(streamId, new Version(1), EventType.of("OrderCreated"),
@@ -523,7 +546,7 @@ class OrderProjection extends BaseProjection {
 
 @Test
 void transactionalLocal_commitsTheRowAndTheCheckpointTogether() {
-  var eventStore = new InMemoryEventStore();
+  var eventStore = new InMemoryEventStore(TYPES);
   var streamId = StreamId.of(ORDER, AggregateId.of("ord-1"));
   eventStore.append(streamId, List.of(EventStoreFixture.event(streamId, new Version(1),
       EventType.of("OrderCreated"), new OrderEvent.OrderCreated("ord-1", "cust-42"))),
@@ -596,7 +619,7 @@ import org.streamrune.test.SagaEnvelopes;
 AggregateType PAYMENT = AggregateType.of("payment");
 StreamId payment = StreamId.of(PAYMENT, AggregateId.of("pay-1"));
 
-var eventStore = new InMemoryEventStore();
+var eventStore = new InMemoryEventStore(paymentTypes);   // registers the payment events
 CommandBus commandBus = InMemoryCommandBus.builder()
     .eventStore(eventStore)
     .register(new InMemoryCommandBus.DeciderRegistration<>(
@@ -787,7 +810,7 @@ void cancelCancelledOrder_throwsDomainException() {
 void concurrentAppend_throwsOptimisticLockException() {
   var streamId = StreamId.of(ORDER, AggregateId.of("ord-x"));
 
-  EventStoreFixture.store()
+  EventStoreFixture.store(TYPES)
       .given()
           .append(streamId, List.of(
               EventStoreFixture.event(streamId, new Version(1), EventType.of("OrderCreated"),
@@ -813,7 +836,7 @@ forwards every method of its interface, the default methods included, and consul
 var faults = FaultSchedule.none()
     .failOnce("append")                 // the next append throws before anything is stored
     .crashAfter("saveOffset");          // the next checkpoint is stored, then the call throws
-var events = new ForwardingEventStore(new InMemoryEventStore(), faults);
+var events = new ForwardingEventStore(new InMemoryEventStore(TYPES), faults);
 var offsets = new ForwardingOffsetStore(new InMemoryOffsetStore(), faults);
 
 // ... run the code under test, catch InjectedFaultException where the "crash" stops it,
@@ -892,17 +915,16 @@ history nobody rebuilds by hand:
 ```java
 EventStreamFixtures.write(store, Path.of("src/test/resources/orders.json"));   // once
 
-var replayed = InMemoryEventStore.serializing(typeRegistry, null);
+var replayed = new InMemoryEventStore(typeRegistry);
 EventStreamFixtures.appendTo(replayed, EventStreamFixtures.read(Path.of("src/test/resources/orders.json")));
 ```
 
 The file is a JSON array of `{streamId, version, eventType, schemaVersion, payload, metadata}`,
 written with sorted keys, so the same stream is always the same file, and its ids and timestamps
-replay unchanged. `appendTo` binds each payload as the serializing store binds a stored one: the
+replay unchanged. `appendTo` binds each payload as the store binds a stored one: the
 store's `EventTypeRegistry` resolves the type (an unregistered one fails with
 `UnknownEventTypeException`) and its upcasters upcast a payload written at an older schema version.
-`write` serializes the payloads of a serializing store with a copy of the store's own
-`ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
+`write` serializes the payloads with a copy of the store's own `ObjectMapper`, so a type your application serializes its own way (a module, a custom serializer)
 reads back, and leaves the fields of an `@Encrypted` event in the clear: append such a file to a
 store without a crypto engine. A fixture file therefore holds personal data as plain text — record
 it from synthetic data only, and keep it in test resources.
@@ -982,8 +1004,9 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 
 | Type | What it is for |
 |---|---|
-| `InMemoryEventStore` | An `EventStore` with the semantics of `PostgresEventStore`: optimistic locking, one global order, snapshots, upcasting, and with `serializing(...)` JSON payloads and crypto-shredding. |
-| `InMemoryEventStoreFactory` | An `EventStoreFactory` that creates `InMemoryEventStore`s, for wiring that asks for a factory. |
+| `InMemoryEventStore` | An `EventStore` with the semantics of `PostgresEventStore`: optimistic locking, one global order, snapshots, JSON payloads read back through an `EventTypeRegistry`, upcasting and crypto-shredding. |
+| `InMemoryEventStoreFactory` | An `EventStoreFactory` that creates `InMemoryEventStore`s over a given `EventTypeRegistry` and optional `CryptoEngine`, for wiring that asks for a factory. |
+
 | `InMemoryCommandBus` | A `CommandBus` without locks, retries or interceptors that runs each decider's `guard` before `decide`. |
 | `InMemoryQueryBus` | A `QueryBus` that dispatches by the exact query class. |
 | `InMemoryEventSubscription` | An `EventSubscription` with the at-most-once notification semantics of PostgreSQL `LISTEN`/`NOTIFY`, to test push-driven wiring without Docker. |

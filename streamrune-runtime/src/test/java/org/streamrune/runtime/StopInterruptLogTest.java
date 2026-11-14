@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.types.GlobalOffset;
@@ -36,6 +38,8 @@ import org.streamrune.test.InMemoryOffsetStore;
  * failure: no ERROR line, and no stack trace. A pause interrupts the read the same way.
  */
 class StopInterruptLogTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   /** What the INFO line says, for a stop and a pause alike. */
   private static final String CUT_SHORT = "ended: the owner's interrupt cut a call in flight short";
@@ -69,7 +73,7 @@ class StopInterruptLogTest {
     final CountDownLatch inTheRead = new CountDownLatch(1);
 
     InterruptibleReads() {
-      super(new InMemoryEventStore());
+      super(new InMemoryEventStore(TYPES));
     }
 
     @Override

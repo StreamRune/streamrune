@@ -20,7 +20,7 @@ class MinimalEventStoreContractTest extends EventStoreContract {
   protected EventStore newStore(Setup setup) {
     return new MinimalEventStore(
         InMemoryEventStoreContractTest.configured(
-            InMemoryEventStore.serializing(setup.registry(), setup.crypto()), setup));
+            new InMemoryEventStore(setup.registry(), setup.crypto()), setup));
   }
 
   /** A minimal store over the events of {@code store}'s in-memory store. */

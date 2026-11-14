@@ -14,6 +14,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.IdempotencyKey;
@@ -21,6 +23,12 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 class ForwardingCommandBusTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CartOpened.class)
+          .registerState("Cart", Cart.class)
+          .build();
 
   record OpenCart(String cartId) implements Command {}
 
@@ -77,7 +85,7 @@ class ForwardingCommandBusTest {
 
   @Test
   void failOnce_failsTheFirstCommandBeforeItRuns_andTheSecondSucceeds() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var faults = FaultSchedule.none().failOnce("execute");
     var forwarding = new ForwardingCommandBus(bus(store), faults);
     StreamId cart = StreamId.of(CART, AggregateId.of("cart-1"));
@@ -116,7 +124,7 @@ class ForwardingCommandBusTest {
     assertTrue(forwarding.supportsIdempotentExecution());
     assertSame(fenceIdentity, forwarding.sagaFenceStorageIdentity());
     assertFalse(
-        new ForwardingCommandBus(bus(new InMemoryEventStore())).supportsIdempotentExecution());
+        new ForwardingCommandBus(bus(new InMemoryEventStore(TYPES))).supportsIdempotentExecution());
   }
 
   @Test
@@ -163,6 +171,6 @@ class ForwardingCommandBusTest {
 
     assertThrows(
         IllegalArgumentException.class,
-        () -> new ForwardingCommandBus(bus(new InMemoryEventStore()), misspelled));
+        () -> new ForwardingCommandBus(bus(new InMemoryEventStore(TYPES)), misspelled));
   }
 }

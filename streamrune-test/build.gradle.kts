@@ -6,7 +6,8 @@ dependencies {
     api(project(":streamrune-runtime"))
     // All `api`, because module-info.java requires each of them by name.
     //
-    // The previous reasoning here — "InMemoryEventStore.serializing() registers
+    // The previous reasoning here — "InMemoryEventStore registers
+
     // CryptoShreddingModule internally but no public signature exposes org.streamrune.crypto
     // types, so the dependency must not leak into consumers' compile classpaths (implementation,
     // not api)" — is sound Java-library hygiene and simultaneously impossible under JPMS. A

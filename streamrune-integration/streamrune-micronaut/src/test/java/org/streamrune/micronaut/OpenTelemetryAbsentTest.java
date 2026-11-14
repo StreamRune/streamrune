@@ -17,6 +17,8 @@ import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.AggregateId;
@@ -35,6 +37,12 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 class OpenTelemetryAbsentTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Probed.class)
+          .registerState("ProbeState", ProbeState.class)
+          .build();
+
   static final String SPEC = "open-telemetry-absent";
 
   /** The application's stores and its one command. */
@@ -43,7 +51,7 @@ class OpenTelemetryAbsentTest {
   static class ApplicationBeans {
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

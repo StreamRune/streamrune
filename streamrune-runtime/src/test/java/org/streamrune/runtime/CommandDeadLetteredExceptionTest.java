@@ -20,6 +20,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -46,13 +48,19 @@ import org.streamrune.test.InjectedFaultException;
  */
 class CommandDeadLetteredExceptionTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Adjusted.class)
+          .registerState("CounterState", CounterState.class)
+          .build();
+
   private static final AggregateType COUNTER = AggregateType.of("counter");
 
   private final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
   private final AtomicReference<EventStoreException> storeFailure = new AtomicReference<>();
   private final ForwardingEventStore store =
       new ForwardingEventStore(
-          new InMemoryEventStore().withCommandInbox(inbox),
+          new InMemoryEventStore(TYPES).withCommandInbox(inbox),
           FaultSchedule.none()
               .throwing(
                   () -> {

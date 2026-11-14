@@ -34,9 +34,11 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.Query;
 import org.streamrune.core.QueryBus;
 import org.streamrune.core.RequireRole;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
@@ -90,6 +92,15 @@ import reactor.core.publisher.Mono;
  * all (a background thread) stays anonymous: nothing is invented.
  */
 class MicronautRequestContextBindingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ProbeEvent.Touched.class)
+          .registerEvent(FlowEvent.Opened.class)
+          .registerEvent(FlowEvent.Prepared.class)
+          .registerEvent(FlowEvent.Finished.class)
+          .registerState("ProbeState", ProbeState.class)
+          .build();
 
   static final String SPEC = "MicronautRequestContextBindingTest";
 
@@ -500,7 +511,7 @@ class MicronautRequestContextBindingTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+      return new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     }
 
     @Singleton

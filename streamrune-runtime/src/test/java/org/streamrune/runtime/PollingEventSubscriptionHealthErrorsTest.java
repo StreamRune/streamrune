@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.LeaseRole;
 import org.streamrune.core.subscription.SubscriptionConfig;
@@ -42,12 +44,15 @@ import org.streamrune.test.InMemoryOffsetStore;
  */
 class PollingEventSubscriptionHealthErrorsTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
+
   private static final String NAME = "orders";
   private static final AggregateType TYPE = AggregateType.of("cart");
 
   record Added(String sku) implements DomainEvent {}
 
-  private final InMemoryEventStore eventStore = new InMemoryEventStore();
+  private final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
   private final InMemoryOffsetStore offsetStore = new InMemoryOffsetStore();
   private final SubscriptionHealthContributor contributor =
       new SubscriptionHealthContributor(eventStore, offsetStore);

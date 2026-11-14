@@ -24,6 +24,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.integration.SseAuthorizer;
@@ -43,6 +45,8 @@ import org.streamrune.test.InMemoryEventStore;
  * the fixture's authorizer the thread it was called on.
  */
 class SseAuthorizerThreadTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final String SPEC = "SseAuthorizerThreadTest";
 
@@ -126,7 +130,7 @@ class SseAuthorizerThreadTest {
 
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

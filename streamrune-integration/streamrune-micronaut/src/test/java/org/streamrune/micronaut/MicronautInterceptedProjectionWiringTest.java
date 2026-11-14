@@ -23,7 +23,9 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.OffsetStore;
@@ -47,6 +49,8 @@ import org.streamrune.test.InMemoryProjectionRepository;
  */
 class MicronautInterceptedProjectionWiringTest {
 
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
+
   /** An application around advice, standing in for {@code @Transactional}, {@code @Timed}. */
   @Around
   @Retention(RetentionPolicy.RUNTIME)
@@ -66,7 +70,7 @@ class MicronautInterceptedProjectionWiringTest {
   static class Fixtures {
     @Singleton
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Singleton

@@ -1,6 +1,8 @@
 package org.streamrune.test;
 
 import java.time.Instant;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.IdempotencyKey;
 
 /**
@@ -8,10 +10,15 @@ import org.streamrune.core.types.IdempotencyKey;
  */
 class InMemoryCommandInboxContractTest extends CommandInboxContract {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(CommandInboxContract.InboxEvent.class)
+          .build();
+
   @Override
   protected Inboxed newStore() {
     var inbox = new InMemoryCommandInbox();
-    return new Inboxed(new InMemoryEventStore().withCommandInbox(inbox), inbox);
+    return new Inboxed(new InMemoryEventStore(TYPES).withCommandInbox(inbox), inbox);
   }
 
   @Override

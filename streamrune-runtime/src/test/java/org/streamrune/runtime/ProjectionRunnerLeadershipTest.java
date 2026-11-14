@@ -16,6 +16,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
@@ -40,6 +42,8 @@ import org.streamrune.test.InMemoryOffsetStore;
  * re-check abandons a batch without committing when leadership is lost after the batch started.
  */
 class ProjectionRunnerLeadershipTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final AggregateType TYPE = AggregateType.of("live");
 
@@ -282,7 +286,7 @@ class ProjectionRunnerLeadershipTest {
   void continuousLiveSkip_leadershipLostBeforeSkip_doesNotAdvanceSubscriptionOffset()
       throws Exception {
     ProjectionName name = ProjectionName.of("cont-live-skip-lost");
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     InMemoryOffsetStore offsets = new InMemoryOffsetStore();
 
     // Leader through catch-up (store empty → drains immediately) and into LIVE. When the poison

@@ -23,7 +23,9 @@ import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
@@ -82,6 +84,15 @@ import org.streamrune.test.InMemorySagaStore;
  * does not bypass interceptors.
  */
 class SagaCommandVetoTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Start.class)
+          .registerEvent(OrderShipped.class)
+          .registerEvent(PaymentRefunded.class)
+          .registerState("ShipState", ShipState.class)
+          .registerState("RefundState", RefundState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -252,7 +263,7 @@ class SagaCommandVetoTest {
     // CommandResult shape the production bus returns (no stub drift).
     var inbox = new InMemoryCommandInbox();
     EventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     var bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)

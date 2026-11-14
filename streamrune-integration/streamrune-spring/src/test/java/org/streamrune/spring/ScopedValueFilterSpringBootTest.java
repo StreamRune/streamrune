@@ -41,6 +41,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.integration.RequestIdentityPolicy;
@@ -59,6 +61,8 @@ import org.streamrune.test.InMemoryEventStore;
  * behind the filter is not called.
  */
 class ScopedValueFilterSpringBootTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final AtomicInteger CONTROLLER_CALLS = new AtomicInteger();
   private static final AtomicInteger ERROR_DISPATCHES = new AtomicInteger();
@@ -109,7 +113,7 @@ class ScopedValueFilterSpringBootTest {
 
     @Bean
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Bean

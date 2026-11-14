@@ -19,7 +19,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -58,6 +60,16 @@ import org.streamrune.test.MutableClock;
  * StreamRuneContext#SAGA_FORWARD} holds when each command reaches the bus.
  */
 class SagaForwardFenceDispatchTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Opened.class)
+          .registerEvent(Advanced.class)
+          .registerEvent(Reserved.class)
+          .registerEvent(Shipped.class)
+          .registerEvent(Released.class)
+          .registerState("Untouched", Untouched.class)
+          .build();
 
   record Opened(String orderId) implements DomainEvent {}
 
@@ -210,7 +222,7 @@ class SagaForwardFenceDispatchTest {
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
     final InMemorySagaStore sagaStore = new InMemorySagaStore(clock);
     final InMemoryEventStore eventStore =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(sagaStore);
     final OneEventDecider<Reserve> reserve = new OneEventDecider<>(c -> new Reserved(c.orderId()));
     final OneEventDecider<Ship> ship = new OneEventDecider<>(c -> new Shipped(c.orderId()));

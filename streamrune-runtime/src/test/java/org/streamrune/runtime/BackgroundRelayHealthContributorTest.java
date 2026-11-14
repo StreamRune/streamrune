@@ -7,12 +7,16 @@ import static org.mockito.Mockito.mock;
 
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
 import org.streamrune.crypto.CryptoForgetSignal;
 import org.streamrune.runtime.BackgroundRelayHealthContributor.Status;
 
 class BackgroundRelayHealthContributorTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   /** Adjustable liveness source so every status branch is exercised deterministically. */
   private static final class FakeSource
@@ -129,7 +133,7 @@ class BackgroundRelayHealthContributorTest {
 
   @Test
   void reportsTheSseEventFeed_downOnceItsPollingThreadHasDied() {
-    var store = new org.streamrune.test.InMemoryEventStore();
+    var store = new org.streamrune.test.InMemoryEventStore(TYPES);
     var dying = new java.util.concurrent.atomic.AtomicBoolean();
     var failing = new java.util.concurrent.atomic.AtomicBoolean();
     org.streamrune.core.EventStore reads =

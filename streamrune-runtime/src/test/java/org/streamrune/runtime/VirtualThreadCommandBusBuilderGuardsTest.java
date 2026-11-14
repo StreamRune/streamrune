@@ -11,6 +11,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.test.InMemoryEventStore;
@@ -21,6 +23,12 @@ import org.streamrune.test.InMemoryEventStore;
  * first command.
  */
 class VirtualThreadCommandBusBuilderGuardsTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Pinged.class)
+          .registerState("PingState", PingState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("ping");
 
@@ -49,7 +57,7 @@ class VirtualThreadCommandBusBuilderGuardsTest {
 
   @Test
   void nullLockTimeout_isRefusedAtTheBuilder_notAtTheFirstCommand() {
-    var builder = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore());
+    var builder = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore(TYPES));
 
     NullPointerException refused =
         assertThrows(NullPointerException.class, () -> builder.lockTimeout(null));
@@ -58,7 +66,7 @@ class VirtualThreadCommandBusBuilderGuardsTest {
 
   @Test
   void aRegistrationWithoutAnAggregateType_isRefusedAtTheBuilder() {
-    var builder = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore());
+    var builder = VirtualThreadCommandBus.builder().eventStore(new InMemoryEventStore(TYPES));
 
     IllegalArgumentException refused =
         assertThrows(
@@ -73,7 +81,7 @@ class VirtualThreadCommandBusBuilderGuardsTest {
   void secondDeciderForTheSameCommandType_isRefused_insteadOfSilentlyReplacingTheFirst() {
     var builder =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(TYPE, Ping.class, cmd -> AggregateId.of(cmd.id()), new PingDecider());
 
     IllegalArgumentException refused =
@@ -90,7 +98,7 @@ class VirtualThreadCommandBusBuilderGuardsTest {
     assertDoesNotThrow(
         () ->
             VirtualThreadCommandBus.builder()
-                .eventStore(new InMemoryEventStore())
+                .eventStore(new InMemoryEventStore(TYPES))
                 .register(TYPE, Ping.class, cmd -> AggregateId.of(cmd.id()), new PingDecider())
                 .build()
                 .execute(new Ping("p-1")));

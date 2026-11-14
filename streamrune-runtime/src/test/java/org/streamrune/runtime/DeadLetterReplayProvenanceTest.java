@@ -28,7 +28,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
@@ -63,6 +65,12 @@ import org.streamrune.test.SagaEnvelopes;
  * dispatch cause is bound.
  */
 class DeadLetterReplayProvenanceTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Paid.class)
+          .registerState("Payment", Payment.class)
+          .build();
 
   /** Stores one {@link Paid} per command. */
   public record Pay(String paymentId) implements Command {}
@@ -105,7 +113,7 @@ class DeadLetterReplayProvenanceTest {
     final ObjectMapper mapper = new ObjectMapper();
     final AtomicBoolean failing = new AtomicBoolean(false);
     final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    final InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    final InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     final InMemoryDeadLetterQueue dlq = new InMemoryDeadLetterQueue();
     final VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()

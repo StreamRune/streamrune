@@ -14,6 +14,8 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.OffsetStore;
@@ -49,6 +51,9 @@ import org.streamrune.test.InMemoryProjectionRepository;
  */
 class ProjectionCommitRejectionEscalationTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Placed.class).build();
+
   private static final StreamId STREAM =
       StreamId.of(AggregateType.of("order"), AggregateId.of("o-1"));
 
@@ -73,7 +78,7 @@ class ProjectionCommitRejectionEscalationTest {
   }
 
   private static InMemoryEventStore storeWithTwoEvents() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     store.append(
         STREAM,
         List.of(

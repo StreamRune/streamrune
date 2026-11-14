@@ -10,6 +10,7 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.EventType;
@@ -29,8 +30,9 @@ import org.streamrune.core.types.Version;
  *
  * <pre>{@code
  * StreamId cart = StreamId.of(AggregateType.of("cart"), AggregateId.of("cart-1"));
+ * var types = SimpleEventTypeRegistry.builder().registerEvent(ItemAdded.class).build();
  *
- * EventStoreFixture.store()
+ * EventStoreFixture.store(types)
  *     .given()
  *     .append(cart, List.of(event(cart, 1, "ItemAdded", new ItemAdded("SKU-1"))))
  *     .when()
@@ -38,14 +40,14 @@ import org.streamrune.core.types.Version;
  *     .eventsPersisted()
  *     .expectEventCount(cart, 2);
  *
- * EventStoreFixture.store()
+ * EventStoreFixture.store(types)
  *     .given()
  *     .append(cart, List.of(event(cart, 1, "ItemAdded", new ItemAdded("SKU-1"))))
  *     .when()
  *     .append(cart, List.of(event(cart, 2, "ItemAdded", new ItemAdded("SKU-2"))), 0) // stale
  *     .expectOptimisticLockException();
  *
- * EventStoreFixture.store()
+ * EventStoreFixture.store(types)
  *     .given()
  *     .append(cart, List.of(event(cart, 1, "ItemAdded", new ItemAdded("SKU-1"))))
  *     .when()
@@ -61,9 +63,14 @@ public final class EventStoreFixture {
     this.eventStore = Objects.requireNonNull(eventStore, "eventStore is required");
   }
 
-  /** Creates a new fixture with an in-memory event store. */
-  public static EventStoreFixture store() {
-    return new EventStoreFixture(new InMemoryEventStore());
+  /**
+   * Creates a new fixture with an {@link InMemoryEventStore} that resolves event types through
+   * {@code typeRegistry}.
+   *
+   * @param typeRegistry registers every event type the fixture appends (required)
+   */
+  public static EventStoreFixture store(EventTypeRegistry typeRegistry) {
+    return new EventStoreFixture(new InMemoryEventStore(typeRegistry));
   }
 
   /** Creates a new fixture with the given event store. */

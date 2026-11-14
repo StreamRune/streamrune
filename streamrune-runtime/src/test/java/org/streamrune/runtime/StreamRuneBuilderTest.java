@@ -25,6 +25,8 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
@@ -51,11 +53,18 @@ import org.streamrune.test.InMemoryOffsetStore;
 /** Tests for enhanced StreamRune.Builder API */
 class StreamRuneBuilderTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Painted.class)
+          .registerEvent(PerRegistrationTestEvent.class)
+          .registerState("WidgetState", WidgetState.class)
+          .build();
+
   private static final AggregateType TYPE = AggregateType.of("widget");
 
   @Test
   void shouldCreateWithEventStore() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune = StreamRune.builder().eventStore(store).build();
 
@@ -93,7 +102,7 @@ class StreamRuneBuilderTest {
             .eventStoreFactory(
                 settings -> {
                   storeCreated.set(true);
-                  return new InMemoryEventStore();
+                  return new InMemoryEventStore(TYPES);
                 })
             .register(TYPE, Paint.class, c -> AggregateId.of(c.widgetId()), new WidgetDecider());
 
@@ -118,7 +127,7 @@ class StreamRuneBuilderTest {
             .eventStoreFactory(
                 settings -> {
                   received.set(settings);
-                  return new InMemoryEventStore();
+                  return new InMemoryEventStore(TYPES);
                 })
             .registerEventType("TestEvent", TestEvent.class)
             .registerStateType("TestState", TestState.class)
@@ -142,7 +151,7 @@ class StreamRuneBuilderTest {
             .eventStoreFactory(
                 settings -> {
                   received.set(settings);
-                  return new InMemoryEventStore();
+                  return new InMemoryEventStore(TYPES);
                 })
             .cryptoEngine(engine)
             .build();
@@ -161,7 +170,7 @@ class StreamRuneBuilderTest {
             .eventStoreFactory(
                 settings -> {
                   received.set(settings);
-                  return new InMemoryEventStore();
+                  return new InMemoryEventStore(TYPES);
                 })
             .upcasters(List.of(upcaster))
             .build();
@@ -178,7 +187,7 @@ class StreamRuneBuilderTest {
         .eventStoreFactory(
             settings -> {
               received.set(settings);
-              return new InMemoryEventStore();
+              return new InMemoryEventStore(TYPES);
             })
         .build();
 
@@ -196,7 +205,7 @@ class StreamRuneBuilderTest {
         .eventStoreFactory(
             settings -> {
               received.set(settings);
-              return new InMemoryEventStore();
+              return new InMemoryEventStore(TYPES);
             })
         .tracing(tracing)
         .build();
@@ -213,7 +222,7 @@ class StreamRuneBuilderTest {
         .eventStoreFactoryProvider(
             settings -> {
               received.set(settings);
-              return InMemoryEventStoreFactory.builder().build();
+              return InMemoryEventStoreFactory.builder(TYPES).build();
             })
         .tracing(tracing)
         .build();
@@ -266,7 +275,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenCryptoEngineSetWithPrebuiltStore() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .cryptoEngine(new TestCryptoEngine());
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -277,7 +286,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenCryptoEngineSetWithPlainEventStoreFactory() {
     var builder =
         StreamRune.builder()
-            .eventStoreFactory(InMemoryEventStoreFactory.builder().build())
+            .eventStoreFactory(InMemoryEventStoreFactory.builder(TYPES).build())
             .cryptoEngine(new TestCryptoEngine());
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -288,7 +297,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenUpcastersSetWithPrebuiltStore() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .upcasters(List.of(new TestUpcaster()));
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -299,7 +308,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenEventTypeRegisteredWithPrebuiltStore() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .registerEventType("TestEvent", TestEvent.class);
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -310,7 +319,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenStateTypeRegisteredWithPrebuiltStore() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .registerStateType("TestState", TestState.class);
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -321,7 +330,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenSubscriptionConfigSetWithoutProjectionRunnerFactory() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .subscriptionConfig(SubscriptionConfig.pollingOnly(Duration.ofMillis(100)));
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -332,7 +341,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldThreadSubscriptionConfigIntoProjectionRunnerFactory() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var config = new SubscriptionConfig(false, Duration.ofMillis(250), Duration.ofMillis(25));
     var receivedStore = new AtomicReference<EventStore>();
     var receivedConfig = new AtomicReference<SubscriptionConfig>();
@@ -359,7 +368,7 @@ class StreamRuneBuilderTest {
     var receivedConfig = new AtomicReference<SubscriptionConfig>();
 
     StreamRune.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .projectionRunnerFactory(
             (eventStore, subscriptionConfig) -> {
               receivedConfig.set(subscriptionConfig);
@@ -388,7 +397,7 @@ class StreamRuneBuilderTest {
 
     var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> runner)
             .registerProjection(
                 ProjectionName.of("TestProjection"),
@@ -405,7 +414,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void registerProjectionRefusesANullMode() {
-    var builder = StreamRune.builder().eventStore(new InMemoryEventStore());
+    var builder = StreamRune.builder().eventStore(new InMemoryEventStore(TYPES));
     var ex =
         assertThrows(
             IllegalArgumentException.class,
@@ -437,7 +446,7 @@ class StreamRuneBuilderTest {
 
     try (var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> recording)
             .registerProjection(
                 ProjectionName.of("at-least-once"), atLeastOnce, AT_LEAST_ONCE_IDEMPOTENT)
@@ -459,7 +468,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenProjectionRunnerFactoryReturnsNull() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunnerFactory((eventStore, subscriptionConfig) -> null);
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
@@ -470,7 +479,7 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenBothProjectionRunnerAndFactoryConfigured() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunner(new NoOpProjectionRunner())
             .projectionRunnerFactory(
                 (eventStore, subscriptionConfig) -> new NoOpProjectionRunner());
@@ -485,8 +494,8 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenMultipleEventStoreSourcesConfigured() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
-            .eventStoreFactory(InMemoryEventStoreFactory.builder().build());
+            .eventStore(new InMemoryEventStore(TYPES))
+            .eventStoreFactory(InMemoryEventStoreFactory.builder(TYPES).build());
 
     var ex = assertThrows(IllegalStateException.class, builder::build);
     assertTrue(ex.getMessage().contains("one"), ex.getMessage());
@@ -496,8 +505,8 @@ class StreamRuneBuilderTest {
   void shouldThrowWhenEventStoreAndConfiguredFactoryConfigured() {
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
-            .eventStoreFactory(settings -> new InMemoryEventStore());
+            .eventStore(new InMemoryEventStore(TYPES))
+            .eventStoreFactory(settings -> new InMemoryEventStore(TYPES));
 
     assertThrows(IllegalStateException.class, builder::build);
   }
@@ -506,7 +515,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldSetSnapshotPolicy() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune =
         StreamRune.builder()
@@ -519,7 +528,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldSetRetryPolicy() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune =
         StreamRune.builder()
@@ -533,7 +542,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldSetLockTimeout() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune =
         StreamRune.builder()
@@ -546,7 +555,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldSetStripeCount() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune = StreamRune.builder().eventStore(store).stripeCount(512).build();
 
@@ -557,7 +566,7 @@ class StreamRuneBuilderTest {
   void shouldChainBuilderMethods() {
     var streamRune =
         StreamRune.builder()
-            .eventStoreFactory(settings -> new InMemoryEventStore())
+            .eventStoreFactory(settings -> new InMemoryEventStore(TYPES))
             .registerEventType("TestEvent", TestEvent.class)
             .registerStateType("TestState", TestState.class)
             .cryptoEngine(new TestCryptoEngine())
@@ -579,7 +588,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldReturnCommandBusAccessor() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var streamRune = StreamRune.builder().eventStore(store).build();
 
@@ -591,7 +600,7 @@ class StreamRuneBuilderTest {
   @Test
   void shouldBuildWithEventStoreFactory() {
     // Covers the plain (no-settings) EventStoreFactory branch in build()
-    var factory = InMemoryEventStoreFactory.builder().build();
+    var factory = InMemoryEventStoreFactory.builder(TYPES).build();
 
     var streamRune = StreamRune.builder().eventStoreFactory(factory).build();
 
@@ -600,7 +609,7 @@ class StreamRuneBuilderTest {
 
   @Test
   void shouldStartAndStopProjections() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     // startProjections() now runs each registration on its own thread, so the assertion
     // below must wait for it rather than checking a flag set by a not-yet-scheduled thread.
     var started = new CountDownLatch(1);
@@ -637,7 +646,7 @@ class StreamRuneBuilderTest {
     // build() used to succeed and startProjections() would silently do nothing when a
     // projection was registered but no runner was configured — permanently-stale read models with
     // zero error signal. build() must now fail loudly instead.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
 
     var builder =
         StreamRune.builder()
@@ -682,7 +691,7 @@ class StreamRuneBuilderTest {
 
     var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunner(blockingRunner)
             .registerProjection(
                 ProjectionName.of("proj1"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
@@ -750,7 +759,7 @@ class StreamRuneBuilderTest {
 
     try (var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunnerFactory(
                 (eventStore, subscriptionConfig) -> {
                   factoryCalls.incrementAndGet();
@@ -788,7 +797,7 @@ class StreamRuneBuilderTest {
     // startProjections()'s per-thread catch block: an ERROR log, and read model #2 permanently
     // stale. Real runner (one per registration, post-fix), real InMemoryEventStore: both
     // registrations must actually process an appended event, and nothing may log at ERROR.
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var logger =
         (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StreamRune.class);
     var appender =
@@ -856,7 +865,7 @@ class StreamRuneBuilderTest {
     // holds a stop that finds it idle for its next run(). Without startProjections() dropping
     // that stop, a stop before the first start, or a stop + start to recover a run that had ended
     // on its own, left the restarted run() returning at once with nothing processed.
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var batches =
         new java.util.concurrent.CopyOnWriteArrayList<org.streamrune.core.EventEnvelope>();
     var streamRune =
@@ -918,7 +927,7 @@ class StreamRuneBuilderTest {
 
     var streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .projectionRunner(runner)
             .registerProjection(
                 ProjectionName.of("p"), (Projection) batch -> {}, AT_LEAST_ONCE_IDEMPOTENT)
@@ -987,7 +996,9 @@ class StreamRuneBuilderTest {
   void closeShouldNotFailWhenEventStoreFactoryIsNotAutoCloseable() {
     // InMemoryEventStoreFactory does not implement AutoCloseable — close() must simply skip it.
     var streamRune =
-        StreamRune.builder().eventStoreFactory(InMemoryEventStoreFactory.builder().build()).build();
+        StreamRune.builder()
+            .eventStoreFactory(InMemoryEventStoreFactory.builder(TYPES).build())
+            .build();
 
     assertDoesNotThrow(streamRune::close);
   }
@@ -1131,7 +1142,7 @@ class StreamRuneBuilderTest {
 
     @Override
     public EventStore create() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Override

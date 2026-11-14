@@ -19,6 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.EventListener;
 import org.streamrune.core.subscription.SubscriptionConfig;
@@ -37,6 +39,9 @@ import org.streamrune.test.InMemoryEventStore;
 
 /** Unit tests for PollingEventSubscription validation and lifecycle. */
 class PollingEventSubscriptionTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
 
@@ -161,7 +166,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void pollOncePersistsEventsAndAdvancesOffset() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
 
@@ -187,7 +192,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void pollOnceReturnsZeroWhenNoEvents() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new PollingEventSubscription(
             SubscriptionName.of("empty"),
@@ -201,7 +206,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void triggerImmediatePollDelegatesToPollOnce() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-imm"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -222,7 +227,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void startAndCloseToggleRunningFlag() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new PollingEventSubscription(
             SubscriptionName.of("start-close"),
@@ -246,7 +251,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void startTwiceThrows() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         new PollingEventSubscription(
             SubscriptionName.of("twice"),
@@ -263,7 +268,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void closeWaitsForInFlightBatch() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("close-wait"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -314,7 +319,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void listenerErrorIsSurfacedFromPollOnce() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -344,7 +349,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void backgroundPollLoopDeliversEvents() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-bg"));
     store.append(s, List.of(envelope(s, 1), envelope(s, 2)), Version.initial());
 
@@ -369,7 +374,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void backgroundPollLoopSurvivesListenerExceptionAndRecovers() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-err"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -417,7 +422,7 @@ class PollingEventSubscriptionTest {
     // the dead thread and /health stays UP while the read model silently freezes. This exercises
     // the
     // REAL poll loop (not a hand-flipped fake): a live listener throws an AssertionError.
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-error"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -457,7 +462,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void consecutiveFailuresReportedWhileListenerKeepsFailing() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-degraded"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -485,7 +490,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void triggerImmediatePollReturnsZeroWhenAnotherPollIsInProgress() throws Exception {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-locked"));
     store.append(s, List.of(envelope(s, 1)), Version.initial());
 
@@ -521,7 +526,7 @@ class PollingEventSubscriptionTest {
 
   @Test
   void builderBuildsWithDefaults() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var sub =
         PollingEventSubscription.builder()
             .subscriptionName(SubscriptionName.of("with-defaults"))

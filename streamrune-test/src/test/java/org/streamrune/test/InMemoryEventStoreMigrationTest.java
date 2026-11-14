@@ -117,7 +117,7 @@ class InMemoryEventStoreMigrationTest {
 
   @Test
   void migratesSnapshotOnLoadAndReplaysOnlyLaterEvents() {
-    var store = InMemoryEventStore.serializing(registry, null).withMigrations(List.of(ONE_TO_TWO));
+    var store = new InMemoryEventStore(registry).withMigrations(List.of(ONE_TO_TWO));
     StreamId id = StreamId.of(TYPE, AggregateId.of("user-1"));
     store.append(
         id,
@@ -141,9 +141,7 @@ class InMemoryEventStoreMigrationTest {
 
   @Test
   void multiStepChainAppliesAllStepsInOrder() {
-    var store =
-        InMemoryEventStore.serializing(registry, null)
-            .withMigrations(List.of(ONE_TO_TWO, TWO_TO_THREE));
+    var store = new InMemoryEventStore(registry).withMigrations(List.of(ONE_TO_TWO, TWO_TO_THREE));
     StreamId id = StreamId.of(TYPE, AggregateId.of("user-3"));
     store.append(
         id, List.of(renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b")), Version.initial());
@@ -187,8 +185,7 @@ class InMemoryEventStoreMigrationTest {
     // GDPR-erased subject's redaction, and replaying from events would hit the identical crypto
     // failure on the same encrypted fields anyway — crypto failures must stay fatal.
     var store =
-        InMemoryEventStore.serializing(registry, null)
-            .withMigrations(List.of(CRYPTO_THROWING_ONE_TO_TWO));
+        new InMemoryEventStore(registry).withMigrations(List.of(CRYPTO_THROWING_ONE_TO_TWO));
     StreamId id = StreamId.of(TYPE, AggregateId.of("user-crypto-throwing-migration"));
     store.append(
         id, List.of(renamedEnvelope(id, 1, "a"), renamedEnvelope(id, 2, "b")), Version.initial());
@@ -274,7 +271,7 @@ class InMemoryEventStoreMigrationTest {
     // a JsonMappingException — the same exception the discard path sees for a plain unmappable
     // payload — so it must still PROPAGATE, never be swallowed as a discardable cache.
     var reg = new SwappableRegistry(NestedSecretState.class);
-    var store = InMemoryEventStore.serializing(reg, new DecryptFailingEngine());
+    var store = new InMemoryEventStore(reg, new DecryptFailingEngine());
     StreamId id = StreamId.of(TYPE, AggregateId.of("nested-secret-1"));
     store.saveSnapshot(
         id, new Version(1), new NestedSecretState("agg-1", new Secret("subj-1", "top-secret")), 1);
@@ -311,9 +308,7 @@ class InMemoryEventStoreMigrationTest {
         };
     assertThrows(
         IllegalArgumentException.class,
-        () ->
-            InMemoryEventStore.serializing(registry, null)
-                .withMigrations(List.of(ONE_TO_TWO, dup)));
+        () -> new InMemoryEventStore(registry).withMigrations(List.of(ONE_TO_TWO, dup)));
   }
 
   @Test
@@ -337,6 +332,6 @@ class InMemoryEventStoreMigrationTest {
         };
     assertThrows(
         IllegalArgumentException.class,
-        () -> InMemoryEventStore.serializing(registry, null).withMigrations(List.of(bad)));
+        () -> new InMemoryEventStore(registry).withMigrations(List.of(bad)));
   }
 }

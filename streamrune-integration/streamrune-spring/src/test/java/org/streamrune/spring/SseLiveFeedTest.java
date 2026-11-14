@@ -50,6 +50,8 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -75,6 +77,12 @@ import org.streamrune.test.InMemoryEventStore;
  * {@code /api/sse/order/o-1}, and executes commands through the {@link CommandBus} bean.
  */
 class SseLiveFeedTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderEvent.Placed.class)
+          .registerState("OrderState", OrderState.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final ObjectMapper JSON = new ObjectMapper();
@@ -416,7 +424,7 @@ class SseLiveFeedTest {
     /** Holds one event of {@code order/o-1} before the application starts. */
     @Bean
     EventStore eventStore() {
-      InMemoryEventStore store = new InMemoryEventStore();
+      InMemoryEventStore store = new InMemoryEventStore(TYPES);
       StreamId stream = StreamId.of(ORDER, AggregateId.of("o-1"));
       store.append(
           stream,

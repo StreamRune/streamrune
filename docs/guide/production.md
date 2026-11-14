@@ -528,8 +528,9 @@ this table cannot drift from what is actually exported. All StreamRune span attr
 - With OpenTelemetry present and the sampler dropping a trace, StreamRune still creates its spans,
   non-recording ones at about 0.2 µs each and roughly six per command; switching an area off
   removes that cost.
-- The in-memory `InMemoryEventStore` starts the event-store spans in its serializing mode only; a
-  by-reference store serializes nothing and does no I/O.
+- The in-memory `InMemoryEventStore` starts the same event-store spans as `PostgresEventStore`,
+  with an outbox entry count of `0`.
+
 - The subscription and projection decorators also wrap a listener or a projection of your own;
   the runners and subscriptions given a tracing apply them, never twice.
 

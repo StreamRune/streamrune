@@ -22,8 +22,10 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.CommandInterceptor;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ReservedCorrelationIdException;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.audit.AuditEntry;
@@ -43,6 +45,12 @@ import org.streamrune.test.InMemoryEventStore;
 
 /** Runs the provenance contract against {@link VirtualThreadCommandBus}. */
 class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(org.streamrune.test.CommandBusProvenanceContract.Marked.class)
+          .registerState("Marks", org.streamrune.test.CommandBusProvenanceContract.Marks.class)
+          .build();
 
   @Override
   protected CommandBus newBus(EventStore eventStore) {
@@ -78,7 +86,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
 
   private static void assertStoredUnder(
       String aggregateId, ScopedValue.Carrier bindings, StreamRuneContext.DispatchCause cause) {
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     try (VirtualThreadCommandBus bus = bus(eventStore)) {
       // The bindings end when call() returns; join() then waits for a command that runs on the
       // bus's own virtual thread, where only what executeAsync carried over is bound.
@@ -162,7 +170,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
 
     static Guarded create() {
       InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-      InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+      InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
       CountingInterceptor interceptor = new CountingInterceptor();
       InMemoryDeadLetterQueue deadLetters = new InMemoryDeadLetterQueue();
       CountingMetrics metrics = new CountingMetrics();
@@ -392,7 +400,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     // ScopedValue.where(CURRENT, StreamRuneContext.capture()) with nothing bound binds null. The
     // bus reads it as no context: the command executes with no user and is audited as a success.
     List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)
@@ -433,7 +441,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
         java.util.function.Consumer<VirtualThreadCommandBus> dispatch, CommandInterceptor last) {
       List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
       InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-      InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+      InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
       VirtualThreadCommandBus[] holder = new VirtualThreadCommandBus[1];
       NestingInterceptor nesting =
           new NestingInterceptor(() -> holder[0], "outer-1", "nested-1", nested -> nested);
@@ -547,7 +555,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
         new StreamRuneContext.RequestContext(
             null, null, CorrelationId.of("app-own-correlation"), Instant.now(), Map.of());
     List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
-    InMemoryEventStore eventStore = new InMemoryEventStore();
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES);
     VirtualThreadCommandBus[] holder = new VirtualThreadCommandBus[1];
     NestingInterceptor nesting =
         new NestingInterceptor(
@@ -624,7 +632,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
     static NestedRun of(java.util.function.UnaryOperator<Runnable> nestedBindings) {
       List<AuditEntry> audit = new java.util.concurrent.CopyOnWriteArrayList<>();
       InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-      InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+      InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
       VirtualThreadCommandBus[] holder = new VirtualThreadCommandBus[1];
       NestingInterceptor nesting =
           new NestingInterceptor(() -> holder[0], "outer-1", "nested-1", nestedBindings);
@@ -717,7 +725,7 @@ class VirtualThreadCommandBusProvenanceTest extends CommandBusProvenanceContract
   void aTaskWrappedInsideARealSagaDispatch_isNotRefusedOnAnotherThread() throws Exception {
     // The bindings of SagaCommandDispatch itself, captured by wrap on the dispatching thread.
     InMemoryCommandInbox inbox = new InMemoryCommandInbox();
-    InMemoryEventStore eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    InMemoryEventStore eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     Runnable[] wrapped = new Runnable[1];
     Runnable[] captured = new Runnable[1];
     try (VirtualThreadCommandBus bus =

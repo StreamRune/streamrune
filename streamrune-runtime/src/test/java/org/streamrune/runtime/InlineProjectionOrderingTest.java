@@ -18,6 +18,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.Command;
 import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -45,6 +47,12 @@ import org.streamrune.test.InMemoryEventStore;
  * the test itself.
  */
 class InlineProjectionOrderingTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(ValueSet.class)
+          .registerState("ValueState", ValueState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("cell");
 
@@ -102,7 +110,7 @@ class InlineProjectionOrderingTest {
         InlineProjectionInterceptor.builder()
             .register(ProjectionName.of("probe"), projection)
             .build();
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var aggregateId = AggregateId.of("same");
 
     try (var bus =
@@ -180,7 +188,7 @@ class InlineProjectionOrderingTest {
             .register(ProjectionName.of("probe"), projection)
             .build();
     var inbox = new InMemoryCommandInbox();
-    var store = new InMemoryEventStore().withCommandInbox(inbox);
+    var store = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     var aggregateId = AggregateId.of("replay-agg");
 
     try (var bus =

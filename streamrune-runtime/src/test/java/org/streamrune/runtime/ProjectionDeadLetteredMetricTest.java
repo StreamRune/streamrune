@@ -13,7 +13,9 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
@@ -38,13 +40,16 @@ import org.streamrune.test.InMemoryProjectionDeadLetterStore;
  */
 class ProjectionDeadLetteredMetricTest {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder().registerEvent(Fail.class).build();
+
   private static final AggregateType TYPE = AggregateType.of("dlq");
 
   private record Fail(String payload) implements DomainEvent {}
 
   @Test
   void continuousRunner_firesDeadLetteredCounterExactlyOncePerDeadLetter() throws Exception {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     var offsetStore = new InMemoryOffsetStore();
     var dlqStore = new InMemoryProjectionDeadLetterStore();
     var metrics = new RecordingStreamRuneMetrics();

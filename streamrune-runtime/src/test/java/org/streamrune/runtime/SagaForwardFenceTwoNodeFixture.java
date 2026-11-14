@@ -13,7 +13,9 @@ import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaId;
@@ -64,11 +66,23 @@ import org.streamrune.test.MutableClock;
  */
 final class SagaForwardFenceTwoNodeFixture implements AutoCloseable {
 
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(SagaStepLockFixture.Opened.class)
+          .registerEvent(SagaStepLockFixture.Advanced.class)
+          .registerEvent(SagaStepLockFixture.Completed.class)
+          .registerEvent(SagaStepLockFixture.Reserved.class)
+          .registerEvent(SagaStepLockFixture.Shipped.class)
+          .registerEvent(SagaStepLockFixture.Released.class)
+          .registerEvent(SagaStepLockFixture.Refunded.class)
+          .registerState("Untouched", SagaStepLockFixture.Untouched.class)
+          .build();
+
   final MutableClock clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
   final InMemoryCommandInbox inbox = new InMemoryCommandInbox();
   final InMemorySagaStore rows = new InMemorySagaStore(clock);
   final InMemoryEventStore eventStore =
-      new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(rows);
+      new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(rows);
   final InMemorySagaDeadLetterStore deadLetters = new InMemorySagaDeadLetterStore(rows);
 
   final Node a;

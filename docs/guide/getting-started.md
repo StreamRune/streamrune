@@ -235,16 +235,26 @@ would reset a confirmed order to `NEW`.
 
 ## Wire with StreamRune.builder()
 
-Start with the `InMemoryEventStore` so nothing needs a database to run:
+Start with the `InMemoryEventStore` so nothing needs a database to run. Like the PostgreSQL store,
+it stores each event as JSON and reads it back through an `EventTypeRegistry`, so register every
+event type — and the state type, for snapshots — the way production will:
 
 ```java
 import java.util.function.Function;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.runtime.StreamRune;
 import org.streamrune.test.InMemoryEventStore;
 
-var eventStore = new InMemoryEventStore();
+var typeRegistry = SimpleEventTypeRegistry.builder()
+    .registerEvent(OrderEvent.OrderCreated.class)
+    .registerEvent(OrderEvent.OrderConfirmed.class)
+    .registerEvent(OrderEvent.OrderCancelled.class)
+    .registerState("OrderState", OrderState.class)
+    .build();
+var eventStore = new InMemoryEventStore(typeRegistry);
+
 
 // The aggregate type names the aggregate; every stream is "<type>:<id>".
 static final AggregateType ORDER = AggregateType.of("order");

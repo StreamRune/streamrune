@@ -20,7 +20,7 @@ import org.streamrune.core.types.Version;
  *
  * <pre>{@code
  * var faults = FaultSchedule.none().crashAfter("append");
- * var store = new ForwardingEventStore(new InMemoryEventStore(), faults);
+ * var store = new ForwardingEventStore(new InMemoryEventStore(typeRegistry), faults);
  * // the next append stores its events, then throws InjectedFaultException
  * }</pre>
  *

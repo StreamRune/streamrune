@@ -48,6 +48,8 @@ import org.springframework.web.filter.CorsFilter;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.integration.RequestIdentityPolicy;
@@ -70,6 +72,8 @@ import org.streamrune.test.InMemoryEventStore;
  * the actual request.
  */
 class ScopedValueFilterCorsSpringBootTest {
+
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
 
   private static final String PAGE_ORIGIN = "https://app.example";
   private static final String ALLOW_ORIGIN = "Access-Control-Allow-Origin";
@@ -114,7 +118,7 @@ class ScopedValueFilterCorsSpringBootTest {
 
     @Bean
     EventStore eventStore() {
-      return new InMemoryEventStore();
+      return new InMemoryEventStore(TYPES);
     }
 
     @Bean

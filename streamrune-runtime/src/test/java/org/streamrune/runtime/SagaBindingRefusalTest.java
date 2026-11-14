@@ -26,7 +26,9 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.DomainException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ReservedCorrelationIdException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
@@ -114,6 +116,20 @@ import org.streamrune.test.MutableClock;
  * terminal write is a compare-and-swap at the episode's version, so of two resumes one writes it.
  */
 class SagaBindingRefusalTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderPlaced.class)
+          .registerEvent(OrderConfirmed.class)
+          .registerEvent(OrderCancelled.class)
+          .registerEvent(Audited.class)
+          .registerEvent(PaymentInitiated.class)
+          .registerEvent(StockReserved.class)
+          .registerState("OrderAggregate", OrderAggregate.class)
+          .registerState("AuditAggregate", AuditAggregate.class)
+          .registerState("PaymentAggregate", PaymentAggregate.class)
+          .registerState("StockAggregate", StockAggregate.class)
+          .build();
 
   private static final AggregateType ORDER = AggregateType.of("order");
   private static final AggregateType PAYMENT = AggregateType.of("payment");
@@ -672,7 +688,7 @@ class SagaBindingRefusalTest {
     final InMemorySagaDeadLetterStore sagaDeadLetters = new InMemorySagaDeadLetterStore(sagaStore);
     final InMemoryDeadLetterQueue deadLetterQueue = new InMemoryDeadLetterQueue();
     final InMemoryEventStore store =
-        new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(sagaStore);
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(sagaStore);
     final AnotherSagasContextInFront bus =
         new AnotherSagasContextInFront(
             VirtualThreadCommandBus.builder()

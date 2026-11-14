@@ -32,8 +32,8 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 /**
- * Serializing-mode tests: {@link InMemoryEventStore#serializing} round-trips every payload through
- * Jackson, surfacing in unit tests the failures {@code PostgresEventStore} raises in production.
+ * Serialization tests: {@link InMemoryEventStore} round-trips every payload through Jackson,
+ * surfacing in unit tests the failures {@code PostgresEventStore} raises in production.
  */
 class InMemoryEventStoreSerializingTest {
 
@@ -86,14 +86,14 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void roundTripsEventAndMetadataThroughJackson() {
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var original = new Added("A", Instant.parse("2026-02-03T04:05:06Z"));
     store.append(s, List.of(envelope(s, 1, original, "Added")), Version.initial());
 
     var loaded = store.load(s).events().getFirst();
     assertEquals(original, loaded.event(), "round-trip must preserve the event's value");
-    assertNotSame(original, loaded.event(), "serializing mode must not store by reference");
+    assertNotSame(original, loaded.event(), "the store must not keep the appended instance");
     assertEquals(metadata(1), loaded.metadata());
   }
 
@@ -101,7 +101,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void roundTripsTheSagaOrigin() {
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     SagaId sagaId = SagaId.of("order-saga-42");
     var original = new Added("A", Instant.parse("2026-02-03T04:05:06Z"));
@@ -130,7 +130,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void unserializableEventFailsAtAppendLikePostgres() {
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var bad = new Unmappable(new Object());
 
@@ -150,7 +150,7 @@ class InMemoryEventStoreSerializingTest {
     // PostgresEventStore raises when reading the event back, at the same point in the lifecycle.
     var badRegistry =
         SimpleEventTypeRegistry.builder().registerEvent("Added", Incompatible.class).build();
-    var store = InMemoryEventStore.serializing(badRegistry, null);
+    var store = new InMemoryEventStore(badRegistry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
 
     // Append succeeds — serialization of a valid Added payload never fails.
@@ -163,7 +163,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void serializationFailureOnAnyEventLeavesNothingAppended() {
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var good = envelope(s, 1, new Added("A", Instant.EPOCH), "Added");
     var bad = envelope(s, 2, new Unmappable(new Object()), "Unmappable");
@@ -175,7 +175,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void encryptedFieldsRoundTripThroughTheCryptoModule() {
-    var store = InMemoryEventStore.serializing(registry, new InMemoryCryptoEngine());
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("user-1"));
     var original = new PiiRegistered("user-42", "alice@example.com");
     store.append(s, List.of(envelope(s, 1, original, "PiiRegistered")), Version.initial());
@@ -187,7 +187,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void encryptedFieldWithNullSubjectIdFailsAtAppendNotInProduction() {
-    var store = InMemoryEventStore.serializing(registry, new InMemoryCryptoEngine());
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("user-1"));
     var bad = new PiiRegistered(null, "alice@example.com");
 
@@ -203,7 +203,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void snapshotStateRoundTripsThroughJackson() {
-    var store = InMemoryEventStore.serializing(registry, null);
+    var store = new InMemoryEventStore(registry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(
         s, List.of(envelope(s, 1, new Added("A", Instant.EPOCH), "Added")), Version.initial());
@@ -212,13 +212,14 @@ class InMemoryEventStoreSerializingTest {
 
     var history = store.load(s);
     assertEquals(state, history.snapshotState());
-    assertNotSame(state, history.snapshotState(), "snapshot must not be stored by reference");
+    assertNotSame(
+        state, history.snapshotState(), "the store must not keep the saved state instance");
   }
 
   @Test
   void snapshotWithUnregisteredStateTypeFailsLikePostgres() {
     var emptyRegistry = SimpleEventTypeRegistry.builder().build();
-    var store = InMemoryEventStore.serializing(emptyRegistry, null);
+    var store = new InMemoryEventStore(emptyRegistry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
 
     var ex =
@@ -234,7 +235,7 @@ class InMemoryEventStoreSerializingTest {
         SimpleEventTypeRegistry.builder()
             .registerState("CartState", InMemoryEventStoreSerializingTest.class)
             .build();
-    var store = InMemoryEventStore.serializing(mismatched, null);
+    var store = new InMemoryEventStore(mismatched);
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
 
     var ex =
@@ -245,28 +246,23 @@ class InMemoryEventStoreSerializingTest {
   }
 
   @Test
-  void byReferenceModeStoresTheSameInstance() {
-    var store = new InMemoryEventStore();
-    StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-    var original = new Added("A", Instant.EPOCH);
-    store.append(s, List.of(envelope(s, 1, original, "Added")), Version.initial());
-
-    assertSame(original, store.load(s).events().getFirst().event());
-  }
-
-  @Test
-  void objectMapperConstructorValidatesArguments() {
+  void constructorsRequireARegistryAndAMapper() {
     var mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    assertThrows(
+        NullPointerException.class, () -> new InMemoryEventStore((EventTypeRegistry) null));
+    assertThrows(
+        NullPointerException.class, () -> new InMemoryEventStore(null, new InMemoryCryptoEngine()));
     assertThrows(NullPointerException.class, () -> new InMemoryEventStore(null, registry));
     assertThrows(NullPointerException.class, () -> new InMemoryEventStore(mapper, null));
     assertDoesNotThrow(() -> new InMemoryEventStore(mapper, registry));
+    assertDoesNotThrow(() -> new InMemoryEventStore(registry, null));
   }
 
   @Test
   void encryptedEventKeepsItsOtherComponentsExactThroughTheStore() {
     // The store's mapper writes an Instant as seconds.nanos and a BigDecimal with its scale; an
     // event carrying an @Encrypted component must read both back exactly, as a plain event does.
-    var store = InMemoryEventStore.serializing(registry, new InMemoryCryptoEngine());
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("order-19"));
     var original =
         new PricedOrderPlaced(
@@ -283,11 +279,13 @@ class InMemoryEventStoreSerializingTest {
   }
 
   @Test
-  void aStoreKeepingItsDataByReferenceCannotBeReopenedSerializing() {
-    var byReference = new InMemoryEventStore();
+  void aReopenedStoreRequiresItsSourceAndARegistry() {
+    var source = new InMemoryEventStore(registry);
 
     assertThrows(
-        IllegalArgumentException.class,
-        () -> InMemoryEventStore.sharingStorageOf(byReference, registry, null));
+        NullPointerException.class,
+        () -> InMemoryEventStore.sharingStorageOf(null, registry, null));
+    assertThrows(
+        NullPointerException.class, () -> InMemoryEventStore.sharingStorageOf(source, null, null));
   }
 }

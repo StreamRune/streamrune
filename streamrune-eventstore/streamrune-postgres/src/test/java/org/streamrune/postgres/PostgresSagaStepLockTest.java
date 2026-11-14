@@ -26,6 +26,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.RetryPolicy;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -69,6 +70,15 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  */
 @Testcontainers
 class PostgresSagaStepLockTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Opened.class)
+          .registerEvent(Reserved.class)
+          .registerEvent(Released.class)
+          .registerEvent(Refunded.class)
+          .registerState("Untouched", Untouched.class)
+          .build();
 
   @Container
   static final PostgreSQLContainer PG =
@@ -214,7 +224,7 @@ class PostgresSagaStepLockTest {
     SagaStore sagaStore =
         new PostgresSagaStore(dataSource, new ObjectMapper().registerModule(new JavaTimeModule()));
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox);
+    var eventStore = new InMemoryEventStore(TYPES).withCommandInbox(inbox);
     SagaId sagaId = SagaId.of("order-saga-" + UUID.randomUUID());
     var saga = new OrderSaga();
     try (VirtualThreadCommandBus realBus =

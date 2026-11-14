@@ -18,7 +18,9 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaDecider;
@@ -57,6 +59,14 @@ import org.streamrune.test.MutableClock;
  * done wrong.
  */
 class SagaConcurrencyRaceTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(OrderAdvanced.class)
+          .registerEvent(OrderShipped.class)
+          .registerEvent(OrderCreated.class)
+          .registerState("OrderAggrState", OrderAggrState.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("order");
 
@@ -493,7 +503,8 @@ class SagaConcurrencyRaceTest {
   @Test
   void startEvent_concurrentCreator_atomicDedup_singleSagaRow() {
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(underlying);
+    var eventStore =
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(underlying);
 
     var bus =
         VirtualThreadCommandBus.builder()
@@ -564,7 +575,8 @@ class SagaConcurrencyRaceTest {
   @Test
   void correlatedConflict_thenRedelivery_isRetrySafe_endToEnd() {
     var inbox = new InMemoryCommandInbox();
-    var eventStore = new InMemoryEventStore().withCommandInbox(inbox).withSagaStore(underlying);
+    var eventStore =
+        new InMemoryEventStore(TYPES).withCommandInbox(inbox).withSagaStore(underlying);
 
     var bus =
         VirtualThreadCommandBus.builder()

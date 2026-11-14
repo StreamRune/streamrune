@@ -10,6 +10,8 @@ import org.streamrune.core.AggregateState;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
@@ -18,6 +20,12 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 class EventStoreFixtureTest {
+
+  private static final EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent(Added.class)
+          .registerEvent(ItemAdded.class)
+          .build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
 
@@ -28,7 +36,7 @@ class EventStoreFixtureTest {
   @Test
   void appendsSucceedWithEventsPersisted() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-1"));
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .when()
         .append(
             s,
@@ -41,7 +49,7 @@ class EventStoreFixtureTest {
   @Test
   void givenThenWhenAppendsTwoBatches() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-2"));
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .given()
         .append(s, List.of(event(s, new Version(1), new EventType("Added"), new Added("A"))))
         .when()
@@ -55,7 +63,7 @@ class EventStoreFixtureTest {
 
   @Test
   void expectOptimisticLockOnVersionConflict() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var s = StreamId.of(TYPE, AggregateId.of("cart-3"));
     // Seed the store so version is 1
     EventStoreFixture.store(store)
@@ -80,7 +88,7 @@ class EventStoreFixtureTest {
   @Test
   void givenStateFollowedByStaleAppendExpectsOptimisticLock() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-4"));
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .given()
         .append(s, List.of(event(s, new Version(1), new EventType("Added"), new Added("A"))))
         .when()
@@ -95,7 +103,7 @@ class EventStoreFixtureTest {
   void eventsPersistedFailsWhenTheAppendThrew() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-5"));
     var then =
-        EventStoreFixture.store()
+        EventStoreFixture.store(TYPES)
             .given()
             .append(s, List.of(event(s, new Version(1), new EventType("Added"), new Added("A"))))
             .when()
@@ -110,7 +118,7 @@ class EventStoreFixtureTest {
   void expectOptimisticLockExceptionFailsWhenNothingWasThrown() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-6"));
     var then =
-        EventStoreFixture.store()
+        EventStoreFixture.store(TYPES)
             .when()
             .append(
                 s,
@@ -137,7 +145,7 @@ class EventStoreFixtureTest {
   void loadCapturesHistoryForAssertions() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-8"));
     var then =
-        EventStoreFixture.store()
+        EventStoreFixture.store(TYPES)
             .given()
             .append(s, List.of(event(s, new Version(1), new EventType("Added"), new Added("A"))))
             .when()
@@ -151,7 +159,7 @@ class EventStoreFixtureTest {
   void loadedHistoryWithoutLoadThrowsIllegalState() {
     var s = StreamId.of(TYPE, AggregateId.of("cart-9"));
     var then =
-        EventStoreFixture.store()
+        EventStoreFixture.store(TYPES)
             .when()
             .append(
                 s,
@@ -164,7 +172,7 @@ class EventStoreFixtureTest {
   // when() must start a fresh outcome against the live store state.
   @Test
   void multipleScenariosOnTheSameFixtureAreIndependent() {
-    var fixture = EventStoreFixture.store();
+    var fixture = EventStoreFixture.store(TYPES);
     var s = StreamId.of(TYPE, AggregateId.of("cart-10"));
 
     fixture
@@ -194,7 +202,7 @@ class EventStoreFixtureTest {
 
   @Test
   void storeWithProvidedEventStore() {
-    var store = new InMemoryEventStore();
+    var store = new InMemoryEventStore(TYPES);
     var s = StreamId.of(TYPE, AggregateId.of("cart-11"));
     EventStoreFixture.store(store)
         .when()
@@ -209,7 +217,7 @@ class EventStoreFixtureTest {
 
   @Test
   void getEventStoreExposesUnderlyingStore() {
-    var underlying = new InMemoryEventStore();
+    var underlying = new InMemoryEventStore(TYPES);
     var s = StreamId.of(TYPE, AggregateId.of("cart-12"));
     var store =
         EventStoreFixture.store(underlying)
@@ -232,7 +240,7 @@ class EventStoreFixtureTest {
   void javadocExamplesWork() {
     StreamId cart = StreamId.of(TYPE, AggregateId.of("cart-1"));
 
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .given()
         .append(
             cart,
@@ -247,7 +255,7 @@ class EventStoreFixtureTest {
         .eventsPersisted()
         .expectEventCount(cart, 2);
 
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .given()
         .append(
             cart,
@@ -261,7 +269,7 @@ class EventStoreFixtureTest {
             new Version(0)) // stale
         .expectOptimisticLockException();
 
-    EventStoreFixture.store()
+    EventStoreFixture.store(TYPES)
         .given()
         .append(
             cart,

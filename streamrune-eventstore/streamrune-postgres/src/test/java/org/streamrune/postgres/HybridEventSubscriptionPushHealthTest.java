@@ -10,6 +10,8 @@ import static org.mockito.Mockito.*;
 import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
@@ -32,12 +34,14 @@ import org.streamrune.test.InMemoryEventStore;
  */
 class HybridEventSubscriptionPushHealthTest {
 
+  private static final EventTypeRegistry TYPES = SimpleEventTypeRegistry.builder().build();
+
   private static final SubscriptionConfig CONFIG =
       new SubscriptionConfig(true, Duration.ofMillis(50), Duration.ofMillis(10));
 
   @Test
   void aListenerThatDiesAtStartupDegradesTheSubscriptionHealth() throws Exception {
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     OffsetStore offsetStore = mock(OffsetStore.class);
     when(offsetStore.getLastOffset(any())).thenReturn(GlobalOffset.initial());
     var contributor = new SubscriptionHealthContributor(eventStore, offsetStore);
@@ -80,7 +84,7 @@ class HybridEventSubscriptionPushHealthTest {
   void aPollingOnlySubscriptionIsNotDegraded() {
     // With LISTEN/NOTIFY disabled there is no push path to be dead. "Not configured"
     // must never be reported as a fault, or every pollingOnly deployment reads DEGRADED forever.
-    var eventStore = new InMemoryEventStore();
+    var eventStore = new InMemoryEventStore(TYPES);
     OffsetStore offsetStore = mock(OffsetStore.class);
     when(offsetStore.getLastOffset(any())).thenReturn(GlobalOffset.initial());
     var contributor = new SubscriptionHealthContributor(eventStore, offsetStore);
