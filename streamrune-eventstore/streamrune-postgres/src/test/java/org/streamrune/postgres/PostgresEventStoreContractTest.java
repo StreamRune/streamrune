@@ -1,9 +1,11 @@
 package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.sql.SQLException;
 import java.util.List;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
@@ -32,10 +34,14 @@ class PostgresEventStoreContractTest extends EventStoreContract {
 
   static PGSimpleDataSource dataSource;
 
+  static PostgresCrashPoints crashPoints;
+
   @BeforeAll
   static void initSchema() {
     dataSource = connections();
     new PostgresEventStoreFactory(dataSource, Setup.defaults().registry()).create();
+    crashPoints = new PostgresCrashPoints(dataSource);
+    crashPoints.install();
   }
 
   /** A data source of its own over the container's database: one process's connections. */
@@ -47,9 +53,13 @@ class PostgresEventStoreContractTest extends EventStoreContract {
     return connections;
   }
 
-  /** Empties the tables and rewinds the offset counter, as a freshly created database has it. */
+  /**
+   * Empties the tables and rewinds the offset counter, as a freshly created database has it, with
+   * no crash point armed.
+   */
   @Override
   protected EventStore newStore(Setup setup) {
+    crashPoints.disarm();
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("TRUNCATE event_stream, command_inbox, snapshot_store, outbox_events");
@@ -73,17 +83,29 @@ class PostgresEventStoreContractTest extends EventStoreContract {
     return build(dataSource, setup);
   }
 
+  /** A store over {@code source}, whose connections die after a commit when that point is armed. */
   private static EventStore build(PGSimpleDataSource source, Setup setup) {
+    DataSource connections = crashPoints.connections(source);
     return PostgresEventStore.builder()
-        .dataSource(source)
+        .dataSource(connections)
         .typeRegistry(setup.registry())
         .cryptoEngine(setup.crypto())
         .upcasters(setup.upcasters())
         .migrations(setup.migrations())
-        .commandInbox(new PostgresCommandInbox(source))
-        .outboxStore(new PostgresOutboxStore(source))
+        .commandInbox(new PostgresCommandInbox(connections))
+        .outboxStore(new PostgresOutboxStore(connections))
         .outboxEventMapper(OUTBOX_MAPPER)
         .build();
+  }
+
+  @Override
+  protected boolean supportsCrashInjection() {
+    return true;
+  }
+
+  @Override
+  protected void crashAt(EventStore store, CrashPoint point) {
+    crashPoints.arm(point);
   }
 
   @Override
@@ -101,6 +123,24 @@ class PostgresEventStoreContractTest extends EventStoreContract {
     new PostgresSnapshotStorePurger(dataSource, subject -> List.of(streamId))
         .purge(SubjectId.of("contract-subject"));
     return true;
+  }
+
+  /**
+   * The offset counter is gap-free (see the class javadoc of {@link PostgresEventStore}): the
+   * reservation of an append that died before its commit is rolled back with it, and the next
+   * append takes the offset right above the head.
+   */
+  @Test
+  void theNextAppendTakesTheOffsetsOfAnAppendKilledBeforeItsCommit() {
+    store.append(A, events(A, 1, 2), Version.initial());
+    crashAt(store, CrashPoint.AFTER_FIRST_EVENT_WRITE);
+    assertThrows(Throwable.class, () -> store.append(A, events(A, 3, 2), new Version(2)));
+
+    EventStore restarted = reopen(store, Setup.defaults());
+
+    assertEquals(
+        List.of(GlobalOffset.of(3), GlobalOffset.of(4)),
+        restarted.append(B, events(B, 1, 2), Version.initial()).globalOffsets());
   }
 
   @Test

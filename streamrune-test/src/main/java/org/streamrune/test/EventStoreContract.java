@@ -194,6 +194,12 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Transactional outbox.</b> For a store that {@link #supportsTransactionalOutbox()}: an
  *       append stores the entries of its events with them, and an append that is refused or
  *       replayed stores none.
+ *   <li><b>Interrupted writes.</b> For a store that {@link #supportsCrashInjection()}: a write
+ *       killed at a {@link CrashPoint} before it is durable leaves nothing of itself for the
+ *       restarted store to read (no event, recorded key or outbox entry, the earlier snapshot
+ *       kept), the next append takes offsets above the head and paging still visits every event
+ *       once; one killed after it is durable is stored whole; a keyed append repeated with its key
+ *       after either stores its events once.
  *   <li><b>Several instances.</b> For a store that {@link #supportsMultipleInstances()}: the
  *       concurrency cases hold with their workers split over two instances over the same data, the
  *       second one opened by {@link #reopen(EventStore, Setup)} and used alongside the first: one
@@ -290,6 +296,51 @@ public abstract class EventStoreContract {
    */
   protected boolean supportsTransactionalOutbox() {
     return false;
+  }
+
+  /**
+   * Whether the suite can make a write of the store die at each {@link CrashPoint} with {@link
+   * #crashAt(EventStore, CrashPoint)}; {@code false} by default, since dying the way a killed
+   * process dies takes a hook into the store's storage that only its own test can give. A store
+   * that returns {@code true} provides Interrupted writes of the {@link EventStore} javadoc, and
+   * the crash cases check it.
+   */
+  protected boolean supportsCrashInjection() {
+    return false;
+  }
+
+  /**
+   * Arms {@code store} so that its next write that reaches {@code point} dies there as it would if
+   * the process running it were killed: the storage loses the write's session, as it loses a dead
+   * process's, and the call throws. Only that write dies; the suite then opens the store a
+   * restarted process would, with {@link #reopen(EventStore, Setup)}, and checks what the write
+   * left; it does not judge what the call throws. Called only when {@link
+   * #supportsCrashInjection()}, and only for {@link CrashPoint#AFTER_FIRST_OUTBOX_WRITE} when
+   * {@link #supportsTransactionalOutbox()}.
+   */
+  protected void crashAt(EventStore store, CrashPoint point) {
+    throw new UnsupportedOperationException("the suite cannot crash a write of the store");
+  }
+
+  /**
+   * A point inside a write of a store at which the process running it can die. A store maps each to
+   * the moment of its own write that matches the description.
+   */
+  public enum CrashPoint {
+    /** A keyed append has recorded its key; nothing else of it is written. */
+    AFTER_KEY_CLAIM,
+    /** An append has taken the global offsets of its events; none of its events is written. */
+    AFTER_OFFSET_RESERVATION,
+    /** An append has written the first of its events and not the others. */
+    AFTER_FIRST_EVENT_WRITE,
+    /** An append has written its events and the first of its outbox entries, and is not durable. */
+    AFTER_FIRST_OUTBOX_WRITE,
+    /** An append is durable; its caller never learns so and sees the call fail. */
+    AFTER_COMMIT,
+    /** A snapshot save is writing the snapshot and is not durable. */
+    DURING_SNAPSHOT_SAVE,
+    /** A snapshot save is durable; its caller never learns so and sees the call fail. */
+    AFTER_SNAPSHOT_COMMIT
   }
 
   /**
@@ -2241,6 +2292,226 @@ public abstract class EventStoreContract {
         () -> appendWithKey(A, 0, 1, IdempotencyKey.of("key-unsupported"), COMMAND_TYPE));
 
     assertTrue(stored(A).isEmpty());
+  }
+
+  // ── Interrupted writes ──────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void anAppendKilledAfterTakingItsOffsetsLeavesNothing() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_OFFSET_RESERVATION, null);
+  }
+
+  @Test
+  public void anAppendKilledAfterItsFirstEventLeavesNothing() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_FIRST_EVENT_WRITE, null);
+  }
+
+  @Test
+  public void anAppendKilledAfterItsFirstOutboxEntryLeavesNothing() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(CrashPoint.AFTER_FIRST_OUTBOX_WRITE, null);
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterClaimingItsKeyLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_KEY_CLAIM, IdempotencyKey.of("key-killed-claim"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterTakingItsOffsetsLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_OFFSET_RESERVATION, IdempotencyKey.of("key-killed-offsets"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItsFirstEventLeavesNothingAndItsRetryStoresOnce() {
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_FIRST_EVENT_WRITE, IdempotencyKey.of("key-killed-event"));
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItsFirstOutboxEntryLeavesNothingAndItsRetryStoresOnce() {
+    assumeTrue(supportsTransactionalOutbox(), "the store writes no outbox entries");
+    assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+        CrashPoint.AFTER_FIRST_OUTBOX_WRITE, IdempotencyKey.of("key-killed-outbox"));
+  }
+
+  @Test
+  public void anAppendKilledAfterItIsDurableIsStoredWhole() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    killed(CrashPoint.AFTER_COMMIT, () -> store.append(A, events(A, 2, 3), new Version(1)));
+
+    assertStoredWhole();
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItIsDurableIsStoredWholeAndItsRetryIsAReplay() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsIdempotentAppend(), "the store has no command inbox");
+    IdempotencyKey key = IdempotencyKey.of("key-killed-durable");
+    store.append(A, events(A, 1, 1), Version.initial());
+
+    killed(
+        CrashPoint.AFTER_COMMIT,
+        () -> store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE));
+
+    assertStoredWhole();
+    List<GlobalOffset> stored = offsets(stored(A)).subList(1, 4);
+    var retry = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+    assertTrue(retry.alreadyApplied(), "the key was recorded with the events");
+    assertEquals(stored, retry.globalOffsets());
+    assertEquals(new Version(4), retry.finalVersion());
+    assertStoredWhole();
+  }
+
+  @Test
+  public void aSnapshotSaveKilledBeforeItIsDurableKeepsTheEarlierSnapshot() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+    store.saveSnapshot(A, new Version(1), new ContractState("at-1"));
+
+    killed(
+        CrashPoint.DURING_SNAPSHOT_SAVE,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    AggregateHistory history = store.load(A);
+    assertEquals(new ContractState("at-1"), history.snapshotState());
+    assertEquals(List.of(2L), versions(history.events()));
+    store.saveSnapshot(A, new Version(2), new ContractState("at-2"));
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+    assertTrue(store.load(A).events().isEmpty());
+  }
+
+  @Test
+  public void aFirstSnapshotSaveKilledBeforeItIsDurableLeavesNone() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    killed(
+        CrashPoint.DURING_SNAPSHOT_SAVE,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    AggregateHistory history = store.load(A);
+    assertNull(history.snapshotState());
+    assertEquals(List.of(1L, 2L), versions(history.events()));
+  }
+
+  @Test
+  public void aSnapshotSaveKilledAfterItIsDurableIsUsedAndSavesAgain() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(supportsSnapshots(), "the store keeps no snapshots");
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    killed(
+        CrashPoint.AFTER_SNAPSHOT_COMMIT,
+        () -> store.saveSnapshot(A, new Version(2), new ContractState("at-2")));
+
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+    assertTrue(store.load(A).events().isEmpty());
+    store.saveSnapshot(A, new Version(2), new ContractState("at-2"));
+    assertEquals(new ContractState("at-2"), store.load(A).snapshotState());
+  }
+
+  /**
+   * Runs {@code write} on {@link #store} armed to die at {@code point}, checks that the call fails,
+   * and replaces {@link #store} with the store a restarted process opens over the same data. What
+   * the call throws is not judged: the caller of a killed process sees nothing at all, and a driver
+   * whose connection dies mid-statement may raise an {@link Error}.
+   */
+  private void killed(CrashPoint point, Runnable write) {
+    crashAt(store, point);
+    assertThrows(Throwable.class, write::run, "the write died at " + point);
+    store = reopen(store, Setup.defaults());
+    peer = store;
+  }
+
+  /**
+   * Over a stream holding one event, an append of three more events, keyed with {@code key} when it
+   * is not {@code null}, dies at {@code point}: the restarted store reads none of the three, has no
+   * outbox entry and no recorded key for them, keeps its head, takes the offsets of the next append
+   * above it and pages through every event once; the append run again stores the three once, and a
+   * keyed one run a third time is a replay.
+   */
+  private void assertAnAppendKilledBeforeItIsDurableLeavesNothing(
+      CrashPoint point, IdempotencyKey key) {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    assumeTrue(key == null || supportsIdempotentAppend(), "the store has no command inbox");
+    AppendResult first = store.append(A, events(A, 1, 1), Version.initial());
+    GlobalOffset head = first.globalOffsets().getLast();
+    Runnable append =
+        key == null
+            ? () -> store.append(A, events(A, 2, 3), new Version(1))
+            : () -> store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+
+    killed(point, append);
+
+    assertEquals(List.of("order-A@1"), values(stored(A)), "readStream returns none of the three");
+    assertEquals(List.of("order-A@1"), values(store.load(A).events()), "load returns none");
+    assertEquals(first.globalOffsets(), offsets(global()), "readGlobalStream returns none");
+    if (supportsLastGlobalOffset()) {
+      assertEquals(head, store.lastGlobalOffset(), "the head did not move");
+    }
+    if (supportsTransactionalOutbox()) {
+      assertEquals(entryIds(stored(A)), outboxIds(store), "no outbox entry of the three");
+    }
+
+    AppendResult other = store.append(B, events(B, 1, 1), Version.initial());
+    assertTrue(
+        other.globalOffsets().getFirst().value() > head.value(), "the next offsets lie above");
+    if (key == null) {
+      store.append(A, events(A, 2, 3), new Version(1));
+    } else {
+      var retry = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+      assertFalse(retry.alreadyApplied(), "the key was not recorded");
+      assertEquals(offsets(stored(A)).subList(1, 4), retry.globalOffsets());
+      var replay = store.appendWithKey(A, events(A, 2, 3), new Version(1), key, COMMAND_TYPE);
+      assertTrue(replay.alreadyApplied());
+      assertEquals(retry.globalOffsets(), replay.globalOffsets());
+    }
+    assertEquals(List.of(1L, 2L, 3L, 4L), versions(stored(A)), "the rerun stored the three once");
+    assertEquals(5, global().size());
+    assertEquals(offsets(global()), pagedByCheckpoint(), "paging visits every event once");
+    if (supportsTransactionalOutbox()) {
+      assertEquals(Set.copyOf(entryIds(global())), Set.copyOf(outboxIds(store)));
+      assertEquals(5, outboxIds(store).size(), "each event has one outbox entry");
+    }
+  }
+
+  /**
+   * After an append of three events over a stream of one died once it was durable: the restarted
+   * store reads the four events, and the outbox holds one entry for each.
+   */
+  private void assertStoredWhole() {
+    assertEquals(
+        List.of("order-A@1", "order-A@2", "order-A@3", "order-A@4"),
+        values(stored(A)),
+        "the durable append is stored whole");
+    assertEquals(4, global().size());
+    if (supportsLastGlobalOffset()) {
+      assertEquals(offsets(global()).getLast(), store.lastGlobalOffset());
+    }
+    if (supportsTransactionalOutbox()) {
+      assertEquals(Set.copyOf(entryIds(stored(A))), Set.copyOf(outboxIds(store)));
+      assertEquals(4, outboxIds(store).size(), "each event has one outbox entry");
+    }
+  }
+
+  /** The offsets a reader paging by checkpoint, two events a page, reads until a page is empty. */
+  private List<GlobalOffset> pagedByCheckpoint() {
+    List<GlobalOffset> read = new ArrayList<>();
+    GlobalOffset checkpoint = GlobalOffset.initial();
+    for (List<EventEnvelope> page = store.readGlobalStream(checkpoint, 2);
+        !page.isEmpty();
+        page = store.readGlobalStream(checkpoint, 2)) {
+      read.addAll(offsets(page));
+      checkpoint = page.getLast().globalOffset();
+    }
+    return read;
   }
 
   // ── Transactional outbox ────────────────────────────────────────────────────────────────────
