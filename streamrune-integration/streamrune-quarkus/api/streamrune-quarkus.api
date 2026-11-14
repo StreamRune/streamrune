@@ -138,7 +138,7 @@ public class org.streamrune.quarkus.StreamRuneLifecycle
 
 public class org.streamrune.quarkus.StreamRuneProducers
   public <init>()
-  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.core.tracing.StreamRuneTracing, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
   public org.streamrune.core.EventStoreFactory postgresEventStoreFactory(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresEventAuditStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxEventMapper>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresOutboxStore>, jakarta.enterprise.inject.Instance<org.streamrune.postgres.PostgresCommandInbox>, jakarta.enterprise.inject.Instance<org.streamrune.core.CommandInbox>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
