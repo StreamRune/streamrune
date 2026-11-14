@@ -7,11 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +31,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.test.EventStoreContract.CrashPoint;
 
 /**
  * The contract every {@link CommandInbox} must honour, together with the {@link EventStore} that
@@ -42,6 +45,9 @@ import org.streamrune.core.types.Version;
  *   <li>{@link #setProcessedAt(Inboxed, IdempotencyKey, Instant)} — moves a recorded row's
  *       processed time, so the retention cases age rows deterministically instead of waiting.
  * </ul>
+ *
+ * <p>and, for a pair whose keyed append the suite can kill, {@link #supportsCrashInjection()},
+ * {@link #crashAt(Inboxed, CrashPoint)} and {@link #reopen(Inboxed)}.
  *
  * <p>The inbox has no write method of its own: a row is written by {@link EventStore#appendWithKey}
  * in the same atomic step as the command's events. The contract therefore writes through that
@@ -59,6 +65,9 @@ import org.streamrune.core.types.Version;
  *       version, so a redelivery is not re-run.
  *   <li>A keyed append that fails records nothing: the row and the events are visible together or
  *       not at all.
+ *   <li>A keyed append killed before it is durable records nothing, and the command run again is
+ *       recorded once; one killed after it is durable is recorded with its events (Interrupted
+ *       writes in the {@link EventStore} javadoc).
  *   <li>A replay leaves the recorded row as it was.
  *   <li>{@link CommandInbox#deleteProcessedBefore} deletes exactly the rows processed strictly
  *       before the cutoff, returns how many it deleted, and a deleted key is not found: a command
@@ -98,6 +107,35 @@ public abstract class CommandInboxContract {
    * test-only method of an in-memory inbox), never through the inbox's public API.
    */
   protected abstract void setProcessedAt(Inboxed inboxed, IdempotencyKey key, Instant processedAt);
+
+  /**
+   * Whether the suite can make a keyed append of the pair die at a {@link CrashPoint} with {@link
+   * #crashAt(Inboxed, CrashPoint)}; {@code false} by default, as on {@link
+   * EventStoreContract#supportsCrashInjection()}. A pair that returns {@code true} implements
+   * {@link #reopen(Inboxed)} too.
+   */
+  protected boolean supportsCrashInjection() {
+    return false;
+  }
+
+  /**
+   * Arms {@code inboxed} so that the next keyed append of its store that reaches {@code point} dies
+   * there as it would if the process running it were killed, as {@link
+   * EventStoreContract#crashAt(EventStore, CrashPoint)} describes. Called only when {@link
+   * #supportsCrashInjection()}, with a point of an append.
+   */
+  protected void crashAt(Inboxed inboxed, CrashPoint point) {
+    throw new UnsupportedOperationException("the suite cannot crash a write of the store");
+  }
+
+  /**
+   * A new pair over the same data as {@code inboxed}, as a restarted process opens it: it reads
+   * every row and event {@code inboxed} stored, and {@code inboxed} is not used again. Called only
+   * when {@link #supportsCrashInjection()}.
+   */
+  protected Inboxed reopen(Inboxed inboxed) {
+    throw new UnsupportedOperationException("the pair cannot be reopened");
+  }
 
   /** The event the contract's commands append. */
   public record InboxEvent(String value) implements DomainEvent {
@@ -249,6 +287,64 @@ public abstract class CommandInboxContract {
     assertThrows(OptimisticLockException.class, () -> process(key, STREAM, 0, 1));
 
     assertTrue(inbox().find(key).isEmpty(), "the failed command left no row");
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterClaimingItsKeyRecordsNothing() {
+    assertAKeyedAppendKilledBeforeItIsDurableRecordsNothing(CrashPoint.AFTER_KEY_CLAIM);
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterTakingItsOffsetsRecordsNothing() {
+    assertAKeyedAppendKilledBeforeItIsDurableRecordsNothing(CrashPoint.AFTER_OFFSET_RESERVATION);
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItsFirstEventRecordsNothing() {
+    assertAKeyedAppendKilledBeforeItIsDurableRecordsNothing(CrashPoint.AFTER_FIRST_EVENT_WRITE);
+  }
+
+  @Test
+  public void aKeyedAppendKilledAfterItIsDurableIsRecordedWithItsEvents() {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    IdempotencyKey key = IdempotencyKey.of("inbox-killed-durable");
+
+    killed(CrashPoint.AFTER_COMMIT, () -> process(key, STREAM, 0, 2));
+
+    InboxResult row = inbox().find(key).orElseThrow(() -> new AssertionError("no row recorded"));
+    List<EventEnvelope> stored = eventStore().readStream(STREAM, Version.initial(), 100);
+    assertEquals(2, stored.size(), "the events were stored with the row");
+    assertEquals(stored.stream().map(EventEnvelope::globalOffset).toList(), row.globalOffsets());
+    assertEquals(new Version(2), row.finalVersion());
+    assertTrue(process(key, STREAM, 0, 2).alreadyApplied());
+  }
+
+  /**
+   * A keyed append of two events dies at {@code point}: the restarted pair has no row and no event
+   * of it, and the command run again is recorded with the offsets of the events it stores.
+   */
+  private void assertAKeyedAppendKilledBeforeItIsDurableRecordsNothing(CrashPoint point) {
+    assumeTrue(supportsCrashInjection(), "the suite cannot crash a write of the store");
+    IdempotencyKey key = IdempotencyKey.of("inbox-killed-" + point.name().toLowerCase(Locale.ROOT));
+
+    killed(point, () -> process(key, STREAM, 0, 2));
+
+    assertTrue(inbox().find(key).isEmpty(), "the killed command left no row");
+    assertTrue(eventStore().readStream(STREAM, Version.initial(), 100).isEmpty());
+    var rerun = process(key, STREAM, 0, 2);
+    assertFalse(rerun.alreadyApplied());
+    assertEquals(rerun.globalOffsets(), inbox().find(key).orElseThrow().globalOffsets());
+    assertEquals(2, eventStore().readStream(STREAM, Version.initial(), 100).size());
+  }
+
+  /**
+   * Runs {@code write} on the pair armed to die at {@code point}, checks that the call fails, and
+   * replaces the pair with the one a restarted process opens over the same data.
+   */
+  private void killed(CrashPoint point, Runnable write) {
+    crashAt(inboxed, point);
+    assertThrows(Throwable.class, write::run, "the write died at " + point);
+    inboxed = reopen(inboxed);
   }
 
   @Test

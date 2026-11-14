@@ -6,12 +6,14 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.test.CommandInboxContract;
+import org.streamrune.test.EventStoreContract.CrashPoint;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -30,6 +32,7 @@ class PostgresCommandInboxContractTest extends CommandInboxContract {
 
   static PGSimpleDataSource dataSource;
   static EventTypeRegistry typeRegistry;
+  static PostgresCrashPoints crashPoints;
 
   @BeforeAll
   static void initSchema() {
@@ -55,24 +58,49 @@ class PostgresCommandInboxContractTest extends CommandInboxContract {
           }
         };
     new PostgresEventStoreFactory(dataSource, typeRegistry).create();
+    crashPoints = new PostgresCrashPoints(dataSource);
+    crashPoints.install();
   }
 
   @Override
   protected Inboxed newStore() {
+    crashPoints.disarm();
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("TRUNCATE event_stream, command_inbox");
     } catch (SQLException e) {
       throw new IllegalStateException(e);
     }
-    var inbox = new PostgresCommandInbox(dataSource);
+    return build();
+  }
+
+  /** A pair over the database, whose connections die after a commit when that point is armed. */
+  private static Inboxed build() {
+    DataSource connections = crashPoints.connections(dataSource);
+    var inbox = new PostgresCommandInbox(connections);
     var events =
         PostgresEventStore.builder()
-            .dataSource(dataSource)
+            .dataSource(connections)
             .typeRegistry(typeRegistry)
             .commandInbox(inbox)
             .build();
     return new Inboxed(events, inbox);
+  }
+
+  @Override
+  protected boolean supportsCrashInjection() {
+    return true;
+  }
+
+  @Override
+  protected void crashAt(Inboxed inboxed, CrashPoint point) {
+    crashPoints.arm(point);
+  }
+
+  /** A new pair over the same database; nothing is emptied. */
+  @Override
+  protected Inboxed reopen(Inboxed inboxed) {
+    return build();
   }
 
   @Override
