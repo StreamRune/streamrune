@@ -51,6 +51,7 @@ class InMemoryEventSubscriptionTest {
       SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
+  private static final StreamId STREAM = StreamId.of(TYPE, AggregateId.of("cart-x"));
 
   record Added(String sku) implements DomainEvent {}
 
@@ -483,12 +484,6 @@ class InMemoryEventSubscriptionTest {
     assertThrows(NullPointerException.class, () -> store.removeAppendListener(null));
   }
 
-  private static final StreamId STREAM = StreamId.of(TYPE, AggregateId.of("cart-x"));
-
-  private static boolean joined(Thread thread, Duration timeout) throws InterruptedException {
-    return thread.join(timeout);
-  }
-
   @Test
   void anAppendFromAnotherThreadDuringADeliveryDoesNotWait_andItsEventIsDelivered()
       throws Exception {
@@ -504,7 +499,7 @@ class InMemoryEventSubscriptionTest {
                 if (sku.equals("first")) {
                   Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
                   try {
-                    workerReturned.set(joined(worker, Duration.ofSeconds(5)));
+                    workerReturned.set(worker.join(Duration.ofSeconds(5)));
                   } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                   }
@@ -523,6 +518,7 @@ class InMemoryEventSubscriptionTest {
   @Test
   void aFailedBatchIsNotRedeliveredByAnAppendThatArrivedDuringIt() throws Exception {
     AtomicInteger calls = new AtomicInteger();
+    AtomicBoolean workerReturned = new AtomicBoolean();
     var sub =
         new InMemoryEventSubscription(
             store,
@@ -530,7 +526,7 @@ class InMemoryEventSubscriptionTest {
               if (calls.incrementAndGet() == 1) {
                 Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
                 try {
-                  joined(worker, Duration.ofSeconds(5));
+                  workerReturned.set(worker.join(Duration.ofSeconds(5)));
                 } catch (InterruptedException interrupted) {
                   Thread.currentThread().interrupt();
                 }
@@ -541,6 +537,7 @@ class InMemoryEventSubscriptionTest {
 
     append(STREAM, 1, "first");
 
+    assertTrue(workerReturned.get(), "the worker's append returned inside the delivery");
     assertEquals(1, calls.get());
     assertEquals(1, sub.deliveryFailureCount());
     sub.poll();
@@ -567,10 +564,10 @@ class InMemoryEventSubscriptionTest {
     assertTrue(inListener.await(5, TimeUnit.SECONDS));
 
     Thread poller = Thread.ofVirtual().start(sub::poll);
-    assertFalse(joined(poller, Duration.ofMillis(200)), "poll waits");
+    assertFalse(poller.join(Duration.ofMillis(200)), "poll waits");
     release.countDown();
 
-    assertTrue(joined(poller, Duration.ofSeconds(5)));
-    assertTrue(joined(appender, Duration.ofSeconds(5)));
+    assertTrue(poller.join(Duration.ofSeconds(5)));
+    assertTrue(appender.join(Duration.ofSeconds(5)));
   }
 }

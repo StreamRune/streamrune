@@ -40,9 +40,10 @@ import org.streamrune.core.types.GlobalOffset;
  * batch is redelivered on the next notification or {@link #poll()}.
  *
  * <p>Unlike the production subscriptions, delivery is <b>synchronous on the appending thread</b> —
- * deterministic for unit tests: when {@code append} returns, the listener has run. Catch-up on
- * {@link #start()} mirrors the production poll-after-LISTEN: events appended before the
- * subscription started are delivered immediately.
+ * deterministic for unit tests: when {@code append} returns and no delivery is running on another
+ * thread, the listener has run; during a delivery on another thread the append returns at once and
+ * that delivery delivers the event (see below). Catch-up on {@link #start()} mirrors the production
+ * poll-after-LISTEN: events appended before the subscription started are delivered immediately.
  *
  * <p><b>An append from inside the listener starts no nested delivery.</b> When the listener appends
  * (it executes a command, as a saga runner or a process manager does) or calls {@link #poll()}, the
@@ -51,8 +52,10 @@ import org.streamrune.core.types.GlobalOffset;
  * delivered once, in offset order. An append made by another thread while a delivery is in progress
  * does not wait for it: it returns at once, and the delivery in progress delivers its events, in
  * offset order, before the call that started that delivery returns. A listener may therefore block
- * on work it handed to another thread that appends. {@link #poll()} and {@link #start()} do wait
- * for a delivery in progress, and then deliver everything pending.
+ * on work it handed to another thread that appends, as long as that work does not call {@link
+ * #poll()}: a poll waits for the delivery the listener is part of and would deadlock. {@link
+ * #poll()} and {@link #start()} do wait for a delivery in progress, and then deliver everything
+ * pending.
  *
  * <p><b>What the listener finds bound.</b> A production subscription calls its listener on a thread
  * of its own, where no request context, saga flag or dispatch cause is bound. This subscription
@@ -223,8 +226,7 @@ public final class InMemoryEventSubscription implements EventSubscription {
         deliveryLock.unlock();
       }
       if (failed) {
-        deliveryRequested.set(false); // a failed batch waits for the next notification or poll
-        return;
+        return; // a failed batch waits for the next notification or poll
       }
       if (!deliveryRequested.get() || !deliveryLock.tryLock()) {
         return;

@@ -78,10 +78,10 @@ jars. In brief:
   the span — logged with a rate-limited `WARN`, and counted in `streamrune.tracing.failures`
   wherever the component has metrics (always for what an integration builds) — and never a command, a lock
   or a delivery.
-- **A test-kit subscription that does not block a second thread.** In `streamrune-test`, an append
-  from another thread while `InMemoryEventSubscription` is delivering returns without waiting; the
-  delivery in progress delivers its events, in offset order, before its own caller returns. `poll()`
-  still waits for a delivery in progress.
+- **Cross-thread appends in the test-kit subscription.** In `streamrune-test`, an append from
+  another thread while `InMemoryEventSubscription` is delivering returns without waiting; the
+  delivery in progress delivers its events, in offset order, before its own caller returns, and
+  `poll()` waits for a delivery in progress.
 
 ```kotlin
 repositories {
