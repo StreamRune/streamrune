@@ -1038,7 +1038,7 @@ public final class PollingEventSubscription
           resolvedLease(),
           healthContributor,
           clock,
-          tracing);
+          GuardedTracing.of(tracing, metrics));
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

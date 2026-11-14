@@ -152,8 +152,7 @@ public class StreamRuneProducers {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
-            // The one guard of the application's tracing, which counts its failures in the
-            // metrics bean; every other component the tracing reaches holds the same guard.
+            // The tracing meets the metrics bean here: its guard counts its failures there.
             .tracing(
                 org.streamrune.runtime.GuardedTracing.of(
                     tracing, resolveMetricsOrDefault(metricsInstance)))
@@ -243,14 +242,20 @@ public class StreamRuneProducers {
 
   /**
    * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
-   * through the {@link StreamRuneTracing} bean.
+   * through the {@link StreamRuneTracing} bean; a failure of that tracing counts in the {@link
+   * org.streamrune.core.StreamRuneMetrics} bean.
    */
   @Produces
   @Singleton
   @DefaultBean
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneQuarkusProperties properties, StreamRuneTracing tracing) {
-    return new LocalStripedLocker(properties.stripeCount()).traced(tracing);
+      StreamRuneQuarkusProperties properties,
+      StreamRuneTracing tracing,
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
+    return new LocalStripedLocker(properties.stripeCount())
+        .traced(
+            org.streamrune.runtime.GuardedTracing.of(
+                tracing, resolveMetricsOrDefault(metricsInstance)));
   }
 
   /**
@@ -1285,17 +1290,17 @@ public class StreamRuneProducers {
         org.streamrune.runtime.CommandInterceptorOrdering.sorted(
             CommandInterceptorBeans.collect(beanManager));
 
+    // The tracing meets the metrics bean here: its guard counts its failures there, and it is
+    // this guard the locker and the bus are handed.
+    StreamRuneTracing boundTracing =
+        org.streamrune.runtime.GuardedTracing.of(tracing, resolveMetricsOrDefault(metricsInstance));
     var builder =
         VirtualThreadCommandBus.builder()
             .allowGraalJit(properties.jvm().allowGraalJit())
             .eventStore(eventStore)
-            .locker(traced(locker, tracing))
+            .locker(traced(locker, boundTracing))
             // Adds the command interceptor in its slot, unless the chain holds the application's.
-            // The one guard of the application's tracing, which counts its failures in the
-            // metrics bean; every other component the tracing reaches holds the same guard.
-            .tracing(
-                org.streamrune.runtime.GuardedTracing.of(
-                    tracing, resolveMetricsOrDefault(metricsInstance)))
+            .tracing(boundTracing)
             .retryPolicy(retryPolicy)
             .snapshotPolicy(resolveSnapshotPolicy(snapshotPolicyInstance, properties))
             .lockTimeout(properties.lockTimeout())

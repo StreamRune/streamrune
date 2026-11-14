@@ -276,7 +276,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       Duration claimWait,
       Duration anchorGrace,
       StreamRuneTracing tracing) {
-    this.tracing = GuardedTracing.of(tracing);
+    this.tracing = GuardedTracing.of(tracing, metrics);
     this.traced = this.tracing.enabled(TracingArea.SAGA);
     this.stepLock = stepLock;
     this.boundRunner = boundRunner;

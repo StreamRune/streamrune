@@ -2851,6 +2851,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       if (eventStore == null) {
         throw new IllegalStateException("eventStore is required");
       }
+      // The tracing meets the metrics here: its guard counts in them, and it is this guard the
+      // default locker and the command span's interceptor are handed. The guard of a
+      // TracingCommandInterceptor the application added itself is bound too, if it counts nowhere.
+      tracing = GuardedTracing.of(tracing, metrics);
+      for (CommandInterceptor interceptor : interceptors) {
+        if (interceptor instanceof TracingCommandInterceptor ownCommandSpans) {
+          GuardedTracing.of(ownCommandSpans.tracing(), metrics);
+        }
+      }
       if (locker == null) {
         locker = new LocalStripedLocker(stripeCount).traced(tracing);
       }

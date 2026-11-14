@@ -15,6 +15,7 @@ import org.streamrune.core.subscription.SubscriptionLifecycleState;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.SubscriptionName;
+import org.streamrune.runtime.GuardedTracing;
 import org.streamrune.runtime.HealthTrackingEventListener;
 import org.streamrune.runtime.LeaseRoleAware;
 import org.streamrune.runtime.PollingEventSubscription;
@@ -703,7 +704,7 @@ public final class HybridEventSubscription
           UnaryOperator.identity(),
           resolvedLease(),
           healthContributor,
-          tracing);
+          GuardedTracing.of(tracing, metrics));
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

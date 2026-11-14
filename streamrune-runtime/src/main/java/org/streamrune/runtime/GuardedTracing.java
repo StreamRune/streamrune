@@ -1,11 +1,7 @@
 package org.streamrune.runtime;
 
-import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -48,7 +44,9 @@ import org.streamrune.core.tracing.TracingArea;
  * ever running the task has dropped it: the guard cannot tell that from a hand-off to another
  * thread, and the {@code executeAsync} future of such a command is never completed, as with an
  * {@code asyncTaskWrapper} that drops its task. A wrapper that hands the task to another thread and
- * then throws is not followed by a second run once that thread has started the task.
+ * then throws is not followed by a second run once that thread has started the task. That is
+ * remembered per wrapped task, not per run: a wrapped task that is run again after it was once
+ * handed off is never rescued by a run of the guard's own.
  *
  * <p>Whatever is thrown is caught, an {@link Error} included: a span that cannot be recorded is
  * never a reason to fail a command, lose a lock or stall a subscription. An {@link
@@ -62,12 +60,20 @@ import org.streamrune.core.tracing.TracingArea;
  * StreamRuneMetrics)} counts each in {@link StreamRuneMetrics#recordTracingFailure(String)}, by the
  * operation that failed.
  *
- * <p><b>One guard per tracing.</b> {@link #of} returns {@link StreamRuneTracing#NOOP} and an
- * already guarded tracing as they are, so an untraced component pays nothing for the guard; and for
- * a tracing it has guarded before it returns that same guard, for as long as a component still
- * holds it. The components of an application that share one tracing therefore share one guard: one
- * failure count, one WARN stream and one metrics binding. The guards are remembered by the identity
- * of the tracing, through weak references, so a guard no component holds any more is forgotten.
+ * <p><b>Binding.</b> {@link #of(StreamRuneTracing)} returns {@link StreamRuneTracing#NOOP} and an
+ * already guarded tracing as they are, so an untraced component pays nothing for the guard, and
+ * gives any other tracing a guard of its own. A guard counts in the metrics it is bound to with
+ * {@link #of(StreamRuneTracing, StreamRuneMetrics)}: whoever holds a tracing and a metrics object —
+ * an integration at each place it hands the tracing on, a builder in its {@code build()} — calls it
+ * and passes the result on. The tracing {@link OpenTelemetryTracing#of} returns is one guard, so an
+ * application that uses it has one failure count and one WARN stream; a tracing of the
+ * application's own is guarded by each component it is handed to, each guard counting in the
+ * metrics of the component that made it. Nothing is shared behind the caller's back: the guard a
+ * component holds is the one it was given, or one it made.
+ *
+ * <p><b>Logger.</b> The WARN is written by the logger named after this class, {@code
+ * org.streamrune.runtime.GuardedTracing}, and the operator documentation names it: the class is
+ * internal, its name is not to be changed lightly.
  *
  * @hidden
  */
@@ -86,16 +92,34 @@ public final class GuardedTracing implements StreamRuneTracing {
    */
   private static final ThreadLocal<PropagatedRun> CURRENT_RUN = new ThreadLocal<>();
 
-  /**
-   * The guards in use, to find the guard of a tracing by the tracing's identity (its {@code equals}
-   * is never called: it is the code being guarded). Read and written under its own lock, when a
-   * component is built; a cleared reference is dropped on the next scan.
-   */
-  private static final List<WeakReference<GuardedTracing>> GUARDS = new ArrayList<>();
+  // The operations of the seam a failure is reported and counted under: the values of the tag
+  // MetricNames.TAG_OPERATION, a fixed set.
+  static final String OP_ENABLED = "enabled";
+  static final String OP_START = "start";
+  static final String OP_START_CHILD = "startChild";
+  static final String OP_PROPAGATING = "propagating";
+  static final String OP_SET_ATTRIBUTE = "setAttribute";
+  static final String OP_RECORD_SUCCESS = "recordSuccess";
+  static final String OP_RECORD_ERROR = "recordError";
+  static final String OP_LINK = "link";
+  static final String OP_CLOSE = "close";
+
+  /** Every operation name, the complete value set of the {@code operation} tag. */
+  static final java.util.Set<String> OPERATIONS =
+      java.util.Set.of(
+          OP_ENABLED,
+          OP_START,
+          OP_START_CHILD,
+          OP_PROPAGATING,
+          OP_SET_ATTRIBUTE,
+          OP_RECORD_SUCCESS,
+          OP_RECORD_ERROR,
+          OP_LINK,
+          OP_CLOSE);
 
   private final StreamRuneTracing delegate;
 
-  /** Where failures are counted; {@link StreamRuneMetrics#NOOP} until an integration binds one. */
+  /** Where failures are counted; {@link StreamRuneMetrics#NOOP} until the guard is bound. */
   private volatile StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
 
   private final AtomicLong failures = new AtomicLong();
@@ -110,8 +134,8 @@ public final class GuardedTracing implements StreamRuneTracing {
 
   /**
    * {@code tracing} guarded so that it can never fail the work it traces. {@link
-   * StreamRuneTracing#NOOP} and a tracing that is already guarded are returned as they are, and a
-   * tracing that was guarded before gets the guard it already has.
+   * StreamRuneTracing#NOOP} and a tracing that is already guarded are returned as they are; any
+   * other tracing gets a new guard, which counts nowhere until it is bound.
    *
    * @param tracing the tracing to guard
    * @return the guarded tracing
@@ -122,73 +146,53 @@ public final class GuardedTracing implements StreamRuneTracing {
     if (tracing == StreamRuneTracing.NOOP || tracing instanceof GuardedTracing) {
       return tracing;
     }
-    return guardOf(tracing, null);
+    return new GuardedTracing(tracing);
   }
 
   /**
    * {@code tracing} guarded so that it can never fail the work it traces, with each failure counted
-   * in {@code metrics} ({@link StreamRuneMetrics#recordTracingFailure(String)}). The integrations
-   * call it where they have the application's tracing and its metrics; the guard of the tracing —
-   * the one every component of the application holds, whether it was built before this call or is
-   * built after it — then counts there. {@link StreamRuneTracing#NOOP} is returned as it is. A
-   * guard that already counts in other metrics keeps them, and {@code tracing} gets a second guard
-   * for {@code metrics}: two applications in one JVM that share a tracing each count their own.
+   * in {@code metrics} ({@link StreamRuneMetrics#recordTracingFailure(String)}). The answer depends
+   * on its two arguments alone:
+   *
+   * <ul>
+   *   <li>{@link StreamRuneTracing#NOOP} is returned as it is;
+   *   <li>with no metrics to count in ({@code null} or {@link StreamRuneMetrics#NOOP}) it is {@link
+   *       #of(StreamRuneTracing)};
+   *   <li>a tracing that is not guarded gets a new guard that counts in {@code metrics};
+   *   <li>a guard that counts nowhere yet is bound to {@code metrics} and returned: it is the guard
+   *       its holder was handed in order to bind it, as the one {@link OpenTelemetryTracing#of}
+   *       returns;
+   *   <li>a guard that already counts in {@code metrics} is returned as it is;
+   *   <li>a guard that counts in other metrics keeps them, and the tracing it wraps gets a new
+   *       guard for {@code metrics}.
+   * </ul>
    *
    * @param tracing the tracing to guard
-   * @param metrics where the failures are counted
+   * @param metrics where the failures are counted, or {@code null} for nowhere
    * @return the guarded tracing
-   * @throws NullPointerException if an argument is {@code null}
+   * @throws NullPointerException if {@code tracing} is {@code null}
    */
   public static StreamRuneTracing of(StreamRuneTracing tracing, StreamRuneMetrics metrics) {
     Objects.requireNonNull(tracing, "tracing is required");
-    Objects.requireNonNull(metrics, "metrics is required");
     if (tracing == StreamRuneTracing.NOOP) {
       return tracing;
     }
-    if (metrics == StreamRuneMetrics.NOOP) {
+    if (metrics == null || metrics == StreamRuneMetrics.NOOP) {
       return of(tracing);
     }
-    synchronized (GUARDS) {
-      if (tracing instanceof GuardedTracing guarded) {
-        if (guarded.bind(metrics)) {
-          return guarded;
-        }
-        return guardOf(guarded.delegate, metrics);
+    if (tracing instanceof GuardedTracing guarded) {
+      if (guarded.bind(metrics)) {
+        return guarded;
       }
-      return guardOf(tracing, metrics);
+      tracing = guarded.delegate;
     }
-  }
-
-  /**
-   * The guard of {@code tracing}: the remembered one that counts in {@code metrics} (or can be
-   * bound to them; any remembered one when {@code metrics} is {@code null}), else a new one.
-   */
-  private static GuardedTracing guardOf(StreamRuneTracing tracing, StreamRuneMetrics metrics) {
-    synchronized (GUARDS) {
-      GuardedTracing found = null;
-      for (Iterator<WeakReference<GuardedTracing>> it = GUARDS.iterator(); it.hasNext(); ) {
-        GuardedTracing guard = it.next().get();
-        if (guard == null) {
-          it.remove();
-        } else if (found == null
-            && guard.delegate == tracing
-            && (metrics == null || guard.bind(metrics))) {
-          found = guard;
-        }
-      }
-      if (found == null) {
-        found = new GuardedTracing(tracing);
-        if (metrics != null) {
-          found.metrics = metrics;
-        }
-        GUARDS.add(new WeakReference<>(found));
-      }
-      return found;
-    }
+    GuardedTracing bound = new GuardedTracing(tracing);
+    bound.metrics = metrics;
+    return bound;
   }
 
   /** Whether this guard counts in {@code metrics}: it already does, or it counted nowhere yet. */
-  private boolean bind(StreamRuneMetrics metrics) {
+  private synchronized boolean bind(StreamRuneMetrics metrics) {
     StreamRuneMetrics bound = this.metrics;
     if (bound == metrics) {
       return true;
@@ -214,7 +218,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       return delegate.enabled(area);
     } catch (Throwable t) {
-      failed("enabled", t);
+      failed(OP_ENABLED, t);
       return false;
     }
   }
@@ -225,7 +229,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       return guarded(delegate.start(area, spanName, kind, attributes));
     } catch (Throwable t) {
-      failed("start", t);
+      failed(OP_START, t);
       return TraceScope.NOOP;
     }
   }
@@ -241,7 +245,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       return guarded(delegate.start(area, spanName, kind, attributes, startTime));
     } catch (Throwable t) {
-      failed("start", t);
+      failed(OP_START, t);
       return TraceScope.NOOP;
     }
   }
@@ -257,7 +261,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       return guarded(delegate.startChild(area, spanName, kind, attributes, startTime));
     } catch (Throwable t) {
-      failed("startChild", t);
+      failed(OP_START_CHILD, t);
       return TraceScope.NOOP;
     }
   }
@@ -275,7 +279,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       return guarded(delegate.start(area, spanName, kind, attributes, link, baggage));
     } catch (Throwable t) {
-      failed("start", t);
+      failed(OP_START, t);
       return TraceScope.NOOP;
     }
   }
@@ -288,7 +292,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     try {
       wrapped = delegate.propagating(tracked);
     } catch (Throwable t) {
-      failed("propagating", t);
+      failed(OP_PROPAGATING, t);
       return task;
     }
     if (wrapped == null || wrapped == tracked || wrapped == task) {
@@ -314,7 +318,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       if (run.taskFailure == t) {
         throw t; // the task's own outcome
       }
-      failed("propagating", t);
+      failed(OP_PROPAGATING, t);
       if (run.taskFailure != null) {
         // The wrapper replaced the task's failure with its own: the task's is the outcome.
         throw sneaky(run.taskFailure);
@@ -350,8 +354,27 @@ public final class GuardedTracing implements StreamRuneTracing {
     }
   }
 
+  /**
+   * The scope the caller gets for {@code scope}, which the tracing just started. A scope that
+   * cannot be wrapped is closed before the failure goes on, so no span stays current without an
+   * owner.
+   */
   private TraceScope guarded(TraceScope scope) {
-    return scope == null || scope == TraceScope.NOOP ? TraceScope.NOOP : new GuardedScope(scope);
+    if (scope == null || scope == TraceScope.NOOP) {
+      return TraceScope.NOOP;
+    }
+    try {
+      return new GuardedScope(scope);
+    } catch (Throwable wrapFailure) {
+      try {
+        scope.close();
+      } catch (Throwable closeFailure) {
+        if (closeFailure != wrapFailure) {
+          wrapFailure.addSuppressed(closeFailure);
+        }
+      }
+      throw wrapFailure;
+    }
   }
 
   /**
@@ -446,7 +469,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.setAttribute(key, value);
       } catch (Throwable t) {
-        failed("setAttribute", t);
+        failed(OP_SET_ATTRIBUTE, t);
       }
     }
 
@@ -455,7 +478,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.setAttribute(key, value);
       } catch (Throwable t) {
-        failed("setAttribute", t);
+        failed(OP_SET_ATTRIBUTE, t);
       }
     }
 
@@ -464,7 +487,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.setAttribute(key, value);
       } catch (Throwable t) {
-        failed("setAttribute", t);
+        failed(OP_SET_ATTRIBUTE, t);
       }
     }
 
@@ -473,7 +496,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.recordSuccess();
       } catch (Throwable t) {
-        failed("recordSuccess", t);
+        failed(OP_RECORD_SUCCESS, t);
       }
     }
 
@@ -482,7 +505,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.recordError(error);
       } catch (Throwable t) {
-        failed("recordError", t);
+        failed(OP_RECORD_ERROR, t);
       }
     }
 
@@ -492,7 +515,7 @@ public final class GuardedTracing implements StreamRuneTracing {
         SpanLink link = scope.link();
         return link == null ? SpanLink.NONE : link;
       } catch (Throwable t) {
-        failed("link", t);
+        failed(OP_LINK, t);
         return SpanLink.NONE;
       }
     }
@@ -502,7 +525,7 @@ public final class GuardedTracing implements StreamRuneTracing {
       try {
         scope.close();
       } catch (Throwable t) {
-        failed("close", t);
+        failed(OP_CLOSE, t);
       }
     }
   }

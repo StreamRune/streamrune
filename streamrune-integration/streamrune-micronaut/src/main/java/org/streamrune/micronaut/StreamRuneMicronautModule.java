@@ -192,8 +192,7 @@ public class StreamRuneMicronautModule {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.autoInitializeSchema())
-            // The one guard of the application's tracing, which counts its failures in the
-            // metrics bean; every other component the tracing reaches holds the same guard.
+            // The tracing meets the metrics bean here: its guard counts its failures there.
             .tracing(org.streamrune.runtime.GuardedTracing.of(tracing, metricsOrNoop(metrics)))
             // Thread the metrics bean into the event store's CryptoShreddingModule so a
             // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
@@ -310,13 +309,17 @@ public class StreamRuneMicronautModule {
    *
    * @param properties the StreamRune configuration properties
    * @param tracing the tracing the locker starts {@code lock/acquire} through
+   * @param metrics optional metrics collector, in which a failure of the tracing counts
    * @return a new {@link LocalStripedLocker}
    */
   @Singleton
   @Requires(missingBeans = org.streamrune.core.AggregateLocker.class)
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneMicronautProperties properties, StreamRuneTracing tracing) {
-    return new LocalStripedLocker(properties.stripeCount()).traced(tracing);
+      StreamRuneMicronautProperties properties,
+      StreamRuneTracing tracing,
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+    return new LocalStripedLocker(properties.stripeCount())
+        .traced(org.streamrune.runtime.GuardedTracing.of(tracing, metrics));
   }
 
   /**
@@ -792,11 +795,11 @@ public class StreamRuneMicronautModule {
     var builder =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)
-            .locker(traced(locker, tracing))
+            // The tracing meets the metrics bean here: its guard counts its failures there, and
+            // it is this guard the locker and the bus are handed.
+            .locker(traced(locker, org.streamrune.runtime.GuardedTracing.of(tracing, metrics)))
             // Adds the command interceptor in its slot, unless the chain holds the application's.
-            // The one guard of the application's tracing, which counts its failures in the
-            // metrics bean; every other component the tracing reaches holds the same guard.
-            .tracing(org.streamrune.runtime.GuardedTracing.of(tracing, metricsOrNoop(metrics)))
+            .tracing(org.streamrune.runtime.GuardedTracing.of(tracing, metrics))
             .retryPolicy(retryPolicy)
             .snapshotPolicy(
                 snapshotPolicy != null

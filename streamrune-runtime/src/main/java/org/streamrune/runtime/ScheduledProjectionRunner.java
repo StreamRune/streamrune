@@ -135,7 +135,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                 reg ->
                     new ScheduledProjectionRegistration(
                         reg.name(),
-                        TracingProjectionDecorator.traced(reg.name(), reg.projection(), b.tracing),
+                        TracingProjectionDecorator.traced(
+                            reg.name(), reg.projection(), GuardedTracing.of(b.tracing, b.metrics)),
                         reg.cron(),
                         reg.errorStrategy(),
                         reg.deliveryMode()))

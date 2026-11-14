@@ -94,7 +94,9 @@ class QuarkusInterceptorOrderingTest {
         producers.virtualThreadCommandBus(
             new InMemoryEventStore(TYPES),
             producers.aggregateLocker(
-                TestProperties.defaults(), org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+                TestProperties.defaults(),
+                org.streamrune.core.tracing.StreamRuneTracing.NOOP,
+                unsatisfied()),
             TestProperties.defaults(),
             unsatisfied(), // no application SnapshotPolicy bean
             containerOrder,

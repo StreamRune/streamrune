@@ -382,7 +382,11 @@ public class ProjectionFactory {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
       ProjectionName name = ProjectionName.of(e.name());
-      builder.register(name, TracingProjectionDecorator.traced(name, e.projection(), tracing));
+      // The tracing meets the metrics bean here: its guard counts its failures there.
+      builder.register(
+          name,
+          TracingProjectionDecorator.traced(
+              name, e.projection(), org.streamrune.runtime.GuardedTracing.of(tracing, metrics)));
     }
 
     return builder.build();

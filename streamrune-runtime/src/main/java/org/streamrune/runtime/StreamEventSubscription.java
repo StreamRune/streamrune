@@ -705,7 +705,8 @@ public final class StreamEventSubscription implements StreamSubscription, ReadPo
           streamId,
           eventStore,
           offsetStore,
-          TracingEventListener.traced(listener, tracing, subscriptionName),
+          TracingEventListener.traced(
+              listener, GuardedTracing.of(tracing, metrics), subscriptionName),
           config,
           fetchSize,
           metrics,

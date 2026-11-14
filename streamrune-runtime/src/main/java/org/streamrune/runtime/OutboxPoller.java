@@ -367,7 +367,7 @@ public final class OutboxPoller implements AutoCloseable {
     this.closeJoinTimeoutMs = builder.closeJoinTimeoutMs;
     this.store = builder.store;
     this.publisher = builder.publisher;
-    this.tracing = GuardedTracing.of(builder.tracing);
+    this.tracing = GuardedTracing.of(builder.tracing, builder.metrics);
     this.traced = tracing.enabled(TracingArea.OUTBOX);
     this.entrySpans = traced ? this::startPublishSpan : OutboxEntrySpans.NONE;
     this.maxInFlightHorizon = normalizeHorizon(builder.publisher.inFlightHorizon());

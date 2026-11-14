@@ -302,8 +302,7 @@ public class StreamRuneAutoConfiguration {
     var factory =
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .autoInitializeSchema(properties.eventStore().schema().autoInitialize())
-            // The one guard of the application's tracing, which counts its failures in the
-            // metrics bean; every other component the tracing reaches holds the same guard.
+            // The tracing meets the metrics bean here: its guard counts its failures there.
             .tracing(
                 org.streamrune.runtime.GuardedTracing.of(
                     tracingOf(tracingProvider),
@@ -405,13 +404,20 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Creates a default LocalStripedLocker with configured stripe count, tracing its acquisitions
-   * through the {@link StreamRuneTracing} bean.
+   * through the {@link StreamRuneTracing} bean; a failure of that tracing counts in the {@link
+   * org.streamrune.core.StreamRuneMetrics} bean.
    */
   @Bean
   @ConditionalOnMissingBean(org.streamrune.core.AggregateLocker.class)
   public org.streamrune.core.AggregateLocker aggregateLocker(
-      StreamRuneProperties properties, ObjectProvider<StreamRuneTracing> tracingProvider) {
-    return new LocalStripedLocker(properties.stripeCount()).traced(tracingOf(tracingProvider));
+      StreamRuneProperties properties,
+      ObjectProvider<StreamRuneTracing> tracingProvider,
+      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+    return new LocalStripedLocker(properties.stripeCount())
+        .traced(
+            org.streamrune.runtime.GuardedTracing.of(
+                tracingOf(tracingProvider),
+                metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP)));
   }
 
   /** The {@link StreamRuneTracing} bean, or {@link StreamRuneTracing#NOOP} without one. */
@@ -601,8 +607,8 @@ public class StreamRuneAutoConfiguration {
     List<CommandInterceptor> interceptors =
         CommandInterceptorOrdering.sorted(interceptorProvider.orderedStream().toList());
 
-    // The one guard of the application's tracing, which counts its failures in the metrics bean;
-    // every other component the tracing reaches holds the same guard.
+    // The tracing meets the metrics bean here: its guard counts its failures there, and it is
+    // this guard the locker and the bus are handed.
     StreamRuneTracing tracing =
         org.streamrune.runtime.GuardedTracing.of(
             tracingOf(tracingProvider),
