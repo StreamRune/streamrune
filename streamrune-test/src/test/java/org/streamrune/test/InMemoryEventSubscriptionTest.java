@@ -9,13 +9,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
@@ -47,6 +51,7 @@ class InMemoryEventSubscriptionTest {
       SimpleEventTypeRegistry.builder().registerEvent(Added.class).build();
 
   private static final AggregateType TYPE = AggregateType.of("cart");
+  private static final StreamId STREAM = StreamId.of(TYPE, AggregateId.of("cart-x"));
 
   record Added(String sku) implements DomainEvent {}
 
@@ -350,6 +355,73 @@ class InMemoryEventSubscriptionTest {
   }
 
   @Test
+  void aLockIsNotLeftHeldByAnErrorFromTheListener() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (calls.incrementAndGet() == 1) {
+                throw new AssertionError("listener assertion");
+              }
+            });
+    sub.start();
+
+    assertThrows(AssertionError.class, () -> append(STREAM, 1, "first"));
+
+    Thread poller = Thread.ofVirtual().start(sub::poll);
+    assertTrue(poller.join(Duration.ofSeconds(5)), "a poll from another thread is not blocked");
+    assertEquals(1, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void anAppendThatLandsAfterTheLastReadOfADeliveryIsStillDelivered() throws Exception {
+    // An empty read scans every stored event, so a seeded store keeps the delivering thread in its
+    // last read long enough for a second thread's append to land between that read and the release
+    // of the delivery lock. Wherever it lands, both events are delivered once both appends
+    // returned; the attempts only make it land there.
+    int seeded = 20_000;
+    StreamId seedStream = StreamId.of(TYPE, AggregateId.of("seed"));
+    List<EventEnvelope> seed = new ArrayList<>();
+    for (int v = 1; v <= seeded; v++) {
+      seed.add(envelope(seedStream, v, "seed"));
+    }
+    store.append(seedStream, seed, Version.initial());
+    AtomicInteger released = new AtomicInteger();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (((Added) events.getLast().event()).sku().equals("trigger")) {
+                released.incrementAndGet(); // the listener's last act: the last read follows
+              }
+            },
+            seeded + 1);
+    sub.start();
+    StreamId late = StreamId.of(TYPE, AggregateId.of("late"));
+
+    for (int attempt = 1; attempt <= 20; attempt++) {
+      int round = attempt;
+      Thread second =
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    while (released.get() < round) {
+                      Thread.onSpinWait();
+                    }
+                    append(late, round, "late");
+                  });
+      append(STREAM, attempt, "trigger");
+      assertTrue(second.join(Duration.ofSeconds(5)));
+
+      assertEquals(
+          store.lastGlobalOffset().value(),
+          sub.lastDeliveredOffset(),
+          "both appends returned, so both events are delivered");
+    }
+  }
+
+  @Test
   void anErrorThrownByTheListenerReachesTheAppender() {
     var sub =
         new InMemoryEventSubscription(
@@ -477,5 +549,92 @@ class InMemoryEventSubscriptionTest {
   void appendListenerRegistrationRejectsNull() {
     assertThrows(NullPointerException.class, () -> store.addAppendListener(null));
     assertThrows(NullPointerException.class, () -> store.removeAppendListener(null));
+  }
+
+  @Test
+  void anAppendFromAnotherThreadDuringADeliveryDoesNotWait_andItsEventIsDelivered()
+      throws Exception {
+    List<String> delivered = new CopyOnWriteArrayList<>();
+    AtomicBoolean workerReturned = new AtomicBoolean();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              for (EventEnvelope e : events) {
+                String sku = ((Added) e.event()).sku();
+                delivered.add(sku);
+                if (sku.equals("first")) {
+                  Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
+                  try {
+                    workerReturned.set(worker.join(Duration.ofSeconds(5)));
+                  } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                  }
+                }
+              }
+            });
+    sub.start();
+
+    append(STREAM, 1, "first");
+
+    assertTrue(workerReturned.get(), "the worker's append returned inside the delivery");
+    assertEquals(List.of("first", "second"), delivered);
+    assertEquals(2, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void aFailedBatchIsNotRedeliveredByAnAppendThatArrivedDuringIt() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    AtomicBoolean workerReturned = new AtomicBoolean();
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              if (calls.incrementAndGet() == 1) {
+                Thread worker = Thread.ofVirtual().start(() -> append(STREAM, 2, "second"));
+                try {
+                  workerReturned.set(worker.join(Duration.ofSeconds(5)));
+                } catch (InterruptedException interrupted) {
+                  Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("first batch fails");
+              }
+            });
+    sub.start();
+
+    append(STREAM, 1, "first");
+
+    assertTrue(workerReturned.get(), "the worker's append returned inside the delivery");
+    assertEquals(1, calls.get());
+    assertEquals(1, sub.deliveryFailureCount());
+    sub.poll();
+    assertEquals(2, sub.lastDeliveredOffset());
+  }
+
+  @Test
+  void aPollWaitsForADeliveryInProgressOnAnotherThread() throws Exception {
+    CountDownLatch inListener = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    var sub =
+        new InMemoryEventSubscription(
+            store,
+            events -> {
+              inListener.countDown();
+              try {
+                release.await(5, TimeUnit.SECONDS);
+              } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+              }
+            });
+    sub.start();
+    Thread appender = Thread.ofVirtual().start(() -> append(STREAM, 1, "first"));
+    assertTrue(inListener.await(5, TimeUnit.SECONDS));
+
+    Thread poller = Thread.ofVirtual().start(sub::poll);
+    assertFalse(poller.join(Duration.ofMillis(200)), "poll waits");
+    release.countDown();
+
+    assertTrue(poller.join(Duration.ofSeconds(5)));
+    assertTrue(appender.join(Duration.ofSeconds(5)));
   }
 }

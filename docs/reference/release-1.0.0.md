@@ -1457,7 +1457,9 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   `decide`), `InMemoryQueryBus`, `InMemoryCommandInbox`, `InMemoryDeadLetterQueue`,
   `InMemoryCryptoEngine` (tests only), `InMemoryEventSubscription` (delivers on the appending
   thread, outside that thread's request context, saga flag and dispatch cause, so a listener's
-  command is never taken for a saga dispatch), `InMemoryOutboxStore`,
+  command is never taken for a saga dispatch; an append from another thread during a delivery
+  returns at once and that delivery delivers its event, in offset order, on its own thread),
+  `InMemoryOutboxStore`,
   `InMemoryOffsetStore`, `InMemoryProjectionRepository` (a fencing-capable processor and its own offset
   store, for `TRANSACTIONAL_LOCAL` unit tests without Docker), `InMemoryProjectionDeadLetterStore`,
   `InMemorySagaStore`, `InMemorySagaDeadLetterStore`.
