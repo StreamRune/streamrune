@@ -353,6 +353,178 @@ class CommandSpanErrorTest {
     }
   }
 
+  // ── a checked exception a callback lets out without declaring it ───────────────────────────
+
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+    throw (T) t;
+  }
+
+  @Test
+  void anUndeclaredCheckedExceptionFromALaterBefore_endsTheCommandSpan_andIsCountedFailed() {
+    CommandInterceptor failing =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext ctx) {
+            sneakyThrow(new java.sql.SQLException("the gate's database is down"));
+            return true;
+          }
+        };
+    Recording recording = new Recording();
+    CountingMetrics metrics = new CountingMetrics();
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new InMemoryEventStore())
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .tracing(tracing())
+            .metrics(metrics)
+            .interceptors(recording, failing)
+            .build()) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .as("wrapped, as the decider's checked exception is")
+          .isInstanceOf(CommandExecutionException.class)
+          .hasCauseInstanceOf(java.sql.SQLException.class);
+
+      assertThat(Span.current().getSpanContext().isValid()).isFalse();
+      assertThat(commandSpans()).as("the command span ended").hasSize(1);
+      assertThat(recording.calls).containsExactly("before", "onError:SQLException");
+      assertThat(metrics.failed.get()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void anUndeclaredCheckedExceptionFromAnAfter_stillGivesTheOthersTheirAfter() {
+    CommandInterceptor failing =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            sneakyThrow(new java.io.IOException("the read model is down"));
+          }
+        };
+    Recording recording = new Recording();
+    try (VirtualThreadCommandBus bus = bus(recording, failing)) {
+      // The command committed; an exception of an after() callback is logged, as always.
+      assertThat(bus.execute(new Switch("l-1", false)).events()).hasSize(1);
+
+      assertThat(Span.current().getSpanContext().isValid()).isFalse();
+      assertThat(commandSpans()).hasSize(1);
+      assertThat(recording.calls).containsExactly("before", "after");
+    }
+  }
+
+  @Test
+  void anUndeclaredCheckedExceptionFromAnOnError_doesNotReplaceTheWorksError() {
+    CommandInterceptor failing =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            sneakyThrow(new java.io.IOException("the audit store is down"));
+          }
+        };
+    Recording recording = new Recording();
+    try (VirtualThreadCommandBus bus = bus(recording, failing)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the decider is missing");
+
+      assertThat(Span.current().getSpanContext().isValid()).isFalse();
+      assertThat(commandSpans()).hasSize(1);
+      assertThat(recording.calls).containsExactly("before", "onError:NoClassDefFoundError");
+    }
+  }
+
+  @Test
+  void aComposedInterceptorHandlesAMembersUndeclaredCheckedException() {
+    Recording first = new Recording();
+    CommandInterceptor second =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext ctx) {
+            sneakyThrow(new java.io.IOException("second.before"));
+            return true;
+          }
+
+          @Override
+          public void after(CommandContext ctx) {
+            sneakyThrow(new java.io.IOException("second.after"));
+          }
+        };
+    CommandInterceptor composed = CommandInterceptor.compose(first, second);
+
+    assertThatThrownBy(() -> composed.after(null)).isInstanceOf(java.io.IOException.class);
+    assertThatThrownBy(() -> composed.before(null)).isInstanceOf(java.io.IOException.class);
+    assertThat(first.calls).containsExactly("after", "before", "onError:IOException");
+  }
+
+  // ── an Error of the metrics backend on the way out ─────────────────────────────────────────
+
+  @Test
+  void anErrorOfTheMetricsBackendDoesNotReplaceTheWorksError() {
+    org.streamrune.core.StreamRuneMetrics broken =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordCommandFailed() {
+            throw new NoClassDefFoundError("a class of the metrics backend is missing");
+          }
+
+          @Override
+          public void recordCommandDuration(long durationNanos) {
+            throw new NoClassDefFoundError("a class of the metrics backend is missing (duration)");
+          }
+        };
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new InMemoryEventStore())
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .metrics(broken)
+            .build()) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the decider is missing")
+          .satisfies(
+              thrown ->
+                  assertThat(thrown.getSuppressed())
+                      .extracting(Throwable::getMessage)
+                      .containsExactly(
+                          "a class of the metrics backend is missing",
+                          "a class of the metrics backend is missing (duration)"));
+    }
+  }
+
+  @Test
+  void theWorksErrorAndACallbacksErrorNeverSuppressEachOther() {
+    CommandInterceptor throwsItsOwn =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw new AssertionError("onError failed an assertion");
+          }
+        };
+    CommandInterceptor rethrows =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw (Error) error;
+          }
+        };
+    // onError() runs in reverse order: throwsItsOwn first, then rethrows.
+    try (VirtualThreadCommandBus bus = bus(rethrows, throwsItsOwn)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .satisfies(
+              thrown -> {
+                assertThat(thrown.getSuppressed()).hasSize(1);
+                assertThat(thrown.getSuppressed()[0])
+                    .isInstanceOf(AssertionError.class)
+                    .satisfies(
+                        callback ->
+                            assertThat(callback.getSuppressed())
+                                .as("no cycle: the callback's Error does not carry the work's")
+                                .isEmpty());
+              });
+    }
+  }
+
   // ── the lock between its grant and the caller's ownership ──────────────────────────────────
 
   @Test

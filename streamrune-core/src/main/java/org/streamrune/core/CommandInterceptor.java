@@ -165,12 +165,12 @@ public interface CommandInterceptor {
         }
         try {
           return second.before(ctx);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
           // first.before() completed, so per the lifecycle contract it must be notified of the
           // failure even though the bus only sees the composed unit as the thrower.
           try {
             first.onError(ctx, e);
-          } catch (RuntimeException | Error onErrorFailure) {
+          } catch (Throwable onErrorFailure) {
             throw bothFailures(e, onErrorFailure);
           }
           throw e;
@@ -181,10 +181,10 @@ public interface CommandInterceptor {
       public void after(CommandContext ctx) {
         try {
           second.after(ctx);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
           try {
             first.after(ctx);
-          } catch (RuntimeException | Error alsoFailed) {
+          } catch (Throwable alsoFailed) {
             throw bothFailures(e, alsoFailed);
           }
           throw e;
@@ -196,10 +196,10 @@ public interface CommandInterceptor {
       public void onError(CommandContext ctx, Throwable error) {
         try {
           second.onError(ctx, error);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
           try {
             first.onError(ctx, error);
-          } catch (RuntimeException | Error alsoFailed) {
+          } catch (Throwable alsoFailed) {
             throw bothFailures(e, alsoFailed);
           }
           throw e;
@@ -212,9 +212,9 @@ public interface CommandInterceptor {
   /**
    * Throws the one of two failures of a composed interceptor that propagates, with the other
    * suppressed on it: {@code primary}, the one thrown first, unless only {@code secondary} is an
-   * {@link Error} — an {@code Error} is never demoted to the suppressed exception of a {@link
-   * RuntimeException}, which the bus would log and swallow. The same throwable twice is thrown as
-   * it is.
+   * {@link Error} — an {@code Error} is never demoted to the suppressed exception of an exception,
+   * which the bus would log and swallow. The same throwable twice is thrown as it is. A member's
+   * checked exception that it does not declare is handled as its unchecked ones are.
    *
    * @return never; declared so that a caller can write {@code throw bothFailures(...)}
    */
@@ -228,10 +228,13 @@ public interface CommandInterceptor {
     if (suppressed != thrown) {
       thrown.addSuppressed(suppressed);
     }
-    if (thrown instanceof Error error) {
-      throw error;
-    }
-    throw (RuntimeException) thrown;
+    return sneakyThrow(thrown);
+  }
+
+  /** Throws {@code thrown} as it is, a checked exception a member let out undeclared included. */
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> RuntimeException sneakyThrow(Throwable thrown) throws T {
+    throw (T) thrown;
   }
 
   /** Returns a no-op interceptor that does nothing. */
