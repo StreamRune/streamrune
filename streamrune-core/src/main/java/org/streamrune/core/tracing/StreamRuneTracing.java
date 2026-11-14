@@ -24,9 +24,9 @@ package org.streamrune.core.tracing;
  * call and ends it in another relies on both calls seeing the same answer. Implementations are
  * thread-safe, and for valid arguments they must not throw: neither {@code start} nor any method of
  * the scopes it returns may fail the work it traces. The components guard themselves against an
- * implementation that throws all the same ({@code org.streamrune.runtime.GuardedTracing}): what it
- * throws is caught and logged, and the traced work runs on without the span, so tracing can never
- * change a command, a lock or a delivery.
+ * implementation that throws all the same: what it throws is caught, counted ({@code
+ * streamrune.tracing.failures}) and logged, and the traced work runs on without the span, so
+ * tracing can never change a command, a lock or a delivery.
  *
  * <p><b>No {@code null}s.</b> Callers pass no {@code null}: no attributes is {@link
  * SpanAttributes#empty()}, no link is {@link SpanLink#NONE} and leaving the baggage alone is {@link

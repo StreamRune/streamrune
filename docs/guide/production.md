@@ -307,6 +307,7 @@ single source of truth — the table below tracks it):
 | `streamrune.subscriptions.delivery.latency` | Timer | Subscription delivery latency |
 | `streamrune.subscriptions.lag` | Gauge | Events between the global head and the last committed offset |
 | `streamrune.subscriptions.listener.reconnects` | Counter | LISTEN/NOTIFY listener reconnect attempts — a **rising** count signals a *flapping* push path. A LISTEN connection whose server vanished without closing it is detected by the listener's liveness probe and counts here too. It cannot tell you the push path is **dead**: a listener that failed at startup never increments it and one that exhausted a finite reconnect cap stops incrementing it, so both read exactly what a perfectly healthy listener reads. For a dead push path use the subscription health signal below, not this counter |
+| `streamrune.tracing.failures` | Counter | Failures of the tracing that StreamRune caught, tagged `operation` (`enabled`, `start`, `startChild`, `propagating`, `setAttribute`, `recordSuccess`, `recordError`, `link`, `close`): a sampler or a span processor of the OpenTelemetry SDK, or a `StreamRuneTracing` of your own, threw, and the traced work went on without the span. A correct tracing never throws — **alert on any nonzero value**: spans are being lost. The first failure also logs a `WARN` (logger `org.streamrune.runtime.GuardedTracing`), later ones at most once per five minutes. Counted by the integrations, in the application's `StreamRuneMetrics` bean |
 | `streamrune.snapshots.created` | Counter | Snapshots created |
 | `streamrune.snapshots.refused` | Counter | Snapshot saves refused because a GDPR forget purged the stream's snapshot after the command loaded it; nothing was written and the next command snapshots again. Nonzero means forgets raced commands on the same aggregates |
 | `streamrune.snapshots.loaded` | Counter | Snapshots loaded during aggregate reconstruction |
@@ -577,17 +578,20 @@ a deployment switches an area without a rebuild.
   `quarkus.otel.traces.exporter=none`), whose span processors still receive the spans, and one
   whose sampler drops every trace. `streamrune.tracing.enabled=false` stops that whatever the
   SDK.
-- **Tracing never fails the work it traces.** Every component wraps the tracing it is given in a
-  `GuardedTracing`, and `OpenTelemetryTracing.of` returns its tracing already wrapped. When the
-  OpenTelemetry SDK throws underneath it — a sampler, a span processor's `onStart` or `onEnd`, a
-  context storage — or a `StreamRuneTracing` of your own throws, the span is lost and the work
-  goes on with its true outcome: the command commits and returns its result, the lock is handed
-  over or released, the subscription delivers, the saga step and the timeout claim run. The
-  failure is logged at `WARN` by `org.streamrune.runtime.GuardedTracing`, the first one at once
-  and then at most once per five minutes with the number of failures since. A command that ends
-  in an `Error` (a `NoClassDefFoundError` after a bad deployment, a `StackOverflowError`) ends its
-  span too and restores the trace context of the calling thread, and the `Error` propagates as
-  it is.
+- **Tracing never fails the work it traces.** Every component guards the tracing it is given, and
+  `OpenTelemetryTracing.of` returns its tracing already guarded. When the OpenTelemetry SDK throws
+  underneath it — a sampler, a span processor's `onStart` or `onEnd`, a context storage — or a
+  `StreamRuneTracing` of your own throws, the span is lost and the work goes on with its true
+  outcome: the command commits and returns its result, the lock is handed over or released, the
+  subscription delivers, the saga step and the timeout claim run. A tracing has one guard, shared
+  by every component it reaches. Each failure counts in `streamrune.tracing.failures` (tagged by
+  the operation that threw; the integrations bind the counter to the metrics bean) and is logged
+  at `WARN` by `org.streamrune.runtime.GuardedTracing`: the first one at once, then at most once
+  per five minutes with the number of failures since. A command that ends in an `Error` (a
+  `NoClassDefFoundError` after a bad deployment, a `StackOverflowError`) ends its span too and
+  restores the trace context of the calling thread, and that `Error` is the one the caller sees:
+  what an interceptor's `onError()` throws on the way is attached to it as a suppressed
+  exception.
 - **What the integration hands it to.** The event store it builds on the application's
   `DataSource` (`PostgresEventStoreFactory.tracing`), its default `LocalStripedLocker`, the command
   bus, the outbox poller, the continuous and scheduled projection runners, and each inline

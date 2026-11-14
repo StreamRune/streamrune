@@ -1319,6 +1319,7 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
     `projections.delivery_mode`, `subscriptions.events.received`, `subscriptions.delivery.latency`,
     `subscriptions.lag`, `subscriptions.listener.reconnects`
   - queries: `queries.dispatched`, `queries.duration`, `queries.cache.hits`, `queries.cache.misses`
+  - tracing: `tracing.failures{operation}`
   - sagas (tagged `saga.type`): `saga.quarantined`, `saga.faulted`, `saga.skipped_while_faulted`,
     `saga.event_held{hold.reason}`, `saga.replay_deferred`, `saga.compensation{outcome}`,
     `saga.compensation_retries`, `saga.cas_conflicts`, `saga.compensation_under_forward_step`,

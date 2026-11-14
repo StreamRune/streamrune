@@ -234,17 +234,6 @@ public final record org.streamrune.runtime.DeciderRegistration<C extends org.str
   public org.streamrune.core.Decider<C, S, E> decider()
   public org.streamrune.core.types.AggregateType aggregateType()
 
-public final class org.streamrune.runtime.GuardedTracing implements org.streamrune.core.tracing.StreamRuneTracing
-  public boolean enabled(org.streamrune.core.tracing.TracingArea)
-  public java.lang.Runnable propagating(java.lang.Runnable)
-  public java.lang.String toString()
-  public long failureCount()
-  public org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes)
-  public org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
-  public org.streamrune.core.tracing.TraceScope start(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, org.streamrune.core.tracing.SpanLink, org.streamrune.core.tracing.SpanBaggage)
-  public org.streamrune.core.tracing.TraceScope startChild(org.streamrune.core.tracing.TracingArea, java.lang.String, org.streamrune.core.tracing.SpanKind, org.streamrune.core.tracing.SpanAttributes, java.time.Instant)
-  public static org.streamrune.core.tracing.StreamRuneTracing of(org.streamrune.core.tracing.StreamRuneTracing)
-
 public final class org.streamrune.runtime.HealthTrackingEventListener implements org.streamrune.core.subscription.EventListener
   public <init>(org.streamrune.core.subscription.EventListener, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.core.types.SubscriptionName)
   public static org.streamrune.core.subscription.EventListener tracking(org.streamrune.core.subscription.EventListener, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.core.types.SubscriptionName)

@@ -606,6 +606,7 @@ public interface org.streamrune.core.StreamRuneMetrics
   public default void recordSubscriptionEventReceived(org.streamrune.core.types.SubscriptionName)
   public default void recordSubscriptionLag(org.streamrune.core.types.SubscriptionName, long)
   public default void recordSystemicKeyStoreFailure()
+  public default void recordTracingFailure(java.lang.String)
   public default void registerInFlightCommandsGauge(java.util.function.LongSupplier)
   public default void registerSubscriptionLagGauge(org.streamrune.core.types.SubscriptionName, java.util.function.LongSupplier)
   public static final org.streamrune.core.StreamRuneMetrics NOOP
@@ -879,6 +880,7 @@ public final class org.streamrune.core.metrics.MetricNames
   public static final java.lang.String TAG_DELIVERY_MODE = "delivery.mode"
   public static final java.lang.String TAG_EVENT_TYPE = "event.type"
   public static final java.lang.String TAG_HOLD_REASON = "hold.reason"
+  public static final java.lang.String TAG_OPERATION = "operation"
   public static final java.lang.String TAG_OUTCOME = "outcome"
   public static final java.lang.String TAG_PROJECTION_NAME = "projection.name"
   public static final java.lang.String TAG_PURGER = "purger"
@@ -887,6 +889,7 @@ public final class org.streamrune.core.metrics.MetricNames
   public static final java.lang.String TAG_SAGA_TYPE = "saga.type"
   public static final java.lang.String TAG_STREAM_ID = "stream.id"
   public static final java.lang.String TAG_SUBSCRIPTION_NAME = "subscription.name"
+  public static final java.lang.String TRACING_FAILURES = "streamrune.tracing.failures"
 
 public final record org.streamrune.core.outbox.OutboxEntry
   public <init>(org.streamrune.core.outbox.OutboxEntryId, java.lang.String, java.lang.String, org.streamrune.core.types.StreamId, org.streamrune.core.outbox.OutboxStatus, int, java.lang.String, java.time.Instant, java.time.Instant, java.time.Instant, org.streamrune.core.outbox.OutboxEntry$SkipRecord, org.streamrune.core.tracing.SpanLink)

@@ -74,9 +74,9 @@ jars. In brief:
   command bus writes into `EventMetadata.spanContext` from its own command span, never from a
   StreamRune header, the request context or baggage; its trace id is the request's, which a
   `traceparent` header chooses. Tracing never fails the work it traces: every component guards its
-  tracing (`GuardedTracing`), so a sampler, a span processor or a hand-written `StreamRuneTracing`
-  that throws costs the span, logged with a rate-limited `WARN`, and never a command, a lock or a
-  delivery.
+  tracing, so a sampler, a span processor or a hand-written `StreamRuneTracing` that throws costs
+  the span — counted in `streamrune.tracing.failures` and logged with a rate-limited `WARN` — and
+  never a command, a lock or a delivery.
 
 ```kotlin
 repositories {
