@@ -356,7 +356,8 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES).withCommandInbox(inbox),
-            module.aggregateLocker(properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
+            module.aggregateLocker(
+                properties, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
             properties,
             null,
             List.of(),
@@ -1148,7 +1149,8 @@ class StreamRuneMicronautModuleTest {
     var bus =
         module.virtualThreadCommandBus(
             new org.streamrune.test.InMemoryEventStore(TYPES),
-            module.aggregateLocker(defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
+            module.aggregateLocker(
+                defaults, org.streamrune.core.tracing.StreamRuneTracing.NOOP, null),
             defaults,
             null,
             List.of(),

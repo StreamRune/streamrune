@@ -504,7 +504,8 @@ class GuardedTracingTest {
         org.streamrune.core.types.AggregateType.of("lamp");
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new org.streamrune.test.InMemoryEventStore())
+            .eventStore(
+                new org.streamrune.test.InMemoryEventStore(TracingFailureIsolationTest.TYPES))
             .register(
                 lamp,
                 TracingFailureIsolationTest.Switch.class,

@@ -113,6 +113,12 @@ class TracedLockerLeakTest {
 
   // ── through the command bus ────────────────────────────────────────────────────────────────
 
+  private static final org.streamrune.core.EventTypeRegistry TYPES =
+      org.streamrune.core.SimpleEventTypeRegistry.builder()
+          .registerEvent("Switched", Switched.class)
+          .registerState("Lamp", Lamp.class)
+          .build();
+
   record Switched(String lampId) implements DomainEvent {}
 
   record Lamp() implements AggregateState {}
@@ -139,7 +145,7 @@ class TracedLockerLeakTest {
   @ParameterizedTest
   @MethodSource("brokenTracings")
   void everyCommandOnTheAggregateSucceeds_fromAnyThread(ThrowingTracing broken) throws Exception {
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)

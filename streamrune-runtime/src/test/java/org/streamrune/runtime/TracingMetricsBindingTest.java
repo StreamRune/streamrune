@@ -96,7 +96,7 @@ class TracingMetricsBindingTest {
   void thePollingSubscription() {
     PollingEventSubscription.builder()
         .subscriptionName(SubscriptionName.of("lights"))
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
         .offsetStore(new InMemoryOffsetStore())
         .listener(events -> {})
         .config(fastConfig())
@@ -112,7 +112,7 @@ class TracingMetricsBindingTest {
     StreamEventSubscription.builder()
         .subscriptionName(SubscriptionName.of("lamp-1"))
         .streamId(LAMP_1)
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
         .offsetStore(new InMemoryOffsetStore())
         .listener(events -> {})
         .config(fastConfig())
@@ -127,7 +127,7 @@ class TracingMetricsBindingTest {
   void theScheduledProjectionRunner_withOneGuardForAllItsProjections() {
     Projection projection = batch -> {};
     ScheduledProjectionRunner.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
         .offsetStore(new InMemoryOffsetStore())
         .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
         .register(ProjectionName.of("nightly"), projection, "0 0 3 * * *", AT_LEAST_ONCE_IDEMPOTENT)
@@ -144,7 +144,7 @@ class TracingMetricsBindingTest {
   void theContinuousProjectionRunner() throws InterruptedException {
     ContinuousProjectionRunner runner =
         ContinuousProjectionRunner.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
             .offsetStore(new InMemoryOffsetStore())
             .subscriptionConfig(fastConfig())
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
@@ -170,7 +170,7 @@ class TracingMetricsBindingTest {
   void theMultiProjectionRunner() throws InterruptedException {
     MultiProjectionRunner runner =
         MultiProjectionRunner.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
             .offsetStore(new InMemoryOffsetStore())
             .subscriptionConfig(fastConfig())
             .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
@@ -192,7 +192,7 @@ class TracingMetricsBindingTest {
   void theStreamRuneFacade_forItsBusItsLockerAndItsProjections() {
     try (StreamRune streamRune =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TracingFailureIsolationTest.TYPES))
             .register(
                 LAMP,
                 TracingFailureIsolationTest.Switch.class,
@@ -223,7 +223,7 @@ class TracingMetricsBindingTest {
   @Test
   void anInlineProjectionsUndeclaredCheckedExceptionDoesNotStopTheOthers() {
     AtomicInteger later = new AtomicInteger();
-    InMemoryEventStore store = new InMemoryEventStore();
+    InMemoryEventStore store = new InMemoryEventStore(TracingFailureIsolationTest.TYPES);
     InlineProjectionInterceptor inline =
         InlineProjectionInterceptor.builder()
             .register(

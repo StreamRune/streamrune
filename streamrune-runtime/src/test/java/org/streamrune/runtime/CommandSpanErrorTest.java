@@ -36,6 +36,12 @@ class CommandSpanErrorTest {
   @RegisterExtension
   static final OpenTelemetryExtension otelTesting = OpenTelemetryExtension.create();
 
+  private static final org.streamrune.core.EventTypeRegistry TYPES =
+      org.streamrune.core.SimpleEventTypeRegistry.builder()
+          .registerEvent("Switched", Switched.class)
+          .registerState("Lamp", Lamp.class)
+          .build();
+
   record Switched(String lampId) implements DomainEvent {}
 
   record Lamp() implements AggregateState {}
@@ -89,7 +95,7 @@ class CommandSpanErrorTest {
 
   private static VirtualThreadCommandBus bus(CommandInterceptor... interceptors) {
     return VirtualThreadCommandBus.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
         .tracing(tracing())
         .interceptors(interceptors)
@@ -252,7 +258,7 @@ class CommandSpanErrorTest {
   private static VirtualThreadCommandBus bus(
       CountingMetrics metrics, CommandInterceptor... interceptors) {
     return VirtualThreadCommandBus.builder()
-        .eventStore(new InMemoryEventStore())
+        .eventStore(new InMemoryEventStore(TYPES))
         .register(
             LAMP,
             Switch.class,
@@ -374,7 +380,7 @@ class CommandSpanErrorTest {
     CountingMetrics metrics = new CountingMetrics();
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .tracing(tracing())
             .metrics(metrics)
@@ -419,7 +425,7 @@ class CommandSpanErrorTest {
     CountingMetrics metrics = new CountingMetrics();
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(
                 LAMP,
                 Switch.class,
@@ -520,7 +526,7 @@ class CommandSpanErrorTest {
         };
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .metrics(broken)
             .build()) {
@@ -588,7 +594,7 @@ class CommandSpanErrorTest {
         };
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
-            .eventStore(new InMemoryEventStore())
+            .eventStore(new InMemoryEventStore(TYPES))
             .lockTimeout(java.time.Duration.ofMillis(300))
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
             .metrics(breaksOnce)

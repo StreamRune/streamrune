@@ -97,15 +97,15 @@ class TracingFailureIsolationTest {
     }
   }
 
-  /** The store in the mode that starts the event-store spans. */
+  static final org.streamrune.core.EventTypeRegistry TYPES =
+      SimpleEventTypeRegistry.builder()
+          .registerEvent("Switched", Switched.class)
+          .registerState("Lamp", Lamp.class)
+          .build();
+
+  /** A store that starts its event-store spans through {@code tracing}. */
   private static InMemoryEventStore serializingStore(StreamRuneTracing tracing) {
-    return InMemoryEventStore.serializing(
-            SimpleEventTypeRegistry.builder()
-                .registerEvent("Switched", Switched.class)
-                .registerState("Lamp", Lamp.class)
-                .build(),
-            null)
-        .withTracing(tracing);
+    return new InMemoryEventStore(TYPES).withTracing(tracing);
   }
 
   private static VirtualThreadCommandBus bus(InMemoryEventStore store, StreamRuneTracing tracing) {
