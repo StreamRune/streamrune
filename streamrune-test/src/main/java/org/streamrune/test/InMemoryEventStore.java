@@ -85,6 +85,10 @@ import org.streamrune.runtime.GuardedTracing;
  *       pg_notify('streamrune_events', lastOffset)} that wakes push-based subscriptions. Like
  *       {@code pg_notify}, delivery is best-effort: a throwing listener never fails the append.
  *       {@link InMemoryEventSubscription} builds on this hook.
+ *   <li><b>One process</b>: the stored data lives in the heap of the process that holds the store
+ *       and ends with it, so an append interrupted by the death of that process leaves nothing to
+ *       start over from, and no other process reaches the data. The store provides neither
+ *       Interrupted writes nor Several instances of the {@link EventStore} javadoc.
  * </ul>
  *
  * <p><b>Serialization.</b> Like {@code PostgresEventStore}, this store keeps the stored form, not

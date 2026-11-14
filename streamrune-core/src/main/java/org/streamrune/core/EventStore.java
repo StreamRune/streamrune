@@ -61,6 +61,34 @@ import org.streamrune.core.types.Version;
  *       one that raised a plain exception for a corrupt payload would retry it forever.
  * </ul>
  *
+ * <h2>Interrupted writes</h2>
+ *
+ * <p>The process running a write can die at any point of it. A store over durable storage provides
+ * the following to the process that starts over the same storage afterwards:
+ *
+ * <ul>
+ *   <li>A write interrupted before it became durable leaves nothing of itself: no event of an
+ *       append is readable, no key of an {@link #appendWithKey} is recorded, no outbox entry is
+ *       stored, and a snapshot save leaves the snapshot stored before it, if any. The next append
+ *       takes offsets above the head, and a reader paging by checkpoint visits every stored event
+ *       once and in order.
+ *   <li>A write interrupted after it became durable, before its caller learned so, is stored whole,
+ *       as if it had returned.
+ *   <li>An {@link #appendWithKey} repeated with the same key after either converges on exactly one
+ *       effect: it stores its events once, or returns the recorded result with {@code
+ *       alreadyApplied()} and stores nothing. A plain {@link #append} repeated after a durable
+ *       interrupted one stores its events again: an append is not idempotent.
+ * </ul>
+ *
+ * <h2>Several instances</h2>
+ *
+ * <p>Several store instances over the same storage, as the processes of one deployment run them,
+ * keep among themselves what one instance keeps among the threads that call it: strict conflict
+ * detection and atomicity of appends racing for one version, one offset per event for appends to
+ * distinct streams, atomic visibility, paging by checkpoint and the global head while others
+ * append, and one effect for concurrent executions of one idempotency key. A store whose storage
+ * belongs to one instance, as an in-process store's does, says so.
+ *
  * <h2>Decorators</h2>
  *
  * <p>A store that wraps another one (to observe, meter or fail its calls) forwards to the wrapped
