@@ -398,6 +398,101 @@ public final class ContractBeans {
   }
 
   /**
+   * An application's own {@code StreamRuneTracing} that breaks the seam's contract: it traces every
+   * area, and every {@code start} throws. {@link #enabledThrows(boolean)} makes its {@code enabled}
+   * throw as well. It counts what it threw.
+   */
+  public static final class ThrowingApplicationTracing implements Supplier<StreamRuneTracing> {
+
+    private static final java.util.concurrent.atomic.AtomicInteger THROWN =
+        new java.util.concurrent.atomic.AtomicInteger();
+    private static volatile boolean enabledThrows;
+
+    @Override
+    public StreamRuneTracing get() {
+      return new Throwing();
+    }
+
+    /**
+     * How many times the tracing threw since the last {@link #reset()}.
+     *
+     * @return the number of exceptions thrown
+     */
+    public static int thrown() {
+      return THROWN.get();
+    }
+
+    /**
+     * Whether {@code enabled} throws too, from now on.
+     *
+     * @param value {@code true} to make {@code enabled} throw
+     */
+    public static void enabledThrows(boolean value) {
+      enabledThrows = value;
+    }
+
+    /** Forgets what was thrown so far; {@code enabled} answers again. */
+    public static void reset() {
+      THROWN.set(0);
+      enabledThrows = false;
+    }
+
+    /** The tracing the bean supplies. */
+    static final class Throwing implements StreamRuneTracing {
+      @Override
+      public boolean enabled(TracingArea area) {
+        if (enabledThrows) {
+          THROWN.incrementAndGet();
+          throw new IllegalStateException("the application's tracing failed in enabled");
+        }
+        return true;
+      }
+
+      @Override
+      public TraceScope start(
+          TracingArea area,
+          String spanName,
+          SpanKind kind,
+          SpanAttributes attributes,
+          SpanLink link,
+          SpanBaggage baggage) {
+        THROWN.incrementAndGet();
+        throw new IllegalStateException("the application's tracing failed in start");
+      }
+    }
+  }
+
+  /**
+   * The application's own {@code StreamRuneMetrics}: one recording instance serves the test JVM; a
+   * test clears it with {@link #reset()}.
+   */
+  public static final class ApplicationMetrics
+      implements Supplier<org.streamrune.core.StreamRuneMetrics> {
+
+    private static final org.streamrune.test.RecordingStreamRuneMetrics RECORDED =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+
+    @Override
+    public org.streamrune.core.StreamRuneMetrics get() {
+      return RECORDED;
+    }
+
+    /**
+     * What the application's metrics recorded since the last {@link #reset()}.
+     *
+     * @return the recording metrics
+     */
+    public static org.streamrune.test.RecordingStreamRuneMetrics recorded() {
+      return RECORDED;
+    }
+
+    /** Forgets what was recorded so far. */
+    public static void reset() {
+      RECORDED.reset();
+    }
+  }
+
+  /**
    * The application's own {@code TracingCommandInterceptor}, over {@link OpenTelemetryBean}'s SDK
    * with every area on: the integration's command bus runs it in the place of the interceptor it
    * adds itself.

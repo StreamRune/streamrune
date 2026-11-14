@@ -71,6 +71,7 @@ class RecordingStreamRuneMetricsTest {
           entry("recordSubscriptionLag", MetricNames.SUBSCRIPTIONS_LAG),
           entry("registerSubscriptionLagGauge", MetricNames.SUBSCRIPTIONS_LAG),
           entry("recordListenerReconnect", MetricNames.SUBSCRIPTIONS_LISTENER_RECONNECTS),
+          entry("recordTracingFailure", MetricNames.TRACING_FAILURES),
           entry("recordQueryDispatched", MetricNames.QUERIES_DISPATCHED),
           entry("recordQueryDuration", MetricNames.QUERIES_DURATION),
           entry("recordQueryCacheHit", MetricNames.QUERIES_CACHE_HITS),

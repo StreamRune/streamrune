@@ -338,6 +338,114 @@ class GuardedTracingTest {
     assertThat(outer.get()).isEqualTo(1);
   }
 
+  @Test
+  void aWrapperThatHandsTheTaskOffAndThenThrowsIsNotFollowedByASecondRun() {
+    AtomicInteger runs = new AtomicInteger();
+    StreamRuneTracing guarded =
+        GuardedTracing.of(
+            propagatingThrough(
+                task ->
+                    () -> {
+                      Thread thread = Thread.ofVirtual().start(task);
+                      try {
+                        thread.join();
+                      } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                      }
+                      throw new IllegalStateException("the scope could not be closed");
+                    }));
+
+    assertThatCode(guarded.propagating(runs::incrementAndGet)::run).doesNotThrowAnyException();
+
+    assertThat(runs.get()).isEqualTo(1);
+  }
+
+  // ── one guard per tracing, interrupts, metrics ─────────────────────────────────────────────
+
+  @Test
+  void aTracingHasOneGuard_howeverManyComponentsAskForIt() {
+    ThrowingTracing broken = ThrowingTracing.on(Fault.START);
+    StreamRuneTracing first = GuardedTracing.of(broken);
+
+    assertThat(GuardedTracing.of(broken)).isSameAs(first);
+    assertThat(GuardedTracing.of(ThrowingTracing.on(Fault.START)))
+        .as("another tracing, another guard")
+        .isNotSameAs(first);
+
+    // Each component that asks again gets the same guard, and counts in it.
+    start(GuardedTracing.of(broken)).close();
+    start(GuardedTracing.of(broken)).close();
+    assertThat(((GuardedTracing) first).failureCount()).isEqualTo(2);
+  }
+
+  @Test
+  void theGuardOfATracingCountsInTheMetricsItIsBoundTo_wheneverItIsBound() {
+    org.streamrune.test.RecordingStreamRuneMetrics metrics =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+    ThrowingTracing broken = ThrowingTracing.on(Fault.START, Fault.PROPAGATING);
+    // A component guarded the tracing before the integration bound the metrics.
+    StreamRuneTracing early = GuardedTracing.of(broken);
+
+    StreamRuneTracing bound = GuardedTracing.of(broken, metrics);
+    assertThat(bound).isSameAs(early);
+    assertThat(GuardedTracing.of(early, metrics)).isSameAs(early);
+    assertThat(GuardedTracing.of(broken)).isSameAs(early);
+
+    start(early).close();
+    start(bound).close();
+    bound.propagating(() -> {}).run();
+
+    assertThat(
+            metrics.total(
+                org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+                org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+                "start"))
+        .isEqualTo(2);
+    assertThat(
+            metrics.total(
+                org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+                org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+                "propagating"))
+        .isEqualTo(1);
+
+    // Another application's metrics get a guard of their own; NOOP metrics bind nothing.
+    org.streamrune.test.RecordingStreamRuneMetrics other =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+    StreamRuneTracing second = GuardedTracing.of(broken, other);
+    assertThat(second).isNotSameAs(early);
+    assertThat(GuardedTracing.of(broken, other)).isSameAs(second);
+    assertThat(GuardedTracing.of(broken, org.streamrune.core.StreamRuneMetrics.NOOP))
+        .isInstanceOf(GuardedTracing.class);
+    assertThat(GuardedTracing.of(StreamRuneTracing.NOOP, metrics)).isSameAs(StreamRuneTracing.NOOP);
+  }
+
+  @Test
+  void aMetricsBackendThatThrowsDoesNotReachTheCaller() {
+    org.streamrune.core.StreamRuneMetrics throwing =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordTracingFailure(String operation) {
+            throw new IllegalStateException("the metrics backend failed");
+          }
+        };
+    StreamRuneTracing guarded = GuardedTracing.of(ThrowingTracing.on(Fault.START), throwing);
+
+    assertThatCode(() -> start(guarded).close()).doesNotThrowAnyException();
+  }
+
+  @Test
+  void anInterruptedExceptionOfTheTracingSetsTheInterruptStatusAgain() {
+    StreamRuneTracing guarded =
+        GuardedTracing.of(
+            ThrowingTracing.throwing(() -> new InterruptedException("in onEnd"), Fault.CLOSE));
+    try {
+      start(guarded).close();
+      assertThat(Thread.currentThread().isInterrupted()).isTrue();
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
   // ── reporting ──────────────────────────────────────────────────────────────────────────────
 
   @Test

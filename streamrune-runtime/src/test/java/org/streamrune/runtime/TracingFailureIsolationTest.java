@@ -127,7 +127,16 @@ class TracingFailureIsolationTest {
         ThrowingTracing.on(Fault.LINK),
         ThrowingTracing.on(Fault.CLOSE),
         ThrowingTracing.on(Fault.PROPAGATING),
-        ThrowingTracing.on(Fault.values()),
+        ThrowingTracing.onEveryScopeMethod(),
+        ThrowingTracing.on(
+            Fault.START,
+            Fault.PROPAGATING,
+            Fault.SET_ATTRIBUTE,
+            Fault.RECORD_SUCCESS,
+            Fault.RECORD_ERROR,
+            Fault.LINK,
+            Fault.CLOSE),
+        ThrowingTracing.on(Fault.ENABLED),
         ThrowingTracing.throwing(
             () -> new LinkageError("a class of the tracing is missing"), Fault.START, Fault.CLOSE));
   }

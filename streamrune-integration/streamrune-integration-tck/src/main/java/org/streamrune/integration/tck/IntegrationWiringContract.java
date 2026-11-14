@@ -997,6 +997,60 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * A tracing that throws fails nothing and is counted: the application's own {@code
+   * StreamRuneTracing} bean, whose every {@code start} throws, costs the spans and no command, and
+   * each failure is counted in the application's metrics as {@code streamrune.tracing.failures}, by
+   * the operation that threw. One whose {@code enabled} throws as well fails no startup: the
+   * integration asks it through the guard, as every component does.
+   */
+  @Test
+  public void aTracingThatThrowsFailsNothingAndIsCounted() {
+    ContractBeans.ThrowingApplicationTracing.reset();
+    ContractBeans.ApplicationMetrics.reset();
+    Set<Class<?>> beans =
+        Set.of(
+            ContractBeans.ThrowingApplicationTracing.class,
+            ContractBeans.ApplicationMetrics.class,
+            ContractCommandRegistration.class);
+    try (Application application = start(null, Map.of(), beans)) {
+      assertStarted(application);
+      VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+      assertEquals(1, bus.execute(new ContractCommand("throwing-1")).events().size());
+      assertEquals(1, bus.execute(new ContractCommand("throwing-1")).events().size());
+
+      int thrown = ContractBeans.ThrowingApplicationTracing.thrown();
+      assertTrue(thrown >= 2, () -> "the tracing must have thrown for each command: " + thrown);
+      assertEquals(
+          thrown,
+          ContractBeans.ApplicationMetrics.recorded()
+              .total(
+                  org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+                  org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+                  "start"),
+          "every failure of the tracing is counted once, in the application's metrics");
+    }
+
+    ContractBeans.ThrowingApplicationTracing.reset();
+    ContractBeans.ApplicationMetrics.reset();
+    ContractBeans.ThrowingApplicationTracing.enabledThrows(true);
+    try (Application application = start(null, Map.of(), beans)) {
+      assertStarted(application);
+      VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+      assertEquals(1, bus.execute(new ContractCommand("throwing-2")).events().size());
+      assertTrue(
+          ContractBeans.ApplicationMetrics.recorded()
+                  .total(
+                      org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+                      org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+                      "enabled")
+              > 0,
+          "an enabled() that throws is counted");
+    } finally {
+      ContractBeans.ThrowingApplicationTracing.reset();
+    }
+  }
+
+  /**
    * A {@code TracingCommandInterceptor} the application declares is the one the command bus runs:
    * one command is one {@code command/…} span, never two.
    */

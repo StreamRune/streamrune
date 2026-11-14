@@ -37,7 +37,13 @@ class TracedLockerLeakTest {
         ThrowingTracing.on(Fault.SET_ATTRIBUTE),
         ThrowingTracing.on(Fault.RECORD_SUCCESS),
         ThrowingTracing.on(Fault.CLOSE),
-        ThrowingTracing.on(Fault.values()),
+        ThrowingTracing.on(
+            Fault.START,
+            Fault.SET_ATTRIBUTE,
+            Fault.RECORD_SUCCESS,
+            Fault.RECORD_ERROR,
+            Fault.CLOSE),
+        ThrowingTracing.onEveryScopeMethod(),
         ThrowingTracing.throwing(
             () -> new OutOfMemoryError("in the span's end"), Fault.RECORD_SUCCESS, Fault.CLOSE));
   }

@@ -213,11 +213,189 @@ class CommandSpanErrorTest {
         };
     Recording recording = new Recording();
     try (VirtualThreadCommandBus bus = bus(recording, failing)) {
-      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true))).isInstanceOf(Error.class);
+      // The work's own Error is the one that propagates, with the callback's suppressed on it.
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the decider is missing")
+          .satisfies(
+              thrown -> {
+                assertThat(thrown.getSuppressed()).hasSize(1);
+                assertThat(thrown.getSuppressed()[0])
+                    .isInstanceOf(AssertionError.class)
+                    .hasMessage("onError failed an assertion");
+              });
 
       assertThat(Span.current().getSpanContext().isValid()).isFalse();
       assertThat(commandSpans()).hasSize(1);
       assertThat(recording.calls).containsExactly("before", "onError:NoClassDefFoundError");
+    }
+  }
+
+  /** Counts the commands the bus reports failed and succeeded. */
+  static final class CountingMetrics implements org.streamrune.core.StreamRuneMetrics {
+    final java.util.concurrent.atomic.AtomicInteger failed =
+        new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.atomic.AtomicInteger succeeded =
+        new java.util.concurrent.atomic.AtomicInteger();
+
+    @Override
+    public void recordCommandFailed() {
+      failed.incrementAndGet();
+    }
+
+    @Override
+    public void recordCommandSucceeded() {
+      succeeded.incrementAndGet();
+    }
+  }
+
+  private static VirtualThreadCommandBus bus(
+      CountingMetrics metrics, CommandInterceptor... interceptors) {
+    return VirtualThreadCommandBus.builder()
+        .eventStore(new InMemoryEventStore())
+        .register(
+            LAMP,
+            Switch.class,
+            c -> {
+              if (c.lampId().equals("no-id")) {
+                throw new NoClassDefFoundError("a class of the id extractor is missing");
+              }
+              return AggregateId.of(c.lampId());
+            },
+            new LampDecider())
+        .metrics(metrics)
+        .interceptors(interceptors)
+        .build();
+  }
+
+  @Test
+  void everyErrorThatLeavesAnUncommittedCommandCountsOneFailedCommand() {
+    CommandInterceptor onErrorThrows =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw new AssertionError("onError failed an assertion");
+          }
+        };
+    CountingMetrics metrics = new CountingMetrics();
+    try (VirtualThreadCommandBus bus = bus(metrics, onErrorThrows)) {
+      // The work's Error, with an onError() that throws an Error of its own.
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class);
+      assertThat(metrics.failed.get()).isEqualTo(1);
+
+      // An Error before the interceptor chain started.
+      assertThatThrownBy(() -> bus.execute(new Switch("no-id", false)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the id extractor is missing");
+      assertThat(metrics.failed.get()).isEqualTo(2);
+      assertThat(metrics.succeeded.get()).isZero();
+    }
+  }
+
+  @Test
+  void anExceptionOfTheWorkIsCarriedByTheErrorOfAnOnErrorCallback_andCountedOnce() {
+    IllegalStateException infrastructure = new IllegalStateException("the store is down");
+    CommandInterceptor failingBefore =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext ctx) {
+            throw infrastructure;
+          }
+        };
+    CommandInterceptor onErrorThrows =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw new AssertionError("onError failed an assertion");
+          }
+        };
+    CountingMetrics metrics = new CountingMetrics();
+    try (VirtualThreadCommandBus bus = bus(metrics, onErrorThrows, failingBefore)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(AssertionError.class)
+          .hasMessage("onError failed an assertion")
+          .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(infrastructure));
+      assertThat(metrics.failed.get()).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void anOnErrorCallbackThatRethrowsTheErrorItWasGivenSuppressesNothing() {
+    CommandInterceptor rethrows =
+        new CommandInterceptor() {
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw (Error) error;
+          }
+        };
+    try (VirtualThreadCommandBus bus = bus(rethrows)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", true)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
+    }
+  }
+
+  @Test
+  void aCommittedCommandWhoseAfterThrowsAnErrorIsNotCountedFailed() {
+    CommandInterceptor failing =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            throw new AssertionError("after failed an assertion");
+          }
+        };
+    CountingMetrics metrics = new CountingMetrics();
+    try (VirtualThreadCommandBus bus = bus(metrics, failing)) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(AssertionError.class);
+      assertThat(metrics.failed.get()).isZero();
+    }
+  }
+
+  // ── the lock between its grant and the caller's ownership ──────────────────────────────────
+
+  @Test
+  void anErrorOfTheMetricsBackendRightAfterTheLockWasGrantedReleasesTheLock() throws Exception {
+    java.util.concurrent.atomic.AtomicInteger thrown =
+        new java.util.concurrent.atomic.AtomicInteger();
+    org.streamrune.core.StreamRuneMetrics breaksOnce =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordLockWait(long durationNanos) {
+            if (thrown.getAndIncrement() == 0) {
+              throw new NoClassDefFoundError("a class of the metrics backend is missing");
+            }
+          }
+        };
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new InMemoryEventStore())
+            .lockTimeout(java.time.Duration.ofMillis(300))
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .metrics(breaksOnce)
+            .build()) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the metrics backend is missing");
+
+      // Another thread takes the same aggregate at once: the lock did not stay with this one.
+      java.util.concurrent.atomic.AtomicReference<Throwable> other =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      Thread thread =
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      bus.execute(new Switch("l-1", false));
+                    } catch (Throwable t) {
+                      other.set(t);
+                    }
+                  });
+      thread.join(10_000);
+      assertThat(other.get()).isNull();
+      // And this thread keeps no record of a lock it does not hold.
+      assertThat(bus.execute(new Switch("l-1", false)).events()).hasSize(1);
     }
   }
 
@@ -254,5 +432,92 @@ class CommandSpanErrorTest {
     assertThatThrownBy(() -> CommandInterceptor.compose(notified, failingBefore).before(null))
         .hasMessage("second.before");
     assertThat(notified.calls).containsExactly("before", "onError:AssertionError");
+  }
+
+  @Test
+  void aComposedInterceptorNeverDemotesAnErrorToASuppressedException() {
+    // after() and onError() run second's callback first: it throws an exception, first's an Error.
+    CommandInterceptor first =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            throw new OutOfMemoryError("first.after");
+          }
+
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw new OutOfMemoryError("first.onError");
+          }
+        };
+    CommandInterceptor second =
+        new CommandInterceptor() {
+          @Override
+          public boolean before(CommandContext ctx) {
+            throw new IllegalStateException("second.before");
+          }
+
+          @Override
+          public void after(CommandContext ctx) {
+            throw new IllegalStateException("second.after");
+          }
+
+          @Override
+          public void onError(CommandContext ctx, Throwable error) {
+            throw new IllegalStateException("second.onError");
+          }
+        };
+    CommandInterceptor composed = CommandInterceptor.compose(first, second);
+
+    assertThatThrownBy(() -> composed.after(null))
+        .isInstanceOf(OutOfMemoryError.class)
+        .hasMessage("first.after")
+        .satisfies(
+            thrown ->
+                assertThat(thrown.getSuppressed())
+                    .singleElement()
+                    .isInstanceOf(IllegalStateException.class));
+    assertThatThrownBy(() -> composed.onError(null, new IllegalArgumentException()))
+        .isInstanceOf(OutOfMemoryError.class)
+        .hasMessage("first.onError");
+    assertThatThrownBy(() -> composed.before(null))
+        .as("second.before failed, then first.onError threw an Error")
+        .isInstanceOf(OutOfMemoryError.class)
+        .hasMessage("first.onError");
+
+    // Through the bus the Error reaches the caller: it is not logged and dropped.
+    CommandInterceptor quietFirst =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            throw new OutOfMemoryError("first.after");
+          }
+        };
+    CommandInterceptor noisySecond =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            throw new IllegalStateException("second.after");
+          }
+        };
+    try (VirtualThreadCommandBus bus = bus(CommandInterceptor.compose(quietFirst, noisySecond))) {
+      assertThatThrownBy(() -> bus.execute(new Switch("l-1", false)))
+          .isInstanceOf(OutOfMemoryError.class)
+          .hasMessage("first.after");
+    }
+  }
+
+  @Test
+  void aComposedInterceptorWhoseMembersThrowTheSameThrowableSuppressesNothing() {
+    IllegalStateException same = new IllegalStateException("thrown by both");
+    CommandInterceptor throwsIt =
+        new CommandInterceptor() {
+          @Override
+          public void after(CommandContext ctx) {
+            throw same;
+          }
+        };
+    assertThatThrownBy(() -> CommandInterceptor.compose(throwsIt, throwsIt).after(null))
+        .isSameAs(same)
+        .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
   }
 }

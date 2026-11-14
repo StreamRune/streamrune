@@ -293,6 +293,23 @@ class MicrometerStreamRuneMetricsTest {
   }
 
   @Test
+  void tracingFailureIncrementsCounterPerOperation() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+
+    metrics.recordTracingFailure("start");
+    metrics.recordTracingFailure("start");
+    metrics.recordTracingFailure("close");
+
+    var start = registry.find("streamrune.tracing.failures").tag("operation", "start").counter();
+    var close = registry.find("streamrune.tracing.failures").tag("operation", "close").counter();
+    assertNotNull(start);
+    assertNotNull(close);
+    assertEquals(2.0, start.count());
+    assertEquals(1.0, close.count());
+  }
+
+  @Test
   void listenerReconnectIncrementsCounterPerChannel() {
     var registry = new SimpleMeterRegistry();
     var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();

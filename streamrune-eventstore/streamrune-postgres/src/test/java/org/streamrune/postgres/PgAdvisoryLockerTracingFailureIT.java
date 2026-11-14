@@ -136,6 +136,7 @@ class PgAdvisoryLockerTracingFailureIT {
         new BrokenTracing(Fault.START, exception),
         new BrokenTracing(Fault.SET_ATTRIBUTE, exception),
         new BrokenTracing(Fault.RECORD_SUCCESS, exception),
+        new BrokenTracing(Fault.RECORD_ERROR, exception),
         new BrokenTracing(Fault.CLOSE, exception),
         new BrokenTracing(Fault.CLOSE, () -> new OutOfMemoryError("in the span's end")));
   }
@@ -188,6 +189,59 @@ class PgAdvisoryLockerTracingFailureIT {
       assertThat(broken.thrown.get()).as("the tracing did throw").isPositive();
       assertThat(sessionsIdleInTransaction()).isZero();
 
+      for (int i = 0; i < 3; i++) {
+        try (AutoCloseable lock = replicaB.acquireLock(order(i), Duration.ofSeconds(1))) {
+          assertThat(lock).as("the other replica locks o-%s", i).isNotNull();
+        }
+      }
+    }
+  }
+
+  /** Replaces the locker's private tracing with the unguarded {@code raw}. */
+  private static void bypassTheGuard(PgAdvisoryLocker locker, StreamRuneTracing raw)
+      throws Exception {
+    java.lang.reflect.Field tracing = PgAdvisoryLocker.class.getDeclaredField("tracing");
+    tracing.setAccessible(true);
+    assertThat(tracing.get(locker)).isInstanceOf(org.streamrune.runtime.GuardedTracing.class);
+    tracing.set(locker, raw);
+  }
+
+  /**
+   * The locker is safe by its own structure, not only because its tracing is guarded: with the
+   * guard taken away, a tracing that throws after the lock was acquired makes the acquisition fail,
+   * and the advisory lock and its connection are released before the failure propagates.
+   */
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(
+      value = Fault.class,
+      names = {"SET_ATTRIBUTE", "RECORD_SUCCESS", "CLOSE"})
+  void withoutTheGuard_aLockAcquiredBeforeTheTracingThrewIsReleased(Fault fault) throws Exception {
+    BrokenTracing raw =
+        new BrokenTracing(fault, () -> new IllegalStateException("the tracing failed"));
+    try (PgAdvisoryLocker replicaA =
+            PgAdvisoryLocker.withDedicatedPool(
+                    PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), 2)
+                .traced(raw);
+        PgAdvisoryLocker replicaB =
+            PgAdvisoryLocker.withDedicatedPool(
+                PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), 2)) {
+      bypassTheGuard(replicaA, raw);
+
+      // Three times the pool: a connection lost per failure would exhaust it.
+      for (int i = 0; i < 6; i++) {
+        Throwable seen = null;
+        try (AutoCloseable lock = replicaA.acquireLock(order(i % 3), Duration.ofMillis(500))) {
+          assertThat(lock).isNull();
+        } catch (Throwable t) {
+          seen = t;
+        }
+        assertThat(seen)
+            .as("acquisition %s: the caller got no handle, and sees why", i)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("the tracing failed");
+        assertThat(advisoryLocksHeld()).as("released before the failure propagated").isZero();
+      }
+      assertThat(sessionsIdleInTransaction()).isZero();
       for (int i = 0; i < 3; i++) {
         try (AutoCloseable lock = replicaB.acquireLock(order(i), Duration.ofSeconds(1))) {
           assertThat(lock).as("the other replica locks o-%s", i).isNotNull();
