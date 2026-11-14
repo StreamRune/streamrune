@@ -650,6 +650,14 @@ assertEquals(1, captured.sagaOrigin().hop());
 assertEquals(CausationId.of(initiated.metadata().eventId().value()), captured.causationId());
 ```
 
+`InMemoryEventSubscription` drives such a listener from the store instead of by hand: every
+append notifies it and it delivers the new events on the thread that appended. An append made by a
+second thread while a delivery is in progress returns at once, and the delivery in progress delivers
+its event, in offset order, on its own thread; a delivery that fails leaves the event pending. When
+the listener waits for the threads it handed work to, their events are delivered before that
+delivery returns; that work must not call `poll()` or need a lock the delivering thread holds. A
+`poll()` waits for a delivery in progress and then delivers everything pending.
+
 ### A hand-written `CommandBus` double is a bus of your own
 
 Every shipped command bus and query bus begins a dispatch with
