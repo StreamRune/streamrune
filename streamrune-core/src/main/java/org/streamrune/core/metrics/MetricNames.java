@@ -226,7 +226,9 @@ public final class MetricNames {
    * Failures of the tracing that StreamRune caught: a {@code StreamRuneTracing} or one of its
    * scopes threw — a sampler or a span processor of the OpenTelemetry SDK underneath it, or an
    * implementation of the application's own — and the traced work went on without the span. Tagged
-   * by {@link #TAG_OPERATION}. Counter; any nonzero value means spans are being lost.
+   * by {@link #TAG_OPERATION}. Counter; any nonzero value means spans are being lost. Counted in
+   * the metrics of the component whose tracing failed; a component built without metrics counts
+   * none.
    */
   public static final String TRACING_FAILURES = "streamrune.tracing.failures";
 

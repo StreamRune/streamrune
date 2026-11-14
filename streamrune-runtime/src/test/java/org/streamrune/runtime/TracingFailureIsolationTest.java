@@ -221,6 +221,39 @@ class TracingFailureIsolationTest {
     assertThatThrownBy(() -> failing.process(List.of())).isSameAs(own);
   }
 
+  @Test
+  void anErrorOfAProjectionIsRecordedOnItsSpan() {
+    io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter exporter =
+        io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter.create();
+    StreamRuneTracing tracing =
+        over(
+            SdkTracerProvider.builder()
+                .addSpanProcessor(
+                    io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.create(exporter))
+                .build());
+    AssertionError own = new AssertionError("the projection's own");
+    Projection failing =
+        TracingProjectionDecorator.traced(
+            ProjectionName.of("lamps"),
+            batch -> {
+              throw own;
+            },
+            tracing);
+
+    assertThatThrownBy(() -> failing.process(List.of())).isSameAs(own);
+
+    assertThat(exporter.getFinishedSpanItems())
+        .singleElement()
+        .satisfies(
+            span -> {
+              assertThat(span.getStatus().getStatusCode())
+                  .isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+              assertThat(span.getEvents())
+                  .extracting(e -> e.getName())
+                  .containsExactly("exception");
+            });
+  }
+
   // ── saga step, compensation, timeout ───────────────────────────────────────────────────────
 
   private static final AggregateType ORDER = AggregateType.of("order");
@@ -495,6 +528,106 @@ class TracingFailureIsolationTest {
     commandsSucceedAndNoContextIsLeft(
         over(SdkTracerProvider.builder().setSampler(sampler).build()));
     assertThat(thrown.get()).isPositive();
+  }
+
+  /**
+   * A span that was started and cannot be made current is ended: nothing else would end it. The
+   * OpenTelemetry here hands out spans that refuse to be stored in a context, which fails between
+   * {@code startSpan()} and {@code makeCurrent()}.
+   */
+  @Test
+  void aSpanThatCannotBeMadeCurrentIsEnded() {
+    SdkTracerProvider sdk = SdkTracerProvider.builder().build();
+    AtomicInteger started = new AtomicInteger();
+    AtomicInteger ended = new AtomicInteger();
+    io.opentelemetry.api.OpenTelemetry openTelemetry =
+        new io.opentelemetry.api.OpenTelemetry() {
+          @Override
+          public io.opentelemetry.api.trace.TracerProvider getTracerProvider() {
+            return new io.opentelemetry.api.trace.TracerProvider() {
+              @Override
+              public io.opentelemetry.api.trace.Tracer get(String name) {
+                io.opentelemetry.api.trace.Tracer real = sdk.get(name);
+                return spanName -> builder(real.spanBuilder(spanName));
+              }
+
+              @Override
+              public io.opentelemetry.api.trace.Tracer get(String name, String version) {
+                return get(name);
+              }
+            };
+          }
+
+          @Override
+          public io.opentelemetry.context.propagation.ContextPropagators getPropagators() {
+            return io.opentelemetry.context.propagation.ContextPropagators.noop();
+          }
+
+          private io.opentelemetry.api.trace.SpanBuilder builder(
+              io.opentelemetry.api.trace.SpanBuilder real) {
+            return (io.opentelemetry.api.trace.SpanBuilder)
+                java.lang.reflect.Proxy.newProxyInstance(
+                    io.opentelemetry.api.trace.SpanBuilder.class.getClassLoader(),
+                    new Class<?>[] {io.opentelemetry.api.trace.SpanBuilder.class},
+                    (proxy, method, args) -> {
+                      Object result = invoke(method, real, args);
+                      if (method.getName().equals("startSpan")) {
+                        started.incrementAndGet();
+                        return span((Span) result);
+                      }
+                      return result == real ? proxy : result;
+                    });
+          }
+
+          private Span span(Span real) {
+            return (Span)
+                java.lang.reflect.Proxy.newProxyInstance(
+                    Span.class.getClassLoader(),
+                    new Class<?>[] {Span.class},
+                    (proxy, method, args) -> {
+                      if (method.getName().equals("storeInContext")) {
+                        throw new IllegalStateException("the context storage failed");
+                      }
+                      if (method.getName().equals("end")) {
+                        ended.incrementAndGet();
+                      }
+                      return invoke(method, real, args);
+                    });
+          }
+
+          private Object invoke(java.lang.reflect.Method method, Object target, Object[] args)
+              throws Throwable {
+            try {
+              return method.invoke(target, args);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+              throw e.getCause();
+            }
+          }
+        };
+    StreamRuneTracing tracing =
+        OpenTelemetryTracing.of(openTelemetry, TracingSettings.allEnabled());
+
+    org.streamrune.core.tracing.TraceScope scope =
+        tracing.start(
+            org.streamrune.core.tracing.TracingArea.COMMAND,
+            "command/Switch",
+            org.streamrune.core.tracing.SpanKind.INTERNAL,
+            org.streamrune.core.tracing.SpanAttributes.empty());
+    org.streamrune.core.tracing.TraceScope withBaggage =
+        tracing.start(
+            org.streamrune.core.tracing.TracingArea.SUBSCRIPTION,
+            "subscription/notify/deliver",
+            org.streamrune.core.tracing.SpanKind.CONSUMER,
+            org.streamrune.core.tracing.SpanAttributes.empty(),
+            org.streamrune.core.tracing.SpanLink.NONE,
+            org.streamrune.core.tracing.SpanBaggage.replace(java.util.Map.of("tenant", "acme")));
+
+    assertThat(scope).isSameAs(org.streamrune.core.tracing.TraceScope.NOOP);
+    assertThat(withBaggage).isSameAs(org.streamrune.core.tracing.TraceScope.NOOP);
+    assertThat(started.get()).isEqualTo(2);
+    assertThat(ended.get()).as("each started span was ended").isEqualTo(2);
+    assertThat(((GuardedTracing) tracing).failureCount()).isEqualTo(2);
+    assertThat(Span.current().getSpanContext().isValid()).isFalse();
   }
 
   @Test

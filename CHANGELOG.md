@@ -75,8 +75,9 @@ jars. In brief:
   StreamRune header, the request context or baggage; its trace id is the request's, which a
   `traceparent` header chooses. Tracing never fails the work it traces: every component guards its
   tracing, so a sampler, a span processor or a hand-written `StreamRuneTracing` that throws costs
-  the span — counted in `streamrune.tracing.failures` and logged with a rate-limited `WARN` — and
-  never a command, a lock or a delivery.
+  the span — logged with a rate-limited `WARN`, and counted in `streamrune.tracing.failures`
+  wherever the component has metrics (always under an integration) — and never a command, a lock
+  or a delivery.
 
 ```kotlin
 repositories {

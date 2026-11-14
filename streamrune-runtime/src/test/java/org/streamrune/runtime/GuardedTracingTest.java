@@ -363,60 +363,137 @@ class GuardedTracingTest {
   // ── one guard per tracing, interrupts, metrics ─────────────────────────────────────────────
 
   @Test
-  void aTracingHasOneGuard_howeverManyComponentsAskForIt() {
+  void aGuardIsWhatItsArgumentsSay_nothingIsRememberedBetweenCalls() {
     ThrowingTracing broken = ThrowingTracing.on(Fault.START);
     StreamRuneTracing first = GuardedTracing.of(broken);
 
-    assertThat(GuardedTracing.of(broken)).isSameAs(first);
-    assertThat(GuardedTracing.of(ThrowingTracing.on(Fault.START)))
-        .as("another tracing, another guard")
+    assertThat(GuardedTracing.of(first)).as("a guard is returned as it is").isSameAs(first);
+    assertThat(GuardedTracing.of(broken))
+        .as("the same tracing, asked again, gets a guard of its own")
         .isNotSameAs(first);
 
-    // Each component that asks again gets the same guard, and counts in it.
+    start(first).close();
     start(GuardedTracing.of(broken)).close();
-    start(GuardedTracing.of(broken)).close();
-    assertThat(((GuardedTracing) first).failureCount()).isEqualTo(2);
+    assertThat(((GuardedTracing) first).failureCount()).isEqualTo(1);
+  }
+
+  private static long counted(
+      org.streamrune.test.RecordingStreamRuneMetrics metrics, String operation) {
+    return metrics.total(
+        org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+        org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+        operation);
   }
 
   @Test
-  void theGuardOfATracingCountsInTheMetricsItIsBoundTo_wheneverItIsBound() {
+  void aGuardCountsInTheMetricsItIsBoundTo() {
     org.streamrune.test.RecordingStreamRuneMetrics metrics =
         new org.streamrune.test.RecordingStreamRuneMetrics();
-    ThrowingTracing broken = ThrowingTracing.on(Fault.START, Fault.PROPAGATING);
-    // A component guarded the tracing before the integration bound the metrics.
-    StreamRuneTracing early = GuardedTracing.of(broken);
-
-    StreamRuneTracing bound = GuardedTracing.of(broken, metrics);
-    assertThat(bound).isSameAs(early);
-    assertThat(GuardedTracing.of(early, metrics)).isSameAs(early);
-    assertThat(GuardedTracing.of(broken)).isSameAs(early);
-
-    start(early).close();
-    start(bound).close();
-    bound.propagating(() -> {}).run();
-
-    assertThat(
-            metrics.total(
-                org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
-                org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
-                "start"))
-        .isEqualTo(2);
-    assertThat(
-            metrics.total(
-                org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
-                org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
-                "propagating"))
-        .isEqualTo(1);
-
-    // Another application's metrics get a guard of their own; NOOP metrics bind nothing.
     org.streamrune.test.RecordingStreamRuneMetrics other =
         new org.streamrune.test.RecordingStreamRuneMetrics();
-    StreamRuneTracing second = GuardedTracing.of(broken, other);
-    assertThat(second).isNotSameAs(early);
-    assertThat(GuardedTracing.of(broken, other)).isSameAs(second);
-    assertThat(GuardedTracing.of(broken, org.streamrune.core.StreamRuneMetrics.NOOP))
-        .isInstanceOf(GuardedTracing.class);
-    assertThat(GuardedTracing.of(StreamRuneTracing.NOOP, metrics)).isSameAs(StreamRuneTracing.NOOP);
+    ThrowingTracing broken = ThrowingTracing.on(Fault.START, Fault.PROPAGATING);
+
+    // A tracing that is not guarded gets a new guard that counts in the metrics.
+    StreamRuneTracing bound = GuardedTracing.of(broken, metrics);
+    assertThat(GuardedTracing.of(broken, metrics)).isNotSameAs(bound);
+    // A guard that already counts there is returned as it is.
+    assertThat(GuardedTracing.of(bound, metrics)).isSameAs(bound);
+    // A guard that counts elsewhere keeps its metrics; the tracing gets another guard.
+    StreamRuneTracing forOther = GuardedTracing.of(bound, other);
+    assertThat(forOther).isNotSameAs(bound);
+
+    start(bound).close();
+    bound.propagating(() -> {}).run();
+    start(forOther).close();
+
+    assertThat(counted(metrics, "start")).isEqualTo(1);
+    assertThat(counted(metrics, "propagating")).isEqualTo(1);
+    assertThat(counted(other, "start")).isEqualTo(1);
+    assertThat(counted(other, "propagating")).isZero();
+  }
+
+  @Test
+  void aGuardThatCountsNowhereIsBoundInPlace_asTheOneOpenTelemetryTracingReturns() {
+    org.streamrune.test.RecordingStreamRuneMetrics metrics =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+    StreamRuneTracing unbound = GuardedTracing.of(ThrowingTracing.on(Fault.START));
+
+    // Whoever holds it and a metrics object binds it, and hands on the same guard.
+    assertThat(GuardedTracing.of(unbound, metrics)).isSameAs(unbound);
+    start(unbound).close();
+
+    assertThat(counted(metrics, "start")).isEqualTo(1);
+  }
+
+  @Test
+  void withNoMetricsToCountInTheGuardCountsNowhere_andNoopStaysNoop() {
+    ThrowingTracing broken = ThrowingTracing.on(Fault.START);
+    StreamRuneTracing guard = GuardedTracing.of(broken);
+
+    assertThat(GuardedTracing.of(guard, null)).isSameAs(guard);
+    assertThat(GuardedTracing.of(guard, org.streamrune.core.StreamRuneMetrics.NOOP))
+        .isSameAs(guard);
+    assertThat(GuardedTracing.of(broken, null)).isInstanceOf(GuardedTracing.class);
+    assertThat(
+            GuardedTracing.of(
+                StreamRuneTracing.NOOP, new org.streamrune.test.RecordingStreamRuneMetrics()))
+        .isSameAs(StreamRuneTracing.NOOP);
+  }
+
+  @Test
+  void theOperationTagIsExactlyTheDocumentedNine() {
+    org.streamrune.test.RecordingStreamRuneMetrics metrics =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+
+    // A tracing whose start throws hands out no scope, so the scope's operations get a tracing of
+    // their own.
+    exerciseEverything(
+        GuardedTracing.of(
+            ThrowingTracing.on(Fault.ENABLED, Fault.START, Fault.PROPAGATING), metrics));
+    exerciseEverything(GuardedTracing.of(ThrowingTracing.onEveryScopeMethod(), metrics));
+
+    java.util.Set<String> operations =
+        metrics.samples(org.streamrune.core.metrics.MetricNames.TRACING_FAILURES).stream()
+            .map(sample -> sample.tags().get(org.streamrune.core.metrics.MetricNames.TAG_OPERATION))
+            .collect(java.util.stream.Collectors.toSet());
+    assertThat(operations)
+        .as("every operation of the seam was driven, and each counted under its own name")
+        .containsExactlyInAnyOrder(
+            "enabled",
+            "start",
+            "startChild",
+            "propagating",
+            "setAttribute",
+            "recordSuccess",
+            "recordError",
+            "link",
+            "close")
+        .isEqualTo(GuardedTracing.OPERATIONS);
+  }
+
+  @Test
+  void aHandBuiltBusBindsItsTracingToItsMetrics() {
+    org.streamrune.test.RecordingStreamRuneMetrics metrics =
+        new org.streamrune.test.RecordingStreamRuneMetrics();
+    ThrowingTracing broken = ThrowingTracing.on(Fault.START);
+    org.streamrune.core.types.AggregateType lamp =
+        org.streamrune.core.types.AggregateType.of("lamp");
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(new org.streamrune.test.InMemoryEventStore())
+            .register(
+                lamp,
+                TracingFailureIsolationTest.Switch.class,
+                c -> org.streamrune.core.types.AggregateId.of(c.lampId()),
+                new TracingFailureIsolationTest.LampDecider())
+            .tracing(broken)
+            .metrics(metrics)
+            .build()) {
+      bus.execute(new TracingFailureIsolationTest.Switch("l-1"));
+    }
+
+    assertThat(broken.thrown.get()).as("the command span and the lock span").isEqualTo(2);
+    assertThat(counted(metrics, "start")).isEqualTo(2);
   }
 
   @Test

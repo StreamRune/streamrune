@@ -152,6 +152,82 @@ class PostgresEventStoreTracingTest {
     assertThat(span.closed).isTrue();
   }
 
+  /** A tracing whose scopes throw from every method, {@code close} included. */
+  private static StreamRuneTracing tracingWhoseScopesThrow(
+      java.util.concurrent.atomic.AtomicInteger thrown) {
+    return new StreamRuneTracing() {
+      @Override
+      public boolean enabled(TracingArea area) {
+        return true;
+      }
+
+      @Override
+      public org.streamrune.core.tracing.TraceScope start(
+          TracingArea area,
+          String spanName,
+          SpanKind kind,
+          org.streamrune.core.tracing.SpanAttributes attributes,
+          org.streamrune.core.tracing.SpanLink link,
+          org.streamrune.core.tracing.SpanBaggage baggage) {
+        return new org.streamrune.core.tracing.TraceScope() {
+          private void fail() {
+            thrown.incrementAndGet();
+            throw new IllegalStateException("span processor failed in onEnd");
+          }
+
+          @Override
+          public void setAttribute(String key, String value) {
+            fail();
+          }
+
+          @Override
+          public void setAttribute(String key, long value) {
+            fail();
+          }
+
+          @Override
+          public void setAttribute(String key, boolean value) {
+            fail();
+          }
+
+          @Override
+          public void recordSuccess() {
+            fail();
+          }
+
+          @Override
+          public void recordError(Throwable error) {
+            fail();
+          }
+
+          @Override
+          public void close() {
+            fail();
+          }
+        };
+      }
+    };
+  }
+
+  /**
+   * The store guards the tracing it is given: a span that fails after the transaction committed
+   * does not turn a stored append into a failed one, and reads and snapshots go on as untraced.
+   */
+  @Test
+  void aTracingThatThrowsFailsNoAppendLoadOrSnapshot_theEventsAreStored() {
+    var thrown = new java.util.concurrent.atomic.AtomicInteger();
+    PostgresEventStore store = store(tracingWhoseScopesThrow(thrown));
+
+    store.append(STREAM, List.of(switched(), switched()), Version.initial());
+
+    assertThat(thrown.get()).as("the tracing did throw").isPositive();
+    assertThat(store.readStream(STREAM, Version.initial(), 10)).hasSize(2);
+    assertThat(store.load(STREAM, EventStore.IGNORE_SNAPSHOT).events()).hasSize(2);
+    assertThat(store(StreamRuneTracing.NOOP).readStream(STREAM, Version.initial(), 10))
+        .as("stored once")
+        .hasSize(2);
+  }
+
   @Test
   void append_startsTheAppendSpan_withTheSerializeSpanUnderIt() {
     var tracing = new RecordingTracing();

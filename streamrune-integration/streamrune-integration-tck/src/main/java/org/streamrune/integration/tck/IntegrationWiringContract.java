@@ -1037,14 +1037,16 @@ public abstract class IntegrationWiringContract {
       assertStarted(application);
       VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
       assertEquals(1, bus.execute(new ContractCommand("throwing-2")).events().size());
-      assertTrue(
+      int enabledThrown = ContractBeans.ThrowingApplicationTracing.thrown();
+      assertTrue(enabledThrown > 0, "enabled() must have thrown while the application started");
+      assertEquals(
+          enabledThrown,
           ContractBeans.ApplicationMetrics.recorded()
-                  .total(
-                      org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
-                      org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
-                      "enabled")
-              > 0,
-          "an enabled() that throws is counted");
+              .total(
+                  org.streamrune.core.metrics.MetricNames.TRACING_FAILURES,
+                  org.streamrune.core.metrics.MetricNames.TAG_OPERATION,
+                  "enabled"),
+          "every enabled() that throws is counted, whichever component asked");
     } finally {
       ContractBeans.ThrowingApplicationTracing.reset();
     }
