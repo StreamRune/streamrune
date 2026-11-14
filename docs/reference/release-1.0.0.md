@@ -899,7 +899,7 @@ license.
 - A poll cycle claims the next batch at once while the last one came back full (`batchSize`
   entries), delivered at least one entry, and every entry of it was confirmed or rejected for
   itself. A partial or empty batch, a batch that delivered nothing, a batch that claimed again an
-  entry the cycle already failed, a stop, a publish cut short by its deadline, a transport failure
+  entry the batch just before it failed (a retry due at once), a stop, a publish cut short by its deadline, a transport failure
   or an in-flight hand-off ends the cycle, and the relay waits `pollInterval`. One cycle drains for
   at most ten poll intervals plus the batch in progress, measured on the monotonic clock. Each batch
   keeps its own claim, publish deadline and `outbox/relay` span; the gauges are sampled once per

@@ -73,12 +73,12 @@ import org.streamrune.core.types.LogSanitizer;
  * back full ({@code batchSize} entries), delivered at least one entry, and every one of its entries
  * resolved — confirmed by the transport or rejected for that entry alone. A partial or empty batch
  * ends the cycle, and so does a batch that delivered nothing, a batch that claimed again an entry
- * the cycle already failed (a retry due at once), and any batch that ended abnormally: a stop, a
- * publish cut short by the deadline, a transport failure or an in-flight hand-off. After the cycle
- * the relay waits {@code pollInterval}. One cycle drains for at most {@link
- * #DRAIN_BUDGET_POLL_INTERVALS} poll intervals plus the batch in progress, then yields to the
- * schedule. Each batch keeps its own claim, its own publish deadline and its own {@code
- * outbox/relay} span; the gauges are sampled once per cycle.
+ * the batch just before it failed (a retry due at once, as with a zero initial delay), and any
+ * batch that ended abnormally: a stop, a publish cut short by the deadline, a transport failure or
+ * an in-flight hand-off. After the cycle the relay waits {@code pollInterval}. One cycle drains for
+ * at most {@link #DRAIN_BUDGET_POLL_INTERVALS} poll intervals plus the batch in progress, then
+ * yields to the schedule. Each batch keeps its own claim, its own publish deadline and its own
+ * {@code outbox/relay} span; the gauges are sampled once per cycle.
  *
  * <p><b>Testing:</b> {@link #pollCycle()} is package-private to allow tests to invoke one poll
  * cycle synchronously without starting a background thread.
@@ -461,21 +461,31 @@ public final class OutboxPoller implements AutoCloseable {
     // drains.
     sampleObservability();
     long cycleStart = drainTicker.getAsLong();
-    // The entries a batch of this cycle failed: a later batch that claims one of them again (its
-    // retry was due at once, as with a zero initial delay) ends the cycle, so the drain never walks
-    // an entry's retry ladder back to back.
-    Set<OutboxEntryId> failedThisCycle = new HashSet<>();
+    // The entries the previous batch of this cycle failed: a batch that claims one of them again
+    // (its retry was due at once, as with a zero or near-zero initial delay) ends the cycle, so the
+    // drain never walks an entry's retry ladder in consecutive batches. A retry that comes due
+    // later in the cycle is claimed and attempted like any other entry, paced by its own backoff.
+    Set<OutboxEntryId> failedInPreviousBatch = new HashSet<>();
     int batches = 1;
-    // A stop delivered by the batch's resume() ends the cycle: the next loadPending would fail at
-    // the socket.
-    while (processBatch(interrupts, failedThisCycle) && !Thread.currentThread().isInterrupted()) {
-      if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
-        reportDrainBudgetReached(batches);
-        return;
+    boolean budgetReached = false;
+    try {
+      // A stop delivered by the batch's resume() ends the cycle: the next loadPending would fail
+      // at the socket.
+      while (processBatch(interrupts, failedInPreviousBatch)
+          && !Thread.currentThread().isInterrupted()) {
+        if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
+          budgetReached = true;
+          reportDrainBudgetReached(batches);
+          return;
+        }
+        batches++;
       }
-      batches++;
+    } finally {
+      // Any cycle that did not reach the budget — a normal ending or a failure — ends a streak.
+      if (!budgetReached) {
+        budgetYieldStreak.set(0);
+      }
     }
-    budgetYieldStreak.set(0);
   }
 
   /**
@@ -505,13 +515,14 @@ public final class OutboxPoller implements AutoCloseable {
   /**
    * Claims, publishes and records one batch.
    *
-   * @param failedThisCycle the entries earlier batches of this cycle failed; this batch's failures
-   *     are added
+   * @param failedInPreviousBatch the entries the previous batch of this cycle failed; replaced by
+   *     this batch's failures
    * @return whether the cycle may claim the next batch at once: the batch came back full, claimed
-   *     no entry the cycle already failed, delivered at least one entry, and every entry of it
+   *     no entry the previous batch failed, delivered at least one entry, and every entry of it
    *     resolved, with no stop requested (see {@link BatchOutcome#resolved()})
    */
-  private boolean processBatch(InterruptDeferral interrupts, Set<OutboxEntryId> failedThisCycle) {
+  private boolean processBatch(
+      InterruptDeferral interrupts, Set<OutboxEntryId> failedInPreviousBatch) {
     // Anchor the publish deadline BEFORE loadPending claims anything. loadPending stamps
     // claimed_at (the DB clock) as it runs; capturing the base here — rather than after it returns
     // — charges the claim-query latency (RECLAIM_EXPIRED + claim CTE on a large backlog, or a GC
@@ -525,10 +536,10 @@ public final class OutboxPoller implements AutoCloseable {
     if (pending.isEmpty()) {
       return false;
     }
-    boolean claimedARetryOfThisCycle = false;
+    boolean claimedARetryDueAtOnce = false;
     for (OutboxEntry entry : pending) {
-      if (failedThisCycle.contains(entry.id())) {
-        claimedARetryOfThisCycle = true;
+      if (failedInPreviousBatch.contains(entry.id())) {
+        claimedARetryDueAtOnce = true;
         break;
       }
     }
@@ -536,8 +547,9 @@ public final class OutboxPoller implements AutoCloseable {
         traced
             ? publishTraced(pending, claimBase, lease, interrupts)
             : publishAndRecord(pending, claimBase, lease, interrupts);
-    failedThisCycle.addAll(outcome.result().failed().keySet());
-    return outcome.resolved() && !claimedARetryOfThisCycle && pending.size() >= batchSize;
+    failedInPreviousBatch.clear();
+    failedInPreviousBatch.addAll(outcome.result().failed().keySet());
+    return outcome.resolved() && !claimedARetryDueAtOnce && pending.size() >= batchSize;
   }
 
   /** {@link #publishAndRecord} inside the batch's {@code outbox/relay} span. */

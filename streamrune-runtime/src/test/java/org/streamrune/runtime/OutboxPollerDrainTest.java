@@ -394,6 +394,52 @@ class OutboxPollerDrainTest {
   }
 
   @Test
+  void aRejectionRetriedLaterInTheCycle_doesNotEndTheDrainEarly() {
+    // Entry e0 is rejected and retried one second later (no jitter); every batch takes 300 ms on
+    // the store's clock, so its retry comes due in the fifth batch, not in the one right after.
+    var clock = MutableClock.startingAt(Instant.parse("2026-01-01T00:00:00Z"));
+    var store = new InMemoryOutboxStore(clock);
+    for (int i = 0; i < 100; i++) {
+      store.save(
+          OutboxEntry.pending(
+              OutboxEntryId.of("e" + i),
+              "{}",
+              "Event",
+              StreamId.of(TYPE, AggregateId.of("a" + i))));
+    }
+    var publisher =
+        new RecordingPublisher(
+            entries -> {
+              clock.advance(Duration.ofMillis(300));
+              var confirmed = new LinkedHashSet<OutboxEntryId>();
+              var failed = new LinkedHashMap<OutboxEntryId, Exception>();
+              for (OutboxEntry e : entries) {
+                if (e.id().value().equals("e0")) {
+                  failed.put(e.id(), new IllegalArgumentException("poison"));
+                } else {
+                  confirmed.add(e.id());
+                }
+              }
+              return new OutboxPublisher.BatchResult(confirmed, failed);
+            }) {
+          @Override
+          public FailureKind classifyFailure(Exception failure) {
+            return FailureKind.ENTRY;
+          }
+        };
+
+    poller(store, publisher)
+        .retryPolicy(new RetryPolicy(10, Duration.ofSeconds(1), 2.0, false))
+        .build()
+        .pollCycle();
+
+    // The fifth batch retried e0 and the drain went on to the end of the backlog.
+    assertThat(store.findById(OutboxEntryId.of("e0")).orElseThrow().attempts()).isEqualTo(2);
+    assertThat(count(store, OutboxStatus.DELIVERED)).isEqualTo(99);
+    assertThat(publisher.batches).containsExactly(10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 1);
+  }
+
+  @Test
   void anAvailabilityFirstBacklogWithoutStreams_isDeliveredInOneCycle() {
     var store =
         new InMemoryOutboxStore(
