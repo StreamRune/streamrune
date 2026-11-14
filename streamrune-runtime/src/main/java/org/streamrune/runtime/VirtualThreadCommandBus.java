@@ -512,6 +512,19 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       } catch (RuntimeException e) {
         recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
         throw e;
+      } catch (Error e) {
+        throw e; // counted where every Error that leaves the command is, below
+      } catch (Throwable undeclared) {
+        // A checked exception the id extractor does not declare: counted and wrapped like any
+        // other failure of user code. No stream is known yet, so it is not a
+        // CommandExecutionException, which names one.
+        restoreInterrupt(undeclared);
+        recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
+        throw new IllegalStateException(
+            "The target of command "
+                + command.getClass().getSimpleName()
+                + " could not be resolved",
+            undeclared);
       }
       CommandId commandId = IdGenerator.generateCommandId();
       Instant commandTimestamp = Instant.now();
@@ -548,11 +561,15 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
       } catch (Throwable undeclared) {
         // A checked exception before() does not declare (code compiled from another language, a
         // generic rethrow). It is a failure like any other: the interceptors whose before()
-        // completed get their onError(), and the caller gets it wrapped, as it gets the decider's.
-        callbacks.failed(undeclared);
+        // completed get their onError(), and the caller gets it wrapped, as it gets the decider's
+        // — the same exception for both, as for the decider's.
+        restoreInterrupt(undeclared);
+        CommandExecutionException wrapped =
+            new CommandExecutionException(
+                command, commandId, streamId, "Failed to execute command", undeclared);
+        callbacks.failed(wrapped);
         recordMetric(metrics::recordCommandFailed, "recordCommandFailed");
-        throw new CommandExecutionException(
-            command, commandId, streamId, "Failed to execute command", undeclared);
+        throw wrapped;
       }
 
       if (shortCircuitedBy != null) {
@@ -2916,14 +2933,9 @@ public final class VirtualThreadCommandBus implements CommandBus, AsyncCommandBu
         throw new IllegalStateException("eventStore is required");
       }
       // The tracing meets the metrics here: its guard counts in them, and it is this guard the
-      // default locker and the command span's interceptor are handed. The guard of a
-      // TracingCommandInterceptor the application added itself is bound too, if it counts nowhere.
+      // default locker and the command span's interceptor are handed. A TracingCommandInterceptor
+      // the application added itself counts where the tracing it was built with counts.
       tracing = GuardedTracing.of(tracing, metrics);
-      for (CommandInterceptor interceptor : interceptors) {
-        if (interceptor instanceof TracingCommandInterceptor ownCommandSpans) {
-          GuardedTracing.of(ownCommandSpans.tracing(), metrics);
-        }
-      }
       if (locker == null) {
         locker = new LocalStripedLocker(stripeCount).traced(tracing);
       }

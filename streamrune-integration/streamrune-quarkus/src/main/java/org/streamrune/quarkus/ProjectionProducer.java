@@ -309,6 +309,9 @@ public class ProjectionProducer {
 
     StreamRuneMetrics metrics = resolveOrNull(metricsInstance);
     var builder = InlineProjectionInterceptor.builder();
+    // The tracing meets the metrics bean here: one guard for the inline projections, which
+    // counts its failures there.
+    StreamRuneTracing inlineTracing = org.streamrune.runtime.GuardedTracing.of(tracing, metrics);
     for (var e : entries) {
       // INLINE has no checkpoint to be transactional with: only AT_LEAST_ONCE_IDEMPOTENT boots.
       ProjectionProcessorResolution.requireInlineMode(e.name(), e.deliveryMode());
@@ -318,11 +321,8 @@ public class ProjectionProducer {
         metrics.recordProjectionDeliveryMode(ProjectionName.of(e.name()), e.deliveryMode());
       }
       ProjectionName name = ProjectionName.of(e.name());
-      // The tracing meets the metrics bean here: its guard counts its failures there.
       builder.register(
-          name,
-          TracingProjectionDecorator.traced(
-              name, e.projection(), org.streamrune.runtime.GuardedTracing.of(tracing, metrics)));
+          name, TracingProjectionDecorator.traced(name, e.projection(), inlineTracing));
     }
 
     return builder.build();

@@ -338,6 +338,7 @@ public class StreamRuneMicronautModule {
    * @param beanContext the context the {@code OpenTelemetry} bean is looked up in
    * @param properties the StreamRune configuration properties
    * @param environment the environment the OpenTelemetry switches are read from
+   * @param metrics optional metrics collector, in which a failure of the tracing counts
    * @return the tracing
    */
   @Singleton
@@ -345,7 +346,8 @@ public class StreamRuneMicronautModule {
   public StreamRuneTracing streamRuneTracing(
       io.micronaut.context.BeanContext beanContext,
       StreamRuneMicronautProperties properties,
-      io.micronaut.context.env.Environment environment) {
+      io.micronaut.context.env.Environment environment,
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
     TracingSettings settings = tracingSettings(properties);
     if (!settings.enabled() || !openTelemetryOnTheClasspath()) {
       return StreamRuneTracing.NOOP;
@@ -361,7 +363,10 @@ public class StreamRuneMicronautModule {
       return StreamRuneTracing.NOOP;
     }
     // The resolution names OpenTelemetry types, so its class is loaded only when they are present.
-    return OpenTelemetryTracingResolution.of(beanContext, settings);
+    // Made counting: a failure of the tracing counts in the metrics bean wherever the bean is
+    // handed to, the application's own components included.
+    return org.streamrune.runtime.GuardedTracing.of(
+        OpenTelemetryTracingResolution.of(beanContext, settings), metrics);
   }
 
   /** Whether {@code opentelemetry-api} is on this module's classpath. */
@@ -792,14 +797,15 @@ public class StreamRuneMicronautModule {
     List<CommandInterceptor> orderedInterceptors =
         org.streamrune.runtime.CommandInterceptorOrdering.sorted(interceptors);
 
+    // The tracing meets the metrics bean here: its guard counts its failures there, and it is
+    // this guard the locker and the bus are handed.
+    StreamRuneTracing boundTracing = org.streamrune.runtime.GuardedTracing.of(tracing, metrics);
     var builder =
         VirtualThreadCommandBus.builder()
             .eventStore(eventStore)
-            // The tracing meets the metrics bean here: its guard counts its failures there, and
-            // it is this guard the locker and the bus are handed.
-            .locker(traced(locker, org.streamrune.runtime.GuardedTracing.of(tracing, metrics)))
+            .locker(traced(locker, boundTracing))
             // Adds the command interceptor in its slot, unless the chain holds the application's.
-            .tracing(org.streamrune.runtime.GuardedTracing.of(tracing, metrics))
+            .tracing(boundTracing)
             .retryPolicy(retryPolicy)
             .snapshotPolicy(
                 snapshotPolicy != null

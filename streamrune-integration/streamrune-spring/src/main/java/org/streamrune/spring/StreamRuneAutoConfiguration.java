@@ -939,7 +939,9 @@ public class StreamRuneAutoConfiguration {
      * application without OpenTelemetry pays nothing. It is {@code NOOP} too when the environment
      * holds one of the {@link org.streamrune.integration.OpenTelemetrySwitches#SPRING switches}
      * that turn OpenTelemetry tracing off ({@code management.opentelemetry.enabled=false}, {@code
-     * otel.sdk.disabled=true}). An application {@code StreamRuneTracing} bean replaces it.
+     * otel.sdk.disabled=true}). An application {@code StreamRuneTracing} bean replaces it. A
+     * failure of the tracing counts in the {@link org.streamrune.core.StreamRuneMetrics} bean
+     * ({@code streamrune.tracing.failures}).
      *
      * <p>The global OpenTelemetry is read once, here: OpenTelemetry fixes it on its first read, so
      * an SDK the application registers globally is registered before the context starts, or is an
@@ -950,11 +952,16 @@ public class StreamRuneAutoConfiguration {
     public StreamRuneTracing streamRuneTracing(
         ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry,
         StreamRuneProperties properties,
-        org.springframework.core.env.Environment environment) {
-      return tracingOf(
-          openTelemetry.getIfAvailable(),
-          properties.tracing().settings(),
-          environment::getProperty);
+        org.springframework.core.env.Environment environment,
+        ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+      // Made counting: a failure of the tracing counts in the metrics bean wherever the bean is
+      // handed to, the application's own components included.
+      return org.streamrune.runtime.GuardedTracing.of(
+          tracingOf(
+              openTelemetry.getIfAvailable(),
+              properties.tracing().settings(),
+              environment::getProperty),
+          metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP));
     }
 
     /**

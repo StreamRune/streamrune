@@ -349,8 +349,10 @@ public final class StreamRune implements CommandBus, AutoCloseable {
    * @param typeRegistry the registry of event and state types (never null, possibly empty)
    * @param cryptoEngine the configured crypto engine, or {@code null} if none was configured
    * @param upcasters the configured upcasters (never null, possibly empty)
-   * @param tracing the configured tracing, {@link StreamRuneTracing#NOOP} when none was configured
-   *     (never null)
+   * @param tracing the configured tracing, guarded: the tracing given to {@link
+   *     Builder#tracing(StreamRuneTracing)} behind the guard the facade's own components hold, so
+   *     it is not the instance the application passed; {@link StreamRuneTracing#NOOP} when none was
+   *     configured (never null)
    */
   public record EventStoreSettings(
       EventTypeRegistry typeRegistry,

@@ -76,7 +76,7 @@ jars. In brief:
   `traceparent` header chooses. Tracing never fails the work it traces: every component guards its
   tracing, so a sampler, a span processor or a hand-written `StreamRuneTracing` that throws costs
   the span — logged with a rate-limited `WARN`, and counted in `streamrune.tracing.failures`
-  wherever the component has metrics (always under an integration) — and never a command, a lock
+  wherever the component has metrics (always for what an integration builds) — and never a command, a lock
   or a delivery.
 
 ```kotlin

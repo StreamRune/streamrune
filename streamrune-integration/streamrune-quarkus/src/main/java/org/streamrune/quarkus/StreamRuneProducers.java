@@ -514,17 +514,22 @@ public class StreamRuneProducers {
   public StreamRuneTracing streamRuneTracing(
       Instance<OpenTelemetry> openTelemetry,
       StreamRuneQuarkusProperties properties,
-      Instance<org.eclipse.microprofile.config.Config> config) {
+      Instance<org.eclipse.microprofile.config.Config> config,
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
     // The application's configuration; without a Config bean, the one of this thread's class
     // loader, which reads system properties and environment variables too.
     org.eclipse.microprofile.config.Config source =
         config.isResolvable()
             ? config.get()
             : org.eclipse.microprofile.config.ConfigProvider.getConfig();
-    return tracingOf(
-        openTelemetry.isResolvable() ? openTelemetry.get() : null,
-        tracingSettings(properties.tracing()),
-        key -> source.getOptionalValue(key, String.class).orElse(null));
+    // Made counting: a failure of the tracing counts in the metrics bean wherever the bean is
+    // handed to, the application's own components included.
+    return org.streamrune.runtime.GuardedTracing.of(
+        tracingOf(
+            openTelemetry.isResolvable() ? openTelemetry.get() : null,
+            tracingSettings(properties.tracing()),
+            key -> source.getOptionalValue(key, String.class).orElse(null)),
+        resolveMetricsOrDefault(metricsInstance));
   }
 
   /**

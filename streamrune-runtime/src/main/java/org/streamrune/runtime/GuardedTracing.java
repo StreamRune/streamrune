@@ -60,16 +60,17 @@ import org.streamrune.core.tracing.TracingArea;
  * StreamRuneMetrics)} counts each in {@link StreamRuneMetrics#recordTracingFailure(String)}, by the
  * operation that failed.
  *
- * <p><b>Binding.</b> {@link #of(StreamRuneTracing)} returns {@link StreamRuneTracing#NOOP} and an
- * already guarded tracing as they are, so an untraced component pays nothing for the guard, and
- * gives any other tracing a guard of its own. A guard counts in the metrics it is bound to with
- * {@link #of(StreamRuneTracing, StreamRuneMetrics)}: whoever holds a tracing and a metrics object —
- * an integration at each place it hands the tracing on, a builder in its {@code build()} — calls it
- * and passes the result on. The tracing {@link OpenTelemetryTracing#of} returns is one guard, so an
- * application that uses it has one failure count and one WARN stream; a tracing of the
- * application's own is guarded by each component it is handed to, each guard counting in the
- * metrics of the component that made it. Nothing is shared behind the caller's back: the guard a
- * component holds is the one it was given, or one it made.
+ * <p><b>Binding.</b> Where a guard counts is fixed when it is made and never changes. {@link
+ * #of(StreamRuneTracing)} returns {@link StreamRuneTracing#NOOP} and an already guarded tracing as
+ * they are, so an untraced component pays nothing for the guard, and gives any other tracing a
+ * guard that counts nowhere. {@link #of(StreamRuneTracing, StreamRuneMetrics)} gives a guard that
+ * counts in the metrics: whoever holds a tracing and a metrics object — an integration where it
+ * makes its tracing bean and at each place it hands a tracing on, a builder in its {@code build()}
+ * — calls it and passes the result on. A component counts in the metrics it was handed and in no
+ * other: a guard that counts nowhere, or elsewhere, is not rebound but yields a new guard for the
+ * new metrics, and the two report through one failure count and one WARN limiter. So the tracing
+ * {@link OpenTelemetryTracing#of} returns has one WARN stream however often it is handed on; a
+ * tracing of the application's own is guarded by each component it is handed to.
  *
  * <p><b>Logger.</b> The WARN is written by the logger named after this class, {@code
  * org.streamrune.runtime.GuardedTracing}, and the operator documentation names it: the class is
@@ -119,17 +120,28 @@ public final class GuardedTracing implements StreamRuneTracing {
 
   private final StreamRuneTracing delegate;
 
-  /** Where failures are counted; {@link StreamRuneMetrics#NOOP} until the guard is bound. */
-  private volatile StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
+  /** Where failures are counted; {@link StreamRuneMetrics#NOOP} for nowhere. Never changes. */
+  private final StreamRuneMetrics metrics;
 
-  private final AtomicLong failures = new AtomicLong();
-  private final AtomicLong unloggedFailures = new AtomicLong();
+  /** The failure count and the WARN limiter, shared by the guards derived from one guard. */
+  private final Reporting reporting;
 
-  /** {@code System.nanoTime()} of the last WARN; meaningful once {@link #failures} is positive. */
-  private final AtomicLong lastLogNanos = new AtomicLong();
+  /** What a guard, and every guard derived from it, reports through: one count, one WARN stream. */
+  private static final class Reporting {
+    final AtomicLong failures = new AtomicLong();
+    final AtomicLong unloggedFailures = new AtomicLong();
 
-  private GuardedTracing(StreamRuneTracing delegate) {
+    /**
+     * {@code System.nanoTime()} of the last WARN; meaningful once {@link #failures} is positive.
+     */
+    final AtomicLong lastLogNanos = new AtomicLong();
+  }
+
+  private GuardedTracing(
+      StreamRuneTracing delegate, StreamRuneMetrics metrics, Reporting reporting) {
     this.delegate = delegate;
+    this.metrics = metrics;
+    this.reporting = reporting;
   }
 
   /**
@@ -146,25 +158,23 @@ public final class GuardedTracing implements StreamRuneTracing {
     if (tracing == StreamRuneTracing.NOOP || tracing instanceof GuardedTracing) {
       return tracing;
     }
-    return new GuardedTracing(tracing);
+    return new GuardedTracing(tracing, StreamRuneMetrics.NOOP, new Reporting());
   }
 
   /**
    * {@code tracing} guarded so that it can never fail the work it traces, with each failure counted
-   * in {@code metrics} ({@link StreamRuneMetrics#recordTracingFailure(String)}). The answer depends
-   * on its two arguments alone:
+   * in {@code metrics} ({@link StreamRuneMetrics#recordTracingFailure(String)}). No guard is ever
+   * changed: where a guard counts is fixed when it is made.
    *
    * <ul>
    *   <li>{@link StreamRuneTracing#NOOP} is returned as it is;
    *   <li>with no metrics to count in ({@code null} or {@link StreamRuneMetrics#NOOP}) it is {@link
    *       #of(StreamRuneTracing)};
    *   <li>a tracing that is not guarded gets a new guard that counts in {@code metrics};
-   *   <li>a guard that counts nowhere yet is bound to {@code metrics} and returned: it is the guard
-   *       its holder was handed in order to bind it, as the one {@link OpenTelemetryTracing#of}
-   *       returns;
    *   <li>a guard that already counts in {@code metrics} is returned as it is;
-   *   <li>a guard that counts in other metrics keeps them, and the tracing it wraps gets a new
-   *       guard for {@code metrics}.
+   *   <li>any other guard — one that counts nowhere, or in other metrics — is left as it is, and
+   *       the tracing it wraps gets a new guard that counts in {@code metrics} and reports through
+   *       the same failure count and WARN limiter as the guard it was derived from.
    * </ul>
    *
    * @param tracing the tracing to guard
@@ -181,36 +191,23 @@ public final class GuardedTracing implements StreamRuneTracing {
       return of(tracing);
     }
     if (tracing instanceof GuardedTracing guarded) {
-      if (guarded.bind(metrics)) {
-        return guarded;
-      }
-      tracing = guarded.delegate;
+      // Nothing is changed: a guard that counts elsewhere, or nowhere, yields a guard that counts
+      // in these metrics and reports through the same count and WARN limiter.
+      return guarded.metrics == metrics
+          ? guarded
+          : new GuardedTracing(guarded.delegate, metrics, guarded.reporting);
     }
-    GuardedTracing bound = new GuardedTracing(tracing);
-    bound.metrics = metrics;
-    return bound;
-  }
-
-  /** Whether this guard counts in {@code metrics}: it already does, or it counted nowhere yet. */
-  private synchronized boolean bind(StreamRuneMetrics metrics) {
-    StreamRuneMetrics bound = this.metrics;
-    if (bound == metrics) {
-      return true;
-    }
-    if (bound == StreamRuneMetrics.NOOP) {
-      this.metrics = metrics;
-      return true;
-    }
-    return false;
+    return new GuardedTracing(tracing, metrics, new Reporting());
   }
 
   /**
-   * How many times the guarded tracing, or one of its scopes, has thrown since this guard was made.
+   * How many times the guarded tracing, or one of its scopes, has thrown since this guard, or the
+   * guard it was derived from, was made: derived guards share the count.
    *
    * @return the number of failures the guard caught
    */
   public long failureCount() {
-    return failures.get();
+    return reporting.failures.get();
   }
 
   @Override
@@ -392,17 +389,17 @@ public final class GuardedTracing implements StreamRuneTracing {
       // A metrics backend that throws must not fail the traced work either.
     }
     try {
-      long count = failures.incrementAndGet();
-      long unlogged = unloggedFailures.incrementAndGet();
+      long count = reporting.failures.incrementAndGet();
+      long unlogged = reporting.unloggedFailures.incrementAndGet();
       long now = System.nanoTime();
-      long last = lastLogNanos.get();
+      long last = reporting.lastLogNanos.get();
       if (count != 1 && now - last < LOG_INTERVAL_NANOS) {
         return;
       }
-      if (!lastLogNanos.compareAndSet(last, now)) {
+      if (!reporting.lastLogNanos.compareAndSet(last, now)) {
         return; // another thread logs this interval
       }
-      unloggedFailures.addAndGet(-unlogged);
+      reporting.unloggedFailures.addAndGet(-unlogged);
       LOG.warn(
           "Tracing failed in {} ({} failure(s) since the last report); the traced work continues"
               + " without it. A StreamRuneTracing must not throw: check the tracing"

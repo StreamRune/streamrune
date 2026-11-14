@@ -87,6 +87,10 @@ public final class LocalStripedLocker implements AggregateLocker {
    * returned locker and this one share their locks, so a stream locked through one is locked for
    * the other.
    *
+   * <p>A tracing that throws never fails an acquisition: the failure is logged. It is counted in
+   * {@code streamrune.tracing.failures} only when {@code tracing} already counts — the tracing bean
+   * of an integration does; this method takes no metrics of its own.
+   *
    * @param tracing the tracing; {@link StreamRuneTracing#NOOP} traces nothing
    * @return a locker that traces through {@code tracing}
    * @throws NullPointerException if {@code tracing} is {@code null}

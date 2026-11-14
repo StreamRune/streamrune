@@ -45,7 +45,8 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(SDK),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of()));
+                environment(Map.of()),
+                null);
 
     assertNotSame(StreamRuneTracing.NOOP, tracing);
     for (TracingArea area : TracingArea.values()) {
@@ -70,7 +71,8 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(OpenTelemetry.noop()),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of()));
+                environment(Map.of()),
+                null);
 
     assertSame(StreamRuneTracing.NOOP, tracing);
   }
@@ -84,7 +86,8 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(null),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of()));
+                environment(Map.of()),
+                null);
 
     assertNotSame(StreamRuneTracing.NOOP, tracing);
   }
@@ -96,7 +99,8 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(null),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of()));
+                environment(Map.of()),
+                null);
 
     assertSame(StreamRuneTracing.NOOP, tracing);
   }
@@ -117,7 +121,10 @@ class OpenTelemetryModuleTest {
           StreamRuneTracing.NOOP,
           new StreamRuneMicronautModule()
               .streamRuneTracing(
-                  contextWith(SDK), StreamRuneMicronautProperties.withDefaults(), environment(off)),
+                  contextWith(SDK),
+                  StreamRuneMicronautProperties.withDefaults(),
+                  environment(off),
+                  null),
           off::toString);
       assertSame(
           StreamRuneTracing.NOOP,
@@ -125,7 +132,8 @@ class OpenTelemetryModuleTest {
               .streamRuneTracing(
                   contextWith(null),
                   StreamRuneMicronautProperties.withDefaults(),
-                  environment(off)),
+                  environment(off),
+                  null),
           off::toString);
     }
     assertNotSame(
@@ -134,7 +142,8 @@ class OpenTelemetryModuleTest {
             .streamRuneTracing(
                 contextWith(SDK),
                 StreamRuneMicronautProperties.withDefaults(),
-                environment(Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "none"))));
+                environment(Map.of("otel.sdk.disabled", "false", "otel.traces.exporter", "none")),
+                null));
 
     GlobalOpenTelemetry.set(SDK);
     assertSame(SDK.getTracerProvider(), GlobalOpenTelemetry.get().getTracerProvider());

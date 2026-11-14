@@ -398,7 +398,7 @@ class GuardedTracingTest {
     assertThat(GuardedTracing.of(broken, metrics)).isNotSameAs(bound);
     // A guard that already counts there is returned as it is.
     assertThat(GuardedTracing.of(bound, metrics)).isSameAs(bound);
-    // A guard that counts elsewhere keeps its metrics; the tracing gets another guard.
+    // A guard that counts elsewhere keeps its metrics; the tracing gets another guard for these.
     StreamRuneTracing forOther = GuardedTracing.of(bound, other);
     assertThat(forOther).isNotSameAs(bound);
 
@@ -413,16 +413,40 @@ class GuardedTracingTest {
   }
 
   @Test
-  void aGuardThatCountsNowhereIsBoundInPlace_asTheOneOpenTelemetryTracingReturns() {
-    org.streamrune.test.RecordingStreamRuneMetrics metrics =
-        new org.streamrune.test.RecordingStreamRuneMetrics();
-    StreamRuneTracing unbound = GuardedTracing.of(ThrowingTracing.on(Fault.START));
+  void noGuardIsEverRebound_aGuardForNewMetricsSharesTheCountAndTheWarnStream() {
+    Logger logger = (Logger) LoggerFactory.getLogger(GuardedTracing.class);
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      org.streamrune.test.RecordingStreamRuneMetrics first =
+          new org.streamrune.test.RecordingStreamRuneMetrics();
+      org.streamrune.test.RecordingStreamRuneMetrics second =
+          new org.streamrune.test.RecordingStreamRuneMetrics();
+      // The guard a component was handed without metrics, as OpenTelemetryTracing.of returns it.
+      StreamRuneTracing unbound = GuardedTracing.of(ThrowingTracing.on(Fault.START));
 
-    // Whoever holds it and a metrics object binds it, and hands on the same guard.
-    assertThat(GuardedTracing.of(unbound, metrics)).isSameAs(unbound);
-    start(unbound).close();
+      StreamRuneTracing forFirst = GuardedTracing.of(unbound, first);
+      StreamRuneTracing forSecond = GuardedTracing.of(forFirst, second);
+      assertThat(forFirst).as("a new guard: the unbound one is not changed").isNotSameAs(unbound);
+      assertThat(forSecond).isNotSameAs(forFirst);
+      assertThat(GuardedTracing.of(forFirst, first)).isSameAs(forFirst);
 
-    assertThat(counted(metrics, "start")).isEqualTo(1);
+      start(unbound).close();
+      start(forFirst).close();
+      start(forSecond).close();
+      start(forSecond).close();
+
+      // Each counts in the metrics it was made for, and in no other.
+      assertThat(counted(first, "start")).isEqualTo(1);
+      assertThat(counted(second, "start")).isEqualTo(2);
+      // One failure count and one WARN stream for the tracing, however often it was handed on.
+      assertThat(((GuardedTracing) unbound).failureCount()).isEqualTo(4);
+      assertThat(((GuardedTracing) forSecond).failureCount()).isEqualTo(4);
+      assertThat(appender.list).hasSize(1);
+    } finally {
+      logger.detachAppender(appender);
+    }
   }
 
   @Test

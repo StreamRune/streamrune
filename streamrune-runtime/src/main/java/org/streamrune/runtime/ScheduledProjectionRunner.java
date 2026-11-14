@@ -128,7 +128,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
   private ScheduledProjectionRunner(Builder b) {
     // Each projection is decorated once, here, so every drain processes it inside its span when the
-    // tracing traces projections.
+    // tracing traces projections. One guard for the runner's projections, counting in its metrics.
+    StreamRuneTracing projectionTracing = GuardedTracing.of(b.tracing, b.metrics);
     this.registrations =
         b.registrations.stream()
             .map(
@@ -136,7 +137,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                     new ScheduledProjectionRegistration(
                         reg.name(),
                         TracingProjectionDecorator.traced(
-                            reg.name(), reg.projection(), GuardedTracing.of(b.tracing, b.metrics)),
+                            reg.name(), reg.projection(), projectionTracing),
                         reg.cron(),
                         reg.errorStrategy(),
                         reg.deliveryMode()))
