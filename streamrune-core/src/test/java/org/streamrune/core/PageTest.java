@@ -45,6 +45,26 @@ class PageTest {
   }
 
   @Test
+  void hasNext_doesNotOverflowOnTheLastPageIndex() {
+    var page = new Page<>(List.of(), 3L, Integer.MAX_VALUE, 1);
+    assertFalse(page.hasNext());
+  }
+
+  @Test
+  void hasNext_doesNotOverflowWhenPageTimesSizeExceedsAnInt() {
+    var beyond = new Page<>(List.of(), 5_000L, 3_000_000, 1000);
+    assertFalse(beyond.hasNext());
+    var before = new Page<>(List.of("a"), 3_000_000_001L * 1000, 3_000_000, 1000);
+    assertTrue(before.hasNext());
+  }
+
+  @Test
+  void totalPages_saturatesAtIntMax() {
+    var page = new Page<>(List.of(), Long.MAX_VALUE, 0, 1);
+    assertEquals(Integer.MAX_VALUE, page.totalPages());
+  }
+
+  @Test
   void hasPrevious_true_afterFirst() {
     var page = new Page<>(List.of("a"), 20L, 1, 10);
     assertTrue(page.hasPrevious());

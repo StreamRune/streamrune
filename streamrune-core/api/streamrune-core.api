@@ -363,9 +363,9 @@ public final record org.streamrune.core.PageRequest
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
-  public int offset()
   public int page()
   public int size()
+  public long offset()
   public org.streamrune.core.Sort sort()
   public static org.streamrune.core.PageRequest of(int, int)
   public static org.streamrune.core.PageRequest of(int, int, org.streamrune.core.Sort)
@@ -1040,6 +1040,15 @@ public abstract class org.streamrune.core.projection.BaseProjection implements o
   public final void process(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
   public java.util.Optional<org.streamrune.core.projection.ProjectionRepository> writeTarget()
 
+public final record org.streamrune.core.projection.FieldEquals
+  public <init>(java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String field()
+  public java.lang.String value()
+  public static org.streamrune.core.projection.FieldEquals of(java.lang.String, java.lang.String)
+
 public enum org.streamrune.core.projection.LateDataPolicy
   constants DROP, REOPEN
   public static final org.streamrune.core.projection.LateDataPolicy DROP
@@ -1131,13 +1140,25 @@ public enum org.streamrune.core.projection.ProjectionErrorStrategy
   public static org.streamrune.core.projection.ProjectionErrorStrategy valueOf(java.lang.String)
   public static org.streamrune.core.projection.ProjectionErrorStrategy[] values()
 
+public final record org.streamrune.core.projection.ProjectionIndex
+  public <init>(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.Sort$Order>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.util.List<org.streamrune.core.Sort$Order> keys()
+  public org.streamrune.core.types.ProjectionName projection()
+  public static org.streamrune.core.projection.ProjectionIndex forFilter(org.streamrune.core.types.ProjectionName, java.lang.String, org.streamrune.core.Sort)
+  public static org.streamrune.core.projection.ProjectionIndex forSort(org.streamrune.core.types.ProjectionName, org.streamrune.core.Sort)
+
 public interface org.streamrune.core.projection.ProjectionRepository
   public abstract <T> java.util.List<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>)
   public abstract <T> java.util.Optional<T> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>)
   public abstract <T> java.util.Optional<org.streamrune.core.Versioned<T>> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>, org.streamrune.core.LockMode)
   public abstract <T> org.streamrune.core.Page<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.PageRequest)
+  public abstract <T> org.streamrune.core.Page<T> findAllBy(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.projection.FieldEquals, org.streamrune.core.PageRequest)
   public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
   public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public abstract void declareIndex(org.streamrune.core.projection.ProjectionIndex)
   public abstract void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
   public default java.lang.Object writeTargetIdentity()
   public default void afterCommit(java.lang.Runnable)

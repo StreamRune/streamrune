@@ -1992,6 +1992,38 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
+   * Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean, in bean order, on
+   * the application's {@link org.streamrune.core.projection.ProjectionRepository} bean — the
+   * auto-configured {@code JdbcProjectionRepository} or one the application defines — once every
+   * singleton exists and before any lifecycle bean (the projection runners) starts. A refused key,
+   * an index that cannot be created, or index beans without a repository bean fail the start.
+   *
+   * @param repositories the projection repository bean, resolved only when index beans exist
+   * @param projectionIndexes the index beans
+   * @return the declaring callback
+   */
+  @Bean
+  public org.springframework.beans.factory.SmartInitializingSingleton
+      streamRuneProjectionIndexDeclarer(
+          ObjectProvider<org.streamrune.core.projection.ProjectionRepository> repositories,
+          ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
+    return () -> {
+      var indexes = projectionIndexes.orderedStream().toList();
+      if (indexes.isEmpty()) {
+        return;
+      }
+      var repository = repositories.getIfAvailable();
+      if (repository == null) {
+        throw new IllegalStateException(
+            indexes.size()
+                + " ProjectionIndex bean(s) but no ProjectionRepository bean to declare them on:"
+                + " define one, or a DataSource for the auto-configured JdbcProjectionRepository");
+      }
+      indexes.forEach(repository::declareIndex);
+    };
+  }
+
+  /**
    * Registers a PostgreSQL-backed {@link org.streamrune.core.projection.OffsetStore} when a
    * DataSource is available, so the auto-configured projection runners have somewhere to checkpoint
    * subscription offsets without the application hand-defining one. Mirrors the Quarkus and

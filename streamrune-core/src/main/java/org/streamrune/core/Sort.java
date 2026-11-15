@@ -7,6 +7,12 @@ import java.util.Objects;
  * Defines ordering for paginated queries.
  *
  * <p>Immutable. Factory methods cover the common cases.
+ *
+ * <p>How a field compares is the reader's: a projection repository sorts a read-model field by its
+ * JSON text in code-point order and breaks ties by the row id (see {@link
+ * org.streamrune.core.projection.ProjectionRepository#findAll(
+ * org.streamrune.core.types.ProjectionName, Class, PageRequest)}), so a number or an instant of
+ * varying printed length is not in value order there.
  */
 public record Sort(List<Order> orders) {
 

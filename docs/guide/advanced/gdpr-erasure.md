@@ -878,7 +878,9 @@ start rather than leak.
   jackson-databind 2.19+.** The encrypting writer survives Jackson's rename derivation and the
   prefixed/suffixed field is ciphertext at rest. Reading the unwrapped
   record back requires jackson-databind ≥ 2.19 (2.18 cannot populate creator properties of an
-  unwrapped *record* target at all — fields deserialize as `null` even without encryption).
+  unwrapped *record* target at all — fields deserialize as `null` even without encryption). One
+  level of `@JsonUnwrapped` is supported: Jackson does not round-trip a record unwrapped inside an
+  unwrapped record.
 - **`@JsonFormat(shape = ARRAY)` is not supported on records carrying `@Encrypted` components.**
   Positional array serialization bypasses the encrypting writer and carries no property name for
   the decrypt side to resolve, so serialization fails closed with `CryptoOperationException`

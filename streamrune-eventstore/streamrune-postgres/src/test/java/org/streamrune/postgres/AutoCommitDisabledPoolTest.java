@@ -499,6 +499,58 @@ class AutoCommitDisabledPoolTest {
   }
 
   @Test
+  void projectionRepository_declaredIndexIsDurable() {
+    var repository = new JdbcProjectionRepository(pool);
+    var name = ProjectionName.of("autocommit_off_indexed");
+    var index =
+        org.streamrune.core.projection.ProjectionIndex.forFilter(
+            name, "value", org.streamrune.core.Sort.unsorted());
+
+    repository.declareIndex(index); // creates the table, then the index
+
+    assertEquals(
+        1,
+        count(
+            "SELECT COUNT(*) FROM pg_indexes WHERE tablename = ? AND indexdef LIKE ?",
+            "autocommit_off_indexed_view",
+            "%(data ->> 'value'%"));
+  }
+
+  /**
+   * On a pool of ONE connection the declaration starts twice — a first start that creates the index
+   * and a restart that finds it — without ever holding the connection while it asks for another
+   * (which would wait out the pool's timeout and fail the start).
+   */
+  @Test
+  void projectionRepository_declareIndexStartsTwiceOnAPoolOfOneConnection() {
+    var config = new HikariConfig();
+    config.setJdbcUrl(PG.getJdbcUrl());
+    config.setUsername(PG.getUsername());
+    config.setPassword(PG.getPassword());
+    config.setAutoCommit(false);
+    config.setMaximumPoolSize(1);
+    config.setConnectionTimeout(1_000);
+    config.setPoolName("streamrune-one-connection-under-test");
+    try (var onePool = new HikariDataSource(config)) {
+      var name = ProjectionName.of("one_connection_indexed");
+      var index =
+          org.streamrune.core.projection.ProjectionIndex.forFilter(
+              name, "value", org.streamrune.core.Sort.by("at"));
+
+      new JdbcProjectionRepository(onePool).declareIndex(index); // first start: creates it
+      new JdbcProjectionRepository(onePool).declareIndex(index); // restart: finds it
+
+      assertEquals(
+          1,
+          count(
+                  "SELECT COUNT(*) FROM pg_indexes WHERE tablename = ?",
+                  "one_connection_indexed_view")
+              - 1, // the primary key
+          "one declared index, created once");
+    }
+  }
+
+  @Test
   void projectionRepository_batchOnATableCreatedOutsideItCommits() {
     var repository = new JdbcProjectionRepository(pool);
     var name = ProjectionName.of("autocommit_off_batch");

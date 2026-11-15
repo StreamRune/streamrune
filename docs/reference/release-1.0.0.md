@@ -501,12 +501,30 @@ license.
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
 - Projection names, subscription names and offsets share one `projection_offset` namespace; the modes
   use no extra table.
+- Paged reads: `ProjectionRepository.findAll(name, type, pageRequest)` and `findAllBy(name, type,
+  FieldEquals.of(field, value), pageRequest)` — equality on one top-level read-model field, compared
+  as text (`data->>'field'`; a decimal as PostgreSQL prints `numeric`). Both order by the sort's
+  fields as JSON text in code-point order (`COLLATE "C"`, whatever the database collation), a
+  missing field last ascending, and break every tie by the id; unsorted reads order by id (the
+  `<projection>_view.id` column is `COLLATE "C"`). The page and its total come from one statement,
+  and a page beyond the last reads only the count. `id`, `version` and `updated_at` are reserved
+  column names; a field outside `[A-Za-z0-9_]+`, a filter on a column and a filter or sort on an
+  `@Encrypted` record component are refused. `InMemoryProjectionRepository` sorts and filters the
+  same way; `ProjectionRepositoryQueryContract` runs against both.
+- `ProjectionIndex.forFilter(name, field, sort)` / `forSort(name, sort)` declare the index a read
+  needs through `ProjectionRepository.declareIndex(index)`. `JdbcProjectionRepository` creates it
+  with the table (`CREATE INDEX IF NOT EXISTS`, not `CONCURRENTLY`, deterministic name within 63
+  bytes, safe on concurrent replicas; an `INVALID` index of the name fails the declaration);
+  `createIndexSql(index)` returns the statement for a manual `CONCURRENTLY` build on a large table.
+  The Spring, Quarkus and Micronaut integrations declare every `ProjectionIndex` bean at startup on
+  the application's `ProjectionRepository` bean, before the runners start.
 
 ## Queries and the query cache
 
 - `QueryBus` (`dispatch(Query<R>)`, `register(Class<Q>, QueryHandler<Q, R>)`) with `SimpleQueryBus`,
   `AuditingQueryBus` (for `@Auditable` queries) and `CachingQueryBus`; `Page`, `PageRequest`, `Sort`
-  for paginated read models.
+  for paginated read models (`PageRequest.offset()` is a `long`; `Page.hasNext()` does not overflow
+  at the last page index).
 - `@Cacheable(ttlSeconds, maxEntries, scope, invalidateOn)` on a query record opts it into a
   per-query-type Caffeine cache (defaults: 60 s, 1000 entries, `Scope.USER` — keyed by the calling
   `UserId`; anonymous callers bypass the cache; `Scope.GLOBAL` keys by the query alone). The

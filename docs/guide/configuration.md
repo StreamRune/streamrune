@@ -86,6 +86,14 @@ names the property and the value:
 | `streamrune.event-audit-enabled` | `false` | Whether the event audit store and its query are created (with a `DataSource`). |
 | `streamrune.query-cache.enabled` | `false` | Whether the `CachingQueryBus` is created. |
 
+Projection indexes are beans, not properties: at startup, before the projection runners start,
+each `org.streamrune.core.projection.ProjectionIndex` bean in the context is declared on the
+application's `ProjectionRepository` bean — the auto-configured `JdbcProjectionRepository` or one
+the application defines — which creates the index with its table if it does not exist (see
+[Reading read models](concepts.md#reading-read-models-pages-filters-and-indexes)). An index whose
+key the repository refuses, an index that cannot be created, or index beans without a repository
+bean fail the start.
+
 ## Sagas
 
 | Property | Default | Meaning |

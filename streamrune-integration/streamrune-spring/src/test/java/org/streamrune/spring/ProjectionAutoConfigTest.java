@@ -1088,6 +1088,20 @@ class ProjectionAutoConfigTest {
     }
 
     @Override
+    public <T> Page<T> findAllBy(
+        ProjectionName n,
+        Class<T> type,
+        org.streamrune.core.projection.FieldEquals filter,
+        PageRequest page) {
+      return delegate.findAllBy(n, type, filter, page);
+    }
+
+    @Override
+    public void declareIndex(org.streamrune.core.projection.ProjectionIndex index) {
+      delegate.declareIndex(index);
+    }
+
+    @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName n, String id, Class<T> type, LockMode lock) {
       return delegate.findById(n, id, type, lock);

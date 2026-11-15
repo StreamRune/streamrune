@@ -97,6 +97,7 @@ public class org.streamrune.spring.StreamRuneAuthorizationValidator implements o
 
 public class org.streamrune.spring.StreamRuneAutoConfiguration
   public <init>()
+  public org.springframework.beans.factory.SmartInitializingSingleton streamRuneProjectionIndexDeclarer(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionRepository>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionIndex>)
   public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.tracing.StreamRuneTracing>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.AsyncCommandBus asyncCommandBus(org.streamrune.runtime.VirtualThreadCommandBus)
   public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)

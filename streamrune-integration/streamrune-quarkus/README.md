@@ -431,6 +431,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)); aborts with `400` for an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
+| `ProjectionIndexDeclarer` | Startup observer: declares every `ProjectionIndex` bean on the application's `ProjectionRepository` bean (the framework's `JdbcProjectionRepository` or its own) before the projection runners start; a refused key or a failed creation fails startup |
 | `StreamRuneAuthorizationValidator` | Startup observer: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneRequestContextHolder` | Request-scoped holder carrying the parsed `RequestContext`; `ofCurrentRequest()` answers it for the request the calling thread serves, the source the command and query buses dispatch as (see [Request context propagation](#request-context-propagation)) |
 

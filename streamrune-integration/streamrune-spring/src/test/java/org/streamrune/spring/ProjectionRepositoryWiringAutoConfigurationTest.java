@@ -2,7 +2,10 @@ package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -34,6 +37,101 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
           .withBean(DataSource.class, () -> mock(DataSource.class))
           .withBean(EventStore.class, () -> mock(EventStore.class));
+
+  @Test
+  void projectionIndexBeansAreDeclaredOnTheRepository() {
+    List<String> statements = new CopyOnWriteArrayList<>();
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(DataSource.class, () -> recordingDataSource(statements))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.projection.ProjectionIndex.class,
+            () ->
+                org.streamrune.core.projection.ProjectionIndex.forFilter(
+                    org.streamrune.core.types.ProjectionName.of("orders"),
+                    "customerId",
+                    org.streamrune.core.Sort.by(
+                        "createdAt", org.streamrune.core.SortDirection.DESC)))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(statements)
+                  .anyMatch(
+                      sql ->
+                          sql.startsWith(
+                                  "CREATE INDEX IF NOT EXISTS orders_customerid_createdat_desc_id_ix_")
+                              && sql.endsWith(
+                                  " ON orders_view ((data->>'customerId') COLLATE \"C\","
+                                      + " (data->>'createdAt') COLLATE \"C\" DESC,"
+                                      + " id COLLATE \"C\")"));
+            });
+  }
+
+  /**
+   * The application defines its own repository: the auto-configured one backs off, and the index
+   * beans are declared on the application's bean at startup, before anything reads.
+   */
+  @Test
+  void projectionIndexBeansAreDeclaredOnAnApplicationDefinedRepositoryAtStartup() {
+    var index =
+        org.streamrune.core.projection.ProjectionIndex.forSort(
+            org.streamrune.core.types.ProjectionName.of("orders"),
+            org.streamrune.core.Sort.by("createdAt"));
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.projection.ProjectionRepository.class,
+            org.streamrune.test.InMemoryProjectionRepository::new)
+        .withBean(org.streamrune.core.projection.ProjectionIndex.class, () -> index)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var repository =
+                  (org.streamrune.test.InMemoryProjectionRepository)
+                      ctx.getBean(org.streamrune.core.projection.ProjectionRepository.class);
+              assertThat(repository.declaredIndexes()).containsExactly(index);
+            });
+  }
+
+  @Test
+  void projectionIndexBeansWithoutARepositoryFailStartup() {
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.projection.ProjectionIndex.class,
+            () ->
+                org.streamrune.core.projection.ProjectionIndex.forSort(
+                    org.streamrune.core.types.ProjectionName.of("orders"),
+                    org.streamrune.core.Sort.by("createdAt")))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("no ProjectionRepository bean");
+            });
+  }
+
+  @Test
+  void aProjectionIndexBeanTheRepositoryRefusesFailsStartup() {
+    runner
+        .withBean(
+            org.streamrune.core.projection.ProjectionIndex.class,
+            () ->
+                org.streamrune.core.projection.ProjectionIndex.forSort(
+                    org.streamrune.core.types.ProjectionName.of("orders"),
+                    org.streamrune.core.Sort.by("customer.id")))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure()).hasStackTraceContaining("no nested path");
+            });
+  }
 
   @Test
   void cryptoEngineBeanIsWiredIntoProjectionRepositoryMapper() {
@@ -112,6 +210,34 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
     @Bean
     CryptoEngine secondaryEngine() {
       return new InMemoryCryptoEngine();
+    }
+  }
+
+  /**
+   * A DataSource whose connections record every statement run through {@code createStatement()} and
+   * answer every query with no rows (so a declared index is found missing and created).
+   */
+  private static DataSource recordingDataSource(List<String> statements) {
+    try {
+      var dataSource = mock(DataSource.class);
+      var connection = mock(java.sql.Connection.class);
+      var statement = mock(java.sql.Statement.class);
+      var prepared = mock(java.sql.PreparedStatement.class);
+      when(dataSource.getConnection()).thenReturn(connection);
+      when(connection.getAutoCommit()).thenReturn(true);
+      when(connection.createStatement()).thenReturn(statement);
+      when(statement.execute(org.mockito.ArgumentMatchers.anyString()))
+          .thenAnswer(
+              invocation -> {
+                statements.add(invocation.getArgument(0));
+                return false;
+              });
+      when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
+          .thenReturn(prepared);
+      when(prepared.executeQuery()).thenReturn(mock(java.sql.ResultSet.class));
+      return dataSource;
+    } catch (java.sql.SQLException e) {
+      throw new IllegalStateException(e);
     }
   }
 }

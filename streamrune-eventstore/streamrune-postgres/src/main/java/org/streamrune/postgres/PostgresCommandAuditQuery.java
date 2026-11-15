@@ -155,7 +155,7 @@ public final class PostgresCommandAuditQuery implements CommandAuditQuery {
       ps.setTimestamp(2, Timestamp.from(from));
       ps.setTimestamp(3, Timestamp.from(to));
       ps.setInt(4, pageRequest.size());
-      ps.setInt(5, pageRequest.offset());
+      ps.setLong(5, pageRequest.offset());
       return readEntries(ps);
     }
   }
