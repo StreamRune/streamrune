@@ -1050,7 +1050,8 @@ public final class PostgresSagaStore implements SagaStore {
         return Optional.of(
             new RowFacts(status, deadLetterPending, rs.wasNull() ? null : lastApplied));
       }
-    } catch (SQLException e) {
+    } catch (Exception e) {
+      // Every read failure, a driver's unchecked one included, is a storage failure, as in load.
       throw new EventStoreException("Failed to load saga row facts: " + forLog(sagaId), e);
     }
   }

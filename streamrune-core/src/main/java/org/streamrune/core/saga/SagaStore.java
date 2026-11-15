@@ -527,10 +527,12 @@ public interface SagaStore {
    */
   record RowFacts(SagaStatus status, boolean deadLetterPending, Long lastAppliedOffset) {
     /**
-     * @throws NullPointerException if {@code status} is null
+     * @throws IllegalArgumentException if {@code status} is {@code null}
      */
     public RowFacts {
-      java.util.Objects.requireNonNull(status, "status is required");
+      if (status == null) {
+        throw new IllegalArgumentException("status is required");
+      }
     }
   }
 
