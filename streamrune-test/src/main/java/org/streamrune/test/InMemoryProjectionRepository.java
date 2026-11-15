@@ -425,7 +425,9 @@ public final class InMemoryProjectionRepository
 
   /**
    * The JSON names of {@code type}'s {@code Encrypted} components, and of those of the records it
-   * embeds with {@code @JsonUnwrapped} (with the annotation's prefix and suffix), at any depth. A
+   * embeds with {@code @JsonUnwrapped} (with the annotation's prefix and suffix). One level of
+   * {@code @JsonUnwrapped} is what is supported: Jackson does not round-trip a record unwrapped
+   * inside an unwrapped record (the walk goes deeper, but such a read model cannot be read back). A
    * type that is not a record ({@code Map}, a class) is not checked.
    */
   private Set<String> encryptedJsonFields(Class<?> type, Set<Class<?>> visiting) {
