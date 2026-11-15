@@ -251,7 +251,7 @@ jobs:
           if-no-files-found: error
           overwrite: true # a run of this job again replaces the notes of the run before
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -300,7 +300,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -397,7 +397,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: git fetch --no-tags origin "refs/tags/v$VERSION:refs/tags/v$VERSION"
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
           distribution: 'temurin'
