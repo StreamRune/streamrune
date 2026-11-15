@@ -88,7 +88,7 @@ AggregateLocker aggregateLocker(
         @Value("${spring.datasource.url}") String url,
         @Value("${spring.datasource.username}") String username,
         @Value("${spring.datasource.password}") String password) {
-    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
 }
 ```
 

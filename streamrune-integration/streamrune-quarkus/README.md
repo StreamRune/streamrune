@@ -172,7 +172,7 @@ public class AggregateLockerProducer {
             @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
             @ConfigProperty(name = "quarkus.datasource.username") String username,
             @ConfigProperty(name = "quarkus.datasource.password") String password) {
-        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
     }
 
     void close(@Disposes AggregateLocker locker) throws Exception {

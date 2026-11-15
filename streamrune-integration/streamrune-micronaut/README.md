@@ -77,7 +77,7 @@ class AggregateLockerFactory {
             @Value("${datasources.default.url}") String url,
             @Value("${datasources.default.username}") String username,
             @Value("${datasources.default.password}") String password) {
-        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
     }
 }
 ```

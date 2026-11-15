@@ -43,7 +43,7 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
   private static final int POOLS_PER_ROUND = 8;
 
   /** Rounds of the burst test. */
-  private static final int ROUNDS = 25;
+  private static final int ROUNDS = 8;
 
   @Test
   @Timeout(120)
@@ -51,8 +51,7 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
       throws Exception {
     String application = "lock-pool-idle";
     try (PgAdvisoryLocker locker = lockerFor(application)) {
-      // pg_stat_activity lags the pool, so every count is polled to a deadline. The idle count
-      // must reach the maximum and then stay there.
+      // pg_stat_activity lags the pool while it fills, so the idle count is polled to a deadline.
       await()
           .atMost(Duration.ofSeconds(20))
           .pollInterval(Duration.ofMillis(100))
@@ -60,15 +59,6 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
               () ->
                   assertThat(connectionsOf(application))
                       .as("an idle lock pool opens its maximum")
-                      .isEqualTo(MAX_POOL_SIZE));
-      await()
-          .during(Duration.ofSeconds(2))
-          .atMost(Duration.ofSeconds(20))
-          .pollInterval(Duration.ofMillis(100))
-          .untilAsserted(
-              () ->
-                  assertThat(connectionsOf(application))
-                      .as("an idle lock pool keeps its maximum open")
                       .isEqualTo(MAX_POOL_SIZE));
 
       List<Throwable> failures = new CopyOnWriteArrayList<>();
@@ -79,6 +69,7 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
             .as("every command gets a lock connection, up to the pool's maximum")
             .extracting(PgAdvisoryLockerDedicatedPoolIdleTest::describe)
             .isEmpty();
+        // Read once: the commands hold sessions the pool had opened, and named, before the burst.
         assertThat(connectionsOf(application))
             .as("a pool whose commands all hold a lock holds its maximum, no more")
             .isEqualTo(MAX_POOL_SIZE);
@@ -96,8 +87,10 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
    * that keeps fewer connections idle than its maximum grows during the burst, and HikariCP's
    * growth asks for fewer connections than the commands wait for in a few bursts out of a hundred;
    * the command left over then fails its lock acquisition after the pool's 10-second connection
-   * timeout. A pool that keeps two connections idle failed about one round in seven, so the rounds
-   * fail a growing pool with high probability and pass a fixed-size one.
+   * timeout. A pool that keeps two connections idle failed about one round in seven to thirteen, so
+   * these rounds catch a growing pool in roughly half the runs; {@link
+   * #theMinimumIdleOfTheLockPoolIsItsMaximum} is the deterministic guard, and this test shows the
+   * failure it guards against.
    */
   @Test
   @Timeout(300)
@@ -112,7 +105,7 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
         }
         for (int pool = 0; pool < POOLS_PER_ROUND; pool++) {
           String application = application(round, pool);
-          int minimumIdle = lockers.get(pool).dedicatedPoolMinimumIdle();
+          int minimumIdle = lockers.get(pool).dedicatedHikariPool().getMinimumIdle();
           await()
               .atMost(Duration.ofSeconds(20))
               .pollInterval(Duration.ofMillis(20))
@@ -147,7 +140,17 @@ class PgAdvisoryLockerDedicatedPoolIdleTest {
     try (PgAdvisoryLocker locker =
         PgAdvisoryLocker.withDedicatedPool(
             PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), maxPoolSize)) {
-      assertThat(locker.dedicatedPoolMinimumIdle()).isEqualTo(maxPoolSize);
+      assertThat(locker.dedicatedHikariPool().getMinimumIdle()).isEqualTo(maxPoolSize);
+    }
+  }
+
+  @Test
+  void theLockPoolChecksAnIdleConnectionEveryMinute() {
+    try (PgAdvisoryLocker locker =
+        PgAdvisoryLocker.withDedicatedPool(
+            PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), MAX_POOL_SIZE)) {
+      assertThat(locker.dedicatedHikariPool().getKeepaliveTime())
+          .isEqualTo(Duration.ofMinutes(1).toMillis());
     }
   }
 

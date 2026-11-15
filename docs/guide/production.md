@@ -1152,7 +1152,7 @@ AggregateLocker aggregateLocker(
         @Value("${spring.datasource.url}") String url,
         @Value("${spring.datasource.username}") String username,
         @Value("${spring.datasource.password}") String password) {
-    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+    return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
 }
 ```
 
@@ -1167,7 +1167,7 @@ public class AggregateLockerProducer {
             @ConfigProperty(name = "quarkus.datasource.jdbc.url") String url,
             @ConfigProperty(name = "quarkus.datasource.username") String username,
             @ConfigProperty(name = "quarkus.datasource.password") String password) {
-        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
     }
 
     void close(@Disposes AggregateLocker locker) throws Exception {
@@ -1187,7 +1187,7 @@ class AggregateLockerFactory {
             @Value("${datasources.default.url}") String url,
             @Value("${datasources.default.username}") String username,
             @Value("${datasources.default.password}") String password) {
-        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 16);
+        return PgAdvisoryLocker.withDedicatedPool(url, username, password, 10);
     }
 }
 ```
@@ -1202,15 +1202,30 @@ budget of a replica's lock pool is its maximum, at rest as under load. It does n
 because HikariCP cannot be relied on to grow a pool under a burst: a pool below its maximum decides
 whether to open another connection from a count of waiting borrowers each one read when it arrived,
 so when the commands of a burst ask in another order than they arrived it opens fewer connections
-than they wait for. The command left over waits until another command returns its connection, or
-until the pool's housekeeping tops it up (every 30 seconds), and fails with a `LockException` after
-the 10-second connection timeout if every other command holds its lock that long, while the pool is
-still under its maximum. To hold fewer connections at rest, build the pool yourself and pass it to
-`withDedicatedPool(pool)`; a HikariCP pool then needs a `minimumIdle` of at least the commands a
-replica runs at once, since a larger `maximumPoolSize` alone does not keep a burst that the pool
-grows for out of the race. The application pool's recommended `minimumIdle` equal to
-`maximumPoolSize` (see [PostgreSQL setup](#postgresql-setup)) keeps it out of the same race. A
-command whose `INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
+than they wait for. The command left over gets a connection when another command returns one, when
+a later command asks for one, or when the pool's housekeeping tops it up (every 30 seconds); if none
+of these happens within the 10-second connection timeout, its lock acquisition fails with a
+`LockException` while the pool is still under its maximum; the command bus retries it under its
+default retry policy, the retry opens the missing connection, and the command completes about ten
+seconds late. To hold fewer
+connections at rest, pass a pool of your own to `withDedicatedPool(pool)`. A HikariCP pool serves a
+burst without growing only up to its `minimumIdle`, and a larger `maximumPoolSize` does not change
+that: set `minimumIdle` to the largest burst that must not wait and `maximumPoolSize` above it as
+headroom, and a burst beyond `minimumIdle` can leave one command waiting as described. Or use a pool
+library whose growth opens a connection for every waiting borrower. The application pool's
+recommended `minimumIdle` equal to `maximumPoolSize` (see [PostgreSQL setup](#postgresql-setup))
+keeps it out of the same race. The lock pool checks each idle connection once a minute (HikariCP's
+keepalive), so a firewall or load balancer that drops idle connections does not leave dead ones for
+a command to draw.
+
+Add it up per replica. With the application pool of 10 recommended above and a lock pool of 10, a
+replica holds 20 connections at all times, plus one LISTEN connection for every
+`HybridEventSubscription` it runs and one for the crypto engine's forget channel when its cache is
+on; with two of those, 22. PostgreSQL's default `max_connections` of 100, three of them reserved for
+superusers, fits four such replicas and not five. A rolling update that starts a new replica before
+it stops an old one needs room for one replica more than you run, so run three, raise
+`max_connections`, or lower the pools of each replica. A command whose `INLINE` projection
+dispatches a command on another aggregate holds a second lock connection (see
 [the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
 lock with either locker.
 
