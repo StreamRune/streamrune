@@ -44,6 +44,7 @@ import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.StreamRune;
+import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -233,7 +234,7 @@ class QuickstartSamplesTest {
     // Built, not started: the offset store of the sample reads PostgreSQL once the runner runs.
     StreamRune streamRune =
         section7Builder(
-                new InMemoryEventStore(TYPES),
+                new InMemoryEventStore(TYPES, new InMemoryCryptoEngine()),
                 mock(DataSource.class),
                 (orderId, productId, qty) -> {})
             .build();
@@ -247,7 +248,7 @@ class QuickstartSamplesTest {
 
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore(TYPES))
+            .eventStore(new InMemoryEventStore(TYPES, new InMemoryCryptoEngine()))
             .register(
                 ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
             .registerProjection(
@@ -305,7 +306,9 @@ class QuickstartSamplesTest {
     return new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
         .withBean(DataSource.class, () -> mock(DataSource.class))
-        .withBean(EventStoreFactory.class, () -> () -> new InMemoryEventStore(TYPES));
+        .withBean(
+            EventStoreFactory.class,
+            () -> () -> new InMemoryEventStore(TYPES, new InMemoryCryptoEngine()));
   }
 
   @Test
@@ -442,7 +445,7 @@ class QuickstartSamplesTest {
 
     var builder =
         StreamRune.builder()
-            .eventStore(new InMemoryEventStore(TYPES))
+            .eventStore(new InMemoryEventStore(TYPES, new InMemoryCryptoEngine()))
             .cryptoEngine(crypto)
             .register(
                 ORDER,

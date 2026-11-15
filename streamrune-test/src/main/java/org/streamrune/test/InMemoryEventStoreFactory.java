@@ -8,8 +8,9 @@ import org.streamrune.core.crypto.CryptoEngine;
 
 /**
  * Factory for creating {@link InMemoryEventStore} instances, for wiring that asks for an {@link
- * EventStoreFactory}. Each store serializes with the given {@link EventTypeRegistry} and optional
- * {@link CryptoEngine}, as {@code PostgresEventStoreFactory} configures its stores.
+ * EventStoreFactory}. Each store serializes with the given {@link EventTypeRegistry} and {@link
+ * CryptoEngine}, as {@code PostgresEventStoreFactory} configures its stores. As there, a registry
+ * that holds an {@code @Encrypted} type needs an engine: {@link #create()} refuses it without one.
  */
 public final class InMemoryEventStoreFactory implements EventStoreFactory {
 
@@ -44,7 +45,8 @@ public final class InMemoryEventStoreFactory implements EventStoreFactory {
     /**
      * Sets the crypto engine for {@code @Encrypted} field handling.
      *
-     * @param cryptoEngine the engine, or {@code null} for none
+     * @param cryptoEngine the engine, or {@code null} for none, which {@link #create()} accepts
+     *     only for a registry without an {@code @Encrypted} type
      * @return this builder
      */
     public Builder cryptoEngine(CryptoEngine cryptoEngine) {
@@ -58,6 +60,12 @@ public final class InMemoryEventStoreFactory implements EventStoreFactory {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * @throws IllegalStateException if no engine was set and a registered type carries
+   *     {@code @Encrypted}
+   */
   @Override
   public EventStore create() {
     return new InMemoryEventStore(typeRegistry, cryptoEngine);

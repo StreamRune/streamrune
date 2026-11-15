@@ -15,6 +15,7 @@ import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -86,7 +87,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void roundTripsEventAndMetadataThroughJackson() {
-    var store = new InMemoryEventStore(registry);
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var original = new Added("A", Instant.parse("2026-02-03T04:05:06Z"));
     store.append(s, List.of(envelope(s, 1, original, "Added")), Version.initial());
@@ -101,7 +102,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void roundTripsTheSagaOrigin() {
-    var store = new InMemoryEventStore(registry);
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     SagaId sagaId = SagaId.of("order-saga-42");
     var original = new Added("A", Instant.parse("2026-02-03T04:05:06Z"));
@@ -130,7 +131,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void unserializableEventFailsAtAppendLikePostgres() {
-    var store = new InMemoryEventStore(registry);
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var bad = new Unmappable(new Object());
 
@@ -163,7 +164,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void serializationFailureOnAnyEventLeavesNothingAppended() {
-    var store = new InMemoryEventStore(registry);
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     var good = envelope(s, 1, new Added("A", Instant.EPOCH), "Added");
     var bad = envelope(s, 2, new Unmappable(new Object()), "Unmappable");
@@ -203,7 +204,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void snapshotStateRoundTripsThroughJackson() {
-    var store = new InMemoryEventStore(registry);
+    var store = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
     StreamId s = StreamId.of(TYPE, AggregateId.of("cart-1"));
     store.append(
         s, List.of(envelope(s, 1, new Added("A", Instant.EPOCH), "Added")), Version.initial());
@@ -255,7 +256,55 @@ class InMemoryEventStoreSerializingTest {
     assertThrows(NullPointerException.class, () -> new InMemoryEventStore(null, registry));
     assertThrows(NullPointerException.class, () -> new InMemoryEventStore(mapper, null));
     assertDoesNotThrow(() -> new InMemoryEventStore(mapper, registry));
-    assertDoesNotThrow(() -> new InMemoryEventStore(registry, null));
+    var plain = SimpleEventTypeRegistry.builder().registerEvent("Added", Added.class).build();
+    assertDoesNotThrow(() -> new InMemoryEventStore(plain, null));
+  }
+
+  @Test
+  void aRegistryWithAnEncryptedTypeIsRefusedWithoutACryptoEngine() {
+    var plain = SimpleEventTypeRegistry.builder().registerEvent("Added", Added.class).build();
+    var source = new InMemoryEventStore(plain);
+
+    // every path that builds a store over a registry runs the check PostgresEventStore runs
+    var refused = assertThrows(IllegalStateException.class, () -> new InMemoryEventStore(registry));
+    assertTrue(refused.getMessage().contains("PiiRegistered.email"), refused.getMessage());
+    assertThrows(
+        IllegalStateException.class, () -> new InMemoryEventStore(registry, (CryptoEngine) null));
+    assertThrows(
+        IllegalStateException.class,
+        () -> InMemoryEventStore.sharingStorageOf(source, registry, null));
+    assertThrows(
+        IllegalStateException.class,
+        () -> InMemoryEventStoreFactory.builder(registry).build().create());
+    assertThrows(IllegalStateException.class, () -> EventStoreFixture.store(registry));
+
+    // with an engine the same registry is accepted, by every path
+    var engine = new InMemoryCryptoEngine();
+    assertDoesNotThrow(() -> new InMemoryEventStore(registry, engine));
+    assertDoesNotThrow(() -> InMemoryEventStore.sharingStorageOf(source, registry, engine));
+    assertDoesNotThrow(
+        () -> InMemoryEventStoreFactory.builder(registry).cryptoEngine(engine).build().create());
+  }
+
+  @Test
+  void aRegistryThatDoesNotListItsTypesIsRefusedWithoutACryptoEngineAndAcceptedWithOne() {
+    EventTypeRegistry unlisted =
+        new EventTypeRegistry() {
+          @Override
+          public Class<?> resolveEventType(EventType eventType) {
+            return Added.class;
+          }
+
+          @Override
+          public Class<?> resolveStateType(String stateType) {
+            return CartState.class;
+          }
+        };
+
+    var refused =
+        assertThrows(UnsupportedOperationException.class, () -> new InMemoryEventStore(unlisted));
+    assertTrue(refused.getMessage().contains("registeredTypes()"), refused.getMessage());
+    assertDoesNotThrow(() -> new InMemoryEventStore(unlisted, new InMemoryCryptoEngine()));
   }
 
   @Test
@@ -280,7 +329,7 @@ class InMemoryEventStoreSerializingTest {
 
   @Test
   void aReopenedStoreRequiresItsSourceAndARegistry() {
-    var source = new InMemoryEventStore(registry);
+    var source = new InMemoryEventStore(registry, new InMemoryCryptoEngine());
 
     assertThrows(
         NullPointerException.class,

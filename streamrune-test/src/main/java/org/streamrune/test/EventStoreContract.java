@@ -1,5 +1,6 @@
 package org.streamrune.test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -112,6 +113,12 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *       stores nothing, so a stream never has a version gap.
  *   <li><b>Empty appends.</b> An empty event list stores nothing and returns {@code new
  *       AppendResult(List.of(), expectedVersion)} without consulting the head.
+ *   <li><b>Encrypted types need a crypto engine.</b> A store built with a registry that holds an
+ *       {@code @Encrypted} type and no crypto engine refuses it, with an {@link
+ *       IllegalStateException} naming the field, before it stores anything: it would write the
+ *       field as plaintext. A store of your own applies the rule with {@code
+ *       org.streamrune.crypto.EncryptedTypeGuard.check(registry, engine)}. The case builds the
+ *       store through {@link #newStore(Setup)}, so that is where the refusal must come from.
  *   <li><b>Atomicity.</b> A multi-event append stores all of its events or none, also when several
  *       race for one version, and its events become readable together: while appends run, no read
  *       returns some events of one append without the others.
@@ -136,7 +143,11 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Null arguments.</b> {@code append}, {@code load}, {@code readStream}, {@code
  *       readGlobalStream} and {@code saveSnapshot} refuse a {@code null} stream, event list,
  *       version or offset with {@link NullPointerException}, and {@code saveSnapshot} a {@code
- *       null} state with {@link IllegalArgumentException}; a refused call stores nothing.
+ *       null} state with {@link IllegalArgumentException}; a refused call stores nothing. {@code
+ *       append} and {@code appendWithKey} check {@code streamId}, {@code events} and {@code
+ *       expectedVersion} in that order, then the key and the command type, and refuse a {@code
+ *       null} {@code expectedVersion} with the message {@code "expectedVersion is required"} for an
+ *       empty event list as for a non-empty one; {@code appendWithKey} claims no key.
  *   <li><b>Read path.</b> On all three reads: an append stores each event at the current version of
  *       the writing store's upcaster for its type ({@code 1} without one), whatever its payload; a
  *       store reads an event stored below its upcaster's version through each step up to it, and
@@ -221,11 +232,12 @@ public abstract class EventStoreContract {
    * <p>Empty storage means no stored events, snapshots, purge records or command-inbox rows, and a
    * global offset counter that hands out {@code 1} to the first event appended, as a freshly
    * created database does. The store must resolve stored types through {@code setup.registry()},
-   * protect {@code @Encrypted} fields with {@code setup.crypto()} when it is not {@code null},
-   * upcast events read back through {@code setup.upcasters()} and migrate snapshots loaded back
-   * through {@code setup.migrations()}, exactly as the store's production configuration would. When
-   * {@link #supportsIdempotentAppend()} it has a command inbox, so {@code appendWithKey} records
-   * its keys.
+   * protect {@code @Encrypted} fields with {@code setup.crypto()} when it is not {@code null}, and
+   * refuse a registry that holds an {@code @Encrypted} type when it is {@code null} (an {@link
+   * IllegalStateException}, thrown by this method: see {@code EncryptedTypeGuard}), upcast events
+   * read back through {@code setup.upcasters()} and migrate snapshots loaded back through {@code
+   * setup.migrations()}, exactly as the store's production configuration would. When {@link
+   * #supportsIdempotentAppend()} it has a command inbox, so {@code appendWithKey} records its keys.
    */
   protected abstract EventStore newStore(Setup setup);
 
@@ -733,6 +745,24 @@ public abstract class EventStoreContract {
 
     assertEquals(new AppendResult(List.of(), new Version(2)), result);
     assertEquals(2, stored(A).size());
+  }
+
+  // ── Encrypted types without a crypto engine ─────────────────────────────────────────────────
+
+  @Test
+  public void anEncryptedTypeWithoutACryptoEngineIsRefusedWhenTheStoreIsBuilt() {
+    IllegalStateException refused =
+        assertThrows(IllegalStateException.class, () -> newStore(secretTypes(null)));
+
+    String message = String.valueOf(refused.getMessage());
+    assertTrue(
+        message.contains("@Encrypted") && message.contains("SecretEvent.value"),
+        "the refusal names the cause and the field: " + message);
+  }
+
+  @Test
+  public void anEncryptedTypeWithACryptoEngineIsAccepted() {
+    assertDoesNotThrow(() -> newStore(secretTypes(new UnavailableKeyStore())));
   }
 
   // ── Atomicity ───────────────────────────────────────────────────────────────────────────────
@@ -1519,6 +1549,67 @@ public abstract class EventStoreContract {
     assertThrows(NullPointerException.class, () -> store.append(A, events(A, 1, 1), null));
 
     assertTrue(global().isEmpty());
+  }
+
+  @Test
+  public void appendRefusesANullExpectedVersionWhateverTheEventListAndStoresNothing() {
+    var refusedEmpty =
+        assertThrows(NullPointerException.class, () -> store.append(A, List.of(), null));
+    var refusedFilled =
+        assertThrows(NullPointerException.class, () -> store.append(A, events(A, 1, 2), null));
+
+    assertEquals("expectedVersion is required", refusedEmpty.getMessage());
+    assertEquals("expectedVersion is required", refusedFilled.getMessage());
+    assertTrue(global().isEmpty());
+  }
+
+  @Test
+  public void appendChecksStreamEventsAndExpectedVersionInThatOrder() {
+    var noStream = assertThrows(NullPointerException.class, () -> store.append(null, null, null));
+    var noEvents = assertThrows(NullPointerException.class, () -> store.append(A, null, null));
+    var noVersion =
+        assertThrows(NullPointerException.class, () -> store.append(A, List.of(), null));
+
+    assertEquals("streamId is required", noStream.getMessage());
+    assertEquals("events is required", noEvents.getMessage());
+    assertEquals("expectedVersion is required", noVersion.getMessage());
+  }
+
+  @Test
+  public void appendWithKeyRefusesANullExpectedVersionWhateverTheEventListAndClaimsNothing() {
+    assumeTrue(supportsIdempotentAppend(), "the store does not implement appendWithKey");
+    IdempotencyKey key = IdempotencyKey.of("key-null-expected-version");
+
+    var refusedEmpty =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, List.of(), null, key, COMMAND_TYPE));
+    var refusedFilled =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, events(A, 1, 2), null, key, COMMAND_TYPE));
+
+    assertEquals("expectedVersion is required", refusedEmpty.getMessage());
+    assertEquals("expectedVersion is required", refusedFilled.getMessage());
+    assertTrue(global().isEmpty());
+    assertFalse(appendWithKey(A, 0, 1, key, COMMAND_TYPE).alreadyApplied(), "the key is unclaimed");
+  }
+
+  @Test
+  public void appendWithKeyChecksTheEventArgumentsBeforeTheKeyAndTheCommandType() {
+    assumeTrue(supportsIdempotentAppend(), "the store does not implement appendWithKey");
+
+    var versionBeforeKey =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, events(A, 1, 1), null, null, COMMAND_TYPE));
+    var keyBeforeCommandType =
+        assertThrows(
+            NullPointerException.class,
+            () -> store.appendWithKey(A, events(A, 1, 1), Version.initial(), null, null));
+
+    assertEquals("expectedVersion is required", versionBeforeKey.getMessage());
+    assertEquals("idempotencyKey is required", keyBeforeCommandType.getMessage());
   }
 
   @Test
@@ -2781,8 +2872,9 @@ public abstract class EventStoreContract {
   }
 
   /**
-   * The default setup with the types holding {@code @Encrypted} fields registered too; a store may
-   * refuse such a registry without a crypto engine, so it is always given one.
+   * The default setup with the types holding {@code @Encrypted} fields registered too; a store
+   * refuses such a registry without a crypto engine, so the cases that use one pass a {@code
+   * crypto}.
    */
   private static Setup secretTypes(CryptoEngine crypto) {
     return Setup.defaults()

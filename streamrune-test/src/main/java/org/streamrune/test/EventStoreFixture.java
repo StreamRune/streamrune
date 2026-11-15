@@ -68,6 +68,9 @@ public final class EventStoreFixture {
    * {@code typeRegistry}.
    *
    * @param typeRegistry registers every event type the fixture appends (required)
+   * @throws IllegalStateException if the registry holds an {@code @Encrypted} type: the store has
+   *     no crypto engine here; build an {@code InMemoryEventStore} with one and pass it to {@link
+   *     #store(EventStore)}
    */
   public static EventStoreFixture store(EventTypeRegistry typeRegistry) {
     return new EventStoreFixture(new InMemoryEventStore(typeRegistry));

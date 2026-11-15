@@ -525,7 +525,7 @@ domain events — as long as that path serializes with the `CryptoEngine`:
   with the event store has an `@Encrypted` field (directly or in a nested record) and no
   `CryptoEngine` is configured, `PostgresEventStore.create(...)`,
   `PostgresEventStore.builder().build()` and `PostgresEventStoreFactory.create()` throw
-  `IllegalStateException` naming each such field (`CryptoConfigValidator`) before they open a
+  `IllegalStateException` naming each such field (`EncryptedTypeGuard`) before they open a
   connection, instead of silently persisting plaintext PII. A custom `EventTypeRegistry` that does
   not implement `registeredTypes()` is refused too, because it cannot be checked. The Spring, Quarkus
   and Micronaut integrations build the store through the factory and also check the registered

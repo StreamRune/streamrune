@@ -12,7 +12,6 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -65,8 +64,8 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
-import org.streamrune.crypto.CryptoConfigValidator;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 
 /**
@@ -640,7 +639,7 @@ public final class PostgresEventStore implements EventStore {
    * registry that cannot list its types is refused with the {@link UnsupportedOperationException}
    * of {@link EventTypeRegistry#registeredTypes()}. With an engine, the check only warns about a
    * property-level Jackson serializer override that would bypass encryption (see {@link
-   * CryptoConfigValidator}).
+   * EncryptedTypeGuard}).
    *
    * @param dataSource the JDBC data source (required)
    * @param typeRegistry event/state type registry (required)
@@ -735,22 +734,7 @@ public final class PostgresEventStore implements EventStore {
     if (typeRegistry == null) {
       throw new IllegalArgumentException("typeRegistry is required");
     }
-    if (cryptoEngine == null) {
-      CryptoConfigValidator.validate(typeRegistry.registeredTypes(), null);
-      return;
-    }
-    Collection<Class<?>> registered;
-    try {
-      registered = typeRegistry.registeredTypes();
-    } catch (UnsupportedOperationException e) {
-      log.debug(
-          "EventTypeRegistry does not list its registered types, so the check for Jackson"
-              + " serializer overrides over @Encrypted components is skipped for event and state"
-              + " types. Override registeredTypes() to enable it.",
-          e);
-      return;
-    }
-    CryptoConfigValidator.validate(registered, cryptoEngine);
+    EncryptedTypeGuard.check(typeRegistry, cryptoEngine);
   }
 
   /**
@@ -1397,6 +1381,10 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public AppendResult append(
       StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+    // The arguments are checked before the outbox mapper, application code, sees the events.
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     return appendWithOutbox(streamId, events, expectedVersion, outboxEntriesOf(events));
   }
 
@@ -1439,6 +1427,7 @@ public final class PostgresEventStore implements EventStore {
    * @return the append result with assigned global offsets and the new stream version
    * @throws IllegalStateException if outboxEntries is non-empty and no outbox store was configured
    * @throws IllegalArgumentException if outboxEntries is non-empty and events is empty
+   * @throws NullPointerException if streamId, events, expectedVersion or outboxEntries is null
    */
   public AppendResult append(
       StreamId streamId,
@@ -1563,6 +1552,7 @@ public final class PostgresEventStore implements EventStore {
       boolean traced) {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
     Objects.requireNonNull(outboxEntries, "outboxEntries is required");
     if (!outboxEntries.isEmpty() && outboxStore == null) {
       throw new IllegalStateException(
@@ -1780,6 +1770,10 @@ public final class PostgresEventStore implements EventStore {
       return appendEventsWithKey(
           streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, null, false);
     }
+    // The rest of the arguments are checked before the outbox mapper, application code, sees the
+    // events.
+    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
+    CommandInbox.requireCommandType(commandType);
     List<OutboxEntry> outboxEntries = outboxEntriesOf(events);
     return tracedAppend(
         streamId,
@@ -1860,9 +1854,10 @@ public final class PostgresEventStore implements EventStore {
       throw new UnsupportedOperationException(
           "This PostgresEventStore was built without a command inbox");
     }
-    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
+    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     CommandInbox.requireCommandType(commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =

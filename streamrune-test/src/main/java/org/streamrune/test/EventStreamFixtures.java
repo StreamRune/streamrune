@@ -58,8 +58,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * and appends each event to its stream at its version. The target is a fresh {@link
  * InMemoryEventStore}: an event whose stream already holds that version fails with the store's
  * {@code OptimisticLockException}. A file holds payloads as the store reads them, so the fields of
- * an {@code @Encrypted} event are in the clear: append such a file to a store without a crypto
- * engine. A fixture file therefore holds personal data as plain text — record it from synthetic
+ * an {@code @Encrypted} event are in the clear. {@link #appendTo} binds a payload as it is, without
+ * decrypting, so appending the file to a store built with a crypto engine stores those fields
+ * encrypted. A fixture file therefore holds personal data as plain text — record it from synthetic
  * data only, and keep it in test resources.
  */
 public final class EventStreamFixtures {

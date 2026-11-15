@@ -278,6 +278,11 @@ class InMemoryEventStoreReadTransformParityTest {
             }
             throw new UnknownEventTypeException("state type", stateType, List.of("CurrentState"));
           }
+
+          @Override
+          public java.util.Collection<Class<?>> registeredTypes() {
+            return List.of(EvolvingV1.class, RetiredState.class, CurrentState.class);
+          }
         };
     var store = new InMemoryEventStore(togglingRegistry);
     StreamId s = StreamId.of(TYPE, AggregateId.of("agg-retired"));
