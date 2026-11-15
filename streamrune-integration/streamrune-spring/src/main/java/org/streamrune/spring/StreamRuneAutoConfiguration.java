@@ -1970,12 +1970,6 @@ public class StreamRuneAutoConfiguration {
    * fall within GDPR forget scope. Without this the auto-configured read model was a silent
    * plaintext no-op even when a CryptoEngine was configured for events and saga state.
    *
-   * <p>Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean on the repository
-   * ({@link org.streamrune.postgres.JdbcProjectionRepository#declareIndex}), in bean order, before
-   * the bean is handed out: each index is created with its table if it does not exist. A {@code
-   * ProjectionRepository} bean of the application's own replaces this one, and its indexes are then
-   * the application's to declare.
-   *
    * @throws IllegalStateException if multiple CryptoEngine beans exist with none marked
    *     {@code @Primary} — silently skipping encryption would persist PII as plaintext
    */
@@ -1985,21 +1979,48 @@ public class StreamRuneAutoConfiguration {
   public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(
       DataSource dataSource,
       ObjectProvider<CryptoEngine> cryptoEngineProvider,
-      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
-      ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
+      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
     CryptoEngine cryptoEngine =
         resolveCryptoEngine(cryptoEngineProvider, "the projection repository");
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when no metrics bean exists.
     org.streamrune.core.StreamRuneMetrics metrics =
         metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP);
-    var repository =
-        new org.streamrune.postgres.JdbcProjectionRepository(
-            dataSource,
-            org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-                cryptoEngine, metrics));
-    projectionIndexes.orderedStream().forEach(repository::declareIndex);
-    return repository;
+    return new org.streamrune.postgres.JdbcProjectionRepository(
+        dataSource,
+        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+  }
+
+  /**
+   * Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean, in bean order, on
+   * the application's {@link org.streamrune.core.projection.ProjectionRepository} bean — the
+   * auto-configured {@code JdbcProjectionRepository} or one the application defines — once every
+   * singleton exists and before any lifecycle bean (the projection runners) starts. A refused key,
+   * an index that cannot be created, or index beans without a repository bean fail the start.
+   *
+   * @param repositories the projection repository bean, resolved only when index beans exist
+   * @param projectionIndexes the index beans
+   * @return the declaring callback
+   */
+  @Bean
+  public org.springframework.beans.factory.SmartInitializingSingleton
+      streamRuneProjectionIndexDeclarer(
+          ObjectProvider<org.streamrune.core.projection.ProjectionRepository> repositories,
+          ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
+    return () -> {
+      var indexes = projectionIndexes.orderedStream().toList();
+      if (indexes.isEmpty()) {
+        return;
+      }
+      var repository = repositories.getIfAvailable();
+      if (repository == null) {
+        throw new IllegalStateException(
+            indexes.size()
+                + " ProjectionIndex bean(s) but no ProjectionRepository bean to declare them on:"
+                + " define one, or a DataSource for the auto-configured JdbcProjectionRepository");
+      }
+      indexes.forEach(repository::declareIndex);
+    };
   }
 
   /**

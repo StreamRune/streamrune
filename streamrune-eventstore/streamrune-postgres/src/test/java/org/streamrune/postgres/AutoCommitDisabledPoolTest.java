@@ -499,6 +499,24 @@ class AutoCommitDisabledPoolTest {
   }
 
   @Test
+  void projectionRepository_declaredIndexIsDurable() {
+    var repository = new JdbcProjectionRepository(pool);
+    var name = ProjectionName.of("autocommit_off_indexed");
+    var index =
+        org.streamrune.core.projection.ProjectionIndex.forFilter(
+            name, "value", org.streamrune.core.Sort.unsorted());
+
+    repository.declareIndex(index); // creates the table, then the index
+
+    assertEquals(
+        1,
+        count(
+            "SELECT COUNT(*) FROM pg_indexes WHERE tablename = ? AND indexdef LIKE ?",
+            "autocommit_off_indexed_view",
+            "%(data ->> 'value'%"));
+  }
+
+  @Test
   void projectionRepository_batchOnATableCreatedOutsideItCommits() {
     var repository = new JdbcProjectionRepository(pool);
     var name = ProjectionName.of("autocommit_off_batch");

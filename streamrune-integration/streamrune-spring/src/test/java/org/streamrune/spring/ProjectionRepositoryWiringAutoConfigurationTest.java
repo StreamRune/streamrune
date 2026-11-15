@@ -69,6 +69,54 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
             });
   }
 
+  /**
+   * The application defines its own repository: the auto-configured one backs off, and the index
+   * beans are declared on the application's bean at startup, before anything reads.
+   */
+  @Test
+  void projectionIndexBeansAreDeclaredOnAnApplicationDefinedRepositoryAtStartup() {
+    var index =
+        org.streamrune.core.projection.ProjectionIndex.forSort(
+            org.streamrune.core.types.ProjectionName.of("orders"),
+            org.streamrune.core.Sort.by("createdAt"));
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.projection.ProjectionRepository.class,
+            org.streamrune.test.InMemoryProjectionRepository::new)
+        .withBean(org.streamrune.core.projection.ProjectionIndex.class, () -> index)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var repository =
+                  (org.streamrune.test.InMemoryProjectionRepository)
+                      ctx.getBean(org.streamrune.core.projection.ProjectionRepository.class);
+              assertThat(repository.declaredIndexes()).containsExactly(index);
+            });
+  }
+
+  @Test
+  void projectionIndexBeansWithoutARepositoryFailStartup() {
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(
+            org.streamrune.core.projection.ProjectionIndex.class,
+            () ->
+                org.streamrune.core.projection.ProjectionIndex.forSort(
+                    org.streamrune.core.types.ProjectionName.of("orders"),
+                    org.streamrune.core.Sort.by("createdAt")))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("no ProjectionRepository bean");
+            });
+  }
+
   @Test
   void aProjectionIndexBeanTheRepositoryRefusesFailsStartup() {
     runner

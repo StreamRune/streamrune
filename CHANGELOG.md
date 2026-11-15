@@ -65,7 +65,8 @@ jars. In brief:
 - **Paged, filtered and indexed read models.** `ProjectionRepository.findAllBy` reads one page of
   the rows whose field holds a value, `findAll` one page in a sort order; both order by code-point
   text with the id as tiebreak and take the page and its total from one snapshot, on PostgreSQL and
-  in memory alike. A `ProjectionIndex` declares the index such a read needs, and the
+  in memory alike. A `ProjectionIndex` declares the index such a read needs
+  (`ProjectionRepository.declareIndex`, or a `ProjectionIndex` bean in the integrations), and the
   PostgreSQL repository creates it with the table.
 - **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
   integrations: a trusted gateway's `X-User-Id` header when

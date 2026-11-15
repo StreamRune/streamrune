@@ -8,7 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assumptions;
@@ -17,6 +21,7 @@ import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.Sort;
 import org.streamrune.core.SortDirection;
+import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.ProjectionIndex;
@@ -24,25 +29,29 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * What the paged reads of a {@link ProjectionRepository} promise, whatever stores the rows: {@code
- * findAll(name, type, pageRequest)} and {@code findAllBy(name, type, filter, pageRequest)} return
- * the rows in the order of the request's sort, compared as JSON text in code-point order, with the
- * id breaking every tie and a missing field after every value ascending; the filter matches the
- * field's text exactly; the total counts the rows the read selects; a page beyond the last, also
- * past an {@code int} offset, is empty and carries the total; a field outside {@code [A-Za-z0-9_]+}
- * or naming a repository column in a filter is refused; and declaring an index twice is accepted.
- * Run by {@code InMemoryProjectionRepositoryQueryContractTest} (streamrune-test) and {@code
+ * What the paged reads and the index declaration of a {@link ProjectionRepository} promise,
+ * whatever stores the rows: {@code findAll(name, type, pageRequest)} and {@code findAllBy(name,
+ * type, filter, pageRequest)} return the rows in the order of the request's sort, compared as JSON
+ * text in code-point order, with the id breaking every tie and a missing field after every value
+ * ascending; the filter matches the field's text exactly, a decimal number's text being the one
+ * PostgreSQL prints; the total counts the rows the read selects; a page beyond the last, also past
+ * an {@code int} offset, is empty and carries the total; a field outside {@code [A-Za-z0-9_]+}, a
+ * repository column in a filter and an {@code Encrypted} record component are refused; declaring an
+ * index twice is accepted, and a transaction-scoped repository refuses a declaration. The plain
+ * reads and writes (save, find, delete, versioned save) are covered by each repository's own tests
+ * and by {@link AtomicBatchProcessorContract}. Run by {@code
+ * InMemoryProjectionRepositoryQueryContractTest} (streamrune-test) and {@code
  * JdbcProjectionRepositoryQueryContractTest} (streamrune-postgres), so a test on the in-memory
- * repository sees the order production returns.
+ * repository sees what production returns.
  */
-public abstract class ProjectionRepositoryContract {
+public abstract class ProjectionRepositoryQueryContract {
 
   private static final AtomicInteger NAMES = new AtomicInteger();
 
   private static final Sort NEWEST_FIRST = Sort.by("createdAt", SortDirection.DESC);
 
   /** For a subclass that supplies the repository under test through the abstract hooks. */
-  protected ProjectionRepositoryContract() {}
+  protected ProjectionRepositoryQueryContract() {}
 
   /**
    * The repository under test.
@@ -50,13 +59,6 @@ public abstract class ProjectionRepositoryContract {
    * @return the repository under test
    */
   protected abstract ProjectionRepository repository();
-
-  /**
-   * Declares {@code index} on the repository under test, as the application's wiring does.
-   *
-   * @param index the index to declare
-   */
-  protected abstract void declareIndex(ProjectionIndex index);
 
   /**
    * A projection name no other test in this JVM has used.
@@ -94,6 +96,71 @@ public abstract class ProjectionRepositoryContract {
       this.customer = customer;
       this.createdAt = createdAt;
       this.rank = rank;
+    }
+  }
+
+  /**
+   * A read model of number, duration and boolean fields, whose text the stores must agree on.
+   *
+   * @param id the row id
+   * @param price a decimal with a scale
+   * @param measure a double
+   * @param big a float
+   * @param delay a duration (written as decimal seconds)
+   * @param active a boolean
+   */
+  public record NumberRow(
+      String id, BigDecimal price, Double measure, Float big, Duration delay, Boolean active) {
+    /**
+     * Jackson creator.
+     *
+     * @param id the row id
+     * @param price a decimal with a scale
+     * @param measure a double
+     * @param big a float
+     * @param delay a duration
+     * @param active a boolean
+     */
+    @JsonCreator
+    public NumberRow(
+        @JsonProperty("id") String id,
+        @JsonProperty("price") BigDecimal price,
+        @JsonProperty("measure") Double measure,
+        @JsonProperty("big") Float big,
+        @JsonProperty("delay") Duration delay,
+        @JsonProperty("active") Boolean active) {
+      this.id = id;
+      this.price = price;
+      this.measure = measure;
+      this.big = big;
+      this.delay = delay;
+      this.active = active;
+    }
+  }
+
+  /**
+   * A read model with an {@code Encrypted} component, which no read may filter or sort on.
+   *
+   * @param id the row id
+   * @param email the encrypted component
+   * @param name a plain component
+   */
+  public record SecretRow(String id, @Encrypted(subjectId = "id") String email, String name) {
+    /**
+     * Jackson creator.
+     *
+     * @param id the row id
+     * @param email the encrypted component
+     * @param name a plain component
+     */
+    @JsonCreator
+    public SecretRow(
+        @JsonProperty("id") String id,
+        @JsonProperty("email") String email,
+        @JsonProperty("name") String name) {
+      this.id = id;
+      this.email = email;
+      this.name = name;
     }
   }
 
@@ -215,7 +282,10 @@ public abstract class ProjectionRepositoryContract {
         "the id tiebreak stays ascending under a descending sort");
   }
 
-  /** Text sorts by code point: an upper-case letter before every lower-case one. */
+  /**
+   * Text sorts by code point: an upper-case letter before every lower-case one, and a character
+   * beyond U+FFFF after U+FF5E (UTF-16 order would put it first).
+   */
   @Test
   public void aFieldSortsByCodePointNotByLinguisticCollation() {
     var name = freshName();
@@ -223,41 +293,74 @@ public abstract class ProjectionRepositoryContract {
     save(name, "2", "Bob", null);
     save(name, "3", "bob", null);
     save(name, "4", "Alice", null);
+    save(name, "5", "é", null);
+    save(name, "6", "😀", null);
+    save(name, "7", "～", null);
 
     assertEquals(
-        List.of("4", "2", "1", "3"), ids(all(name, PageRequest.of(0, 10, Sort.by("customer")))));
+        List.of("4", "2", "1", "3", "5", "7", "6"),
+        ids(all(name, PageRequest.of(0, 10, Sort.by("customer")))));
   }
 
-  /** An unsorted read orders by id, in code-point order. */
+  /** An unsorted read orders by id, in code-point order, beyond U+FFFF too. */
   @Test
   public void anUnsortedReadOrdersByIdInCodePointOrder() {
     var name = freshName();
-    save(name, "order-a1", "x", null);
-    save(name, "order-B1", "x", null);
-    save(name, "order-b0", "x", null);
+    for (String id : List.of("order-a1", "order-B1", "order-b0", "order-😀", "order-～")) {
+      save(name, id, "x", null);
+    }
+    var expected = List.of("order-B1", "order-a1", "order-b0", "order-～", "order-😀");
 
-    assertEquals(
-        List.of("order-B1", "order-a1", "order-b0"), ids(all(name, PageRequest.of(0, 10))));
-    assertEquals(
-        List.of("order-B1", "order-a1", "order-b0"), ids(by(name, "x", PageRequest.of(0, 10))));
+    assertEquals(expected, ids(all(name, PageRequest.of(0, 10))));
+    assertEquals(expected, ids(by(name, "x", PageRequest.of(0, 10))));
   }
 
-  /** A missing field sorts after every value ascending and before every value descending. */
+  /**
+   * A missing field and a JSON-{@code null} one sort after every value ascending and before every
+   * value descending, and match no filter.
+   */
   @Test
+  @SuppressWarnings("rawtypes")
   public void aMissingFieldSortsLastAscendingAndFirstDescending() {
     var name = freshName();
-    save(name, "n1", "alice", null);
-    save(name, "v1", "alice", "2026-01-01T00:00:01Z");
-    save(name, "v2", "alice", "2026-01-01T00:00:02Z");
+    repository().save(name, "m1", row("m1", "alice", null, false)); // no createdAt key at all
+    repository().save(name, "n1", row("n1", "alice", null, true)); // "createdAt": null
+    repository().save(name, "v1", row("v1", "alice", "2026-01-01T00:00:01Z", true));
+    repository().save(name, "v2", row("v2", "alice", "2026-01-01T00:00:02Z", true));
+    var customer = FieldEquals.of("customer", "alice");
 
-    assertEquals(
-        List.of("v1", "v2", "n1"),
-        ids(by(name, "alice", PageRequest.of(0, 10, Sort.by("createdAt")))));
-    assertEquals(
-        List.of("n1", "v2", "v1"), ids(by(name, "alice", PageRequest.of(0, 10, NEWEST_FIRST))));
+    Page<Map> ascending =
+        repository()
+            .findAllBy(name, Map.class, customer, PageRequest.of(0, 10, Sort.by("createdAt")));
+    Page<Map> descending =
+        repository().findAllBy(name, Map.class, customer, PageRequest.of(0, 10, NEWEST_FIRST));
+
+    assertEquals(List.of("v1", "v2", "m1", "n1"), mapIds(ascending));
+    assertEquals(List.of("m1", "n1", "v2", "v1"), mapIds(descending));
+    assertTrue(
+        repository()
+            .findAllBy(name, Map.class, FieldEquals.of("createdAt", "null"), PageRequest.of(0, 10))
+            .isEmpty(),
+        "a missing or null field matches no value, not even the text null");
   }
 
-  /** A number field filters by its text and sorts as text. */
+  private static Map<String, Object> row(
+      String id, String customer, String createdAt, boolean writeCreatedAt) {
+    var row = new LinkedHashMap<String, Object>();
+    row.put("id", id);
+    row.put("customer", customer);
+    if (writeCreatedAt) {
+      row.put("createdAt", createdAt);
+    }
+    return row;
+  }
+
+  @SuppressWarnings("rawtypes")
+  private static List<Object> mapIds(Page<Map> page) {
+    return page.content().stream().map(row -> row.get("id")).toList();
+  }
+
+  /** A whole number filters by its text and sorts as text. */
   @Test
   public void aNumberFieldFiltersAndSortsAsText() {
     var name = freshName();
@@ -276,24 +379,155 @@ public abstract class ProjectionRepositoryContract {
         List.of("r10", "r5", "r9"), ids(all(name, PageRequest.of(0, 10, Sort.by("rank")))));
   }
 
-  /** The repository columns sort by their own values: {@code version} as a number. */
+  /**
+   * A decimal, a double, a float and a duration compare as PostgreSQL prints the {@code numeric}
+   * the JSON number is stored as: no exponent, the scale as written; a boolean as its word.
+   */
+  @Test
+  public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem() {
+    var name = freshName();
+    repository()
+        .save(
+            name,
+            "n1",
+            new NumberRow(
+                "n1", new BigDecimal("19.90"), 1.2345678E7, 1.0E10f, Duration.ofSeconds(90), true));
+    repository()
+        .save(
+            name,
+            "n2",
+            new NumberRow("n2", new BigDecimal("100"), 1.0E-4, 2.5f, Duration.ofSeconds(5), false));
+    repository()
+        .save(
+            name,
+            "n3",
+            new NumberRow("n3", new BigDecimal("5.00"), -0.0, 0.25f, Duration.ofMillis(500), true));
+
+    assertEquals(List.of("n1"), numberIds(name, "price", "19.90"));
+    assertEquals(List.of(), numberIds(name, "price", "19.9"));
+    assertEquals(List.of("n2"), numberIds(name, "price", "100"));
+    assertEquals(List.of("n3"), numberIds(name, "price", "5.00"));
+    assertEquals(List.of("n1"), numberIds(name, "measure", "12345678"));
+    assertEquals(List.of(), numberIds(name, "measure", "1.2345678E7"));
+    assertEquals(List.of("n2"), numberIds(name, "measure", "0.00010"));
+    assertEquals(List.of("n3"), numberIds(name, "measure", "0.0"));
+    assertEquals(List.of("n1"), numberIds(name, "big", "10000000000"));
+    assertEquals(List.of("n1"), numberIds(name, "delay", "90.000000000"));
+    assertEquals(List.of("n3"), numberIds(name, "delay", "0.500000000"));
+    assertEquals(List.of("n1", "n3"), numberIds(name, "active", "true"));
+    assertEquals(List.of("n2", "n1", "n3"), numberSort(name, "price"));
+    assertEquals(List.of("n3", "n2", "n1"), numberSort(name, "measure"));
+    assertEquals(List.of("n3", "n1", "n2"), numberSort(name, "big"));
+  }
+
+  private List<String> numberIds(ProjectionName name, String field, String value) {
+    return repository()
+        .findAllBy(name, NumberRow.class, FieldEquals.of(field, value), PageRequest.of(0, 10))
+        .content()
+        .stream()
+        .map(NumberRow::id)
+        .toList();
+  }
+
+  private List<String> numberSort(ProjectionName name, String field) {
+    return repository()
+        .findAll(name, NumberRow.class, PageRequest.of(0, 10, Sort.by(field)))
+        .content()
+        .stream()
+        .map(NumberRow::id)
+        .toList();
+  }
+
+  /**
+   * The repository columns sort by their own values: {@code version} as a number (10 after 2), and
+   * {@code updated_at} by the last save.
+   */
   @Test
   public void theVersionAndUpdatedAtColumnsSortByTheirValues() {
     var name = freshName();
     save(name, "b", "x", null);
     save(name, "a", "x", null);
     save(name, "c", "x", null);
-    save(name, "c", "x", "again");
-    save(name, "c", "x", "and again");
+    for (int i = 0; i < 10; i++) {
+      save(name, "c", "x", "again " + i);
+    }
     save(name, "a", "x", "again");
+    save(name, "a", "x", "and again");
 
     assertEquals(
-        List.of("c", "a", "b"),
-        ids(all(name, PageRequest.of(0, 10, Sort.by("version", SortDirection.DESC)))));
+        List.of("b", "a", "c"),
+        ids(all(name, PageRequest.of(0, 10, Sort.by("version")))),
+        "versions 0, 2, 10 in number order");
     assertEquals(
         List.of("b", "c", "a"),
         ids(all(name, PageRequest.of(0, 10, Sort.by("updated_at")))),
-        "the row written last sorts last");
+        "the row saved last sorts last");
+  }
+
+  /** Inside a transaction its rows share one {@code updated_at}, so the id orders them. */
+  @Test
+  public void theRowsOfOneTransactionTieOnUpdatedAt() {
+    Assumptions.assumeTrue(
+        repository() instanceof AtomicBatchProcessor, "the repository has no transactions");
+    var processor = (AtomicBatchProcessor) repository();
+    var name = freshName();
+    var inside = new AtomicReference<Page<ContractRow>>();
+
+    processor.executeReplay(
+        name,
+        List.of(),
+        tx -> {
+          for (String id : List.of("z", "y", "a")) {
+            tx.save(name, id, new ContractRow(id, "x", null, null));
+          }
+          inside.set(
+              tx.findAll(name, ContractRow.class, PageRequest.of(0, 10, Sort.by("updated_at"))));
+        });
+
+    assertEquals(List.of("a", "y", "z"), ids(inside.get()));
+    assertEquals(
+        List.of("a", "y", "z"), ids(all(name, PageRequest.of(0, 10, Sort.by("updated_at")))));
+  }
+
+  /**
+   * A filter or sort on an {@code Encrypted} component is refused: its stored text is ciphertext.
+   */
+  @Test
+  public void anEncryptedComponentCannotBeFilteredOrSorted() {
+    var name = freshName();
+    var byEmail = FieldEquals.of("email", "a@example.com");
+    var request = PageRequest.of(0, 10);
+
+    var filter =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> repository().findAllBy(name, SecretRow.class, byEmail, request));
+    assertTrue(filter.getMessage().contains("email"), filter.getMessage());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> repository().findAll(name, SecretRow.class, PageRequest.of(0, 10, Sort.by("email"))));
+    var byName = FieldEquals.of("name", "x");
+    var sortedByEmail = PageRequest.of(0, 10, Sort.by("email", SortDirection.DESC));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> repository().findAllBy(name, SecretRow.class, byName, sortedByEmail));
+    assertDoesNotThrow(
+        () -> repository().findAllBy(name, SecretRow.class, byName, request),
+        "a plain component of the same type is fine");
+  }
+
+  /** {@code declareIndex(null)} and a declaration inside a transaction are refused. */
+  @Test
+  public void aNullIndexAndAnIndexDeclaredInsideATransactionAreRefused() {
+    assertThrows(IllegalArgumentException.class, () -> repository().declareIndex(null));
+    Assumptions.assumeTrue(
+        repository() instanceof AtomicBatchProcessor, "the repository has no transactions");
+    var name = freshName();
+    var index = ProjectionIndex.forSort(name, NEWEST_FIRST);
+    var processor = (AtomicBatchProcessor) repository();
+    assertThrows(
+        IllegalStateException.class,
+        () -> processor.executeReplay(name, List.of(), tx -> tx.declareIndex(index)));
   }
 
   /** A page past an {@code int} offset is an empty page with the total, not an error. */
@@ -333,7 +567,7 @@ public abstract class ProjectionRepositoryContract {
           "sort field " + field);
       assertThrows(
           IllegalArgumentException.class,
-          () -> declareIndex(ProjectionIndex.forSort(name, Sort.by(field))),
+          () -> repository().declareIndex(ProjectionIndex.forSort(name, Sort.by(field))),
           "index key " + field);
     }
     for (String column : List.of("id", "version", "updated_at")) {
@@ -375,15 +609,15 @@ public abstract class ProjectionRepositoryContract {
     var byCustomerNewest = ProjectionIndex.forFilter(name, "customer", NEWEST_FIRST);
     var newest = ProjectionIndex.forSort(name, NEWEST_FIRST);
 
-    assertDoesNotThrow(() -> declareIndex(byCustomer));
+    assertDoesNotThrow(() -> repository().declareIndex(byCustomer));
     save(name, "r1", "alice", "2026-01-01T00:00:01Z");
     save(name, "r2", "alice", "2026-01-01T00:00:02Z");
     assertDoesNotThrow(
         () -> {
-          declareIndex(byCustomer);
-          declareIndex(byCustomerNewest);
-          declareIndex(byCustomerNewest);
-          declareIndex(newest);
+          repository().declareIndex(byCustomer);
+          repository().declareIndex(byCustomerNewest);
+          repository().declareIndex(byCustomerNewest);
+          repository().declareIndex(newest);
         });
 
     assertEquals(List.of("r2", "r1"), ids(by(name, "alice", PageRequest.of(0, 10, NEWEST_FIRST))));

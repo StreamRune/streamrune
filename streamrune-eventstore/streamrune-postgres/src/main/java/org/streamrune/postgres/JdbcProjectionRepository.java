@@ -44,16 +44,18 @@ import org.streamrune.core.types.ProjectionName;
  * data JSONB NOT NULL, version BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ} — through {@code
  * CREATE TABLE IF NOT EXISTS}, so a table of that name the application created itself must already
  * have that shape. The id is in code-point order ({@code COLLATE "C"}) so the primary key serves
- * the paged reads' order by id (see {@link #findAll(ProjectionName, Class, PageRequest)}). A
- * projection name must match {@code [a-z_][a-z0-9_]{0,57}} and is used exactly as given: any other
- * name is rejected with an {@link IllegalArgumentException}, never rewritten, so no two names share
- * a table; the projection runners check the name at registration through {@link
- * #checkProjectionName}. Also implements {@link AtomicBatchProcessor} to provide atomic projection
- * update + offset save within a single transaction, guarded against split-brain double-apply by
- * three checks under one checkpoint-row lock: the epoch fence, the first-offset overlap guard, and
- * the monotonic offset guard (see {@link #executeAtomically}). {@link #executeReplay} applies a
- * dead-lettered range under the same checkpoint-row lock without moving the checkpoint, so a replay
- * and a live batch of one projection never interleave.
+ * the paged reads' order by id (see {@link #findAll(ProjectionName, Class, PageRequest)}); on a
+ * table whose id has another collation the order stays right (the statements name the collation)
+ * and the primary key does not serve it. A projection name must match {@code [a-z_][a-z0-9_]{0,57}}
+ * and is used exactly as given: any other name is rejected with an {@link
+ * IllegalArgumentException}, never rewritten, so no two names share a table; the projection runners
+ * check the name at registration through {@link #checkProjectionName}. Also implements {@link
+ * AtomicBatchProcessor} to provide atomic projection update + offset save within a single
+ * transaction, guarded against split-brain double-apply by three checks under one checkpoint-row
+ * lock: the epoch fence, the first-offset overlap guard, and the monotonic offset guard (see {@link
+ * #executeAtomically}). {@link #executeReplay} applies a dead-lettered range under the same
+ * checkpoint-row lock without moving the checkpoint, so a replay and a live batch of one projection
+ * never interleave.
  *
  * <p><b>When a table is created.</b> By the first read or write of a projection name through this
  * repository, by {@link #declareIndex}, or by {@link #prepareReadModel}, which the runners call
@@ -109,6 +111,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   // Cache to track which tables have been checked/created (avoids race condition)
   private final Set<ProjectionName> tablesChecked = ConcurrentHashMap.newKeySet();
+
+  // The JSON names of each read-model type's @Encrypted record components (see
+  // refuseEncryptedKeys).
+  private final ConcurrentHashMap<Class<?>, Set<String>> encryptedFields =
+      new ConcurrentHashMap<>();
 
   private static final String UPSERT =
       "INSERT INTO %1$s (id, data, version, updated_at) VALUES (?, ?::jsonb, 0, NOW()) "
@@ -361,6 +368,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     if (pageRequest == null) {
       throw new IllegalArgumentException("pageRequest cannot be null");
     }
+    refuseEncryptedKeys(type, null, pageRequest.sort());
     return page(projectionName, type, null, pageRequest);
   }
 
@@ -375,7 +383,64 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   public <T> Page<T> findAllBy(
       ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
     validateFilteredRead(projectionName, type, filter, pageRequest);
+    refuseEncryptedKeys(type, filter, pageRequest.sort());
     return page(projectionName, type, filter, pageRequest);
+  }
+
+  /**
+   * Refuses a filter or sort on an {@code Encrypted} record component of {@code type}: its stored
+   * text is ciphertext under a crypto-aware mapper (so it matches and orders nothing meaningful),
+   * plaintext under a crypto-blind one; refused in every wiring so the mistake fails at the first
+   * call. The component is matched by its Java name and by the JSON name this repository's mapper
+   * gives it.
+   */
+  private void refuseEncryptedKeys(Class<?> type, FieldEquals filter, Sort sort) {
+    Set<String> encrypted = encryptedFields.computeIfAbsent(type, this::encryptedJsonFields);
+    if (encrypted.isEmpty()) {
+      return;
+    }
+    if (filter != null && encrypted.contains(filter.field())) {
+      throw encryptedKey(type, filter.field());
+    }
+    for (Sort.Order order : sort.orders()) {
+      if (!DIRECT_COLUMNS.contains(order.field()) && encrypted.contains(order.field())) {
+        throw encryptedKey(type, order.field());
+      }
+    }
+  }
+
+  private Set<String> encryptedJsonFields(Class<?> type) {
+    if (!type.isRecord()) {
+      return Set.of();
+    }
+    var components = new HashSet<String>();
+    for (var component : type.getRecordComponents()) {
+      if (component.isAnnotationPresent(org.streamrune.core.crypto.Encrypted.class)) {
+        components.add(component.getName());
+      }
+    }
+    if (components.isEmpty()) {
+      return Set.of();
+    }
+    var names = new HashSet<>(components);
+    var description =
+        objectMapper.getSerializationConfig().introspect(objectMapper.constructType(type));
+    for (var property : description.findProperties()) {
+      if (components.contains(property.getInternalName())) {
+        names.add(property.getName());
+      }
+    }
+    return Set.copyOf(names);
+  }
+
+  private static IllegalArgumentException encryptedKey(Class<?> type, String field) {
+    return new IllegalArgumentException(
+        "Field '"
+            + LogSanitizer.sanitizeForLog(field)
+            + "' of "
+            + type.getSimpleName()
+            + " is @Encrypted: its stored text is ciphertext, so it cannot be filtered or sorted"
+            + " (keep a separate, non-sensitive field for the query)");
   }
 
   private <T> Page<T> page(
@@ -414,15 +479,19 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * a page beyond the last is one row with the count and a {@code NULL} {@code data} ({@code data}
    * is {@code NOT NULL} in the table, so {@code NULL} means "no row"). The page subquery selects
    * its sort keys too, so the outer {@code ORDER BY} restores its order after the join (at most
-   * {@link PageRequest} size rows). Parameters: the filter value twice when there is a filter, then
-   * {@code LIMIT} and {@code OFFSET}.
+   * {@link PageRequest} size rows). The page is gated on the count ({@code LATERAL ... WHERE
+   * total.n > offset}), so a page beyond the last reads only the count, not every row before the
+   * offset. Parameters: the filter value (when there is a filter), the offset, the filter value
+   * again, {@code LIMIT}, {@code OFFSET}.
    *
    * @throws IllegalArgumentException if the projection name, the filter field or a sort field is
    *     outside the rules
    */
   static String pageSql(ProjectionName projectionName, FieldEquals filter, Sort sort) {
     String table = tableName(projectionName);
-    String where = filter == null ? "" : " WHERE " + filterExpression(filter.field()) + " = ?";
+    String condition = filter == null ? null : filterExpression(filter.field()) + " = ?";
+    String where = condition == null ? "" : " WHERE " + condition;
+    String gate = " WHERE total.n > ?" + (condition == null ? "" : " AND " + condition);
     List<Sort.Order> keys = keysWithIdTiebreak(sort.orders());
     var selected = new ArrayList<String>();
     var inner = new ArrayList<String>();
@@ -438,11 +507,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     return "SELECT total.n, page.data FROM (SELECT count(*) AS n FROM "
         + table
         + where
-        + ") AS total LEFT JOIN (SELECT data, "
+        + ") AS total LEFT JOIN LATERAL (SELECT data, "
         + String.join(", ", selected)
         + " FROM "
         + table
-        + where
+        + gate
         + " ORDER BY "
         + String.join(", ", inner)
         + " LIMIT ? OFFSET ?) AS page ON true ORDER BY "
@@ -459,6 +528,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       int parameter = 1;
       if (filter != null) {
         ps.setString(parameter++, filter.value());
+      }
+      ps.setLong(parameter++, pageRequest.offset());
+      if (filter != null) {
         ps.setString(parameter++, filter.value());
       }
       ps.setInt(parameter++, pageRequest.size());
@@ -512,15 +584,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     };
   }
 
-  /** The SQL a filter compares: only a read-model field, never a repository column. */
+  /**
+   * The SQL a filter compares: a read-model field ({@link FieldEquals} refuses the column names).
+   */
   private static String filterExpression(String field) {
     validateField(field);
-    if (DIRECT_COLUMNS.contains(field)) {
-      throw new IllegalArgumentException(
-          "A filter names a read-model field, not the repository column '"
-              + field
-              + "': read one row by id with findById; version and updated_at cannot be filtered");
-    }
     return jsonFieldExpression(field);
   }
 
@@ -541,32 +609,45 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   /**
    * Creates {@code index} on its projection's table, creating the table first if it does not exist:
-   * {@code CREATE INDEX IF NOT EXISTS <name> ON <name>_view (<keys>)}, committed before it returns.
-   * Call it at wiring, once per index the projection's reads need, before the application serves
-   * them; the Spring, Quarkus and Micronaut projection-repository beans call it for each {@link
-   * ProjectionIndex} bean. Idempotent: an index of that name that exists is left as it is, and no
+   * {@code CREATE INDEX IF NOT EXISTS <index name> ON <projection>_view (<keys>)}, committed before
+   * it returns. Call it at wiring, once per index the projection's reads need, before the
+   * application serves them; the Spring, Quarkus and Micronaut integrations call it at startup for
+   * each {@link ProjectionIndex} bean, on the application's {@code ProjectionRepository} bean.
+   * Idempotent: a valid index of that name on the projection's table is left as it is, and no
    * statement takes a lock on the table then.
    *
    * <p><b>Keys.</b> Each JSON field is indexed as {@code (data->>'field') COLLATE "C"}, the
    * expression the reads compare, so the planner can use the index for the filter and for the
    * {@code ORDER BY}; the id is the last key ({@code id COLLATE "C"}, appended unless the keys name
-   * it).
+   * it). Index short scalar fields: a B-tree entry holds at most 2704 bytes, and once the index
+   * exists a save whose indexed text is longer fails ({@code 54000}), and its projection batch with
+   * it.
    *
    * <p><b>Name.</b> {@code <projection>_<keys>_ix_<hash>}: the projection name and the lower-cased
    * keys ({@code _desc} after a descending one), cut so the name stays within PostgreSQL's 63-byte
-   * identifier limit, then the first ten hex digits of a SHA-256 of the table and the exact keys,
-   * so two indexes that differ only in letter case, direction or a cut-off tail have two names.
-   * {@link #createIndexSql} prints the statement.
+   * identifier limit, then the first ten hex digits of a SHA-256 of the table and the exact column
+   * list the statement creates, so two indexes that differ in letter case, direction, a cut-off
+   * tail or a key expression have two names. {@link #createIndexSql} returns the statement, and it
+   * is logged at INFO when this method creates the index.
    *
    * <p><b>Not {@code CONCURRENTLY}.</b> {@code CREATE INDEX} holds a {@code SHARE} lock on the
    * table while it builds: reads go on, writes to that projection wait until the build commits. On
    * a new or small table that is milliseconds; on a large one it stalls the projection's batches
-   * for the build. {@code CREATE INDEX CONCURRENTLY} would not block writes, but it cannot run in a
-   * transaction (so not on a pool that hands out manual-commit connections), waits for every open
-   * transaction that touched the table, and a failed or interrupted build leaves an {@code INVALID}
-   * index that {@code IF NOT EXISTS} then skips for ever. For a large existing table, run {@link
-   * #createIndexSql}'s statement with {@code CONCURRENTLY} by hand before the deploy that declares
-   * it; this method then finds the index and does nothing.
+   * for the build, and the session's {@code statement_timeout} (this class sets none of its own)
+   * bounds it: a build that takes longer fails every start. {@code CREATE INDEX CONCURRENTLY} would
+   * not block writes, but it cannot run in a transaction (so not on a pool that hands out
+   * manual-commit connections), waits for every open transaction that touched the table, and a
+   * failed or interrupted build leaves an {@code INVALID} index behind. For a large existing table,
+   * run {@link #createIndexSql}'s statement with {@code CONCURRENTLY} by hand before the deploy
+   * that declares it (print it with {@code
+   * System.out.println(JdbcProjectionRepository.createIndexSql(index))}); this method then finds
+   * the index and does nothing.
+   *
+   * <p><b>An index of that name that is not usable</b> — {@code INVALID} (a failed manual {@code
+   * CONCURRENTLY} build, or one still running), or a relation of that name that is not an index of
+   * the projection's table — fails this method with an {@link EventStoreException} naming the
+   * {@code DROP INDEX} to run. It is not dropped here: an {@code INVALID} index may be a build an
+   * operator is still running.
    *
    * <p><b>Replicas.</b> Several replicas declaring one index at once all succeed: each finds the
    * index missing and builds it; PostgreSQL commits one and fails the others on the catalog ({@code
@@ -576,14 +657,17 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * @param index the index to create
    * @throws IllegalArgumentException if {@code index} is {@code null}, or its projection name or a
    *     key is outside the rules
-   * @throws EventStoreException if the table or the index cannot be created
+   * @throws EventStoreException if the table or the index cannot be created, or an index of its
+   *     name is not usable
    */
+  @Override
   public void declareIndex(ProjectionIndex index) {
     if (index == null) {
       throw new IllegalArgumentException("index cannot be null");
     }
     String ddl = createIndexSql(index); // validates the name and the keys before any I/O
     String name = indexName(index);
+    String table = tableName(index.projection());
     ensureTableExists(index.projection());
     SQLException lost = null;
     for (int attempt = 1; ; attempt++) {
@@ -593,21 +677,24 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
                 conn,
                 "projection index creation",
                 c -> {
-                  if (indexExists(c, name)) {
+                  if (usableIndexExists(c, name, table)) {
                     return false;
                   }
                   try (var stmt = c.createStatement()) {
                     stmt.execute(ddl);
+                    // IF NOT EXISTS skipped it (42P07 notice): another session's index, committed
+                    // between the check and the statement; the next attempt checks it.
+                    return !skippedAsExisting(stmt.getWarnings());
                   }
-                  return true;
                 });
         if (created) {
-          log.info(
-              "Created index {} on projection table {}",
-              LogSanitizer.sanitizeForLog(name),
-              tableName(index.projection()));
+          log.info("Created projection index: {}", LogSanitizer.sanitizeForLog(ddl));
+          return;
         }
-        return;
+        if (usableIndexExistsCommitted(name, table)) {
+          return;
+        }
+        throw new SQLException("index " + name + " was skipped but is not there", "42P07");
       } catch (SQLException failure) {
         if (lost != null) {
           failure.addSuppressed(lost);
@@ -624,32 +711,54 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
+  private boolean usableIndexExistsCommitted(String name, String table) throws SQLException {
+    try (var conn = dataSource.getConnection()) {
+      return PostgresTransactions.commitIfManual(
+          conn, "projection index check", c -> usableIndexExists(c, name, table));
+    }
+  }
+
+  private static boolean skippedAsExisting(SQLWarning warning) {
+    for (var w = warning; w != null; w = w.getNextWarning()) {
+      if ("42P07".equals(w.getSQLState())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * The statement {@link #declareIndex} runs for {@code index}: {@code CREATE INDEX IF NOT EXISTS
-   * <name> ON <table> (<keys>)}. For a large existing table, run it with {@code CONCURRENTLY}
-   * inserted after {@code INDEX} before the deploy that declares the index.
+   * <index name> ON <projection>_view (<keys>)}. For a large existing table, run it with {@code
+   * CONCURRENTLY} inserted after {@code INDEX} before the deploy that declares the index.
    *
    * @param index the index
    * @return the statement
-   * @throws IllegalArgumentException if the projection name or a key is outside the rules
+   * @throws IllegalArgumentException if {@code index} is {@code null}, or the projection name or a
+   *     key is outside the rules
    */
   public static String createIndexSql(ProjectionIndex index) {
     if (index == null) {
       throw new IllegalArgumentException("index cannot be null");
     }
     String table = tableName(index.projection());
-    var columns = new ArrayList<String>();
-    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
-      columns.add(
-          keyExpression(key.field()) + (key.direction() == SortDirection.DESC ? " DESC" : ""));
-    }
     return "CREATE INDEX IF NOT EXISTS "
         + indexName(index)
         + " ON "
         + table
         + " ("
-        + String.join(", ", columns)
+        + indexColumns(index)
         + ")";
+  }
+
+  /** The column list of {@code index}'s statement: each key's expression and direction, id last. */
+  private static String indexColumns(ProjectionIndex index) {
+    var columns = new ArrayList<String>();
+    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
+      columns.add(
+          keyExpression(key.field()) + (key.direction() == SortDirection.DESC ? " DESC" : ""));
+    }
+    return String.join(", ", columns);
   }
 
   private static final int INDEX_NAME_HASH_DIGITS = 10;
@@ -659,20 +768,17 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   /** The deterministic name of {@code index} (see {@link #declareIndex}). */
   static String indexName(ProjectionIndex index) {
     String table = tableName(index.projection());
+    String columns = indexColumns(index); // validates every key
     var readable = new StringBuilder(index.projection().value());
-    var canonical = new StringBuilder(table);
     for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
-      validateField(key.field());
-      boolean descending = key.direction() == SortDirection.DESC;
       readable.append('_').append(key.field().toLowerCase(java.util.Locale.ROOT));
-      if (descending) {
+      if (key.direction() == SortDirection.DESC) {
         readable.append("_desc");
       }
-      canonical.append('|').append(key.field()).append(descending ? " DESC" : " ASC");
     }
     int room = POSTGRES_IDENTIFIER_BYTES - INDEX_NAME_MARK.length() - INDEX_NAME_HASH_DIGITS;
     String prefix = readable.length() > room ? readable.substring(0, room) : readable.toString();
-    return prefix + INDEX_NAME_MARK + sha256Hex(canonical.toString(), INDEX_NAME_HASH_DIGITS);
+    return prefix + INDEX_NAME_MARK + sha256Hex(table + "|" + columns, INDEX_NAME_HASH_DIGITS);
   }
 
   private static String sha256Hex(String text, int digits) {
@@ -686,15 +792,47 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
-  /** Whether a relation named {@code name} exists in the schema the projection tables go to. */
-  private static boolean indexExists(Connection conn, String name) throws SQLException {
+  /**
+   * Whether a valid index named {@code name} on {@code table} exists in the schema the projection
+   * tables go to; {@code false} when no relation of that name exists there.
+   *
+   * @throws EventStoreException if a relation of that name exists and is not a valid index of
+   *     {@code table}
+   */
+  private static boolean usableIndexExists(Connection conn, String name, String table)
+      throws SQLException {
     try (var ps =
         conn.prepareStatement(
-            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+            "SELECT i.indisvalid, t.relname FROM pg_class c"
+                + " JOIN pg_namespace n ON n.oid = c.relnamespace"
+                + " LEFT JOIN pg_index i ON i.indexrelid = c.oid"
+                + " LEFT JOIN pg_class t ON t.oid = i.indrelid"
                 + " WHERE c.relname = ? AND n.nspname = current_schema()")) {
       ps.setString(1, name);
       try (var rs = ps.executeQuery()) {
-        return rs.next();
+        if (!rs.next()) {
+          return false;
+        }
+        boolean valid = rs.getBoolean(1);
+        String indexedTable = rs.getString(2);
+        if (indexedTable == null || !indexedTable.equals(table)) {
+          throw new EventStoreException(
+              "A relation named "
+                  + name
+                  + " exists and is not an index of "
+                  + table
+                  + ": the projection index of that name cannot be created; rename or drop it");
+        }
+        if (!valid) {
+          throw new EventStoreException(
+              "Projection index "
+                  + name
+                  + " exists but is INVALID (a failed or still running CREATE INDEX CONCURRENTLY):"
+                  + " wait for a running build to finish, or run DROP INDEX "
+                  + name
+                  + " and start again");
+        }
+        return true;
       }
     }
   }
@@ -1598,6 +1736,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       if (pageRequest == null) {
         throw new IllegalArgumentException("pageRequest cannot be null");
       }
+      refuseEncryptedKeys(type, null, pageRequest.sort());
       String sql = pageSql(projectionName, null, pageRequest.sort());
       ensureTableOnConnection(projectionName);
       return fromJson(
@@ -1608,10 +1747,19 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     public <T> Page<T> findAllBy(
         ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
       validateFilteredRead(projectionName, type, filter, pageRequest);
+      refuseEncryptedKeys(type, filter, pageRequest.sort());
       String sql = pageSql(projectionName, filter, pageRequest.sort());
       ensureTableOnConnection(projectionName);
       return fromJson(
           pageJsonOn(conn, projectionName, sql, filter, pageRequest), type, projectionName);
+    }
+
+    /** Refused: an index is declared at wiring, on the repository itself, not inside a batch. */
+    @Override
+    public void declareIndex(ProjectionIndex index) {
+      throw new IllegalStateException(
+          "declareIndex on a transaction-scoped repository: declare indexes at wiring, on the"
+              + " repository itself, not inside a projection batch");
     }
 
     @Override

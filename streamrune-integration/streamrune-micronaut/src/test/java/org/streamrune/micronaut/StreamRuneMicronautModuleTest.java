@@ -860,52 +860,11 @@ class StreamRuneMicronautModuleTest {
   // saga store bean does, so @Encrypted read-model fields are ciphertext at rest (not plaintext).
 
   @Test
-  void jdbcProjectionRepositoryDeclaresTheProjectionIndexBeans() {
-    var module = new StreamRuneMicronautModule();
-    List<String> statements = new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    module.jdbcProjectionRepository(
-        recordingDataSource(statements),
-        List.of(),
-        null,
-        List.of(
-            org.streamrune.core.projection.ProjectionIndex.forFilter(
-                org.streamrune.core.types.ProjectionName.of("orders"),
-                "customerId",
-                org.streamrune.core.Sort.by("createdAt", org.streamrune.core.SortDirection.DESC))));
-
-    assertTrue(
-        statements.stream()
-            .anyMatch(
-                sql ->
-                    sql.startsWith(
-                            "CREATE INDEX IF NOT EXISTS orders_customerid_createdat_desc_id_ix_")
-                        && sql.contains(" ON orders_view (")),
-        statements.toString());
-  }
-
-  @Test
-  void jdbcProjectionRepositoryRefusesAProjectionIndexBeanOutsideTheFieldRule() {
-    var module = new StreamRuneMicronautModule();
-    var index =
-        org.streamrune.core.projection.ProjectionIndex.forSort(
-            org.streamrune.core.types.ProjectionName.of("orders"),
-            org.streamrune.core.Sort.by("customer.id"));
-
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            module.jdbcProjectionRepository(
-                mock(DataSource.class), List.of(), null, List.of(index)));
-  }
-
-  @Test
   void jdbcProjectionRepositoryWiresCryptoEngine_whenPresent() throws Exception {
     var module = new StreamRuneMicronautModule();
     var crypto = new InMemoryCryptoEngine();
 
-    var repo =
-        module.jdbcProjectionRepository(mock(DataSource.class), List.of(crypto), null, List.of());
+    var repo = module.jdbcProjectionRepository(mock(DataSource.class), List.of(crypto), null);
 
     assertNotNull(repo);
     var field = repo.getClass().getDeclaredField("objectMapper");
@@ -918,7 +877,7 @@ class StreamRuneMicronautModuleTest {
   void jdbcProjectionRepositoryMapperIsCryptoBlind_whenNoCryptoEngine() throws Exception {
     var module = new StreamRuneMicronautModule();
 
-    var repo = module.jdbcProjectionRepository(mock(DataSource.class), List.of(), null, List.of());
+    var repo = module.jdbcProjectionRepository(mock(DataSource.class), List.of(), null);
 
     assertNotNull(repo);
     var field = repo.getClass().getDeclaredField("objectMapper");
@@ -938,7 +897,7 @@ class StreamRuneMicronautModuleTest {
             IllegalStateException.class,
             () ->
                 module.jdbcProjectionRepository(
-                    mock(DataSource.class), List.of(crypto1, crypto2), null, List.of()));
+                    mock(DataSource.class), List.of(crypto1, crypto2), null));
     assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"));
   }
 
@@ -1776,34 +1735,6 @@ class StreamRuneMicronautModuleTest {
       return field.get(target);
     } catch (ReflectiveOperationException e) {
       throw new RuntimeException(e);
-    }
-  }
-
-  /**
-   * A DataSource whose connections record every statement run through {@code createStatement()} and
-   * answer every query with no rows (so a declared index is found missing and created).
-   */
-  private static DataSource recordingDataSource(List<String> statements) {
-    try {
-      var dataSource = mock(DataSource.class);
-      var connection = mock(java.sql.Connection.class);
-      var statement = mock(java.sql.Statement.class);
-      var prepared = mock(java.sql.PreparedStatement.class);
-      when(dataSource.getConnection()).thenReturn(connection);
-      when(connection.getAutoCommit()).thenReturn(true);
-      when(connection.createStatement()).thenReturn(statement);
-      when(statement.execute(org.mockito.ArgumentMatchers.anyString()))
-          .thenAnswer(
-              invocation -> {
-                statements.add(invocation.getArgument(0));
-                return false;
-              });
-      when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
-          .thenReturn(prepared);
-      when(prepared.executeQuery()).thenReturn(mock(java.sql.ResultSet.class));
-      return dataSource;
-    } catch (java.sql.SQLException e) {
-      throw new IllegalStateException(e);
     }
   }
 }

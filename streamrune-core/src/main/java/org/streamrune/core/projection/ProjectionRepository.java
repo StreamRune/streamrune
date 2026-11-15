@@ -61,18 +61,26 @@ public interface ProjectionRepository {
   /**
    * Finds one page of a projection's read models, in the order of {@code pageRequest.sort()}.
    *
-   * <p><b>Order.</b> A sort order names a top-level field of the read model, or one of the
-   * repository's columns {@code id}, {@code version} and {@code updated_at}; a field outside {@code
-   * [A-Za-z0-9_]+} (nested paths included) is refused with an {@link IllegalArgumentException}. A
-   * field sorts by its text, as the stored JSON renders it ({@code data->>'field'} on PostgreSQL),
-   * compared by Unicode code point — byte order, PostgreSQL's {@code COLLATE "C"} — not by the
-   * database's linguistic collation and not by value: {@code "B"} sorts before {@code "a"}, the
-   * number {@code 10} before {@code 9}, and an ISO-8601 instant with fewer fraction digits after
-   * one with more within the same second ({@code "…00.5Z"} after {@code "…00.123Z"}). A missing or
-   * JSON-{@code null} field sorts after every value ascending and before every value descending.
-   * The id breaks every tie: a sort that does not order by {@code id} is followed by {@code id}
-   * ascending, so the order is total and a row appears on exactly one page of a stable table. An
-   * unsorted request orders by id.
+   * <p><b>Columns.</b> Besides the read model, every row has three columns: {@code id}, the row id;
+   * {@code version}, the number of saves of the row after its first; {@code updated_at}, the time
+   * of its last save (on PostgreSQL the start of the saving transaction, so the rows of one
+   * transaction tie). The three names are reserved: a sort order or an index key of that name
+   * orders by the column, so a read-model field named {@code id}, {@code version} or {@code
+   * updated_at} can be neither sorted nor filtered nor indexed.
+   *
+   * <p><b>Order.</b> A sort order names a top-level field of the read model, or one of the three
+   * columns; a field outside {@code [A-Za-z0-9_]+} (nested paths included), and an {@code
+   * Encrypted} record component of {@code type} (its stored text is ciphertext), are refused with
+   * an {@link IllegalArgumentException}. A field sorts by its text, as the stored JSON renders it
+   * ({@code data->>'field'} on PostgreSQL; see {@link FieldEquals} for numbers), compared by
+   * Unicode code point — byte order, PostgreSQL's {@code COLLATE "C"} — not by the database's
+   * linguistic collation and not by value: {@code "B"} sorts before {@code "a"}, the number {@code
+   * 10} before {@code 9}, and an ISO-8601 instant whose printed fraction is the beginning of
+   * another's sorts after it, though it is earlier ({@code "…00.123Z"} after {@code "…00.123456Z"},
+   * {@code "…00Z"} after {@code "…00.500Z"}). A missing or JSON-{@code null} field sorts after
+   * every value ascending and before every value descending. The id breaks every tie: a sort that
+   * does not order by {@code id} is followed by {@code id} ascending, so the order is total and a
+   * row appears on exactly one page of a stable table. An unsorted request orders by id.
    *
    * <p><b>Consistency.</b> {@link Page#content()} and {@link Page#totalElements()} come from one
    * view of the table: a write committed while the page is read changes both or neither.
@@ -102,10 +110,28 @@ public interface ProjectionRepository {
    * @param pageRequest pagination and sort parameters
    * @return a page of the matching read models
    * @throws IllegalArgumentException if an argument is {@code null}, or the filter or a sort order
-   *     names a field the repository refuses
+   *     names a field the repository refuses (outside {@code [A-Za-z0-9_]+}, or an {@code
+   *     Encrypted} record component of {@code type})
    */
   <T> Page<T> findAllBy(
       ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest);
+
+  /**
+   * Declares an index the projection's reads need (see {@link ProjectionIndex}). A repository that
+   * stores read models in a database creates it if it does not exist, with the projection's
+   * storage; one that does not checks its keys and records it. Idempotent. Call it at wiring,
+   * before the application serves reads: the Spring, Quarkus and Micronaut integrations call it at
+   * startup for every {@code ProjectionIndex} bean, on whatever {@code ProjectionRepository} bean
+   * the application uses. A decorator must forward it to the repository it wraps. A
+   * transaction-scoped repository (the one handed to a batch) refuses it with an {@link
+   * IllegalStateException}.
+   *
+   * @param index the index
+   * @throws IllegalArgumentException if {@code index} is {@code null} or a key is outside the field
+   *     rule
+   * @throws IllegalStateException if this repository is bound to a transaction
+   */
+  void declareIndex(ProjectionIndex index);
 
   /**
    * Finds a read model by ID with the specified lock mode. Returns a {@link Versioned} wrapper

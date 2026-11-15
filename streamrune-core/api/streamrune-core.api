@@ -1158,6 +1158,7 @@ public interface org.streamrune.core.projection.ProjectionRepository
   public abstract <T> org.streamrune.core.Page<T> findAllBy(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.projection.FieldEquals, org.streamrune.core.PageRequest)
   public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
   public abstract <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public abstract void declareIndex(org.streamrune.core.projection.ProjectionIndex)
   public abstract void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
   public default java.lang.Object writeTargetIdentity()
   public default void afterCommit(java.lang.Runnable)

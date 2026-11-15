@@ -138,8 +138,7 @@ class StreamRuneProducersTest {
   void jdbcProjectionRepositoryProduced() {
     var producers = new StreamRuneProducers();
     var repository =
-        producers.jdbcProjectionRepository(
-            mock(DataSource.class), unsatisfied(), unsatisfied(), unsatisfied());
+        producers.jdbcProjectionRepository(mock(DataSource.class), unsatisfied(), unsatisfied());
     assertNotNull(repository);
     // The repository doubles as the AtomicBatchProcessor wired into projection runners.
     assertInstanceOf(org.streamrune.core.projection.AtomicBatchProcessor.class, repository);
@@ -1109,54 +1108,13 @@ class StreamRuneProducersTest {
   // the saga store producer does, so @Encrypted read-model fields are ciphertext at rest.
 
   @Test
-  void jdbcProjectionRepositoryDeclaresTheProjectionIndexBeans() {
-    var producers = new StreamRuneProducers();
-    java.util.List<String> statements = new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    producers.jdbcProjectionRepository(
-        recordingDataSource(statements),
-        unsatisfied(),
-        unsatisfied(),
-        streaming(
-            org.streamrune.core.projection.ProjectionIndex.forFilter(
-                org.streamrune.core.types.ProjectionName.of("orders"),
-                "customerId",
-                org.streamrune.core.Sort.by("createdAt", org.streamrune.core.SortDirection.DESC))));
-
-    assertTrue(
-        statements.stream()
-            .anyMatch(
-                sql ->
-                    sql.startsWith(
-                            "CREATE INDEX IF NOT EXISTS orders_customerid_createdat_desc_id_ix_")
-                        && sql.contains(" ON orders_view (")),
-        statements.toString());
-  }
-
-  @Test
-  void jdbcProjectionRepositoryRefusesAProjectionIndexBeanOutsideTheFieldRule() {
-    var producers = new StreamRuneProducers();
-    var indexes =
-        streaming(
-            org.streamrune.core.projection.ProjectionIndex.forSort(
-                org.streamrune.core.types.ProjectionName.of("orders"),
-                org.streamrune.core.Sort.by("customer.id")));
-
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            producers.jdbcProjectionRepository(
-                mock(DataSource.class), unsatisfied(), unsatisfied(), indexes));
-  }
-
-  @Test
   void jdbcProjectionRepositoryWiresCryptoEngine_whenPresent() {
     var producers = new StreamRuneProducers();
     var cryptoEngine = new org.streamrune.test.InMemoryCryptoEngine();
 
     var repo =
         producers.jdbcProjectionRepository(
-            mock(DataSource.class), satisfied(cryptoEngine), unsatisfied(), unsatisfied());
+            mock(DataSource.class), satisfied(cryptoEngine), unsatisfied());
 
     assertNotNull(repo);
     var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(repo, "objectMapper");
@@ -1168,8 +1126,7 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
 
     var repo =
-        producers.jdbcProjectionRepository(
-            mock(DataSource.class), unsatisfied(), unsatisfied(), unsatisfied());
+        producers.jdbcProjectionRepository(mock(DataSource.class), unsatisfied(), unsatisfied());
 
     assertNotNull(repo);
     var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(repo, "objectMapper");
@@ -1185,9 +1142,7 @@ class StreamRuneProducersTest {
 
     assertThrows(
         IllegalStateException.class,
-        () ->
-            producers.jdbcProjectionRepository(
-                mock(DataSource.class), ambiguous, unsatisfied(), unsatisfied()));
+        () -> producers.jdbcProjectionRepository(mock(DataSource.class), ambiguous, unsatisfied()));
   }
 
   @Test
@@ -2190,41 +2145,5 @@ class StreamRuneProducersTest {
         resolver.resolve(org.streamrune.core.types.UserId.of("alice")).hasRole("ADMIN"),
         "a CachingUserRoleResolver wrap would serve Alice's cached roles to Bob — cross-principal"
             + " authorization bypass");
-  }
-
-  @SafeVarargs
-  @SuppressWarnings("unchecked")
-  private static <T> Instance<T> streaming(T... beans) {
-    Instance<T> inst = mock(Instance.class);
-    when(inst.stream()).thenAnswer(invocation -> java.util.stream.Stream.of(beans));
-    return inst;
-  }
-
-  /**
-   * A DataSource whose connections record every statement run through {@code createStatement()} and
-   * answer every query with no rows (so a declared index is found missing and created).
-   */
-  private static DataSource recordingDataSource(java.util.List<String> statements) {
-    try {
-      var dataSource = mock(DataSource.class);
-      var connection = mock(java.sql.Connection.class);
-      var statement = mock(java.sql.Statement.class);
-      var prepared = mock(java.sql.PreparedStatement.class);
-      when(dataSource.getConnection()).thenReturn(connection);
-      when(connection.getAutoCommit()).thenReturn(true);
-      when(connection.createStatement()).thenReturn(statement);
-      when(statement.execute(org.mockito.ArgumentMatchers.anyString()))
-          .thenAnswer(
-              invocation -> {
-                statements.add(invocation.getArgument(0));
-                return false;
-              });
-      when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
-          .thenReturn(prepared);
-      when(prepared.executeQuery()).thenReturn(mock(java.sql.ResultSet.class));
-      return dataSource;
-    } catch (java.sql.SQLException e) {
-      throw new IllegalStateException(e);
-    }
   }
 }

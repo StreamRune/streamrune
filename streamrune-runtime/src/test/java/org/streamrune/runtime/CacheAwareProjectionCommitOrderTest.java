@@ -140,6 +140,11 @@ class CacheAwareProjectionCommitOrderTest {
     }
 
     @Override
+    public void declareIndex(org.streamrune.core.projection.ProjectionIndex index) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
       throw new UnsupportedOperationException();

@@ -716,6 +716,7 @@ public final class org.streamrune.test.InMemoryProjectionRepository implements o
   public boolean serializesReplay()
   public boolean supportsFencing()
   public int rowCount(org.streamrune.core.types.ProjectionName)
+  public java.util.List<org.streamrune.core.projection.ProjectionIndex> declaredIndexes()
   public long stampedEpoch(org.streamrune.core.types.ProjectionName)
   public org.streamrune.core.types.GlobalOffset committedOffset(org.streamrune.core.types.ProjectionName)
   public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
@@ -876,10 +877,9 @@ public final class org.streamrune.test.ProjectionFixture$WhenStage
   public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope)
   public org.streamrune.test.ProjectionFixture<S>$ThenStage receive(org.streamrune.core.EventEnvelope...)
 
-public abstract class org.streamrune.test.ProjectionRepositoryContract
+public abstract class org.streamrune.test.ProjectionRepositoryQueryContract
   protected <init>()
   protected abstract org.streamrune.core.projection.ProjectionRepository repository()
-  protected abstract void declareIndex(org.streamrune.core.projection.ProjectionIndex)
   protected org.streamrune.core.types.ProjectionName freshName()
   public void aFieldOutsideTheRuleIsRefused()
   public void aFieldSortsByCodePointNotByLinguisticCollation()
@@ -891,14 +891,18 @@ public abstract class org.streamrune.test.ProjectionRepositoryContract
   public void aFilteredReadRefusesNullArguments()
   public void aFilteredReadSortsAndBreaksTiesById()
   public void aMissingFieldSortsLastAscendingAndFirstDescending()
+  public void aNullIndexAndAnIndexDeclaredInsideATransactionAreRefused()
   public void aNumberFieldFiltersAndSortsAsText()
   public void aPagePastAnIntOffsetIsEmptyAndCarriesTheTotal()
   public void aSortedReadBreaksTiesById()
+  public void anEncryptedComponentCannotBeFilteredOrSorted()
   public void anUnsortedReadOrdersByIdInCodePointOrder()
+  public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem()
   public void declaringAnIndexTwiceIsAccepted()
+  public void theRowsOfOneTransactionTieOnUpdatedAt()
   public void theVersionAndUpdatedAtColumnsSortByTheirValues()
 
-public static final record org.streamrune.test.ProjectionRepositoryContract$ContractRow
+public static final record org.streamrune.test.ProjectionRepositoryQueryContract$ContractRow
   public <init>(java.lang.String, java.lang.String, java.lang.String, java.lang.Integer)
   public final boolean equals(java.lang.Object)
   public final int hashCode()
@@ -907,6 +911,27 @@ public static final record org.streamrune.test.ProjectionRepositoryContract$Cont
   public java.lang.String createdAt()
   public java.lang.String customer()
   public java.lang.String id()
+
+public static final record org.streamrune.test.ProjectionRepositoryQueryContract$NumberRow
+  public <init>(java.lang.String, java.math.BigDecimal, java.lang.Double, java.lang.Float, java.time.Duration, java.lang.Boolean)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.Boolean active()
+  public java.lang.Double measure()
+  public java.lang.Float big()
+  public java.lang.String id()
+  public java.math.BigDecimal price()
+  public java.time.Duration delay()
+
+public static final record org.streamrune.test.ProjectionRepositoryQueryContract$SecretRow
+  public <init>(java.lang.String, java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String email()
+  public java.lang.String id()
+  public java.lang.String name()
 
 public class org.streamrune.test.RecordingStreamRuneMetrics implements org.streamrune.core.StreamRuneMetrics
   public <init>()

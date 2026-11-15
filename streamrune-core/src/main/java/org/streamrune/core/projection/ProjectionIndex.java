@@ -6,13 +6,17 @@ import java.util.List;
 import java.util.Objects;
 import org.streamrune.core.Sort;
 import org.streamrune.core.SortDirection;
+import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * An index a projection's read queries need, declared by the application. A repository that stores
- * read models in a database creates it (the PostgreSQL repository with {@code CREATE INDEX IF NOT
- * EXISTS}, see {@code JdbcProjectionRepository.declareIndex}); the in-memory repository only checks
- * it.
+ * An index a projection's read queries need, declared by the application through {@link
+ * ProjectionRepository#declareIndex}. A repository that stores read models in a database creates it
+ * (the PostgreSQL repository with {@code CREATE INDEX IF NOT EXISTS}, see {@code
+ * JdbcProjectionRepository.declareIndex}); the in-memory repository checks and records it. In the
+ * Spring, Quarkus and Micronaut integrations each {@code ProjectionIndex} bean is declared at
+ * startup on the application's {@code ProjectionRepository} bean, before the projection runners
+ * start.
  *
  * <p>The keys are read-model fields, or the repository columns {@code id}, {@code version} and
  * {@code updated_at}, each with a direction, in index order. The row id is always the last key: a
@@ -30,7 +34,10 @@ import org.streamrune.core.types.ProjectionName;
  * </ul>
  *
  * <p>The field rule is the repository's (see {@link FieldEquals}): a repository refuses a key
- * outside {@code [A-Za-z0-9_]+} when the index is declared.
+ * outside {@code [A-Za-z0-9_]+} when the index is declared. The index does not know the read-model
+ * type, so a key on an {@code Encrypted} record component is not refused here; the reads refuse to
+ * filter or sort on one, so such an index is never used. Index short scalar fields: on PostgreSQL
+ * an index entry holds at most 2704 bytes, and a save whose indexed text is longer fails.
  *
  * @param projection the projection whose read models the index covers
  * @param keys the index keys in order; not empty, no field twice
@@ -52,7 +59,8 @@ public record ProjectionIndex(ProjectionName projection, List<Sort.Order> keys) 
     var fields = new HashSet<String>();
     for (Sort.Order key : keys) {
       if (!fields.add(key.field())) {
-        throw new IllegalArgumentException("index key named twice: " + key.field());
+        throw new IllegalArgumentException(
+            "index key named twice: " + LogSanitizer.sanitizeForLog(key.field()));
       }
     }
   }
@@ -66,10 +74,12 @@ public record ProjectionIndex(ProjectionName projection, List<Sort.Order> keys) 
    * @param field the filtered field
    * @param sort the sort of the read
    * @return the index
-   * @throws IllegalArgumentException if the sort also orders by {@code field}
+   * @throws IllegalArgumentException if {@code field} is not a filterable field (as for {@link
+   *     FieldEquals}: blank, or a column name), or the sort also orders by {@code field}
    */
   public static ProjectionIndex forFilter(ProjectionName projection, String field, Sort sort) {
     Objects.requireNonNull(sort, "sort");
+    FieldEquals.of(field, ""); // the filter's own rule: refuses a blank field or a column name
     var keys = new ArrayList<Sort.Order>();
     keys.add(new Sort.Order(field, SortDirection.ASC));
     keys.addAll(sort.orders());

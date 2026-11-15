@@ -5,6 +5,10 @@ public class org.streamrune.quarkus.CryptoForgetListenHealthRegistrar
   public <init>(jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.runtime.BackgroundRelayHealthContributor>)
   public void onStart(io.quarkus.runtime.StartupEvent)
 
+public class org.streamrune.quarkus.ProjectionIndexDeclarer
+  public <init>()
+  public void declare(io.quarkus.runtime.StartupEvent, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionRepository>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionIndex>)
+
 public class org.streamrune.quarkus.ProjectionProducer
   public <init>()
   public org.streamrune.runtime.InlineProjectionInterceptor inlineProjectionInterceptor(jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>, org.eclipse.microprofile.config.Config, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, org.streamrune.core.tracing.StreamRuneTracing)
@@ -154,7 +158,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.integration.AuthenticatedUserResolver quarkusAuthenticatedUserResolver(jakarta.enterprise.inject.Instance<io.quarkus.security.identity.SecurityIdentity>)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.integration.AuthenticatedUserResolver>)
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionIndex>)
+  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties)

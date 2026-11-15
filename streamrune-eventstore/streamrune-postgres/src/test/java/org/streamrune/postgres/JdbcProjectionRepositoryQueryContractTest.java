@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -26,7 +27,7 @@ import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.ProjectionIndex;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.ProjectionName;
-import org.streamrune.test.ProjectionRepositoryContract;
+import org.streamrune.test.ProjectionRepositoryQueryContract;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -38,7 +39,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * when several replicas declare them at once.
  */
 @Testcontainers
-class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryContract {
+class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryQueryContract {
 
   /**
    * A database whose default collation is linguistic (ICU {@code en-US}, as a Debian image's {@code
@@ -74,11 +75,6 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryCont
   @Override
   protected ProjectionRepository repository() {
     return repo;
-  }
-
-  @Override
-  protected void declareIndex(ProjectionIndex index) {
-    repo.declareIndex(index);
   }
 
   @Test
@@ -253,10 +249,122 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryCont
     assertThat(filtered.isEmpty()).isTrue();
   }
 
-  /** A {@code Limit} node whose input is a scan of {@code index} in index order. */
+  @Test
+  void aPageBeyondTheEndReadsOnlyTheCount() throws SQLException {
+    var name = freshName();
+    repo.declareIndex(ProjectionIndex.forFilter(name, "customer", NEWEST_FIRST));
+    repo.save(name, "r1", new ContractRow("r1", "alice", "2026-01-01T00:00:01Z", null));
+
+    String plan =
+        explain(
+            "EXPLAIN (ANALYZE) ",
+            JdbcProjectionRepository.pageSql(
+                name, FieldEquals.of("customer", "alice"), NEWEST_FIRST),
+            true,
+            1_000_000L);
+
+    assertThat(plan).contains("One-Time Filter").contains("never executed");
+  }
+
+  @Test
+  void anInvalidIndexOfTheDeclaredNameFailsTheDeclarationNamingTheDrop() throws SQLException {
+    var name = freshName();
+    var index = ProjectionIndex.forSort(name, NEWEST_FIRST);
+    repo.declareIndex(index);
+    String indexName = JdbcProjectionRepository.indexName(index);
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = ?::regclass")) {
+      ps.setString(1, indexName);
+      ps.executeUpdate();
+    }
+
+    assertThatThrownBy(() -> new JdbcProjectionRepository(dataSource).declareIndex(index))
+        .isInstanceOf(org.streamrune.core.EventStoreException.class)
+        .hasMessageContaining("INVALID")
+        .hasMessageContaining("DROP INDEX " + indexName);
+  }
+
+  @Test
+  void aRelationOfTheDeclaredNameThatIsNotItsIndexFailsTheDeclaration() throws SQLException {
+    var name = freshName();
+    var index = ProjectionIndex.forSort(name, NEWEST_FIRST);
+    repo.prepareReadModel(name);
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE TABLE " + JdbcProjectionRepository.indexName(index) + " (x int)");
+    }
+
+    assertThatThrownBy(() -> repo.declareIndex(index))
+        .isInstanceOf(org.streamrune.core.EventStoreException.class)
+        .hasMessageContaining("is not an index of " + name.value() + "_view");
+  }
+
+  @Test
+  void aDeclarationThatFailsForAnotherReasonIsAnEventStoreException() {
+    var name = freshName();
+    var index = ProjectionIndex.forSort(name, NEWEST_FIRST);
+    repo.prepareReadModel(name);
+    var failing = new CountingDataSource(dataSource, sql -> sql.startsWith("CREATE INDEX"));
+
+    assertThatThrownBy(() -> new JdbcProjectionRepository(failing.proxy()).declareIndex(index))
+        .isInstanceOf(org.streamrune.core.EventStoreException.class)
+        .hasMessageContaining("Failed to create projection index");
+  }
+
+  @Test
+  void nullIndexesAreRefused() {
+    org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
+        .isThrownBy(() -> JdbcProjectionRepository.createIndexSql(null));
+  }
+
+  /**
+   * A table whose id is in the database's linguistic collation (created by an older version, or by
+   * the application): the reads still order by code point, because they name the collation.
+   */
+  @Test
+  void aTableWhoseIdIsNotInTheCCollationStillOrdersByCodePoint() throws SQLException {
+    var name = freshName();
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute(
+          "CREATE TABLE "
+              + name.value()
+              + "_view (id VARCHAR(255) PRIMARY KEY, data JSONB NOT NULL,"
+              + " version BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())");
+    }
+    for (String id : List.of("order-a1", "order-B1", "order-b0")) {
+      repo.save(name, id, new ContractRow(id, "x", "2026-01-01T00:00:00Z", null));
+    }
+    var expected = List.of("order-B1", "order-a1", "order-b0");
+
+    assertThat(ids(repo.findAll(name, ContractRow.class, PageRequest.of(0, 10))))
+        .isEqualTo(expected);
+    assertThat(
+            ids(
+                repo.findAllBy(
+                    name,
+                    ContractRow.class,
+                    FieldEquals.of("customer", "x"),
+                    PageRequest.of(0, 10, NEWEST_FIRST))))
+        .isEqualTo(expected);
+  }
+
+  private static List<String> ids(org.streamrune.core.Page<ContractRow> page) {
+    return page.content().stream().map(ContractRow::id).toList();
+  }
+
+  /**
+   * A {@code Limit} node whose input is a scan of {@code index} in index order, possibly through
+   * the {@code Result} of the count gate.
+   */
   private static java.util.regex.Pattern limitOver(String index) {
     return java.util.regex.Pattern.compile(
-        "Limit [^\\n]*\\n\\s*->  Index Scan(?: Backward)? using " + index + " ");
+        "Limit [^\\n]*\\n(?:\\s*->  Result[^\\n]*\\n(?:\\s+One-Time Filter[^\\n]*\\n)?)?"
+            + "\\s*->  Index Scan(?: Backward)? using "
+            + index
+            + " ");
   }
 
   private static String indexDefinition(String indexName) throws SQLException {
@@ -271,19 +379,27 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryCont
 
   /** The plan of {@code sql}, with sequential scans priced out so a usable index is chosen. */
   private static String explain(String sql, boolean filtered) throws SQLException {
+    return explain("EXPLAIN ", sql, filtered, 0L);
+  }
+
+  private static String explain(String explain, String sql, boolean filtered, long offset)
+      throws SQLException {
     try (var conn = dataSource.getConnection()) {
       try (var off = conn.createStatement()) {
         off.execute("SET enable_seqscan = off");
         off.execute("SET enable_bitmapscan = off");
       }
-      try (var ps = conn.prepareStatement("EXPLAIN " + sql)) {
+      try (var ps = conn.prepareStatement(explain + sql)) {
         int p = 1;
         if (filtered) {
           ps.setString(p++, "alice");
+        }
+        ps.setLong(p++, offset);
+        if (filtered) {
           ps.setString(p++, "alice");
         }
         ps.setInt(p++, 20);
-        ps.setLong(p, 0L);
+        ps.setLong(p, offset);
         var plan = new StringBuilder();
         try (var rs = ps.executeQuery()) {
           while (rs.next()) {
@@ -301,8 +417,16 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryCont
     final List<String> statements = Collections.synchronizedList(new ArrayList<>());
     final AtomicInteger connections = new AtomicInteger();
 
+    final java.util.function.Predicate<String> failing;
+
     CountingDataSource(DataSource target) {
+      this(target, sql -> false);
+    }
+
+    /** Fails every statement {@code failing} matches with a SQL state that is not a race. */
+    CountingDataSource(DataSource target, java.util.function.Predicate<String> failing) {
       this.target = target;
+      this.failing = failing;
     }
 
     DataSource proxy() {
@@ -336,6 +460,9 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryCont
                       (sp, sm, sargs) -> {
                         if (sm.getName().startsWith("execute") && sargs != null) {
                           statements.add((String) sargs[0]);
+                          if (failing.test((String) sargs[0])) {
+                            throw new SQLException("injected", "XX000");
+                          }
                         }
                         return invoke(statement, sm, sargs);
                       });

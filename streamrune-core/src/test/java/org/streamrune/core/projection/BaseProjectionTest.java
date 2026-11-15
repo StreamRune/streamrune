@@ -63,6 +63,9 @@ class BaseProjectionTest {
     }
 
     @Override
+    public void declareIndex(ProjectionIndex index) {}
+
+    @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
       return Optional.empty();

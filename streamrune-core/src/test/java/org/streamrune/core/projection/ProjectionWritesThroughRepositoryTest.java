@@ -150,6 +150,11 @@ class ProjectionWritesThroughRepositoryTest {
       }
 
       @Override
+      public void declareIndex(ProjectionIndex index) {
+        throw new UnsupportedOperationException("not exercised by this test");
+      }
+
+      @Override
       public <T> Optional<Versioned<T>> findById(
           ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
         throw new UnsupportedOperationException("not exercised by this test");

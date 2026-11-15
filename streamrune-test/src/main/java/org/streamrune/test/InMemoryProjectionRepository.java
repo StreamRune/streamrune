@@ -1,8 +1,12 @@
 package org.streamrune.test;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.cfg.JsonNodeFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,6 +26,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.LockMode;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.Page;
@@ -29,6 +34,7 @@ import org.streamrune.core.PageRequest;
 import org.streamrune.core.Sort;
 import org.streamrune.core.SortDirection;
 import org.streamrune.core.Versioned;
+import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.OffsetStore;
@@ -73,9 +79,12 @@ import org.streamrune.core.types.ProjectionName;
  * <p>The paged reads return what the JDBC repository returns: {@code findAll(name, type,
  * pageRequest)} and {@code findAllBy(name, type, filter, pageRequest)} order by the sort's fields
  * as JSON text in code-point order, a missing field last ascending, the id breaking ties, filter by
- * the field's JSON text, and refuse the fields the JDBC repository refuses. A field is read through
- * the mapper this repository was built with. Passes {@link ProjectionRepositoryContract}. {@link
- * #declareIndex} checks an index and creates nothing.
+ * the field's JSON text (a decimal number as PostgreSQL prints {@code numeric}), and refuse the
+ * fields the JDBC repository refuses, {@code Encrypted} record components included. A field is read
+ * through the mapper this repository was built with, and a read model that mapper cannot write is
+ * refused at save, as the JDBC repository refuses it. Passes {@link
+ * ProjectionRepositoryQueryContract}. {@link #declareIndex} checks and records an index and creates
+ * nothing ({@link #declaredIndexes()}).
  *
  * <p>Read models are stored as the objects themselves, not serialized: a projection that mutates a
  * read model after saving it mutates the stored row too. Not for production.
@@ -118,6 +127,15 @@ public final class InMemoryProjectionRepository
   // Renders a read model's fields as JSON text for the filtered and sorted reads, as the JDBC
   // repository's mapper writes them to its data column.
   private final ObjectMapper fieldMapper;
+  private final ObjectReader fieldReader;
+
+  // The JSON names of each read-model type's @Encrypted record components (refuseEncryptedKeys).
+  private final ConcurrentHashMap<Class<?>, Set<String>> encryptedFields =
+      new ConcurrentHashMap<>();
+
+  // The indexes declared through declareIndex, in declaration order, each once.
+  private final Set<ProjectionIndex> declaredIndexes =
+      java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
 
   /**
    * Creates an empty store: no read models, every checkpoint at offset 0 and epoch 0. A filter or a
@@ -142,6 +160,11 @@ public final class InMemoryProjectionRepository
       throw new IllegalArgumentException("fieldMapper cannot be null");
     }
     this.fieldMapper = fieldMapper;
+    this.fieldReader =
+        fieldMapper
+            .reader()
+            .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .without(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES);
   }
 
   private static ObjectMapper defaultFieldMapper() {
@@ -219,8 +242,13 @@ public final class InMemoryProjectionRepository
   }
 
   /** The versioned-save outcome of the JDBC repository's {@code UPDATE ... AND version = ?}. */
-  private Stored versionedUpdate(
-      ProjectionName name, String id, Object readModel, long expectedVersion, Stored current) {
+  private static Stored versionedUpdate(
+      ProjectionName name,
+      String id,
+      Object readModel,
+      long expectedVersion,
+      Stored current,
+      long writtenAt) {
     if (current == null || current.version() != expectedVersion) {
       throw new OptimisticLockException(
           "Optimistic lock conflict on projection '%s/%s': expected version %d but %s"
@@ -230,7 +258,7 @@ public final class InMemoryProjectionRepository
                   expectedVersion,
                   current == null ? "no such row exists" : "was " + current.version()));
     }
-    return new Stored(readModel, current.version() + 1, writeClock.incrementAndGet());
+    return new Stored(readModel, current.version() + 1, writtenAt);
   }
 
   // ---- paged reads: the JDBC repository's order and filter, on the rows of one snapshot ----
@@ -291,13 +319,32 @@ public final class InMemoryProjectionRepository
    */
   private String fieldText(
       Map.Entry<String, Stored> row, String field, Map<String, JsonNode> fields) {
-    JsonNode tree =
-        fields.computeIfAbsent(row.getKey(), id -> fieldMapper.valueToTree(row.getValue().value()));
-    JsonNode node = tree == null ? null : tree.get(field);
+    JsonNode node = fields.computeIfAbsent(row.getKey(), id -> tree(row)).get(field);
     if (node == null || node.isNull()) {
       return null;
     }
+    if (node.isNumber()) {
+      // As PostgreSQL prints the numeric a jsonb number is: no exponent, the scale as written.
+      return node.isIntegralNumber()
+          ? node.bigIntegerValue().toString()
+          : node.decimalValue().toPlainString();
+    }
     return node.isValueNode() ? node.asText() : node.toString();
+  }
+
+  /**
+   * The row's JSON as the field mapper writes it, read back with every decimal kept as written (not
+   * a double, trailing zeros kept), so a number's text is the one PostgreSQL stores.
+   */
+  private JsonNode tree(Map.Entry<String, Stored> row) {
+    try {
+      return fieldReader.readTree(fieldMapper.writeValueAsBytes(row.getValue().value()));
+    } catch (java.io.IOException e) {
+      throw new EventStoreException(
+          "Failed to read the fields of projection row "
+              + LogSanitizer.sanitizeForLog(row.getKey()),
+          e);
+    }
   }
 
   /** Unicode code-point order: PostgreSQL's {@code COLLATE "C"} on UTF-8 text. */
@@ -351,12 +398,76 @@ public final class InMemoryProjectionRepository
       throw new IllegalArgumentException("filter cannot be null");
     }
     validatePagedRead(name, type, pageRequest);
-    validateField(filter.field());
-    if (COLUMNS.contains(filter.field())) {
-      throw new IllegalArgumentException(
-          "A filter names a read-model field, not the repository column '"
-              + filter.field()
-              + "': read one row by id with findById; version and updated_at cannot be filtered");
+    validateField(filter.field()); // FieldEquals itself refuses the column names
+  }
+
+  /**
+   * Refuses a filter or sort on an {@code Encrypted} record component of {@code type}, as the JDBC
+   * repository does: matched by its Java name and by the JSON name the field mapper gives it.
+   */
+  private void refuseEncryptedKeys(Class<?> type, FieldEquals filter, Sort sort) {
+    Set<String> encrypted = encryptedFields.computeIfAbsent(type, this::encryptedJsonFields);
+    if (encrypted.isEmpty()) {
+      return;
+    }
+    if (filter != null && encrypted.contains(filter.field())) {
+      throw encryptedKey(type, filter.field());
+    }
+    for (Sort.Order order : sort.orders()) {
+      if (!COLUMNS.contains(order.field()) && encrypted.contains(order.field())) {
+        throw encryptedKey(type, order.field());
+      }
+    }
+  }
+
+  private Set<String> encryptedJsonFields(Class<?> type) {
+    if (!type.isRecord()) {
+      return Set.of();
+    }
+    var components = new HashSet<String>();
+    for (var component : type.getRecordComponents()) {
+      if (component.isAnnotationPresent(Encrypted.class)) {
+        components.add(component.getName());
+      }
+    }
+    if (components.isEmpty()) {
+      return Set.of();
+    }
+    var names = new HashSet<>(components);
+    var description =
+        fieldMapper.getSerializationConfig().introspect(fieldMapper.constructType(type));
+    for (var property : description.findProperties()) {
+      if (components.contains(property.getInternalName())) {
+        names.add(property.getName());
+      }
+    }
+    return Set.copyOf(names);
+  }
+
+  private static IllegalArgumentException encryptedKey(Class<?> type, String field) {
+    return new IllegalArgumentException(
+        "Field '"
+            + LogSanitizer.sanitizeForLog(field)
+            + "' of "
+            + type.getSimpleName()
+            + " is @Encrypted: its stored text is ciphertext, so it cannot be filtered or sorted"
+            + " (keep a separate, non-sensitive field for the query)");
+  }
+
+  /**
+   * Refuses, as the JDBC repository does at save, a read model the field mapper cannot write; the
+   * stored object itself is kept, not the JSON.
+   */
+  private void requireWritable(ProjectionName name, String id, Object readModel) {
+    try {
+      fieldMapper.writeValueAsBytes(readModel);
+    } catch (JsonProcessingException e) {
+      throw new EventStoreException(
+          "Failed to save projection: "
+              + LogSanitizer.sanitizeForLog(name.value())
+              + "/"
+              + LogSanitizer.sanitizeForLog(id),
+          e);
     }
   }
 
@@ -365,6 +476,7 @@ public final class InMemoryProjectionRepository
   @Override
   public <T> void save(ProjectionName projectionName, String id, T readModel) {
     validateWrite(projectionName, id, readModel);
+    requireWritable(projectionName, id, readModel);
     write(
         () ->
             table(projectionName)
@@ -418,6 +530,7 @@ public final class InMemoryProjectionRepository
   public <T> Page<T> findAll(
       ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
     validatePagedRead(projectionName, type, pageRequest);
+    refuseEncryptedKeys(type, null, pageRequest.sort());
     return read(() -> page(committedRows(projectionName), type, null, pageRequest));
   }
 
@@ -430,6 +543,7 @@ public final class InMemoryProjectionRepository
   public <T> Page<T> findAllBy(
       ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
     validateFilteredRead(projectionName, type, filter, pageRequest);
+    refuseEncryptedKeys(type, filter, pageRequest.sort());
     return read(() -> page(committedRows(projectionName), type, filter, pageRequest));
   }
 
@@ -439,19 +553,33 @@ public final class InMemoryProjectionRepository
   }
 
   /**
-   * Checks {@code index} as the JDBC repository does and creates nothing: a map needs no index.
-   * Declare the same indexes here as in production, so a key the database would refuse fails in a
-   * test too.
+   * Checks {@code index} as the JDBC repository does and records it ({@link #declaredIndexes()});
+   * it creates nothing: a map needs no index. Declare the same indexes here as in production, so a
+   * key the database would refuse fails in a test too.
    *
    * @param index the index the projection's reads need
    * @throws IllegalArgumentException if {@code index} is {@code null} or a key is outside the field
    *     rule
    */
+  @Override
   public void declareIndex(ProjectionIndex index) {
     if (index == null) {
       throw new IllegalArgumentException("index cannot be null");
     }
     index.keys().forEach(key -> validateField(key.field()));
+    declaredIndexes.add(index);
+  }
+
+  /**
+   * The indexes declared on this repository, in declaration order, each once: what a test of the
+   * wiring asserts.
+   *
+   * @return the declared indexes; an unmodifiable copy
+   */
+  public List<ProjectionIndex> declaredIndexes() {
+    synchronized (declaredIndexes) {
+      return List.copyOf(declaredIndexes);
+    }
   }
 
   /** The lock mode is accepted and ignored: a single JVM map needs no row lock. */
@@ -473,11 +601,17 @@ public final class InMemoryProjectionRepository
   public <T> void save(
       ProjectionName projectionName, String id, T readModel, long expectedVersion) {
     validateVersionedWrite(projectionName, id, readModel, expectedVersion);
+    requireWritable(projectionName, id, readModel);
     write(
         () -> {
           Stored next =
               versionedUpdate(
-                  projectionName, id, readModel, expectedVersion, committedRow(projectionName, id));
+                  projectionName,
+                  id,
+                  readModel,
+                  expectedVersion,
+                  committedRow(projectionName, id),
+                  writeClock.incrementAndGet());
           table(projectionName).put(id, next);
         });
   }
@@ -693,6 +827,9 @@ public final class InMemoryProjectionRepository
     private final Map<ProjectionName, Map<String, Stored>> staged = new HashMap<>();
     private final Map<ProjectionName, Set<String>> deleted = new HashMap<>();
     private final List<Runnable> afterCommit = new ArrayList<>();
+    // updated_at of every row this transaction writes: one tick, as PostgreSQL's NOW() is the
+    // transaction's start, so the rows of one transaction tie and the id orders them.
+    private final long startedAt = writeClock.incrementAndGet();
     private volatile boolean closed;
     private volatile boolean ran;
 
@@ -727,8 +864,9 @@ public final class InMemoryProjectionRepository
     public <T> void save(ProjectionName name, String id, T readModel) {
       ensureOpen();
       validateWrite(name, id, readModel);
+      requireWritable(name, id, readModel);
       long version = lookup(name, id).map(s -> s.version() + 1).orElse(0L);
-      stage(name, id, new Stored(readModel, version, writeClock.incrementAndGet()));
+      stage(name, id, new Stored(readModel, version, startedAt));
     }
 
     @Override
@@ -776,6 +914,7 @@ public final class InMemoryProjectionRepository
     public <T> Page<T> findAll(ProjectionName name, Class<T> type, PageRequest pageRequest) {
       ensureOpen();
       validatePagedRead(name, type, pageRequest);
+      refuseEncryptedKeys(type, null, pageRequest.sort());
       return page(merged(name), type, null, pageRequest);
     }
 
@@ -784,7 +923,16 @@ public final class InMemoryProjectionRepository
         ProjectionName name, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
       ensureOpen();
       validateFilteredRead(name, type, filter, pageRequest);
+      refuseEncryptedKeys(type, filter, pageRequest.sort());
       return page(merged(name), type, filter, pageRequest);
+    }
+
+    /** Refused, as on the JDBC repository's transaction-scoped view. */
+    @Override
+    public void declareIndex(ProjectionIndex index) {
+      throw new IllegalStateException(
+          "declareIndex on a transaction-scoped repository: declare indexes at wiring, on the"
+              + " repository itself, not inside a projection batch");
     }
 
     @Override
@@ -799,10 +947,12 @@ public final class InMemoryProjectionRepository
     public <T> void save(ProjectionName name, String id, T readModel, long expectedVersion) {
       ensureOpen();
       validateVersionedWrite(name, id, readModel, expectedVersion);
+      requireWritable(name, id, readModel);
       stage(
           name,
           id,
-          versionedUpdate(name, id, readModel, expectedVersion, lookup(name, id).orElse(null)));
+          versionedUpdate(
+              name, id, readModel, expectedVersion, lookup(name, id).orElse(null), startedAt));
     }
 
     @Override
@@ -834,12 +984,7 @@ public final class InMemoryProjectionRepository
               ids.forEach(t::remove);
             }
           });
-      long committedAt = writeClock.incrementAndGet();
-      staged.forEach(
-          (name, rows) ->
-              rows.forEach(
-                  (id, row) ->
-                      table(name).put(id, new Stored(row.value(), row.version(), committedAt))));
+      staged.forEach((name, rows) -> table(name).putAll(rows));
     }
 
     void close() {

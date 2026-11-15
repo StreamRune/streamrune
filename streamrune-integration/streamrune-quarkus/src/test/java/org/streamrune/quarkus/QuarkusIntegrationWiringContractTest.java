@@ -124,6 +124,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           StreamRuneConfigValidator.class,
           StreamRuneAuthorizationValidator.class,
           StreamRuneRequestIdentityValidator.class,
+          ProjectionIndexDeclarer.class,
           SagaStateCryptoValidator.class,
           SagaEventPathRetentionConfigurer.class,
           SagaCompensationRetryLifecycle.class,
