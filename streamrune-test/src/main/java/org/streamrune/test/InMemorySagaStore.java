@@ -401,6 +401,17 @@ public final class InMemorySagaStore implements SagaStore {
   }
 
   @Override
+  public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+    requireKey(sagaId, sagaType);
+    SagaEntry entry = store.get(sagaId);
+    if (entry == null || !entry.sagaType().equals(sagaType)) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        new RowFacts(entry.status(), entry.deadLetterPending(), entry.lastAppliedOffset()));
+  }
+
+  @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
     requireKey(sagaId, sagaType);
     // Only remove the row if this saga type owns it, so a cross-type SagaId collision

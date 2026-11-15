@@ -503,8 +503,9 @@ public interface StreamRuneMetrics {
    * makes {@code quarantined - skipped_while_faulted - event_held} the count of genuine poison
    * quarantines (a NEW defect; apart from event-path {@code SagaStaleCompensationEpisodeException}
    * refusals — see {@link org.streamrune.core.metrics.MetricNames#SAGA_SKIPPED_WHILE_FAULTED})
-   * while this series measures the blast radius of a fault that is already known. See {@link
-   * org.streamrune.core.metrics.MetricNames#SAGA_SKIPPED_WHILE_FAULTED}.
+   * while this series measures the blast radius of a fault that is already known. Called once per
+   * event recorded: a redelivery of an event already recorded keeps its entry and is not counted.
+   * See {@link org.streamrune.core.metrics.MetricNames#SAGA_SKIPPED_WHILE_FAULTED}.
    *
    * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
    *     state's fully-qualified class name
@@ -519,8 +520,9 @@ public interface StreamRuneMetrics {
    * would reorder its history) or {@code BEFORE_START} (no row, but the saga owns a dead-letter
    * record — its start could not even produce an initial state). A strict subset of {@link
    * #recordSagaQuarantined(String)} and a blast-radius signal, not a new-defect signal; {@code
-   * SagaDeadLetterReplayer.replayAll} feeds held events in order once the blocker is gone. See
-   * {@link org.streamrune.core.metrics.MetricNames#SAGA_EVENT_HELD}.
+   * SagaDeadLetterReplayer.replayAll} feeds held events in order once the blocker is gone. Called
+   * once per event recorded: a redelivery of an event already recorded, or of one the saga has
+   * applied, is not counted. See {@link org.streamrune.core.metrics.MetricNames#SAGA_EVENT_HELD}.
    *
    * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()} — the saga
    *     state's fully-qualified class name

@@ -371,7 +371,9 @@ public final class MetricNames {
    *
    * <p>Replayed events are never counted: a replay feed goes straight to the saga executor and
    * never passes the live FAULTED hold — the dead-letter entry being replayed is already that
-   * event's durable record.
+   * event's durable record. Nor is an event already recorded when its page is delivered again (the
+   * poison event itself, or an event held before): its entry is kept and nothing is counted. The
+   * series counts events, not deliveries.
    */
   public static final String SAGA_SKIPPED_WHILE_FAULTED = "streamrune.saga.skipped_while_faulted";
 
@@ -379,7 +381,9 @@ public final class MetricNames {
    * Correlated events held (recorded, not processed) because their KNOWN saga cannot consume them
    * yet — tagged by {@link #TAG_SAGA_TYPE} and {@link #TAG_HOLD_REASON} ({@code GENESIS_PENDING},
    * {@code BACKLOG_PENDING}, {@code BEFORE_START}). A strict subset of {@link #SAGA_QUARANTINED}.
-   * The FAULTED hold keeps its own series, {@link #SAGA_SKIPPED_WHILE_FAULTED}.
+   * The FAULTED hold keeps its own series, {@link #SAGA_SKIPPED_WHILE_FAULTED}. An event already
+   * recorded is not counted again when its page is delivered again, nor is an event the saga has
+   * applied by the time the hold is written: the series counts events, not deliveries.
    */
   public static final String SAGA_EVENT_HELD = "streamrune.saga.event_held";
 

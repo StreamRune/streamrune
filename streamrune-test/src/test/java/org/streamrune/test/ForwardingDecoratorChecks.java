@@ -25,6 +25,7 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.saga.SagaStore;
@@ -294,6 +295,9 @@ final class ForwardingDecoratorChecks {
           StreamId.of(AggregateType.of("type" + n), AggregateId.of("id-" + n)),
           new Version(n),
           List.of(GlobalOffset.of(n)));
+    }
+    if (type == SagaDeadLetterStore.HoldResult.class) {
+      return new SagaDeadLetterStore.HoldResult.AlreadyApplied(n);
     }
     if (type == OutboxStore.BlockageSample.class) {
       return new OutboxStore.BlockageSample(n, Instant.ofEpochSecond(n), n + 1L);

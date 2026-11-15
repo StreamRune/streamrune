@@ -5,10 +5,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaId;
-import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.GlobalOffset;
@@ -54,11 +52,13 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>The conditional shield clear:</b> {@link #clearShieldIfDrained} is the ONLY writer of
  * {@code dead_letter_pending = false} in the framework; it runs under the same monitor {@link
- * #publish}, {@link #publishShielded} and {@link #setResolvedTarget} take (see {@code
- * entriesMonitor}), which is what makes it race-free against the runner's hold in this store.
- * {@link #publishShielded} additionally writes the owner's shield inside that monitor, so the entry
- * and its shield are one indivisible step here exactly as they are one transaction in the Postgres
- * store.
+ * #publish}, {@link #publishShielded}, {@link #publishShieldedIfAbsent} and {@link
+ * #setResolvedTarget} take (see {@code entriesMonitor}), which is what makes it race-free against
+ * the runner's hold in this store. {@link #publishShielded} and {@link #publishShieldedIfAbsent}
+ * additionally write the owner's shield inside that monitor, so the entry and its shield are one
+ * indivisible step here exactly as they are one transaction in the Postgres store. The hold's check
+ * of the owner row's {@code last_applied_offset} reads the saga store inside the monitor; the saga
+ * store's own writes do not take it, so in this store the check is as of that read.
  */
 public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
 
@@ -85,16 +85,17 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * The entries monitor. {@link #clearShieldIfDrained} evaluates "no named entry, no resolved
    * null-saga entry" AND writes the saga store's flag while holding it; {@link #publish}, {@link
-   * #publishShielded} and {@link #setResolvedTarget} — the writes that make an entry count for the
-   * shield — take the SAME monitor. <b>Invariant:</b> that shared monitor is this store's "one
-   * transaction", and it is the only reason the in-memory hold (T: set TRUE → P: {@code
-   * publishShielded}) is race-free against the clear. Two things it buys, both load-bearing: P
-   * cannot land between the clear's check and its write, and P's own two writes — the entry upsert
-   * and the shield — cannot be separated by a clear, so no observer ever sees a held entry on an
-   * unshielded row. A refactor that moves {@code publish}, {@code publishShielded} or {@code
-   * setResolvedTarget} off this monitor, or that splits {@code publishShielded}'s two writes across
-   * two monitor-held sections, silently re-opens the race (a held entry left unshielded, prunable,
-   * and re-evolved by a later drain after its redelivery is applied live).
+   * #publishShielded}, {@link #publishShieldedIfAbsent} and {@link #setResolvedTarget} — the writes
+   * that make an entry count for the shield — take the SAME monitor. <b>Invariant:</b> that shared
+   * monitor is this store's "one transaction", and it is the only reason an entry write (P: {@code
+   * publishShielded} or {@code publishShieldedIfAbsent}) is race-free against the clear. Two things
+   * it buys, both load-bearing: P cannot land between the clear's check and its write, and P's own
+   * two writes — the entry and the shield — cannot be separated by a clear, so no observer ever
+   * sees a held entry on an unshielded row. A refactor that moves {@code publish}, {@code
+   * publishShielded}, {@code publishShieldedIfAbsent} or {@code setResolvedTarget} off this
+   * monitor, or that splits P's two writes across two monitor-held sections, silently re-opens the
+   * race (a held entry left unshielded, prunable, and re-evolved by a later drain after its
+   * redelivery is applied live).
    */
   private final Object entriesMonitor = new Object();
 
@@ -105,8 +106,10 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    * FAULTED} or shielded, mirroring the Postgres store's join.
    *
    * @param sagaStore the saga store whose rows this store shields — the one the runner writes (the
-   *     undecorated store, when the runner's is a test decorator); only the row's status and shield
-   *     flag are read, and only the shield flag is written
+   *     undecorated store, when the runner's is a test decorator); only the row's facts are read
+   *     ({@link SagaStore#loadRowFacts}: status, shield flag, last applied offset — never the
+   *     state, so any saga store serves, {@code PostgresSagaStore} included), and only the shield
+   *     flag is written
    */
   public InMemorySagaDeadLetterStore(SagaStore sagaStore) {
     this.sagaStore = Objects.requireNonNull(sagaStore, "sagaStore is required");
@@ -139,6 +142,40 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     synchronized (entriesMonitor) {
       upsert(entry);
       sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
+    }
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under {@link #entriesMonitor}, as {@link #publishShielded}: when the owner row has applied
+   * the event nothing is written; otherwise the entry is written unless one of the same saga type
+   * is stored at the key, and the saga store's flag is set.
+   */
+  @Override
+  public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
+    if (entry.sagaId() == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
+    synchronized (entriesMonitor) {
+      Long lastApplied =
+          sagaStore
+              .loadRowFacts(entry.sagaId(), entry.sagaType())
+              .map(SagaStore.RowFacts::lastAppliedOffset)
+              .orElse(null);
+      if (lastApplied != null && lastApplied >= entry.eventOffset().value()) {
+        return new HoldResult.AlreadyApplied(lastApplied);
+      }
+      SagaDeadLetterEntry stored = store.get(keyOf(entry));
+      boolean write = stored == null || !stored.sagaType().equals(entry.sagaType());
+      if (write) {
+        upsert(entry);
+      }
+      sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
+      return write ? new HoldResult.Written() : new HoldResult.Kept(stored);
     }
   }
 
@@ -375,7 +412,7 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
       if (entryExists) {
         return false;
       }
-      var row = sagaStore.load(sagaId, sagaType, SagaState.class);
+      var row = sagaStore.loadRowFacts(sagaId, sagaType);
       if (row.isEmpty() || !row.get().deadLetterPending()) {
         return false;
       }
@@ -420,7 +457,7 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     return store.values().stream().filter(e -> ownerShielded(e) || targetShielded(e)).count();
   }
 
-  private static boolean shielded(LoadedSaga<?> row) {
+  private static boolean shielded(SagaStore.RowFacts row) {
     return row.status() == SagaStatus.FAULTED || row.deadLetterPending();
   }
 
@@ -428,13 +465,13 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    * A named entry is shielded while its type-scoped owner row is {@code FAULTED} or carries the
    * {@code dead_letter_pending} shield — or has NO row at all (the row-less residual: the entry is
    * the saga's only record and is never pruned). Null-saga entries are never shielded this way.
-   * Only the row's status and shield flag are read.
+   * Only the row's facts are read ({@link SagaStore#loadRowFacts}), never its state.
    */
   private boolean ownerShielded(SagaDeadLetterEntry e) {
     if (e.sagaId() == null) {
       return false;
     }
-    var row = sagaStore.load(e.sagaId(), e.sagaType(), SagaState.class);
+    var row = sagaStore.loadRowFacts(e.sagaId(), e.sagaType());
     return row.map(InMemorySagaDeadLetterStore::shielded)
         .orElse(true); // row-less named: never pruned
   }

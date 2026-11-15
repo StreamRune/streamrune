@@ -3,6 +3,7 @@ package org.streamrune.postgres;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1407,10 +1408,11 @@ class PostgresSagaDeadLetterStoreTest {
   }
 
   /**
-   * Schedule 1 — the drain's clear C takes the row lock FIRST. The runner's hold (T: set TRUE → P:
-   * publish → R: re-assert TRUE) queues behind it at T, so C's fresh-snapshot UPDATE sees no entry
-   * and clears (correct on the facts at that instant); then T, P and R run and R restores the
-   * shield. End state: shield TRUE, E2 present, retention prunes nothing. Two real connections.
+   * Schedule 1 — the drain's clear C takes the row lock FIRST. The runner's hold (one transaction:
+   * the entry, then the shield) queues behind it at the shield write, so C's fresh-snapshot UPDATE
+   * cannot see the hold's uncommitted entry and clears (correct on the facts at that instant); then
+   * the hold's shield write runs and the hold commits the entry and the shield. End state: shield
+   * TRUE, E2 present, retention prunes nothing. Two real connections.
    */
   @Test
   void clearShieldIfDrained_holdBlockedBehindTheRowLock_thenRestoresTheShield_interleaving()
@@ -1425,15 +1427,11 @@ class PostgresSagaDeadLetterStoreTest {
         new PostgresSagaDeadLetterStore(
             hookedBeforeConditionalUpdate(
                 () -> {
-                  // the runner decides to hold a live event NOW: T blocks behind C's row lock
+                  // the runner holds a live event NOW: its shield write blocks behind C's row lock
                   hold.set(
                       CompletableFuture.runAsync(
-                          () -> {
-                            rows.setDeadLetterPending(a, type, true); // T
-                            store.publish(entry(a, type, 20L, "held", T0)); // P
-                            rows.setDeadLetterPending(a, type, true); // R
-                          }));
-                  awaitBlockedOnRowLock("UPDATE saga_state SET dead_letter_pending = $1");
+                          () -> store.publishShieldedIfAbsent(entry(a, type, 20L, "held", T0))));
+                  awaitBlockedOnRowLock("UPDATE saga_state SET dead_letter_pending = TRUE");
                 }));
 
     boolean cleared = drain.clearShieldIfDrained(a, type);
@@ -1442,7 +1440,7 @@ class PostgresSagaDeadLetterStoreTest {
     hold.get().get(20, TimeUnit.SECONDS);
     assertTrue(
         rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending(),
-        "R re-asserted the shield after C's clear");
+        "the hold's shield write landed after C's clear");
     assertEquals(1, store.findBySaga(a).size(), "E2 is recorded");
     assertEquals(0, store.deleteOlderThan(T0.plus(Duration.ofDays(30))), "E2 is not prunable");
   }
@@ -1510,6 +1508,121 @@ class PostgresSagaDeadLetterStoreTest {
     store.publishShielded(entry(a, type, 30L, "held", T0)); // the plain store: both land
     assertEquals(1, store.findBySaga(a).size());
     assertTrue(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * The hold's entry and the owner's shield are ONE transaction, as the poison's are: a failure at
+   * the shield UPDATE rolls the hold's entry back too, and a stored entry the hold keeps stays as
+   * it was.
+   */
+  @Test
+  void publishShieldedIfAbsent_isOneTransaction_aFailureAtTheShieldRollsTheEntryBack() {
+    var rows = sagaRows();
+    var a = SagaId.of("dl-atomic-hold");
+    var type = SagaType.of("T");
+    rows.create(a, type, new ShieldState(SagaStatus.RUNNING, "m"), SagaStatus.RUNNING);
+    var failing =
+        new PostgresSagaDeadLetterStore(
+            hookedBeforeStatement(
+                "UPDATE saga_state SET dead_letter_pending = TRUE",
+                () -> {
+                  throw new IllegalStateException("simulated failure after the hold's upsert");
+                }));
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> failing.publishShieldedIfAbsent(entry(a, type, 31L, "held", T0)));
+
+    assertTrue(store.findBySaga(a).isEmpty(), "the hold's entry was rolled back with the shield");
+    assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+
+    store.publishShielded(entry(a, type, 32L, "the poison", T0)); // a stored entry
+    assertThrows(
+        IllegalStateException.class,
+        () -> failing.publishShieldedIfAbsent(entry(a, type, 32L, "held", T0.plusSeconds(9))));
+    assertEquals("the poison", store.findBySaga(a).getFirst().errorMessage());
+    assertEquals(T0, store.findBySaga(a).getFirst().faultedAt());
+
+    assertInstanceOf(
+        SagaDeadLetterStore.HoldResult.Written.class,
+        store.publishShieldedIfAbsent(entry(a, type, 31L, "held", T0))); // the plain store
+    assertEquals(2, store.findBySaga(a).size());
+    assertTrue(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * A hold queued behind a poison writer of the same event, whose entry is written and not yet
+   * committed, keeps the poison's entry once the poison commits — the conflict arm decides on the
+   * row as committed, which a look-up followed by a write would not. Two real connections.
+   */
+  @Test
+  void publishShieldedIfAbsent_queuedBehindAnUncommittedPoison_keepsThePoison_interleaving()
+      throws Exception {
+    var rows = sagaRows();
+    var a = SagaId.of("dl-race-hold-poison");
+    var type = SagaType.of("T");
+    rows.create(a, type, new ShieldState(SagaStatus.RUNNING, "m"), SagaStatus.RUNNING);
+    var hold = new AtomicReference<CompletableFuture<SagaDeadLetterStore.HoldResult>>();
+    var poisonWriter =
+        new PostgresSagaDeadLetterStore(
+            hookedBeforeStatement(
+                "UPDATE saga_state SET dead_letter_pending = TRUE",
+                () -> {
+                  // the poison's entry is written, uncommitted: the hold queues on its row
+                  hold.set(
+                      CompletableFuture.supplyAsync(
+                          () ->
+                              store.publishShieldedIfAbsent(
+                                  entry(a, type, 40L, "held", T0.plusSeconds(1)))));
+                  awaitBlockedOnRowLock("INSERT INTO saga_dead_letters");
+                }));
+
+    poisonWriter.publishShielded(entry(a, type, 40L, "the poison", T0));
+
+    var result = hold.get().get(20, TimeUnit.SECONDS);
+    var kept = assertInstanceOf(SagaDeadLetterStore.HoldResult.Kept.class, result).entry();
+    assertEquals("the poison", kept.errorMessage());
+    assertEquals(1, store.findBySaga(a).size());
+    assertEquals("the poison", store.findBySaga(a).getFirst().errorMessage());
+    assertTrue(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * A hold queued behind a drain of another process that applies the event (its write of the saga
+   * row not yet committed) reads the row as the drain committed it, finds the event applied and
+   * records nothing — neither entry nor shield. Two real connections.
+   */
+  @Test
+  void publishShieldedIfAbsent_queuedBehindAnUncommittedApply_recordsNothing_interleaving()
+      throws Exception {
+    var rows = sagaRows();
+    var a = SagaId.of("dl-race-hold-apply");
+    var type = SagaType.of("T");
+    rows.create(a, type, new ShieldState(SagaStatus.RUNNING, "m"), SagaStatus.RUNNING);
+    try (Connection drain = dataSource.getConnection()) {
+      drain.setAutoCommit(false);
+      try (var ps =
+          drain.prepareStatement(
+              "UPDATE saga_state SET last_applied_offset = ? WHERE saga_id = ? AND saga_type = ?")) {
+        ps.setLong(1, 50L);
+        ps.setString(2, a.value());
+        ps.setString(3, type.value());
+        assertEquals(1, ps.executeUpdate());
+      }
+      var hold =
+          CompletableFuture.supplyAsync(
+              () -> store.publishShieldedIfAbsent(entry(a, type, 50L, "held", T0)));
+      awaitBlockedOnRowLock("UPDATE saga_state SET dead_letter_pending = TRUE");
+      drain.commit();
+
+      var result = hold.get(20, TimeUnit.SECONDS);
+      assertEquals(
+          50L,
+          assertInstanceOf(SagaDeadLetterStore.HoldResult.AlreadyApplied.class, result)
+              .lastAppliedOffset());
+    }
+    assertTrue(store.findBySaga(a).isEmpty(), "no entry records the applied event");
+    assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
   }
 
   /** The clear never runs its UPDATE on an absent row: no lock, no write, {@code false}. */

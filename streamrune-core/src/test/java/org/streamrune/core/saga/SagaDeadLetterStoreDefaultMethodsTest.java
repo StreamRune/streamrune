@@ -41,6 +41,11 @@ class SagaDeadLetterStoreDefaultMethodsTest {
       public void publishShielded(SagaDeadLetterEntry entry) {}
 
       @Override
+      public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+        return new HoldResult.Written();
+      }
+
+      @Override
       public List<SagaDeadLetterEntry> findAll(int limit) {
         return entries;
       }

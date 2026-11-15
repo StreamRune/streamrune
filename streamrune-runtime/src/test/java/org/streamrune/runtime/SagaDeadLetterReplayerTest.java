@@ -20,6 +20,7 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaCommand;
+import org.streamrune.core.saga.SagaDeadLetterStore.HoldResult;
 import org.streamrune.core.saga.SagaDeadLetterStore.SagaDeadLetterEntry;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -597,7 +598,8 @@ class SagaDeadLetterReplayerTest {
    * dedup-skipped by the runner, never held, so the drain after the fix feeds only the second event
    * and the first evolves exactly once. The replay feed's exact-match rule cannot catch this (a
    * deferred older entry must still feed), so the live guard is the only place the redelivery check
-   * can hold ahead of the FAULTED hold.
+   * can hold ahead of the FAULTED hold. The second event's redelivery meets the row its own poison
+   * faulted: its entry already exists, so the entry keeps the poison's own cause.
    */
   @Test
   void
@@ -618,6 +620,14 @@ class SagaDeadLetterReplayerTest {
         .as("the first event was applied: its redelivery is moot and records nothing")
         .extracting(e -> e.eventOffset().value())
         .containsExactly(h.offset(c2));
+    assertThat(h.entries())
+        .as("the redelivered poison keeps its own cause on its entry")
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("evolve poison at " + h.offset(c2));
+            });
     h.orchestrator.evolvePoison.clear(); // the operator ships the fix
 
     assertThat(h.replayer.replayAll(SAGA)).containsExactly(ReplayOutcome.REPLAYED);
@@ -628,6 +638,132 @@ class SagaDeadLetterReplayerTest {
     assertThat(h.entries()).isEmpty();
     assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
     assertThat(h.row().deadLetterPending()).isFalse();
+  }
+
+  /** A runner over the harness's stores with its own step lock, as another process has. */
+  private static SagaRunner<StartState> otherProcess(
+      Harness h,
+      ForwardingSagaStore sagaStore,
+      ForwardingSagaDeadLetterStore deadLetters,
+      StreamRuneMetrics metrics) {
+    return SagaRunner.<StartState>builder()
+        .orchestrator(h.orchestrator)
+        .sagaStore(sagaStore)
+        .commandBus(h.bus)
+        .sagaDeadLetterStore(deadLetters)
+        .metrics(metrics)
+        .clock(h.clock)
+        .inboxRetentionMaxAge(WINDOW)
+        .forwardFence(false)
+        .build();
+  }
+
+  /**
+   * A process stopped between the poison's entry and its fault write: the row is live and shielded
+   * with the poison's entry. The orchestrator is fixed. The page is delivered again on one replica,
+   * which keeps the entry and decides to complete the fault; before its fault write lands, an
+   * operator's drain on another replica applies the event, discards the entry and clears the
+   * shield. The fault write is decided on the row the delivery read, so it loses its
+   * compare-and-swap and the event is routed again: it is applied, and the saga stays RUNNING — not
+   * FAULTED after its event was applied, with no entry to replay.
+   */
+  @Test
+  void interruptedFault_completedBesideADrainOfAnotherProcess_neverFaultsAnAppliedEvent() {
+    var h = new Harness();
+    var start = h.start();
+    var poison = h.advance();
+    h.deliver(start);
+    h.orchestrator.evolvePoison.add(h.offset(poison));
+    h.dlq.crashOnceAfter("publish"); // stop between the entry and the fault write
+    assertThat(catchThrowable(() -> h.deliver(poison)))
+        .isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
+    assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(h.row().deadLetterPending()).isTrue();
+    h.orchestrator.evolvePoison.clear(); // the operator ships the fix
+
+    var faults = new java.util.concurrent.atomic.AtomicInteger();
+    var drainedFirst =
+        new ForwardingSagaStore(h.sagaStore) {
+          private boolean drained;
+
+          @Override
+          public boolean markFaulted(SagaId id, SagaType t, long v) {
+            if (!drained) {
+              drained = true; // the other replica's drain lands under this delivery
+              assertThat(h.replayer.replayAll(SAGA)).containsExactly(ReplayOutcome.REPLAYED);
+            }
+            return super.markFaulted(id, t, v);
+          }
+        };
+    var replica =
+        otherProcess(
+            h,
+            drainedFirst,
+            new ForwardingSagaDeadLetterStore(h.dlq),
+            new StreamRuneMetrics() {
+              @Override
+              public void recordSagaFaulted(String sagaType) {
+                faults.incrementAndGet();
+              }
+            });
+
+    replica.asEventListener().onEvents(List.of(poison)); // the page is delivered again
+
+    var row = h.row();
+    assertThat(row.status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(row.lastAppliedOffset()).isEqualTo(h.offset(poison));
+    assertThat(h.entries()).isEmpty();
+    assertThat(h.orchestrator.consumed)
+        .as("the event evolved once, by the drain")
+        .containsExactly(h.offset(start), h.offset(poison));
+    assertThat(faults.get()).isZero();
+  }
+
+  /**
+   * The saga is FAULTED with E's poison entry and N held behind it, and the orchestrator is fixed.
+   * The page [E, N] is delivered again on one replica, which reads the FAULTED row; before its hold
+   * of E writes, a drain on another replica feeds and discards E and N and clears the shield. The
+   * hold must not record E, which the row has applied by then: the store decides on the row as it
+   * is, records nothing, and the next drain has nothing to feed — each event evolved once.
+   */
+  @Test
+  void holdDecidedOnAStaleRow_besideADrainOfAnotherProcess_recordsNoAppliedEvent() {
+    var h = new Harness();
+    var start = h.start();
+    var e = h.advance();
+    var n = h.advance();
+    h.deliver(start);
+    h.orchestrator.evolvePoison.add(h.offset(e));
+    h.deliver(e, n);
+    assertThat(h.row().status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(h.entries()).hasSize(2);
+    h.orchestrator.evolvePoison.clear(); // the operator ships the fix
+
+    var drainedFirst =
+        new ForwardingSagaDeadLetterStore(h.dlq) {
+          private boolean drained;
+
+          @Override
+          public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+            if (!drained) {
+              drained = true; // the replica has read the FAULTED row; the drain lands now
+              assertThat(h.replayer.replayAll(SAGA))
+                  .containsExactly(ReplayOutcome.REPLAYED, ReplayOutcome.REPLAYED);
+            }
+            return super.publishShieldedIfAbsent(entry);
+          }
+        };
+    var replica =
+        otherProcess(h, new ForwardingSagaStore(h.sagaStore), drainedFirst, StreamRuneMetrics.NOOP);
+
+    replica.asEventListener().onEvents(List.of(e, n)); // the page is delivered again
+
+    assertThat(h.entries()).as("no entry records an applied event").isEmpty();
+    assertThat(h.row().status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(h.replayer.replayAll(SAGA)).isEmpty();
+    assertThat(h.orchestrator.consumed)
+        .as("each event evolved once")
+        .containsExactly(h.offset(start), h.offset(e), h.offset(n));
   }
 
   /**

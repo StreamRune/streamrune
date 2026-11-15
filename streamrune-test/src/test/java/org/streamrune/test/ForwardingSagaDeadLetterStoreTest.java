@@ -32,7 +32,7 @@ class ForwardingSagaDeadLetterStoreTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden_theThrowingDefaultsIncluded() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        SagaDeadLetterStore.class, ForwardingSagaDeadLetterStore.class, 12);
+        SagaDeadLetterStore.class, ForwardingSagaDeadLetterStore.class, 13);
   }
 
   @Test

@@ -937,6 +937,11 @@ class SagaTimeoutRunnerTest {
           }
 
           @Override
+          public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+            return Optional.empty();
+          }
+
+          @Override
           public void delete(SagaId sagaId, SagaType sagaType) {}
 
           @Override
@@ -1084,6 +1089,11 @@ class SagaTimeoutRunnerTest {
           }
 
           @Override
+          public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+            return Optional.empty();
+          }
+
+          @Override
           public void delete(SagaId sagaId, SagaType sagaType) {}
 
           @Override
@@ -1200,6 +1210,11 @@ class SagaTimeoutRunnerTest {
           @Override
           public <S extends SagaState> java.util.Optional<LoadedSaga<S>> load(
               SagaId sagaId, SagaType sagaType, Class<S> stateType) {
+            return Optional.empty();
+          }
+
+          @Override
+          public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
             return Optional.empty();
           }
 

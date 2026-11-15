@@ -251,6 +251,11 @@ class SagaStateConversionPoisonTest {
     }
 
     @Override
+    public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+      return delegate.loadRowFacts(sagaId, sagaType);
+    }
+
+    @Override
     public List<SagaId> findTimedOut(SagaType sagaType, Instant cutoff, int limit) {
       return delegate.findTimedOut(sagaType, cutoff, limit);
     }

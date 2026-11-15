@@ -30,15 +30,17 @@ import org.streamrune.core.types.SagaType;
  * identified), the key degenerates to {@code eventOffset} alone.
  *
  * <p><b>A dead-letter store must READ AND WRITE the saga rows it shields</b> (normative for
- * implementations and for how a store is WIRED). Three of its operations are not entry-local at
- * all: {@link #publishShielded} sets {@code saga_state.dead_letter_pending} with the entry, {@link
- * #clearShieldIfDrained} is the framework's ONLY writer of that flag back to {@code false}, and
- * {@link #deleteOlderThan} / {@link #countFaultedBacklog} must never prune (and must count) an
- * entry whose owner row is {@code FAULTED} or shielded. A store that cannot reach the saga rows
- * cannot honour any of them: it will either drop the shield silently or prune a held entry. That is
- * why {@link #publishShielded}, {@link #clearShieldIfDrained} and {@link #deleteOlderThan} are
- * abstract. {@link #countFaultedBacklog} is an optional default: a store that cannot see saga rows
- * leaves it throwing, and the gauge is then absent. It must never return {@code 0}.
+ * implementations and for how a store is WIRED). Four of its operations are not entry-local at all:
+ * {@link #publishShielded} sets {@code saga_state.dead_letter_pending} with the entry, {@link
+ * #publishShieldedIfAbsent} reads the row's {@code last_applied_offset} and sets the flag with the
+ * hold's entry, {@link #clearShieldIfDrained} is the framework's ONLY writer of that flag back to
+ * {@code false}, and {@link #deleteOlderThan} / {@link #countFaultedBacklog} must never prune (and
+ * must count) an entry whose owner row is {@code FAULTED} or shielded. A store that cannot reach
+ * the saga rows cannot honour any of them: it will either drop the shield silently or prune a held
+ * entry. That is why {@link #publishShielded}, {@link #publishShieldedIfAbsent}, {@link
+ * #clearShieldIfDrained} and {@link #deleteOlderThan} are abstract. {@link #countFaultedBacklog} is
+ * an optional default: a store that cannot see saga rows leaves it throwing, and the gauge is then
+ * absent. It must never return {@code 0}.
  *
  * <p><b>The wiring consequence:</b> the dead-letter store and the {@code SagaStore} a {@code
  * SagaRunner} is built with must see the SAME saga rows. The framework's defaults do — all three
@@ -95,15 +97,15 @@ public interface SagaDeadLetterStore {
    * recorded" and "the row is shielded". An absent owner row (the row-less residual) records the
    * entry and leaves the shield write a no-op, exactly like {@code SagaStore.setDeadLetterPending}.
    *
-   * <p><b>Why one write.</b> The runner holds an event as T ({@code setDeadLetterPending(true)}) →
-   * P ({@code publish}). A concurrent drain's {@link #clearShieldIfDrained} may legitimately land
-   * between T and P (it sees no entry yet and clears). A separate re-assert after P closed the race
-   * but opened a crash window: a process death between P and the re-assert left the entry on an
-   * UNSHIELDED row, the redelivery was then APPLIED live (the shield WAS the hold's condition) and
-   * the entry survived as the record of an already-applied event that the next drain evolved again.
-   * With the entry and the shield in one transaction the window is gone: after any crash either
-   * neither exists (the redelivery re-decides on the row) or both do (the redelivery is held behind
-   * its own entry).
+   * <p><b>Why one write.</b> The runner records a poison here, and a hold through {@link
+   * #publishShieldedIfAbsent}, which is one write for the same reason. A concurrent drain's {@link
+   * #clearShieldIfDrained} may land at any time before the write (it sees no entry yet and clears):
+   * the write sets the shield again. An entry written apart from its shield would leave, after a
+   * process death between the two, the entry on an UNSHIELDED row: the redelivery would then be
+   * APPLIED live (the shield is the hold's condition) and the entry would survive as the record of
+   * an already-applied event that the next drain evolves again. With the entry and the shield in
+   * one transaction, after any crash either neither exists (the redelivery re-decides on the row)
+   * or both do (the redelivery is held behind its own entry).
    *
    * <p>Lock order (PostgreSQL): the dead-letter row first (the upsert), then the saga row (the
    * shield UPDATE). {@link #clearShieldIfDrained} takes the saga row first and only READS the
@@ -117,6 +119,92 @@ public interface SagaDeadLetterStore {
    * @throws IllegalArgumentException if {@code entry} or its saga id is null
    */
   void publishShielded(SagaDeadLetterEntry entry);
+
+  /**
+   * {@link #publishShielded} for a HOLD, which never replaces an entry already recorded and never
+   * records an event its saga has applied. In one durable write, against the owner row as it is at
+   * the store (not as the caller read it):
+   *
+   * <ul>
+   *   <li>when the owner row has applied the event ({@code last_applied_offset} at or above {@code
+   *       entry.eventOffset()}), nothing is written — neither entry nor shield — and the result is
+   *       {@link HoldResult.AlreadyApplied};
+   *   <li>otherwise, when an entry of {@code entry.sagaType()} is stored at {@code (entry.sagaId(),
+   *       entry.eventOffset())}, it is kept exactly as stored — its error type, error message,
+   *       {@code faultedAt} and every other column — the shield is asserted (it is already set, as
+   *       every entry is written with it) and the result is {@link HoldResult.Kept} with that
+   *       entry;
+   *   <li>otherwise the entry is written exactly as {@link #publishShielded} writes it, with the
+   *       shield, and the result is {@link HoldResult.Written}.
+   * </ul>
+   *
+   * <p>An absent owner row (the row-less residual) has applied nothing and leaves the shield write
+   * a no-op. Two concurrent holds of one event write it once. A look-up followed by a write does
+   * not meet this contract: a hold between the two, a poison writer between the two, or a drain of
+   * another process that applies the event and discards its entry between the two, would each be
+   * overwritten or recorded again.
+   *
+   * <p><b>Why a hold must not record an applied event (normative for implementations).</b> The
+   * runner decides a hold on the row it read; a drain of another process may feed and discard the
+   * event, and clear the shield, before the hold writes. An entry recorded then is the record of an
+   * applied event, which the next drain feeds and evolves a second time. The row the store sees in
+   * the hold's own transaction is the authority.
+   *
+   * <p><b>Why a hold must not refresh (normative for implementations).</b> The runner holds a
+   * correlated event it cannot consume yet (the saga is {@code FAULTED}, shielded, genesis-pending
+   * or has no row) and records it here. An entry already stored at that key records the same event:
+   * delivered before and held, or — the case that matters — the saga's own poison event, whose page
+   * is delivered again after the poison was recorded and now meets the saga that poison faulted. A
+   * refreshing upsert would replace the poison's exception class name and message, the only durable
+   * record of the cause, with the hold's, and the entry would then claim that the original poison
+   * event was "delivered while the saga is FAULTED". The poison path keeps {@link #publishShielded}
+   * and its refresh: a still-poison replay records the newest real failure.
+   *
+   * <p><b>How the runner reads a kept entry.</b> {@code SagaRunner} records holds with two error
+   * types only, {@code org.streamrune.runtime.SagaEventHeldException} and {@code
+   * org.streamrune.runtime.SagaSkippedWhileFaultedException}. A kept entry of the hold's saga type
+   * with any other error type, on a shielded row that is not {@code FAULTED}, is taken for the
+   * saga's own poison whose fault write did not land, and the runner makes that fault write.
+   *
+   * <p>The shipped stores key a named entry by {@code (sagaId, eventOffset)}, saga type not
+   * included, as {@link #publish} does: in them an entry of ANOTHER saga type stored at that key is
+   * replaced, as {@link #publish} replaces it, and the result is {@link HoldResult.Written}.
+   *
+   * @param entry the hold's entry; {@code sagaId} is required
+   * @return what the call did: {@link HoldResult.Written}, {@link HoldResult.Kept} with the stored
+   *     entry, or {@link HoldResult.AlreadyApplied}
+   * @throws IllegalArgumentException if {@code entry} or its saga id is null
+   */
+  HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry);
+
+  /** What {@link #publishShieldedIfAbsent} did with a hold's entry. */
+  sealed interface HoldResult {
+
+    /** The entry was written, with the owner's shield. */
+    record Written() implements HoldResult {}
+
+    /**
+     * An entry of the hold's saga type was stored at the key and is kept as stored.
+     *
+     * @param entry the stored entry
+     */
+    record Kept(SagaDeadLetterEntry entry) implements HoldResult {
+      /**
+       * @throws NullPointerException if {@code entry} is null
+       */
+      public Kept {
+        Objects.requireNonNull(entry, "entry is required");
+      }
+    }
+
+    /**
+     * The owner row has applied the event; nothing was written.
+     *
+     * @param lastAppliedOffset the row's {@code last_applied_offset}, at or above the event's
+     *     offset
+     */
+    record AlreadyApplied(long lastAppliedOffset) implements HoldResult {}
+  }
 
   /**
    * Returns the most recently faulted entries across all sagas, up to {@code limit}.
@@ -333,28 +421,27 @@ public interface SagaDeadLetterStore {
    * the flag was cleared by this call ({@code false}: an entry exists, the flag was already clear,
    * or the row is absent).
    *
-   * <p><b>Why this is a store method and not two calls.</b> The replayer's former
-   * observe-then-write ({@code findBySaga} empty → {@code setDeadLetterPending(false)}) raced the
-   * runner's hold ({@code setDeadLetterPending(true)} → {@code publish}): the drain observed an
-   * empty backlog, the runner shielded and published, the drain wrote FALSE — a held entry left
-   * unshielded, applied behind by the next live event and pruned by {@link #deleteOlderThan}. Nor
-   * is a single conditional {@code UPDATE … WHERE NOT EXISTS} enough under READ COMMITTED: its
-   * subqueries run on the statement snapshot and EvalPlanQual re-checks a concurrently updated row
-   * with that SAME snapshot, so a clear whose snapshot predates the hold still writes FALSE behind
-   * a completed hold. The contract is therefore: <em>serialize against the shield writes, then
-   * decide on a fresh view</em> — PostgreSQL: one transaction, {@code SELECT … FOR UPDATE} on the
-   * saga row (the hold's flag writes queue behind it) followed by the conditional UPDATE as a
-   * SECOND statement (fresh snapshot after the lock); in-memory: the entries monitor that {@code
-   * publish}, {@link #publishShielded} and {@code setResolvedTarget} also take. Together with
-   * {@link #publishShielded} writing the entry and the shield as ONE durable step, every
-   * interleaving of the hold's T (set TRUE) / P (entry + shield) with the clear C ends with the
-   * shield TRUE while an entry exists, <em>and stays that way across a crash at any point</em> (see
-   * {@code SagaRunner}'s single poison handler). C before or between T and P: C sees no entry and
-   * clears, then P re-establishes both. C after P: C's fresh snapshot sees the entry and does not
-   * clear. C concurrent with P: C holds the saga row, so P's shield UPDATE waits; C's read of the
-   * dead-letter table cannot see P's uncommitted entry, so C clears, and P then sets the shield
-   * back — never the reverse, because C never holds a dead-letter row lock and so can never
-   * overtake a committed P.
+   * <p><b>Why this is a store method and not two calls.</b> An observe-then-write ({@code
+   * findBySaga} empty → {@code setDeadLetterPending(false)}) races the runner's writes of an entry:
+   * the drain observes an empty backlog, the runner writes an entry and its shield, the drain
+   * writes FALSE — an entry left unshielded, applied behind by the next live event and pruned by
+   * {@link #deleteOlderThan}. Nor is a single conditional {@code UPDATE … WHERE NOT EXISTS} enough
+   * under READ COMMITTED: its subqueries run on the statement snapshot and EvalPlanQual re-checks a
+   * concurrently updated row with that SAME snapshot, so a clear whose snapshot predates the hold
+   * still writes FALSE behind a completed hold. The contract is therefore: <em>serialize against
+   * the shield writes, then decide on a fresh view</em> — PostgreSQL: one transaction, {@code
+   * SELECT … FOR UPDATE} on the saga row (the hold's flag writes queue behind it) followed by the
+   * conditional UPDATE as a SECOND statement (fresh snapshot after the lock); in-memory: the
+   * entries monitor that {@code publish}, {@link #publishShielded}, {@link
+   * #publishShieldedIfAbsent} and {@code setResolvedTarget} also take. Together with {@link
+   * #publishShielded} and {@link #publishShieldedIfAbsent} writing the entry and the shield as ONE
+   * durable step P, every interleaving of P with the clear C ends with the shield TRUE while an
+   * entry exists, <em>and stays that way across a crash at any point</em> (see {@code SagaRunner}'s
+   * single poison handler). C before P: C sees no entry and clears, then P establishes both. C
+   * after P: C's fresh snapshot sees the entry and does not clear. C concurrent with P: C holds the
+   * saga row, so P's shield UPDATE waits; C's read of the dead-letter table cannot see P's
+   * uncommitted entry, so C clears, and P then sets the shield back — never the reverse, because C
+   * never holds a dead-letter row lock and so can never overtake a committed P.
    *
    * <p>A store that cannot answer must never clear — the shield invariant errs toward recording. It
    * throws {@link UnsupportedOperationException} instead, and {@code SagaDeadLetterReplayer} WARNs
