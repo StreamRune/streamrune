@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794643293046,
+  "lastUpdate": 1794730985430,
   "repoUrl": "https://github.com/StreamRune/streamrune",
   "entries": {
     "StreamRune JMH": [
@@ -884,6 +884,214 @@ window.BENCHMARK_DATA = {
           {
             "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
             "value": 48.68386162518526,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Martin Bednář",
+            "username": "xxBedy",
+            "email": "martin.bednar@streamrune.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f76eccf811fdb9574c1319577a9fa0786339e246",
+          "message": "fix(test): InMemoryEventSubscription takes an append from another thread during a delivery (#117)\n\n## Why\n\nCode that runs several listener steps at once appends events from worker threads while the test kit's `InMemoryEventSubscription` is still delivering a page on another thread. Until now such an append waited for the delivery in progress — and the delivery waits for the workers, so a test of parallel processing deadlocked.\n\n## Change\n\n- `InMemoryEventSubscription` serialises deliveries with a `ReentrantLock` and a \"delivery requested\" flag instead of a monitor:\n  - an append notification from another thread no longer waits — it marks a delivery as requested and returns;\n  - the thread that holds the lock keeps draining until an empty page;\n  - a re-check after unlocking catches an append that landed after the last read, so no wake-up is lost.\n- `poll()` and `start()` still wait for a delivery in progress and then deliver.\n- A failed delivery returns without retrying; its events stay pending for the next notification or poll.\n- The lock and the delivering-thread state are released on every path, including an `Error` from the listener.\n- The class Javadoc, `docs/guide/testing.md` and the 1.0.0 reference state the delivery rule exactly, including:\n  - when events appended during a delivery are delivered;\n  - that work handed to another thread must neither call `poll()` nor need a lock the delivering thread holds;\n  - which thread the listener runs on.\n\n## Tests\n\nNew cases in `InMemoryEventSubscriptionTest`:\n- an append from another thread during a delivery returns at once and is still delivered;\n- a failed delivery is not retried at once;\n- `poll()` waits for a delivery in progress;\n- an append that lands after a delivery's last read is still delivered (fails without the re-check);\n- an `Error` from the listener leaves no lock held (a poll from another thread completes).\n\n`:streamrune-test:check` (incl. doc lint and coverage) is green.\n\n\n\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T15:00:11Z",
+          "url": "https://github.com/StreamRune/streamrune/commit/f76eccf811fdb9574c1319577a9fa0786339e246"
+        },
+        "date": 1794730984739,
+        "tool": "jmh",
+        "benches": [
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"0\"} )",
+            "value": 162.70916396148698,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 229.07196558553514,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 236.85731569426721,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapPublishedEvent",
+            "value": 0.2660047955181625,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"10\"} )",
+            "value": 18.46199260052486,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"100\"} )",
+            "value": 164.2355964403313,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.commandBusThroughput",
+            "value": 17.620195465874012,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"1\"} )",
+            "value": 16.041029253923377,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"10\"} )",
+            "value": 57.40442396831905,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"100\"} )",
+            "value": 401.3590151101164,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"1\"} )",
+            "value": 1.4363949237749227,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"10\"} )",
+            "value": 13.183604082390497,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"100\"} )",
+            "value": 127.82006721898472,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"1\"} )",
+            "value": 7.282776916503359,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"10\"} )",
+            "value": 7.305151462872416,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"100\"} )",
+            "value": 7.309364961393213,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"NOOP\"} )",
+            "value": 17.70311018990575,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_OFF\"} )",
+            "value": 20.743371552878983,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_ON\"} )",
+            "value": 21.71559139931488,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"1\"} )",
+            "value": 1040.832481602463,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"10\"} )",
+            "value": 1320.819807130897,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"1\"} )",
+            "value": 1046.3798251499002,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"10\"} )",
+            "value": 1317.537083199854,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"10\"} )",
+            "value": 396.4521307189967,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"100\"} )",
+            "value": 889.9126289569728,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 941.4139597729452,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 962.6834807301027,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 8.386937405874729,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 37.90313734556802,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 13.775316379160452,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 66.11093099836407,
             "unit": "us/op",
             "extra": "iterations: 5\nforks: 2\nthreads: 1"
           }
