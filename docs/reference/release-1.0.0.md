@@ -519,6 +519,9 @@ license.
   `createIndexSql(index)` returns the statement for a manual `CONCURRENTLY` build on a large table.
   The Spring, Quarkus and Micronaut integrations declare every `ProjectionIndex` bean at startup on
   the application's `ProjectionRepository` bean, before the runners start.
+
+## Queries and the query cache
+
 - `QueryBus` (`dispatch(Query<R>)`, `register(Class<Q>, QueryHandler<Q, R>)`) with `SimpleQueryBus`,
   `AuditingQueryBus` (for `@Auditable` queries) and `CachingQueryBus`; `Page`, `PageRequest`, `Sort`
   for paginated read models (`PageRequest.offset()` is a `long`; `Page.hasNext()` does not overflow

@@ -96,7 +96,16 @@ class StreamRuneLifecycleOrderingTest {
    * of passing while the container ignores it.
    */
   private static int priorityOf(Class<?> type, String methodName) throws NoSuchMethodException {
-    Method m = type.getDeclaredMethod(methodName, StartupEvent.class);
+    // The event is the first parameter; an observer may take injected beans after it.
+    Method m =
+        java.util.Arrays.stream(type.getDeclaredMethods())
+            .filter(
+                candidate ->
+                    candidate.getName().equals(methodName)
+                        && candidate.getParameterCount() > 0
+                        && candidate.getParameterTypes()[0] == StartupEvent.class)
+            .findFirst()
+            .orElseThrow(() -> new NoSuchMethodException(type.getName() + "." + methodName));
     assertNull(
         m.getAnnotation(Priority.class),
         () ->
@@ -139,6 +148,14 @@ class StreamRuneLifecycleOrderingTest {
     assertTrue(
         identityValidator < lifecycleStart,
         "StreamRuneRequestIdentityValidator must run before StreamRuneLifecycle.onStart");
+    // The projection indexes are declared before any runner reads or writes a read model.
+    int indexDeclarer = priorityOf(ProjectionIndexDeclarer.class, "declare");
+    assertTrue(
+        indexDeclarer < lifecycleStart,
+        "ProjectionIndexDeclarer must run before StreamRuneLifecycle.onStart");
+    assertTrue(
+        indexDeclarer < priorityOf(SagaCompensationRetryLifecycle.class, "onStart"),
+        "ProjectionIndexDeclarer must run before SagaCompensationRetryLifecycle.onStart");
   }
 
   @RequireRole("ADMIN")
@@ -343,6 +360,7 @@ class StreamRuneLifecycleOrderingTest {
                 // @Priority, so it ran deterministically AFTER the two 1100 runner starters below —
                 // its event-path key-age guard landed too late for a SagaRunner bean.
                 SagaEventPathRetentionConfigurer.class,
+                ProjectionIndexDeclarer.class,
                 DefaultConfigInfrastructure.class))) {
       BeanManager beanManager = arc.container().beanManager();
       // CDI observer resolution — no dispatch, no side effects — against a real deployment's
@@ -392,6 +410,12 @@ class StreamRuneLifecycleOrderingTest {
               + " fix it had no @Priority at all and ran deterministically AFTER both 1100"
               + " runner starters, so the event-path key-age guard applied too late for a SagaRunner"
               + " bean");
+
+      assertEquals(
+          Interceptor.Priority.LIBRARY_BEFORE,
+          priorityByBeanClass.get(ProjectionIndexDeclarer.class),
+          "Arc must resolve ProjectionIndexDeclarer.declare at LIBRARY_BEFORE, before the runner"
+              + " starters");
 
       assertTrue(configValidatorPriority < lifecycleStartPriority);
       assertTrue(authValidatorPriority < lifecycleStartPriority);

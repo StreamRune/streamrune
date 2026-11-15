@@ -2076,6 +2076,14 @@ class MicronautBeanWiringTest {
     assertTrue(
         identityValidator < sagaSweeperLifecycleStart,
         "StreamRuneRequestIdentityValidator must run before SagaCompensationRetryLifecycle");
+    // The projection indexes are declared before any runner reads or writes a read model.
+    int indexDeclarer = new ProjectionIndexDeclarer(null, List.of()).getOrder();
+    assertTrue(
+        indexDeclarer < lifecycleStart,
+        "ProjectionIndexDeclarer must run before StreamRuneLifecycle");
+    assertTrue(
+        indexDeclarer < sagaSweeperLifecycleStart,
+        "ProjectionIndexDeclarer must run before SagaCompensationRetryLifecycle");
   }
 
   record OrderingEncryptedSagaState(

@@ -1,6 +1,5 @@
 package org.streamrune.test;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -81,10 +80,10 @@ import org.streamrune.core.types.ProjectionName;
  * as JSON text in code-point order, a missing field last ascending, the id breaking ties, filter by
  * the field's JSON text (a decimal number as PostgreSQL prints {@code numeric}), and refuse the
  * fields the JDBC repository refuses, {@code Encrypted} record components included. A field is read
- * through the mapper this repository was built with, and a read model that mapper cannot write is
- * refused at save, as the JDBC repository refuses it. Passes {@link
- * ProjectionRepositoryQueryContract}. {@link #declareIndex} checks and records an index and creates
- * nothing ({@link #declaredIndexes()}).
+ * through the mapper this repository was built with, and a read model that mapper cannot write, or
+ * whose JSON holds U+0000 in a string, is refused at save, as the JDBC repository refuses it.
+ * Passes {@link ProjectionRepositoryQueryContract}. {@link #declareIndex} checks and records an
+ * index and creates nothing ({@link #declaredIndexes()}).
  *
  * <p>Read models are stored as the objects themselves, not serialized: a projection that mutates a
  * read model after saving it mutates the stored row too. Not for production.
@@ -421,27 +420,62 @@ public final class InMemoryProjectionRepository
   }
 
   private Set<String> encryptedJsonFields(Class<?> type) {
-    if (!type.isRecord()) {
+    return encryptedJsonFields(type, new HashSet<>());
+  }
+
+  /**
+   * The JSON names of {@code type}'s {@code Encrypted} components, and of those of the records it
+   * embeds with {@code @JsonUnwrapped} (with the annotation's prefix and suffix), at any depth. A
+   * type that is not a record ({@code Map}, a class) is not checked.
+   */
+  private Set<String> encryptedJsonFields(Class<?> type, Set<Class<?>> visiting) {
+    if (!type.isRecord() || !visiting.add(type)) {
       return Set.of();
     }
     var components = new HashSet<String>();
+    var names = new HashSet<String>();
     for (var component : type.getRecordComponents()) {
       if (component.isAnnotationPresent(Encrypted.class)) {
         components.add(component.getName());
       }
+      var unwrapped = unwrapped(type, component);
+      if (unwrapped != null && unwrapped.enabled()) {
+        for (String inner : encryptedJsonFields(component.getType(), visiting)) {
+          names.add(unwrapped.prefix() + inner + unwrapped.suffix());
+        }
+      }
     }
-    if (components.isEmpty()) {
-      return Set.of();
-    }
-    var names = new HashSet<>(components);
-    var description =
-        fieldMapper.getSerializationConfig().introspect(fieldMapper.constructType(type));
-    for (var property : description.findProperties()) {
-      if (components.contains(property.getInternalName())) {
-        names.add(property.getName());
+    visiting.remove(type);
+    if (!components.isEmpty()) {
+      names.addAll(components);
+      var description =
+          fieldMapper.getSerializationConfig().introspect(fieldMapper.constructType(type));
+      for (var property : description.findProperties()) {
+        if (components.contains(property.getInternalName())) {
+          names.add(property.getName());
+        }
       }
     }
     return Set.copyOf(names);
+  }
+
+  /**
+   * The {@code @JsonUnwrapped} of a record component: the annotation is not a record-component
+   * annotation, so Java puts it on the accessor and the field.
+   */
+  private static com.fasterxml.jackson.annotation.JsonUnwrapped unwrapped(
+      Class<?> type, java.lang.reflect.RecordComponent component) {
+    var onAccessor =
+        component.getAccessor().getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
+    if (onAccessor != null) {
+      return onAccessor;
+    }
+    try {
+      return type.getDeclaredField(component.getName())
+          .getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
+    } catch (NoSuchFieldException e) {
+      return null;
+    }
   }
 
   private static IllegalArgumentException encryptedKey(Class<?> type, String field) {
@@ -455,13 +489,22 @@ public final class InMemoryProjectionRepository
   }
 
   /**
-   * Refuses, as the JDBC repository does at save, a read model the field mapper cannot write; the
-   * stored object itself is kept, not the JSON.
+   * Refuses, as the JDBC repository does at save, a read model the field mapper cannot write, and
+   * one whose JSON holds U+0000 in a string or a field name, which PostgreSQL's {@code jsonb}
+   * refuses ({@code 22P05}); the stored object itself is kept, not the JSON.
    */
   private void requireWritable(ProjectionName name, String id, Object readModel) {
     try {
-      fieldMapper.writeValueAsBytes(readModel);
-    } catch (JsonProcessingException e) {
+      JsonNode tree = fieldReader.readTree(fieldMapper.writeValueAsBytes(readModel));
+      if (holdsNul(tree)) {
+        throw new EventStoreException(
+            "Failed to save projection: "
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "/"
+                + LogSanitizer.sanitizeForLog(id)
+                + ": a string holds U+0000, which PostgreSQL jsonb cannot store");
+      }
+    } catch (java.io.IOException e) {
       throw new EventStoreException(
           "Failed to save projection: "
               + LogSanitizer.sanitizeForLog(name.value())
@@ -469,6 +512,29 @@ public final class InMemoryProjectionRepository
               + LogSanitizer.sanitizeForLog(id),
           e);
     }
+  }
+
+  private static boolean holdsNul(JsonNode node) {
+    if (node.isTextual()) {
+      return node.textValue().indexOf(0) >= 0;
+    }
+    if (node.isObject()) {
+      for (var fields = node.fields(); fields.hasNext(); ) {
+        var field = fields.next();
+        if (field.getKey().indexOf(0) >= 0 || holdsNul(field.getValue())) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (node.isArray()) {
+      for (JsonNode element : node) {
+        if (holdsNul(element)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // ---- ProjectionRepository (autocommit face: what a BaseProjection uses outside a batch) ----

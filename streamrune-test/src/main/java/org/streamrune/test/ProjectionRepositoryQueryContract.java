@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.Sort;
@@ -163,6 +165,29 @@ public abstract class ProjectionRepositoryQueryContract {
       this.name = name;
     }
   }
+
+  /**
+   * A record with an {@code Encrypted} component, embedded in {@link OuterRow}.
+   *
+   * @param customerId a plain component
+   * @param email the encrypted component
+   */
+  public record Contact(String customerId, @Encrypted(subjectId = "customerId") String email) {}
+
+  /**
+   * A read model that embeds {@link Contact} twice with {@code JsonUnwrapped}: its {@code email}
+   * and {@code billing_email} fields are stored at the top level, as ciphertext.
+   *
+   * @param id the row id
+   * @param contact embedded without a prefix
+   * @param billing embedded with the prefix {@code billing_}
+   * @param name a plain component
+   */
+  public record OuterRow(
+      String id,
+      @JsonUnwrapped Contact contact,
+      @JsonUnwrapped(prefix = "billing_") Contact billing,
+      String name) {}
 
   private ContractRow save(ProjectionName name, String id, String customer, String createdAt) {
     var row = new ContractRow(id, customer, createdAt, null);
@@ -514,6 +539,44 @@ public abstract class ProjectionRepositoryQueryContract {
     assertDoesNotThrow(
         () -> repository().findAllBy(name, SecretRow.class, byName, request),
         "a plain component of the same type is fine");
+  }
+
+  /**
+   * An {@code Encrypted} component of a record embedded with {@code JsonUnwrapped} is refused under
+   * its top-level JSON name, prefix included.
+   */
+  @Test
+  public void anEncryptedComponentOfAnUnwrappedRecordCannotBeFilteredOrSorted() {
+    var name = freshName();
+    var request = PageRequest.of(0, 10);
+    for (String field : List.of("email", "billing_email")) {
+      var filter = FieldEquals.of(field, "a@example.com");
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> repository().findAllBy(name, OuterRow.class, filter, request),
+          "filter " + field);
+      var sorted = PageRequest.of(0, 10, Sort.by(field));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> repository().findAll(name, OuterRow.class, sorted),
+          "sort " + field);
+    }
+    for (String field : List.of("customerId", "billing_customerId", "name")) {
+      var filter = FieldEquals.of(field, "x");
+      assertDoesNotThrow(
+          () -> repository().findAllBy(name, OuterRow.class, filter, request), "filter " + field);
+    }
+  }
+
+  /** A string holding U+0000 is refused at save, as PostgreSQL's jsonb refuses it. */
+  @Test
+  public void aStringHoldingUPlus0000IsRefusedAtSave() {
+    var name = freshName();
+    var row = new ContractRow("z1", "a\0b", null, null);
+
+    assertThrows(EventStoreException.class, () -> repository().save(name, "z1", row));
+    assertTrue(
+        repository().findById(name, "z1", ContractRow.class).isEmpty(), "nothing was stored");
   }
 
   /** {@code declareIndex(null)} and a declaration inside a transaction are refused. */

@@ -895,12 +895,22 @@ public abstract class org.streamrune.test.ProjectionRepositoryQueryContract
   public void aNumberFieldFiltersAndSortsAsText()
   public void aPagePastAnIntOffsetIsEmptyAndCarriesTheTotal()
   public void aSortedReadBreaksTiesById()
+  public void aStringHoldingUPlus0000IsRefusedAtSave()
   public void anEncryptedComponentCannotBeFilteredOrSorted()
+  public void anEncryptedComponentOfAnUnwrappedRecordCannotBeFilteredOrSorted()
   public void anUnsortedReadOrdersByIdInCodePointOrder()
   public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem()
   public void declaringAnIndexTwiceIsAccepted()
   public void theRowsOfOneTransactionTieOnUpdatedAt()
   public void theVersionAndUpdatedAtColumnsSortByTheirValues()
+
+public static final record org.streamrune.test.ProjectionRepositoryQueryContract$Contact
+  public <init>(java.lang.String, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String customerId()
+  public java.lang.String email()
 
 public static final record org.streamrune.test.ProjectionRepositoryQueryContract$ContractRow
   public <init>(java.lang.String, java.lang.String, java.lang.String, java.lang.Integer)
@@ -923,6 +933,16 @@ public static final record org.streamrune.test.ProjectionRepositoryQueryContract
   public java.lang.String id()
   public java.math.BigDecimal price()
   public java.time.Duration delay()
+
+public static final record org.streamrune.test.ProjectionRepositoryQueryContract$OuterRow
+  public <init>(java.lang.String, org.streamrune.test.ProjectionRepositoryQueryContract$Contact, org.streamrune.test.ProjectionRepositoryQueryContract$Contact, java.lang.String)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String id()
+  public java.lang.String name()
+  public org.streamrune.test.ProjectionRepositoryQueryContract$Contact billing()
+  public org.streamrune.test.ProjectionRepositoryQueryContract$Contact contact()
 
 public static final record org.streamrune.test.ProjectionRepositoryQueryContract$SecretRow
   public <init>(java.lang.String, java.lang.String, java.lang.String)

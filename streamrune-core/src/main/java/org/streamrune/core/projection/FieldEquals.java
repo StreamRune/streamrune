@@ -28,8 +28,10 @@ import org.streamrune.core.types.LogSanitizer;
  * it. Refused with an {@link IllegalArgumentException}: a blank field and the names of the
  * repository's own columns {@code id}, {@code version} and {@code updated_at} (here, at
  * construction); a field outside {@code [A-Za-z0-9_]+} (nested paths included), and an {@code
- * Encrypted} record component of the read-model type, whose stored text is ciphertext (by the
- * repository, at the read). To read one row by id, use {@link ProjectionRepository#findById}.
+ * Encrypted} record component of the read-model type or of a record it embeds with {@code
+ * JsonUnwrapped}, whose stored text is ciphertext (by the repository, at the read; a read-model
+ * type that is not a record, such as {@code Map}, is not checked). To read one row by id, use
+ * {@link ProjectionRepository#findById}.
  *
  * @param field the top-level read-model field; not {@code null}, not blank, not a column name
  * @param value the text the field must hold; not {@code null}

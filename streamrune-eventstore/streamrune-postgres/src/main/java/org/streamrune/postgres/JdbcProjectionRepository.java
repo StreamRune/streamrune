@@ -410,27 +410,62 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   private Set<String> encryptedJsonFields(Class<?> type) {
-    if (!type.isRecord()) {
+    return encryptedJsonFields(type, new HashSet<>());
+  }
+
+  /**
+   * The JSON names of {@code type}'s {@code Encrypted} components, and of those of the records it
+   * embeds with {@code @JsonUnwrapped} (with the annotation's prefix and suffix), at any depth. A
+   * type that is not a record ({@code Map}, a class) is not checked.
+   */
+  private Set<String> encryptedJsonFields(Class<?> type, Set<Class<?>> visiting) {
+    if (!type.isRecord() || !visiting.add(type)) {
       return Set.of();
     }
     var components = new HashSet<String>();
+    var names = new HashSet<String>();
     for (var component : type.getRecordComponents()) {
       if (component.isAnnotationPresent(org.streamrune.core.crypto.Encrypted.class)) {
         components.add(component.getName());
       }
+      var unwrapped = unwrapped(type, component);
+      if (unwrapped != null && unwrapped.enabled()) {
+        for (String inner : encryptedJsonFields(component.getType(), visiting)) {
+          names.add(unwrapped.prefix() + inner + unwrapped.suffix());
+        }
+      }
     }
-    if (components.isEmpty()) {
-      return Set.of();
-    }
-    var names = new HashSet<>(components);
-    var description =
-        objectMapper.getSerializationConfig().introspect(objectMapper.constructType(type));
-    for (var property : description.findProperties()) {
-      if (components.contains(property.getInternalName())) {
-        names.add(property.getName());
+    visiting.remove(type);
+    if (!components.isEmpty()) {
+      names.addAll(components);
+      var description =
+          objectMapper.getSerializationConfig().introspect(objectMapper.constructType(type));
+      for (var property : description.findProperties()) {
+        if (components.contains(property.getInternalName())) {
+          names.add(property.getName());
+        }
       }
     }
     return Set.copyOf(names);
+  }
+
+  /**
+   * The {@code @JsonUnwrapped} of a record component: the annotation is not a record-component
+   * annotation, so Java puts it on the accessor and the field.
+   */
+  private static com.fasterxml.jackson.annotation.JsonUnwrapped unwrapped(
+      Class<?> type, java.lang.reflect.RecordComponent component) {
+    var onAccessor =
+        component.getAccessor().getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
+    if (onAccessor != null) {
+      return onAccessor;
+    }
+    try {
+      return type.getDeclaredField(component.getName())
+          .getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
+    } catch (NoSuchFieldException e) {
+      return null;
+    }
   }
 
   private static IllegalArgumentException encryptedKey(Class<?> type, String field) {
@@ -628,7 +663,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * identifier limit, then the first ten hex digits of a SHA-256 of the table and the exact column
    * list the statement creates, so two indexes that differ in letter case, direction, a cut-off
    * tail or a key expression have two names. {@link #createIndexSql} returns the statement, and it
-   * is logged at INFO when this method creates the index.
+   * is logged in full at INFO when this method creates the index.
    *
    * <p><b>Not {@code CONCURRENTLY}.</b> {@code CREATE INDEX} holds a {@code SHARE} lock on the
    * table while it builds: reads go on, writes to that projection wait until the build commits. On
@@ -672,29 +707,40 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     SQLException lost = null;
     for (int attempt = 1; ; attempt++) {
       try (var conn = dataSource.getConnection()) {
-        boolean created =
+        IndexOutcome outcome =
             PostgresTransactions.commitIfManual(
                 conn,
                 "projection index creation",
                 c -> {
                   if (usableIndexExists(c, name, table)) {
-                    return false;
+                    return IndexOutcome.EXISTS;
                   }
                   try (var stmt = c.createStatement()) {
                     stmt.execute(ddl);
-                    // IF NOT EXISTS skipped it (42P07 notice): another session's index, committed
-                    // between the check and the statement; the next attempt checks it.
-                    return !skippedAsExisting(stmt.getWarnings());
+                    if (!skippedAsExisting(stmt.getWarnings())) {
+                      return IndexOutcome.CREATED;
+                    }
                   }
+                  // IF NOT EXISTS skipped it (42P07 notice): another session's index, committed
+                  // between the check and the statement. Checked on this same connection: a
+                  // declaration never holds one connection while it borrows a second.
+                  return usableIndexExists(c, name, table)
+                      ? IndexOutcome.EXISTS
+                      : IndexOutcome.SKIPPED_MISSING;
                 });
-        if (created) {
-          log.info("Created projection index: {}", LogSanitizer.sanitizeForLog(ddl));
-          return;
+        switch (outcome) {
+          case CREATED -> {
+            // The statement is framework-built from validated identifiers ([a-z_][a-z0-9_]* and
+            // [A-Za-z0-9_]+) and fixed text: logged in full, so an operator can run it by hand.
+            log.info("Created projection index: {}", ddl);
+            return;
+          }
+          case EXISTS -> {
+            return;
+          }
+          case SKIPPED_MISSING ->
+              throw new SQLException("index " + name + " was skipped but is not there", "42P07");
         }
-        if (usableIndexExistsCommitted(name, table)) {
-          return;
-        }
-        throw new SQLException("index " + name + " was skipped but is not there", "42P07");
       } catch (SQLException failure) {
         if (lost != null) {
           failure.addSuppressed(lost);
@@ -711,11 +757,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
-  private boolean usableIndexExistsCommitted(String name, String table) throws SQLException {
-    try (var conn = dataSource.getConnection()) {
-      return PostgresTransactions.commitIfManual(
-          conn, "projection index check", c -> usableIndexExists(c, name, table));
-    }
+  /** What one attempt of {@link #declareIndex} found or did. */
+  private enum IndexOutcome {
+    EXISTS,
+    CREATED,
+    SKIPPED_MISSING
   }
 
   private static boolean skippedAsExisting(SQLWarning warning) {

@@ -337,11 +337,11 @@ test kit alike (`ProjectionRepositoryQueryContract` runs against both):
 
 Offset paging has its costs and its limits:
 
-- A page reads every row before its offset: a deep page costs its depth (70 ms for offset 150,000
-  at 200,000 rows), so an endpoint should bound the page index. A page beyond the last reads only
-  the count.
-- The total of an unfiltered read counts the whole table on every page (about 10 ms at 200,000
-  rows), index or not; a filtered total counts only the matches, through the index.
+- A page reads every row before its offset: a deep page costs its depth (tens of milliseconds a
+  hundred thousand rows deep), so an endpoint should bound the page index. A page beyond the last
+  reads only the count.
+- The total of an unfiltered read counts the whole table on every page (milliseconds per hundred
+  thousand rows), index or not; a filtered total counts only the matches, through the index.
 - Under concurrent writes a row inserted before the page you are on shifts the next page by one, so
   a client reading on can see a row twice; and a save that changes a sort or filter field (a
   status, `updated_at`, `version`) moves its row across the page boundary, so a client reading on
@@ -368,8 +368,8 @@ On `JdbcProjectionRepository`, `declareIndex` creates the projection's table if 
 the index, `CREATE INDEX IF NOT EXISTS <index name> ON <projection>_view ((data->>'customerId')
 COLLATE "C", (data->>'createdAt') COLLATE "C" DESC, id COLLATE "C")` — the expressions the reads
 compare, so the planner uses the index for the filter, the order and the count; the id is always
-the last key. An ascending index also serves the read sorted the other way when that read names
-the id descending too (`[createdAt ASC, id DESC]` against a `createdAt DESC` index). Call it at
+the last key. An index also serves the exactly reversed order: `(createdAt DESC, id)` serves
+`[createdAt ASC, id DESC]`. Call it at
 wiring, before the application serves reads. In the Spring, Quarkus and Micronaut integrations,
 define each index as a `ProjectionIndex` bean: at startup, before the projection runners start and
 before the first request, every one is declared on the application's `ProjectionRepository` bean —
@@ -381,7 +381,7 @@ the creation race finds the winner's index.
 - **Name.** `<projection>_<keys>_ix_<hash>`, cut to PostgreSQL's 63-byte limit, the hash taken over
   the exact column list. `JdbcProjectionRepository.createIndexSql(index)` returns the statement
   (`System.out.println(JdbcProjectionRepository.createIndexSql(byCustomerNewestFirst))`), and it is
-  logged at INFO when the index is created.
+  logged in full at INFO when the index is created.
 - **Not `CONCURRENTLY`.** The build holds a `SHARE` lock on the table: reads continue, the
   projection's writes wait until the build commits — milliseconds on a new or small table, longer
   on a large one, and the session's `statement_timeout` bounds it (a build that takes longer fails

@@ -266,6 +266,39 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryQuer
     assertThat(plan).contains("One-Time Filter").contains("never executed");
   }
 
+  /** The INFO line carries the whole statement, so an operator can run it by hand. */
+  @Test
+  void theCreatedIndexIsLoggedWithItsWholeStatement_andAnExistingOneIsNot() {
+    var name = freshName();
+    var index = ProjectionIndex.forFilter(name, "customerId", NEWEST_FIRST);
+    var logger =
+        (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(JdbcProjectionRepository.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    var level = logger.getLevel();
+    logger.setLevel(ch.qos.logback.classic.Level.INFO); // the test config keeps the root at WARN
+    logger.addAppender(appender);
+    try {
+      repo.declareIndex(index);
+      new JdbcProjectionRepository(dataSource).declareIndex(index);
+    } finally {
+      logger.detachAppender(appender);
+      logger.setLevel(level);
+      appender.stop();
+    }
+
+    assertThat(
+            appender.list.stream()
+                .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.INFO)
+                .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .filter(m -> m.startsWith("Created projection index"))
+                .toList())
+        .containsExactly(
+            "Created projection index: " + JdbcProjectionRepository.createIndexSql(index));
+  }
+
   @Test
   void anInvalidIndexOfTheDeclaredNameFailsTheDeclarationNamingTheDrop() throws SQLException {
     var name = freshName();
