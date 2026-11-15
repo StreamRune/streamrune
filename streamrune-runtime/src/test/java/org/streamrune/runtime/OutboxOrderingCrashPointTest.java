@@ -36,6 +36,10 @@ import org.streamrune.test.InMemoryOutboxStore;
  * CP-10 mode switch AF → strict over one table      OutboxStoreContract.failedRowBelowAPendingRow_blocksAfterSwitchToStrict_andIsReleasedBySkip, nullAggregateLegacyRows_stillDrain_afterSwitchToStrict; OutboxPollerTest.firstCycle_strict_warnsOnceAboutLegacyNullAggregateFailedRows_evenWithNoopMetrics
  * CP-11 strict append with a null-aggregate mapper  PostgresEventStoreOutboxIT.append_strictNullAggregateMapper_rollsBack_surfacesOrderingViolationUnwrapped
  * CP-12 skipFailed(max) crash after k skips         OutboxFailedReplayerTest.skipFailed_bulk_rerunAfterPartialRun_skipsOnlyRowsStillFailed
+ * CP-13 store fails in a later batch of a drain      OutboxPollerDrainTest.aStoreFailureInALaterBatch_failsTheCycle_afterTheEarlierBatchesAreStored (earlier batches stay stored)
+ * CP-14 stop between two batches of a drain          OutboxPollerDrainTest.aStopWhileAFullBatchIsRecorded_endsTheCycleBeforeTheNextClaim
+ * CP-15 stop inside a batch of a drain               OutboxPollerDrainTest.aStopDuringADrain_holdsTheInterruptedEntry_releasesTheRest_andClaimsNoFurtherBatch; PostgresOutboxPollerShutdownIT.closeMidBatch_confirmedRowsAreDelivered_interruptedRowIsHeld_unattemptedRowsArePending
+ * CP-16 stop during the claim of a batch             OutboxPollerDrainTest.aStopDuringTheClaim_releasesWhatTheClaimCommitted, aStopRequestedBeforeTheClaim_claimsNothing; PostgresOutboxPollerShutdownIT.closingTheRelayAnywhereInADrain_leavesNoEntryClaimed
  * </pre>
  */
 class OutboxOrderingCrashPointTest {

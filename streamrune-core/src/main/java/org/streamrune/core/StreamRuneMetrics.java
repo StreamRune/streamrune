@@ -863,10 +863,11 @@ public interface StreamRuneMetrics {
   default void recordDlqAwaitingOperator(long awaiting) {}
 
   /**
-   * Records the outbox relay's current consecutive poll-cycle failure count — {@code 0} when the
-   * last cycle succeeded, rising while the relay is degraded (in backoff-retry). Reported as a
-   * gauge sampled each poll cycle so a stalled-but-alive relay is visible on the metrics endpoint,
-   * not only in the logs. See {@link
+   * Records the outbox relay's current count of poll cycles that failed in a row — rising while the
+   * relay is degraded (in backoff-retry), {@code 0} once a cycle completes or stores the outcome of
+   * a batch. Called at the start of each poll cycle and whenever the count changes (at once when a
+   * cycle fails, and when a stored batch clears it), so a stalled-but-alive relay is visible on the
+   * metrics endpoint, not only in the logs. See {@link
    * org.streamrune.core.metrics.MetricNames#OUTBOX_RELAY_DEGRADED}.
    *
    * @param consecutiveFailures consecutive poll-cycle failures (never negative)

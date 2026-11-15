@@ -3726,7 +3726,14 @@ class OutboxPollerTest {
       poller.pollCycle(); // succeeds → armed (0 legacy rows: no legacy WARN)
       poller.pollCycle(); // armed → no call
       assertEquals(2, calls.get(), "retried once, then armed");
-      var warns = linesAt(appender, ch.qos.logback.classic.Level.WARN);
+      // Only this test's own lines: the cycles ran on this thread.
+      String self = Thread.currentThread().getName();
+      var warns =
+          appender.list.stream()
+              .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+              .filter(e -> self.equals(e.getThreadName()))
+              .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+              .toList();
       assertEquals(1, warns.size(), warns.toString());
       assertTrue(warns.getFirst().contains("retrying next cycle"), warns.getFirst());
     } finally {

@@ -100,10 +100,11 @@ public final class MetricNames {
   public static final String DLQ_AWAITING_OPERATOR = "streamrune.dlq.awaiting_operator";
 
   /**
-   * Consecutive poll-cycle failures of the outbox relay ({@code OutboxPoller}) — a gauge, {@code 0}
-   * when the last cycle succeeded, rising while the relay is in backoff-retry (store/broker
-   * unreachable). A nonzero value means the relay is DEGRADED but still running; combine with the
-   * relay-liveness health check (which catches a wholly dead relay thread) for full coverage.
+   * Poll cycles of the outbox relay ({@code OutboxPoller}) that failed in a row — a gauge, rising
+   * while the relay is in backoff-retry (store/broker unreachable), {@code 0} once a cycle
+   * completes or stores the outcome of a batch. A nonzero value means the relay is DEGRADED but
+   * still running; combine with the relay-liveness health check (which catches a wholly dead relay
+   * thread) for full coverage.
    */
   public static final String OUTBOX_RELAY_DEGRADED = "streamrune.outbox.relay.consecutive_failures";
 

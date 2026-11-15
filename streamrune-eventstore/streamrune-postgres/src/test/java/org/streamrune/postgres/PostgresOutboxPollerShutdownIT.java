@@ -8,7 +8,11 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -214,6 +218,206 @@ class PostgresOutboxPollerShutdownIT {
           published.indexOf("s" + s + "-1") < published.indexOf("s" + s + "-2"),
           "stream agg-" + s + " is delivered in order");
     }
+  }
+
+  /** A publisher that confirms every entry at once and records the order it saw them in. */
+  private static OutboxPublisher recordingPublisher(List<String> published) {
+    return new OutboxPublisher() {
+      @Override
+      public void publish(OutboxEntry entry) {
+        published.add(entry.id().value());
+      }
+    };
+  }
+
+  /**
+   * Writes {@code perStream} entries in each of {@code streams} streams in one statement, ids
+   * {@code s<stream>-<n>}, the n-th entry of every stream before the (n+1)-th of any.
+   */
+  private static void insertBacklog(int streams, int perStream) throws SQLException {
+    try (var conn = plain.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "INSERT INTO outbox_events (entry_id, payload, payload_type, aggregate_type,"
+                    + " aggregate_id) SELECT 's' || s || '-' || n, '{}'::jsonb, 'Event', ?,"
+                    + " 'agg-' || s FROM generate_series(1, ?) AS n,"
+                    + " generate_series(0, ? - 1) AS s ORDER BY n, s")) {
+      ps.setString(1, TestStreams.TYPE.value());
+      ps.setInt(2, perStream);
+      ps.setInt(3, streams);
+      ps.executeUpdate();
+    }
+  }
+
+  /** Whether every stream's entries were published in order, each exactly once. */
+  private static void assertEachStreamInOrderOnce(List<String> published, int streams, int each) {
+    assertEquals(streams * each, published.size(), "every entry is published");
+    assertEquals(streams * each, Set.copyOf(published).size(), "no entry is published twice");
+    for (int s = 0; s < streams; s++) {
+      for (int n = 2; n <= each; n++) {
+        assertTrue(
+            published.indexOf("s" + s + "-" + (n - 1)) < published.indexOf("s" + s + "-" + n),
+            "stream agg-" + s + " is delivered in order");
+      }
+    }
+  }
+
+  private static void awaitDelivered(int expected, Duration atMost) throws Exception {
+    long deadline = System.nanoTime() + atMost.toNanos();
+    while (!String.valueOf(expected).equals(countWithStatus("DELIVERED"))
+        && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+    }
+  }
+
+  private static String countWithStatus(String status) throws SQLException {
+    return scalar("SELECT count(*) FROM outbox_events WHERE status = '" + status + "'");
+  }
+
+  @Test
+  void aQueueOnOneStream_isDeliveredInOnePollCycle_inStreamOrder() throws Exception {
+    var store =
+        new PostgresOutboxStore(
+            pool, PostgresOutboxStore.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE);
+    insertBacklog(1, 30);
+    var published = new CopyOnWriteArrayList<String>();
+    // A poll interval far longer than the test: every entry must go out in the first cycle,
+    // although each claim finds one entry, the stream's head.
+    var poller =
+        OutboxPoller.builder()
+            .outboxStore(store)
+            .publisher(recordingPublisher(published))
+            .batchSize(10)
+            .pollInterval(Duration.ofMinutes(10))
+            .build();
+
+    poller.start();
+    try {
+      awaitDelivered(30, Duration.ofSeconds(20));
+    } finally {
+      poller.close();
+    }
+
+    assertEquals("30", countWithStatus("DELIVERED"));
+    assertEachStreamInOrderOnce(published, 1, 30);
+  }
+
+  @Test
+  void twoRelaysDrainingOneChannel_keepEveryStreamInOrder_andPublishEachEntryOnce()
+      throws Exception {
+    insertBacklog(50, 20);
+    var published = Collections.synchronizedList(new ArrayList<String>());
+    var publishedByRelay = new ArrayList<List<String>>();
+    // Two relays started together claim the same heads at once: one takes them, the other's claim
+    // skips the locked rows and comes back empty, and it may keep colliding until the first has
+    // drained everything. So each relay's first publish waits, bounded, for the other's: the relay
+    // that claimed first then holds its batch in a publish, not in a claim, and the other's next
+    // claim takes the next heads. From there on the two compete freely.
+    var firstPublish = List.of(new CountDownLatch(1), new CountDownLatch(1));
+    var waitedInVain = new CopyOnWriteArrayList<String>();
+    var relays = new ArrayList<OutboxPoller>();
+    for (int r = 0; r < 2; r++) {
+      var mine = new CopyOnWriteArrayList<String>();
+      publishedByRelay.add(mine);
+      CountDownLatch own = firstPublish.get(r);
+      CountDownLatch other = firstPublish.get(1 - r);
+      String relayName = "relay " + r;
+      relays.add(
+          OutboxPoller.builder()
+              .outboxStore(
+                  new PostgresOutboxStore(
+                      pool,
+                      PostgresOutboxStore.DEFAULT_CLAIM_LEASE,
+                      OutboxOrderingMode.STRICT_PER_AGGREGATE))
+              .publisher(
+                  new OutboxPublisher() {
+                    @Override
+                    public void publish(OutboxEntry entry) throws InterruptedException {
+                      if (own.getCount() == 1) {
+                        own.countDown();
+                        if (!other.await(10, TimeUnit.SECONDS)) {
+                          waitedInVain.add(relayName);
+                        }
+                      }
+                      mine.add(entry.id().value());
+                      published.add(entry.id().value());
+                    }
+                  })
+              .batchSize(20)
+              .pollInterval(Duration.ofMillis(100))
+              .build());
+    }
+
+    relays.forEach(OutboxPoller::start);
+    try {
+      awaitDelivered(1000, Duration.ofSeconds(30));
+    } finally {
+      relays.forEach(OutboxPoller::close);
+    }
+
+    assertEquals("1000", countWithStatus("DELIVERED"));
+    assertEquals("0", countWithStatus("IN_PROGRESS"));
+    assertEachStreamInOrderOnce(List.copyOf(published), 50, 20);
+    assertEquals(
+        List.of(),
+        waitedInVain,
+        "each relay's first publish saw the other relay publish within 10 s");
+    for (int r = 0; r < 2; r++) {
+      assertFalse(publishedByRelay.get(r).isEmpty(), "relay " + r + " took part in the drain");
+    }
+  }
+
+  @Test
+  @Timeout(value = 120, unit = TimeUnit.SECONDS)
+  void closingTheRelayAnywhereInADrain_leavesNoEntryClaimed() throws Exception {
+    // On a strict backlog the claim is most of each batch, so a stop at a random moment of a drain
+    // usually lands in a claim. Whatever the claim had committed must be released, not left
+    // claimed until the lease expires.
+    // The stop points are random. The seed is printed and named in every failure message: to
+    // repeat a failing run, put it in place of System.nanoTime().
+    long seed = System.nanoTime();
+    System.out.println("closingTheRelayAnywhereInADrain_leavesNoEntryClaimed seed=" + seed);
+    var random = new Random(seed);
+    int stoppedMidDrain = 0;
+    for (int iteration = 0; iteration < 10; iteration++) {
+      cleanTable();
+      insertBacklog(400, 5);
+      var store =
+          new PostgresOutboxStore(
+              pool,
+              PostgresOutboxStore.DEFAULT_CLAIM_LEASE,
+              OutboxOrderingMode.STRICT_PER_AGGREGATE);
+      var poller =
+          OutboxPoller.builder()
+              .outboxStore(store)
+              .publisher(recordingPublisher(new CopyOnWriteArrayList<>()))
+              .batchSize(50)
+              .pollInterval(Duration.ofMinutes(10))
+              .build();
+
+      poller.start();
+      try {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while ("0".equals(countWithStatus("DELIVERED")) && System.nanoTime() < deadline) {
+          Thread.onSpinWait();
+        }
+        Thread.sleep(random.nextInt(40));
+      } finally {
+        poller.close();
+      }
+
+      assertFalse(poller.isAlive(), "seed " + seed + ": the poll thread has stopped");
+      assertEquals(
+          "0",
+          countWithStatus("IN_PROGRESS"),
+          "seed " + seed + ", iteration " + iteration + ": no entry stays claimed");
+      if (!"2000".equals(countWithStatus("DELIVERED"))) {
+        stoppedMidDrain++;
+      }
+    }
+    assertTrue(
+        stoppedMidDrain > 0,
+        "seed " + seed + ": at least one stop landed in the middle of a drain");
   }
 
   private static String status(String id) throws SQLException {

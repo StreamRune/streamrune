@@ -118,6 +118,53 @@ class OutboxPollerTracingTest {
   }
 
   @Test
+  void theRelaySpan_countsWhatTheOutcomeWasDecidedOn_notWhatThePublisherAddedLater() {
+    save("e-1");
+    save("e-2");
+    // The publisher confirms e-1 and, against its contract, adds e-2 to its result after it
+    // returned, while the relay marks the batch delivered: e-2 is released, not delivered.
+    var late = new java.util.concurrent.atomic.AtomicReference<Runnable>(() -> {});
+    OutboxStore marking =
+        new ForwardingOutboxStore(store) {
+          @Override
+          public int markDeliveredAll(java.util.Collection<OutboxEntryId> ids, String claimedBy) {
+            int marked = super.markDeliveredAll(ids, claimedBy);
+            late.get().run();
+            return marked;
+          }
+        };
+    OutboxPublisher publisher =
+        new OutboxPublisher() {
+          @Override
+          public void publish(OutboxEntry entry) {
+            throw new UnsupportedOperationException("publishBatch is overridden");
+          }
+
+          @Override
+          public BatchResult publishBatch(
+              List<OutboxEntry> entries, Instant deadline, OutboxEntrySpans spans) {
+            var confirmed = new LinkedHashSet<OutboxEntryId>();
+            confirmed.add(entries.getFirst().id());
+            late.set(() -> confirmed.add(entries.getLast().id()));
+            return new BatchResult(confirmed, Map.of());
+          }
+        };
+
+    OutboxPoller.builder()
+        .outboxStore(marking)
+        .publisher(publisher)
+        .batchSize(10)
+        .pollInterval(Duration.ofSeconds(60))
+        .tracing(tracing())
+        .build()
+        .pollCycle();
+
+    SpanData relay = spans(TraceAttributes.OUTBOX_RELAY).getFirst();
+    assertThat(EventStoreTracingTest.number(relay, TraceAttributes.OUTBOX_PUBLISHED)).isEqualTo(1L);
+    assertThat(EventStoreTracingTest.number(relay, TraceAttributes.OUTBOX_FAILED)).isZero();
+  }
+
+  @Test
   void aCycleThatDrainsSeveralBatches_startsOneRelaySpanPerBatch_eachItsOwnTrace() {
     for (int i = 0; i < 25; i++) {
       save("e-" + i);
