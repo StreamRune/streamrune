@@ -22,7 +22,7 @@ class ForwardingSagaStoreTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden_theDefaultsIncluded() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        SagaStore.class, ForwardingSagaStore.class, 18);
+        SagaStore.class, ForwardingSagaStore.class, 19);
   }
 
   @Test

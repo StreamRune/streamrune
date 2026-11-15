@@ -552,6 +552,11 @@ class SagaMetricsEmissionTest {
     }
 
     @Override
+    public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+      return delegate.loadRowFacts(sagaId, sagaType);
+    }
+
+    @Override
     public void delete(SagaId sagaId, SagaType sagaType) {
       delegate.delete(sagaId, sagaType);
     }
@@ -769,6 +774,11 @@ class SagaMetricsEmissionTest {
     public <S extends SagaState> java.util.Optional<LoadedSaga<S>> load(
         SagaId sagaId, SagaType sagaType, Class<S> stateType) {
       return delegate.load(sagaId, sagaType, stateType);
+    }
+
+    @Override
+    public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+      return delegate.loadRowFacts(sagaId, sagaType);
     }
 
     @Override

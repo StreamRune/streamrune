@@ -405,6 +405,11 @@ class SagaRunnerPoisonIsolationTest {
           }
 
           @Override
+          public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+            return delegate.loadRowFacts(sagaId, sagaType);
+          }
+
+          @Override
           public void delete(SagaId sagaId, SagaType sagaType) {
             delegate.delete(sagaId, sagaType);
           }

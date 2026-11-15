@@ -1341,6 +1341,7 @@ public interface org.streamrune.core.saga.SagaStore
   public abstract boolean markFaulted(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, long)
   public abstract java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
   public abstract java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public abstract java.util.Optional<org.streamrune.core.saga.SagaStore$RowFacts> loadRowFacts(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
   public abstract void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)
   public abstract void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long, org.streamrune.core.types.EventId)
   public abstract void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)
@@ -1379,6 +1380,15 @@ public static final record org.streamrune.core.saga.SagaStore$CompensatingSaga
   public java.time.Instant episodeClaimedAt()
   public java.time.Instant updatedAt()
   public org.streamrune.core.saga.SagaId sagaId()
+
+public static final record org.streamrune.core.saga.SagaStore$RowFacts
+  public <init>(org.streamrune.core.saga.SagaStatus, boolean, java.lang.Long)
+  public boolean deadLetterPending()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.Long lastAppliedOffset()
+  public org.streamrune.core.saga.SagaStatus status()
 
 public final class org.streamrune.core.saga.SagaTimeoutException extends java.lang.RuntimeException
   public <init>(org.streamrune.core.saga.SagaId, java.time.Duration)

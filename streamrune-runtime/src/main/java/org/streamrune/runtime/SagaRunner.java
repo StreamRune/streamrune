@@ -60,9 +60,9 @@ import org.streamrune.core.types.SubscriptionName;
  *       genesis-pending row it re-drives from {@code initialState} and the committed indices dedup
  *       on their offset-stable forward keys.
  *   <li><b>Correlated event</b> → the row is loaded and the event is either applied by the executor
- *       or <em>held</em>: recorded in the {@link SagaDeadLetterStore} under the saga's id, with the
- *       durable {@code dead_letter_pending} shield set on the row first — never processed and never
- *       dropped. Which, by the row's recovery state:
+ *       or <em>held</em>: recorded in the {@link SagaDeadLetterStore} under the saga's id, the
+ *       entry and the durable {@code dead_letter_pending} shield on the row in one write — never
+ *       processed and never dropped. Which, by the row's recovery state:
  *       <ul>
  *         <li>ABSENT — held with {@link SagaEventHeldException.HoldReason#BEFORE_START} only when
  *             the saga already owns a dead-letter record of this runner's type (the row-less

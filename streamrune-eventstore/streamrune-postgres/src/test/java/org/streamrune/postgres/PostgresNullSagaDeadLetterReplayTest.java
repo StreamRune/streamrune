@@ -297,6 +297,12 @@ class PostgresNullSagaDeadLetterReplayTest {
     }
 
     @Override
+    public Optional<RowFacts> loadRowFacts(
+        SagaId sagaId, org.streamrune.core.types.SagaType sagaType) {
+      return delegate.loadRowFacts(sagaId, sagaType);
+    }
+
+    @Override
     public void delete(SagaId sagaId, org.streamrune.core.types.SagaType sagaType) {
       delegate.delete(sagaId, sagaType);
     }

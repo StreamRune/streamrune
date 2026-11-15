@@ -129,6 +129,12 @@ class ForwardingSagaStore implements SagaStore {
   }
 
   @Override
+  public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+    calls.add("loadRowFacts");
+    return delegate.loadRowFacts(sagaId, sagaType);
+  }
+
+  @Override
   public void delete(SagaId id, SagaType t) {
     calls.add("delete");
     delegate.delete(id, t);

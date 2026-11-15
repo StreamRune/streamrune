@@ -107,6 +107,43 @@ public abstract class SagaStoreContract {
         store.load(wideId, wide, ContractState.class).orElseThrow().effectiveStatus());
   }
 
+  /**
+   * The row's facts are read without the state: absent, another type's, a fresh row, then after an
+   * applied event, the shield and a fault — the values {@link SagaStore#load} reports.
+   */
+  @Test
+  public void loadRowFacts_readsStatusShieldAndAppliedOffset_withoutTheState() {
+    assertTrue(store.loadRowFacts(ID, TYPE).isEmpty(), "absent row");
+    store.create(ID, TYPE, INITIAL, SagaStatus.STARTED);
+    assertTrue(
+        store.loadRowFacts(ID, SagaType.of("contract.OtherType")).isEmpty(),
+        "a row of another saga type is not returned");
+    assertEquals(
+        new SagaStore.RowFacts(SagaStatus.STARTED, false, null),
+        store.loadRowFacts(ID, TYPE).get());
+
+    store.applyEvent(
+        ID,
+        TYPE,
+        EVOLVED,
+        SagaStatus.RUNNING,
+        1L,
+        SagaStore.AppliedEvent.live(GlobalOffset.of(7L)));
+    store.setDeadLetterPending(ID, TYPE, true);
+    assertEquals(
+        new SagaStore.RowFacts(SagaStatus.RUNNING, true, 7L), store.loadRowFacts(ID, TYPE).get());
+
+    store.markFaulted(ID, TYPE, row().version());
+    var facts = store.loadRowFacts(ID, TYPE).orElseThrow();
+    assertEquals(SagaStatus.FAULTED, facts.status());
+    assertEquals(row().status(), facts.status());
+    assertEquals(row().deadLetterPending(), facts.deadLetterPending());
+    assertEquals(row().lastAppliedOffset(), facts.lastAppliedOffset());
+
+    assertThrows(IllegalArgumentException.class, () -> store.loadRowFacts(null, TYPE));
+    assertThrows(IllegalArgumentException.class, () -> store.loadRowFacts(ID, null));
+  }
+
   @Test
   public void createGenesisPending_isVersion1_withGenesisNotApplied() {
     store.createGenesisPending(ID, TYPE, EVOLVED, SagaStatus.RUNNING, false);

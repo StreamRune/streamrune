@@ -366,11 +366,14 @@ public interface SagaStore {
   /**
    * The durable {@code dead_letter_pending} shield flag: no version bump, no {@code updated_at}
    * change, a no-op when the row is absent (the row-less residual). The runtime writes {@code true}
-   * here — the runner's hold before a named saga's entry is recorded, and the replayer when a
-   * null-saga entry resolves to this saga. {@code false} is written only through the dead-letter
-   * store's conditional clear, {@link SagaDeadLetterStore#clearShieldIfDrained}. A silent no-op
-   * would leave the flag unset after a dead-letter publish, so a live event could apply ahead of an
-   * older pending entry, breaking the drain's oldest-first ordering.
+   * here — the poison handler on a row a concurrent deliverer created after the entry was recorded,
+   * the replayer when a null-saga entry resolves to this saga, and the test kit's in-memory
+   * dead-letter store with an entry. A named saga's entry and its shield are otherwise one write of
+   * the dead-letter store ({@link SagaDeadLetterStore#publishShielded}, {@link
+   * SagaDeadLetterStore#publishShieldedIfAbsent}). {@code false} is written only through the
+   * dead-letter store's conditional clear, {@link SagaDeadLetterStore#clearShieldIfDrained}. A
+   * silent no-op would leave the flag unset after a dead-letter publish, so a live event could
+   * apply ahead of an older pending entry, breaking the drain's oldest-first ordering.
    *
    * @throws IllegalArgumentException if {@code sagaId} or {@code sagaType} is {@code null}
    */
@@ -496,6 +499,40 @@ public interface SagaStore {
    */
   <S extends SagaState> Optional<LoadedSaga<S>> load(
       SagaId sagaId, SagaType sagaType, Class<S> stateType);
+
+  /**
+   * The facts of a saga's row that a reader without its state type needs, read without the state:
+   * its status, its {@code dead_letter_pending} shield and its {@code last_applied_offset}. Type
+   * scoped like {@link #load(SagaId, SagaType, Class)}: a row of another saga type is not returned.
+   *
+   * <p><b>Why this exists.</b> A dead-letter store that is not the saga store's own (the test kit's
+   * in-memory dead-letter store, bound to any saga store) reads these facts for the hold's applied
+   * check, the conditional shield clear, retention and the backlog count. Through {@link #load} it
+   * would have to bind the state to a class it does not know, which a store that keeps the state as
+   * JSON cannot do.
+   *
+   * @param sagaId the saga identifier
+   * @param sagaType the saga type the caller expects to own {@code sagaId}
+   * @return the row's facts if the row exists AND is of {@code sagaType}; otherwise empty
+   * @throws IllegalArgumentException if {@code sagaId} or {@code sagaType} is {@code null}
+   */
+  Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType);
+
+  /**
+   * The facts {@link #loadRowFacts} reads.
+   *
+   * @param status the row's lifecycle status
+   * @param deadLetterPending the {@code dead_letter_pending} shield
+   * @param lastAppliedOffset the highest global offset applied to the saga; {@code null} before any
+   */
+  record RowFacts(SagaStatus status, boolean deadLetterPending, Long lastAppliedOffset) {
+    /**
+     * @throws NullPointerException if {@code status} is null
+     */
+    public RowFacts {
+      java.util.Objects.requireNonNull(status, "status is required");
+    }
+  }
 
   /**
    * Type-scoped delete: removes a saga only if it is of {@code sagaType}. A no-op when no row

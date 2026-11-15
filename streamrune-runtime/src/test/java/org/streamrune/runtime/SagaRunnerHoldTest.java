@@ -95,6 +95,7 @@ abstract class SagaRunnerHoldTest {
   private final AtomicInteger faulted = new AtomicInteger();
   private final AtomicInteger quarantined = new AtomicInteger();
   private final AtomicInteger casConflicts = new AtomicInteger();
+  private final AtomicInteger deliveryRetried = new AtomicInteger();
 
   private SagaRunner<StartState> runner() {
     return runner(store, orchestrator);
@@ -132,6 +133,11 @@ abstract class SagaRunnerHoldTest {
               @Override
               public void recordSagaCasConflict(String sagaType) {
                 casConflicts.incrementAndGet();
+              }
+
+              @Override
+              public void recordSagaDeliveryRetried(String sagaType) {
+                deliveryRetried.incrementAndGet();
               }
             })
         // The bus is a test double that stores nothing; the fence is tested in
@@ -890,6 +896,63 @@ abstract class SagaRunnerHoldTest {
             });
     assertThat(faulted.get()).isEqualTo(1);
     assertThat(held).as("a redelivery of a recorded event is not a new hold").isEmpty();
+  }
+
+  /**
+   * The completion of an interrupted fault loses its compare-and-swap to a writer that leaves the
+   * row live (a drain that fed an older entry, a step of another process). The event is routed
+   * again on the row that won — still shielded, still carrying the poison's entry — and the second
+   * attempt writes the fault: the saga ends FAULTED after two fault writes, one of them lost.
+   */
+  @Test
+  void interruptedFault_lostToAWriterThatLeavesTheRowLive_isRoutedAgainAndFaultsTheSaga() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    orchestrator.poisonCorrelatedAt = 5L;
+    var crashBeforeFault =
+        new ForwardingSagaStore(inner) {
+          private boolean crashed;
+
+          @Override
+          public boolean markFaulted(SagaId id, SagaType t, long v) {
+            if (!crashed) {
+              crashed = true;
+              throw new ForwardingSagaStore.SimulatedCrash("the entry, before markFaulted");
+            }
+            return super.markFaulted(id, t, v);
+          }
+        };
+    assertThat(
+            catchThrowable(
+                () -> deliver(runner(crashBeforeFault, orchestrator), correlatedEvent(5L))))
+        .isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
+    var interrupted = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(interrupted.status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(interrupted.deadLetterPending()).isTrue();
+
+    var markFaultedCalls = new AtomicInteger();
+    var anotherWriterFirst =
+        new ForwardingSagaStore(inner) {
+          @Override
+          public boolean markFaulted(SagaId id, SagaType t, long v) {
+            if (markFaultedCalls.incrementAndGet() == 1) {
+              // another writer moves the row on and leaves it live, before this write lands
+              inner.update(
+                  id, t, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING, v);
+            }
+            return super.markFaulted(id, t, v);
+          }
+        };
+    deliver(runner(anotherWriterFirst, orchestrator), correlatedEvent(5L));
+
+    var row = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(row.status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(row.preFaultStatus()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(markFaultedCalls.get()).as("the lost write, then the routed-again one").isEqualTo(2);
+    assertThat(deliveryRetried.get()).isEqualTo(1);
+    assertThat(entries())
+        .singleElement()
+        .satisfies(e -> assertThat(e.errorMessage()).isEqualTo("poison at 5"));
+    assertThat(orchestrator.consumedCorrelatedOffsets).isEmpty();
   }
 
   /**

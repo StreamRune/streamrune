@@ -92,6 +92,11 @@ class SagaStoreDefaultMethodsTest {
         }
 
         @Override
+        public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+          return Optional.empty();
+        }
+
+        @Override
         public void delete(SagaId sagaId, SagaType sagaType) {}
 
         @Override

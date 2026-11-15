@@ -5,10 +5,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaId;
-import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.GlobalOffset;
@@ -108,8 +106,10 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    * FAULTED} or shielded, mirroring the Postgres store's join.
    *
    * @param sagaStore the saga store whose rows this store shields — the one the runner writes (the
-   *     undecorated store, when the runner's is a test decorator); only the row's status and shield
-   *     flag are read, and only the shield flag is written
+   *     undecorated store, when the runner's is a test decorator); only the row's facts are read
+   *     ({@link SagaStore#loadRowFacts}: status, shield flag, last applied offset — never the
+   *     state, so any saga store serves, {@code PostgresSagaStore} included), and only the shield
+   *     flag is written
    */
   public InMemorySagaDeadLetterStore(SagaStore sagaStore) {
     this.sagaStore = Objects.requireNonNull(sagaStore, "sagaStore is required");
@@ -163,8 +163,8 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     synchronized (entriesMonitor) {
       Long lastApplied =
           sagaStore
-              .load(entry.sagaId(), entry.sagaType(), SagaState.class)
-              .map(LoadedSaga::lastAppliedOffset)
+              .loadRowFacts(entry.sagaId(), entry.sagaType())
+              .map(SagaStore.RowFacts::lastAppliedOffset)
               .orElse(null);
       if (lastApplied != null && lastApplied >= entry.eventOffset().value()) {
         return new HoldResult.AlreadyApplied(lastApplied);
@@ -412,7 +412,7 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
       if (entryExists) {
         return false;
       }
-      var row = sagaStore.load(sagaId, sagaType, SagaState.class);
+      var row = sagaStore.loadRowFacts(sagaId, sagaType);
       if (row.isEmpty() || !row.get().deadLetterPending()) {
         return false;
       }
@@ -457,7 +457,7 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     return store.values().stream().filter(e -> ownerShielded(e) || targetShielded(e)).count();
   }
 
-  private static boolean shielded(LoadedSaga<?> row) {
+  private static boolean shielded(SagaStore.RowFacts row) {
     return row.status() == SagaStatus.FAULTED || row.deadLetterPending();
   }
 
@@ -465,13 +465,13 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    * A named entry is shielded while its type-scoped owner row is {@code FAULTED} or carries the
    * {@code dead_letter_pending} shield — or has NO row at all (the row-less residual: the entry is
    * the saga's only record and is never pruned). Null-saga entries are never shielded this way.
-   * Only the row's status and shield flag are read.
+   * Only the row's facts are read ({@link SagaStore#loadRowFacts}), never its state.
    */
   private boolean ownerShielded(SagaDeadLetterEntry e) {
     if (e.sagaId() == null) {
       return false;
     }
-    var row = sagaStore.load(e.sagaId(), e.sagaType(), SagaState.class);
+    var row = sagaStore.loadRowFacts(e.sagaId(), e.sagaType());
     return row.map(InMemorySagaDeadLetterStore::shielded)
         .orElse(true); // row-less named: never pruned
   }

@@ -334,6 +334,11 @@ class SagaConcurrencyRaceTest {
     }
 
     @Override
+    public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+      return underlying.loadRowFacts(sagaId, sagaType);
+    }
+
+    @Override
     public void delete(SagaId sagaId, SagaType sagaType) {
       underlying.delete(sagaId, sagaType);
     }

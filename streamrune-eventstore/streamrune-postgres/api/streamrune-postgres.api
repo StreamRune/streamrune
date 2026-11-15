@@ -290,6 +290,7 @@ public final class org.streamrune.postgres.PostgresSagaStore implements org.stre
   public java.util.List<org.streamrune.core.saga.SagaId> findByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus, int)
   public java.util.List<org.streamrune.core.saga.SagaId> findTimedOut(org.streamrune.core.types.SagaType, java.time.Instant, int)
   public java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
+  public java.util.Optional<org.streamrune.core.saga.SagaStore$RowFacts> loadRowFacts(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
   public long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine)
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)

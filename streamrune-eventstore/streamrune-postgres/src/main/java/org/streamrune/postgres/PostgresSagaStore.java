@@ -266,6 +266,11 @@ public final class PostgresSagaStore implements SagaStore {
   private static final String SELECT_BY_TYPE =
       "SELECT " + COLUMNS + " FROM saga_state WHERE saga_id = ? AND saga_type = ?";
 
+  // The row's facts without its state (loadRowFacts): type-scoped like SELECT_BY_TYPE, no JSON.
+  private static final String SELECT_ROW_FACTS =
+      "SELECT status, dead_letter_pending, last_applied_offset FROM saga_state"
+          + " WHERE saga_id = ? AND saga_type = ?";
+
   // Read the existing row's saga_type on a create conflict to distinguish a benign
   // same-type dedup (OptimisticLockException) from a cross-type collision
   // (SagaTypeCollisionException).
@@ -1024,6 +1029,29 @@ public final class PostgresSagaStore implements SagaStore {
     } catch (Exception e) {
       throw new SagaStateSerializationException(
           "Failed to deserialize saga state: " + forLog(sagaId), sagaId, e);
+    }
+  }
+
+  /** {@inheritDoc} One plain read of three columns; the state is not read. */
+  @Override
+  public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+    requireKey(sagaId, sagaType);
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(SELECT_ROW_FACTS)) {
+      ps.setString(1, sagaId.value());
+      ps.setString(2, sagaType.value());
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          return Optional.empty();
+        }
+        SagaStatus status = SagaStatus.valueOf(rs.getString("status"));
+        boolean deadLetterPending = rs.getBoolean("dead_letter_pending");
+        long lastApplied = rs.getLong("last_applied_offset");
+        return Optional.of(
+            new RowFacts(status, deadLetterPending, rs.wasNull() ? null : lastApplied));
+      }
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to load saga row facts: " + forLog(sagaId), e);
     }
   }
 

@@ -168,6 +168,11 @@ public class ForwardingSagaStore implements SagaStore {
   }
 
   @Override
+  public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
+    return schedule.call("loadRowFacts", () -> delegate.loadRowFacts(sagaId, sagaType));
+  }
+
+  @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
     schedule.run("delete", () -> delegate.delete(sagaId, sagaType));
   }
