@@ -128,9 +128,8 @@ license.
   MicrometerMetricsTrackerFactory(registry)` gives `hikaricp.connections.*` tagged with the pool
   name); the four-argument form builds it without one, and its saturation then shows only as failed
   lock acquisitions (a `LockException` after the pool's 10-second connection timeout). The dedicated
-  pool keeps two idle connections (`maxPoolSize` when smaller) and opens the others on demand, up to
-  `maxPoolSize`; one beyond the two that stays idle for ten minutes is closed, so an idle replica
-  holds two lock connections.
+  pool is fixed-size: it keeps `maxPoolSize` connections open, idle or not, because a HikariCP pool
+  that grows on demand can open fewer connections than a burst of commands waits for.
 - Typed identifiers: `StreamId`, `AggregateType`, `AggregateId`, `Version`, `GlobalOffset`,
   `EventId`, `CommandId`, `CorrelationId`, `CausationId`, `TraceId`, `SpanId`, `UserId`,
   `SubjectId`, `IdempotencyKey`, `ProjectionName`, `SubscriptionName`, `SagaId`, `SagaType`,
