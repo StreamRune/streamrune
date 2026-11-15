@@ -824,9 +824,10 @@ license.
   dead-letter-store infrastructure failures propagate and the batch is retried.
 - Held events: a correlated event its saga cannot consume yet is recorded under the saga, never
   dropped, and drained oldest-first by `replayAll`. A hold never replaces an entry already recorded
-  at the event's offset (`SagaDeadLetterStore.publishShieldedIfAbsent`), so a poison event whose
-  page is delivered again keeps its own exception class name and message. Terminal sagas ignore further events; redeliveries
-  at or below `last_applied_offset` are skipped before `evolve` runs.
+  at the event's offset and never records an event the saga has applied by the time it writes
+  (`SagaDeadLetterStore.publishShieldedIfAbsent`), so a poison event whose page is delivered again
+  keeps its own exception class name and message. Terminal sagas ignore further events;
+  redeliveries at or below `last_applied_offset` are skipped before `evolve` runs.
 - Operator recovery with `SagaDeadLetterReplayer`: `replayAll(sagaId)`, `replay(sagaId, offset)`,
   `discard(sagaId, offset)`, `resumeFaulted(sagaId)` for a give-up fault without a dead-letter entry,
   and `compensateFaulted(sagaId)` for a forward fault whose entry an operator discarded (metered as

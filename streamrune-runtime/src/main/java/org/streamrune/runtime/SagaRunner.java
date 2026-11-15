@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -124,9 +125,11 @@ import org.streamrune.core.types.SubscriptionName;
  * the poison's own entry, and the redelivery, held behind the shield, finds that entry and makes
  * the fault write ({@link #completeInterruptedFault}); a crash after the fault write leaves the row
  * {@code FAULTED}, and the redelivery keeps the entry ({@link #recordHold}). Each rerun ends with
- * the row {@code FAULTED} and the poison's own entry, as a run that is not interrupted does. The
- * poison handler writes no shield before its entry: a shield without an entry would turn the
- * redelivery into a hold behind a backlog that does not exist. The one such failure that is not
+ * the row {@code FAULTED} and the poison's own entry, as a run that is not interrupted does. No
+ * path writes a shield on its own before its entry: a shield without an entry would turn the
+ * redelivery into a hold behind a backlog that does not exist. A hold is decided on the row the
+ * delivery read, and the store refuses it when the row has applied the event by then (a drain of
+ * another process), so no entry records an applied event. The one such failure that is not
  * propagated at once is a lost compare-and-swap of the step's own saga-row write: the step is run
  * again in place first (see <b>Concurrency</b>).
  *
@@ -829,8 +832,7 @@ public final class SagaRunner<S extends SagaState> {
       // returned null) owns an entry without a row. A never-started saga's out-of-order event
       // keeps the silent drop.
       if (hasOwnDeadLetterRecord(sagaId)) {
-        hold(sagaId, event, SagaEventHeldException.HoldReason.BEFORE_START);
-        return DEFERRED;
+        return heldOutcome(hold(sagaId, event, SagaEventHeldException.HoldReason.BEFORE_START));
       }
       return SKIPPED;
     }
@@ -854,8 +856,7 @@ public final class SagaRunner<S extends SagaState> {
       return SKIPPED;
     }
     if (row.status() == SagaStatus.FAULTED) {
-      holdWhileFaulted(sagaId, event);
-      return DEFERRED;
+      return heldOutcome(holdWhileFaulted(sagaId, event));
     }
     if (row.status().isTerminal()) {
       return SKIPPED; // legitimately done: drop silently
@@ -867,15 +868,17 @@ public final class SagaRunner<S extends SagaState> {
           executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false)));
     }
     if (!row.genesisApplied()) {
-      hold(sagaId, event, SagaEventHeldException.HoldReason.GENESIS_PENDING);
-      return DEFERRED;
+      return heldOutcome(hold(sagaId, event, SagaEventHeldException.HoldReason.GENESIS_PENDING));
     }
     if (row.deadLetterPending()) {
-      if (hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING)
-          || !completeInterruptedFault(sagaId, event, row)) {
-        return DEFERRED;
+      SagaDeadLetterStore.HoldResult held =
+          hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING);
+      if (held instanceof SagaDeadLetterStore.HoldResult.Kept(var kept)
+          && isUnfinishedPoison(kept)) {
+        completeInterruptedFault(sagaId, event, row);
+        return FAULTED;
       }
-      return FAULTED;
+      return heldOutcome(held);
     }
     StepOutcome outcome =
         executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
@@ -893,6 +896,14 @@ public final class SagaRunner<S extends SagaState> {
 
   /** The step outcome of an event with nothing to do. */
   private static final String SKIPPED = "SKIPPED";
+
+  /**
+   * The step outcome of a hold: {@code SKIPPED} when the store found the event applied (a drain of
+   * another process applied it after this delivery read the row), {@code DEFERRED} otherwise.
+   */
+  private static String heldOutcome(SagaDeadLetterStore.HoldResult held) {
+    return held instanceof SagaDeadLetterStore.HoldResult.AlreadyApplied ? SKIPPED : DEFERRED;
+  }
 
   /**
    * A live step over a forward row ends {@code SKIPPED_HALTED} only when one of its forward
@@ -922,73 +933,77 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * {@code hold(reason)}: shield → entry+shield (one write) → metric → WARNING. The shield is
-   * written first (it may be TRUE without an entry after a crash in between, never the reverse) and
-   * written AGAIN, atomically with the entry, by {@link #recordHold} through {@link
-   * SagaDeadLetterStore#publishShieldedIfAbsent} (a drain's conditional clear that observed an
-   * empty backlog between the two must not leave the entry unshielded, and no crash may separate
-   * the entry from its shield); on an absent row ({@code BEFORE_START}) both shield writes are the
-   * stores' documented no-op. The entry is written only when the saga has none of this type at the
-   * event's offset ({@link #recordHold}), so a redelivery storm converges on one record, the first.
-   * Returns whether the entry was written: {@code false} for an event already recorded.
+   * {@code hold(reason)}: entry and shield, one write ({@link #recordHold} through {@link
+   * SagaDeadLetterStore#publishShieldedIfAbsent}) → metric → WARNING. No shield is written on its
+   * own before the entry: a drain's conditional clear that lands before the write is repaired by
+   * the write, one that lands during it queues the write's shield behind it, one after it sees the
+   * entry; and no crash can leave a shield without its entry, or an entry without its shield. On an
+   * absent row ({@code BEFORE_START}) the shield write is the stores' documented no-op. The entry
+   * is written only when the saga has none of this type at the event's offset and has not applied
+   * the event, so a redelivery storm converges on one record, the first. Returns what the store
+   * did.
    */
-  private boolean hold(
+  private SagaDeadLetterStore.HoldResult hold(
       SagaId sagaId, EventEnvelope event, SagaEventHeldException.HoldReason reason) {
-    sagaStore.setDeadLetterPending(sagaId, SagaType.fromClass(orchestrator.stateType()), true);
-    if (!recordHold(
-        sagaId, event, new SagaEventHeldException(sagaId, event.globalOffset(), reason))) {
-      return false;
+    SagaDeadLetterStore.HoldResult held =
+        recordHold(sagaId, event, new SagaEventHeldException(sagaId, event.globalOffset(), reason));
+    if (held instanceof SagaDeadLetterStore.HoldResult.Written) {
+      recordMetric(
+          () -> metrics.recordSagaEventHeld(sagaTypeTag(), reason.name()), "recordSagaEventHeld");
+      LOG.warn(
+          "Correlated event at offset {} for saga {} was HELD [{}] and recorded in the saga"
+              + " dead-letter store; drain the saga with SagaDeadLetterReplayer.replayAll(sagaId)"
+              + " once the blocker is gone.",
+          event.globalOffset().value(),
+          LogSanitizer.sanitizeForLog(sagaId.value()),
+          reason);
     }
-    recordMetric(
-        () -> metrics.recordSagaEventHeld(sagaTypeTag(), reason.name()), "recordSagaEventHeld");
-    LOG.warn(
-        "Correlated event at offset {} for saga {} was HELD [{}] and recorded in the saga"
-            + " dead-letter store; drain the saga with SagaDeadLetterReplayer.replayAll(sagaId)"
-            + " once the blocker is gone.",
-        event.globalOffset().value(),
-        LogSanitizer.sanitizeForLog(sagaId.value()),
-        reason);
-    return true;
+    return held;
   }
 
   /**
-   * The redelivery of a correlated event over a shielded live row found the event already recorded.
-   * When its entry is the event's own poison — written by {@link #recordPoison}, whose fault write
-   * did not land after it (the process stopped between the two writes, or the fault write lost its
-   * compare-and-swap twice) — this delivery makes the fault write, so the saga ends {@code FAULTED}
-   * with the poison's own entry, where a run that is not interrupted ends. An entry a hold wrote is
-   * an event held before, which stays held. A poison entry over a live row whose event is not
-   * applied exists only there: the drain discards an entry once its feed applied the event, and an
-   * applied event is skipped before any hold. Returns whether the event was the saga's recorded
-   * poison.
+   * Whether an entry a hold kept on a shielded live row is the saga's own poison whose fault write
+   * did not land: an entry of this runner's saga type that no hold wrote ({@link
+   * #HOLD_ERROR_TYPES}). The type check matters for a store that keeps one named entry per saga
+   * type at an offset; the shipped stores keep one per saga and offset, and report another type's
+   * entry as replaced, never as kept.
    */
-  private boolean completeInterruptedFault(SagaId sagaId, EventEnvelope event, LoadedSaga<S> row) {
-    SagaType type = SagaType.fromClass(orchestrator.stateType());
-    boolean recordedPoison = false;
-    for (SagaDeadLetterStore.SagaDeadLetterEntry entry : sagaDeadLetterStore.findBySaga(sagaId)) {
-      if (type.equals(entry.sagaType())
-          && entry.eventOffset().value() == event.globalOffset().value()
-          && !isHoldRecord(entry)) {
-        recordedPoison = true;
-        break;
-      }
-    }
-    if (!recordedPoison) {
-      return false;
-    }
-    LOG.warn(
-        "Correlated event at offset {} is the recorded poison event of saga {}, which was not"
-            + " marked FAULTED when the poison was recorded; the redelivery makes the fault write",
-        event.globalOffset().value(),
-        LogSanitizer.sanitizeForLog(sagaId.value()));
-    faultExistingRow(sagaId, type, row.version());
-    return true;
+  private boolean isUnfinishedPoison(SagaDeadLetterStore.SagaDeadLetterEntry kept) {
+    return SagaType.fromClass(orchestrator.stateType()).equals(kept.sagaType())
+        && !HOLD_ERROR_TYPES.contains(kept.errorType());
   }
 
-  /** Whether {@code entry} was written by a hold rather than by the poison handler. */
-  private static boolean isHoldRecord(SagaDeadLetterStore.SagaDeadLetterEntry entry) {
-    return SagaEventHeldException.class.getName().equals(entry.errorType())
-        || SagaSkippedWhileFaultedException.class.getName().equals(entry.errorType());
+  /**
+   * The redelivery of a correlated event over a shielded live row found the event's own poison
+   * recorded and the row not {@code FAULTED}: the fault write that follows the poison's entry did
+   * not land. That is a process that stopped between the two writes, a fault write that lost its
+   * compare-and-swap twice, a fault write skipped because the row could not be read then, or a
+   * drain that un-faulted the row to feed an older entry and has not fed this one yet (the fault is
+   * then written a second time, and the drain feeds the event over it). This delivery makes the
+   * fault write at the version it read, so the saga ends {@code FAULTED} with the poison's own
+   * entry, where a run that is not interrupted ends.
+   *
+   * <p>One compare-and-swap, never a reload and a second write: the decision was made on the row
+   * this delivery read. A lost compare-and-swap leaves the listener as {@link
+   * SagaRowConflictException}, and {@link #deliver} routes the event again on the row that won — a
+   * drain of another process that applied the event makes it an applied redelivery, a fault another
+   * path wrote makes it a kept hold, a claim resumes the episode, a terminal row drops it.
+   */
+  private void completeInterruptedFault(SagaId sagaId, EventEnvelope event, LoadedSaga<S> row) {
+    SagaType type = SagaType.fromClass(orchestrator.stateType());
+    try {
+      if (sagaStore.markFaulted(sagaId, type, row.version())) {
+        recordFaultedMetric();
+      }
+    } catch (OptimisticLockException lost) {
+      recordCasConflictMetric();
+      throw new SagaRowConflictException(lost);
+    }
+    LOG.warn(
+        "Correlated event at offset {} has a recorded poison entry and saga {} was not FAULTED;"
+            + " the redelivery marked it FAULTED",
+        event.globalOffset().value(),
+        LogSanitizer.sanitizeForLog(sagaId.value()));
   }
 
   /**
@@ -1005,23 +1020,24 @@ public final class SagaRunner<S extends SagaState> {
    * it after the poison was recorded (a retry-later failure later in the page, a crash before the
    * checkpoint, a handover): the poison event then meets the FAULTED row it faulted. Its entry is
    * already recorded, so {@link #recordHold} keeps it — the poison's own exception class name and
-   * message — and this delivery writes and counts nothing.
+   * message — and this delivery changes and counts nothing. Returns what the store did.
    */
-  private void holdWhileFaulted(SagaId sagaId, EventEnvelope event) {
-    sagaStore.setDeadLetterPending(sagaId, SagaType.fromClass(orchestrator.stateType()), true);
-    if (!recordHold(
-        sagaId, event, new SagaSkippedWhileFaultedException(sagaId, event.globalOffset()))) {
-      return;
+  private SagaDeadLetterStore.HoldResult holdWhileFaulted(SagaId sagaId, EventEnvelope event) {
+    SagaDeadLetterStore.HoldResult held =
+        recordHold(
+            sagaId, event, new SagaSkippedWhileFaultedException(sagaId, event.globalOffset()));
+    if (held instanceof SagaDeadLetterStore.HoldResult.Written) {
+      recordMetric(
+          () -> metrics.recordSagaSkippedWhileFaulted(sagaTypeTag()),
+          "recordSagaSkippedWhileFaulted");
+      LOG.warn(
+          "Correlated event at offset {} arrived while saga {} is FAULTED and was NOT processed;"
+              + " recorded in the saga dead-letter store so it is not lost. Fix the orchestrator,"
+              + " then drain the saga with SagaDeadLetterReplayer.replayAll(sagaId).",
+          event.globalOffset().value(),
+          LogSanitizer.sanitizeForLog(sagaId.value()));
     }
-    recordMetric(
-        () -> metrics.recordSagaSkippedWhileFaulted(sagaTypeTag()),
-        "recordSagaSkippedWhileFaulted");
-    LOG.warn(
-        "Correlated event at offset {} arrived while saga {} is FAULTED and was NOT processed;"
-            + " recorded in the saga dead-letter store so it is not lost. Fix the orchestrator,"
-            + " then drain the saga with SagaDeadLetterReplayer.replayAll(sagaId).",
-        event.globalOffset().value(),
-        LogSanitizer.sanitizeForLog(sagaId.value()));
+    return held;
   }
 
   /**
@@ -1353,9 +1369,11 @@ public final class SagaRunner<S extends SagaState> {
    * <p><b>The saga type is ALWAYS stamped — even when {@code sagaId} is null.</b> The quarantining
    * runner's type is well-defined regardless of whether the saga id could be resolved (it is the
    * type whose router poisoned), and every entry requires it. Two types poisoning on the same event
-   * at the same offset therefore produce two entries, one per type, and {@code findEntry}/{@code
-   * DISCARD_TYPED}/{@code establishFirstReplayAnchor} isolate them: one type's replay-then-discard
-   * can never match — and delete — the other type's only record that the event was never consumed.
+   * at the same offset therefore produce two NULL-SAGA entries, one per type, and {@code
+   * findEntry}/{@code DISCARD_TYPED}/{@code establishFirstReplayAnchor} isolate them: one type's
+   * replay-then-discard can never match — and delete — the other type's only record that the event
+   * was never consumed. A NAMED entry is keyed by saga id and offset in the shipped stores, without
+   * the type, so two types' named entries at one saga id and offset are one row, the last written.
    */
   private void quarantine(SagaId sagaId, EventEnvelope event, Throwable cause) {
     var entry = entryOf(sagaId, event, cause);
@@ -1377,25 +1395,61 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * Records a held event: its entry and the owner's shield as one write, unless the saga already
-   * has an entry of this runner's type at the event's offset — then that entry is kept exactly as
-   * stored and only the shield is asserted ({@link SagaDeadLetterStore#publishShieldedIfAbsent}).
-   * An entry already there records this very event: an earlier hold of it, or its own poison, whose
-   * exception class name and message are the only durable record of the cause and must not be
-   * replaced by the hold's. Returns whether the entry was written; a kept entry is a redelivery,
+   * The error types of the entries a hold writes — the class names of the two hold causes. They are
+   * persisted and documented values: an entry with any other error type was written by the poison
+   * handler ({@link #isUnfinishedPoison}), and {@link #recordHold} refuses a cause outside this
+   * set, so a hold cause added later is classified as a hold only once it is listed here.
+   */
+  static final Set<String> HOLD_ERROR_TYPES =
+      Set.of(
+          SagaEventHeldException.class.getName(), SagaSkippedWhileFaultedException.class.getName());
+
+  /**
+   * Records a held event ({@link SagaDeadLetterStore#publishShieldedIfAbsent}): its entry and the
+   * owner's shield as one write, unless the saga has applied the event by the time the store
+   * decides (nothing is written: a drain of another process applied it after this delivery read the
+   * row), or already has an entry of this runner's type at the event's offset — then that entry is
+   * kept exactly as stored. An entry already there records this very event: an earlier hold of it,
+   * or its own poison, whose exception class name and message are the only durable record of the
+   * cause and must not be replaced by the hold's. A kept entry or an applied event is a redelivery,
    * not a new hold: it is logged at DEBUG and counted in no metric.
    */
-  private boolean recordHold(SagaId sagaId, EventEnvelope event, RuntimeException holdCause) {
-    if (!sagaDeadLetterStore.publishShieldedIfAbsent(entryOf(sagaId, event, holdCause))) {
-      LOG.debug(
-          "Correlated event at offset {} for saga {} is already recorded in the saga dead-letter"
-              + " store; the redelivery keeps that entry and writes nothing",
-          event.globalOffset().value(),
-          LogSanitizer.sanitizeForLog(sagaId.value()));
-      return false;
+  private SagaDeadLetterStore.HoldResult recordHold(
+      SagaId sagaId, EventEnvelope event, RuntimeException holdCause) {
+    requireHoldCause(holdCause);
+    SagaDeadLetterStore.HoldResult held =
+        sagaDeadLetterStore.publishShieldedIfAbsent(entryOf(sagaId, event, holdCause));
+    switch (held) {
+      case SagaDeadLetterStore.HoldResult.Written _ ->
+          recordMetric(() -> metrics.recordSagaQuarantined(sagaTypeTag()), "recordSagaQuarantined");
+      case SagaDeadLetterStore.HoldResult.Kept _ ->
+          LOG.debug(
+              "Correlated event at offset {} for saga {} is already recorded in the saga"
+                  + " dead-letter store; the redelivery keeps that entry and changes nothing",
+              event.globalOffset().value(),
+              LogSanitizer.sanitizeForLog(sagaId.value()));
+      case SagaDeadLetterStore.HoldResult.AlreadyApplied applied ->
+          LOG.debug(
+              "Correlated event at offset {} for saga {} is applied (last applied offset {});"
+                  + " the redelivery records nothing",
+              event.globalOffset().value(),
+              LogSanitizer.sanitizeForLog(sagaId.value()),
+              applied.lastAppliedOffset());
     }
-    recordMetric(() -> metrics.recordSagaQuarantined(sagaTypeTag()), "recordSagaQuarantined");
-    return true;
+    return held;
+  }
+
+  /**
+   * Refuses a hold cause whose class is not one of {@link #HOLD_ERROR_TYPES}: its entries would be
+   * taken for a poison's.
+   *
+   * @throws IllegalArgumentException if {@code holdCause}'s class is not a hold cause
+   */
+  static void requireHoldCause(Throwable holdCause) {
+    if (!HOLD_ERROR_TYPES.contains(holdCause.getClass().getName())) {
+      throw new IllegalArgumentException(
+          holdCause.getClass().getName() + " is not a hold cause: " + HOLD_ERROR_TYPES);
+    }
   }
 
   /** The dead-letter entry for {@code event} with {@code cause}, stamped by the builder's clock. */

@@ -54,11 +54,13 @@ import org.streamrune.core.types.SagaType;
  *
  * <p><b>The conditional shield clear:</b> {@link #clearShieldIfDrained} is the ONLY writer of
  * {@code dead_letter_pending = false} in the framework; it runs under the same monitor {@link
- * #publish}, {@link #publishShielded} and {@link #setResolvedTarget} take (see {@code
- * entriesMonitor}), which is what makes it race-free against the runner's hold in this store.
- * {@link #publishShielded} additionally writes the owner's shield inside that monitor, so the entry
- * and its shield are one indivisible step here exactly as they are one transaction in the Postgres
- * store.
+ * #publish}, {@link #publishShielded}, {@link #publishShieldedIfAbsent} and {@link
+ * #setResolvedTarget} take (see {@code entriesMonitor}), which is what makes it race-free against
+ * the runner's hold in this store. {@link #publishShielded} and {@link #publishShieldedIfAbsent}
+ * additionally write the owner's shield inside that monitor, so the entry and its shield are one
+ * indivisible step here exactly as they are one transaction in the Postgres store. The hold's check
+ * of the owner row's {@code last_applied_offset} reads the saga store inside the monitor; the saga
+ * store's own writes do not take it, so in this store the check is as of that read.
  */
 public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
 
@@ -85,16 +87,17 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * The entries monitor. {@link #clearShieldIfDrained} evaluates "no named entry, no resolved
    * null-saga entry" AND writes the saga store's flag while holding it; {@link #publish}, {@link
-   * #publishShielded} and {@link #setResolvedTarget} — the writes that make an entry count for the
-   * shield — take the SAME monitor. <b>Invariant:</b> that shared monitor is this store's "one
-   * transaction", and it is the only reason the in-memory hold (T: set TRUE → P: {@code
-   * publishShielded}) is race-free against the clear. Two things it buys, both load-bearing: P
-   * cannot land between the clear's check and its write, and P's own two writes — the entry upsert
-   * and the shield — cannot be separated by a clear, so no observer ever sees a held entry on an
-   * unshielded row. A refactor that moves {@code publish}, {@code publishShielded} or {@code
-   * setResolvedTarget} off this monitor, or that splits {@code publishShielded}'s two writes across
-   * two monitor-held sections, silently re-opens the race (a held entry left unshielded, prunable,
-   * and re-evolved by a later drain after its redelivery is applied live).
+   * #publishShielded}, {@link #publishShieldedIfAbsent} and {@link #setResolvedTarget} — the writes
+   * that make an entry count for the shield — take the SAME monitor. <b>Invariant:</b> that shared
+   * monitor is this store's "one transaction", and it is the only reason an entry write (P: {@code
+   * publishShielded} or {@code publishShieldedIfAbsent}) is race-free against the clear. Two things
+   * it buys, both load-bearing: P cannot land between the clear's check and its write, and P's own
+   * two writes — the entry and the shield — cannot be separated by a clear, so no observer ever
+   * sees a held entry on an unshielded row. A refactor that moves {@code publish}, {@code
+   * publishShielded}, {@code publishShieldedIfAbsent} or {@code setResolvedTarget} off this
+   * monitor, or that splits P's two writes across two monitor-held sections, silently re-opens the
+   * race (a held entry left unshielded, prunable, and re-evolved by a later drain after its
+   * redelivery is applied live).
    */
   private final Object entriesMonitor = new Object();
 
@@ -145,11 +148,12 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
-   * <p>Under {@link #entriesMonitor}, as {@link #publishShielded}: the entry is written unless one
-   * of the same saga type is stored at the key, then the saga store's flag is set either way.
+   * <p>Under {@link #entriesMonitor}, as {@link #publishShielded}: when the owner row has applied
+   * the event nothing is written; otherwise the entry is written unless one of the same saga type
+   * is stored at the key, and the saga store's flag is set.
    */
   @Override
-  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+  public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
     if (entry == null) {
       throw new IllegalArgumentException("entry must not be null");
     }
@@ -157,13 +161,21 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
       throw new IllegalArgumentException("sagaId is required");
     }
     synchronized (entriesMonitor) {
+      Long lastApplied =
+          sagaStore
+              .load(entry.sagaId(), entry.sagaType(), SagaState.class)
+              .map(LoadedSaga::lastAppliedOffset)
+              .orElse(null);
+      if (lastApplied != null && lastApplied >= entry.eventOffset().value()) {
+        return new HoldResult.AlreadyApplied(lastApplied);
+      }
       SagaDeadLetterEntry stored = store.get(keyOf(entry));
       boolean write = stored == null || !stored.sagaType().equals(entry.sagaType());
       if (write) {
         upsert(entry);
       }
       sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
-      return write;
+      return write ? new HoldResult.Written() : new HoldResult.Kept(stored);
     }
   }
 

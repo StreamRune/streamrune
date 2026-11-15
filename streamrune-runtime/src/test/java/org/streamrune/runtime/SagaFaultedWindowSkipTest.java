@@ -302,7 +302,7 @@ class SagaFaultedWindowSkipTest {
   }
 
   @Test
-  void redeliveryOfTheSameSkippedEvent_upsertsOneEntry_notADuplicatePerDelivery() {
+  void redeliveryOfTheSameSkippedEvent_keepsItsOneEntry_notADuplicatePerDelivery() {
     sagaStore.create(SAGA, TYPE, new OrderState(SagaStatus.RUNNING, "order-1"), SagaStatus.FAULTED);
     var payment = correlated(new PaymentCaptured("order-1"), 140L);
 
@@ -312,8 +312,8 @@ class SagaFaultedWindowSkipTest {
 
     assertThat(dlq.findBySaga(SAGA))
         .as(
-            "publish is an idempotent upsert on (sagaId, eventOffset) — a redelivery storm or a"
-                + " second replica cannot multiply the record")
+            "a hold keeps the entry already recorded at (sagaId, eventOffset) — a redelivery"
+                + " storm or a second replica cannot multiply the record")
         .hasSize(1);
   }
 
@@ -498,7 +498,7 @@ class SagaFaultedWindowSkipTest {
   }
 
   @Test
-  void redeliveryOfARowlessSkippedEvent_upsertsOneEntry_notADuplicatePerDelivery() {
+  void redeliveryOfARowlessSkippedEvent_keepsItsOneEntry_notADuplicatePerDelivery() {
     var runner = rowlessFaultedRunner();
     var payment = correlated(new PaymentCaptured("order-1"), 140L);
 
@@ -507,7 +507,8 @@ class SagaFaultedWindowSkipTest {
     runner.asEventListener().onEvents(List.of(payment));
 
     assertThat(dlq.findBySaga(SAGA))
-        .as("publish upserts on (sagaId, eventOffset): a crash-redelivery converges on one row")
+        .as(
+            "a hold keeps the entry at (sagaId, eventOffset): a crash-redelivery converges on one row")
         .hasSize(2);
   }
 

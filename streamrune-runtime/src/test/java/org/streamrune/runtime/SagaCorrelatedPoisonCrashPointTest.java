@@ -11,6 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.saga.LoadedSaga;
+import org.streamrune.core.saga.SagaDeadLetterStore.HoldResult;
 import org.streamrune.core.saga.SagaDeadLetterStore.SagaDeadLetterEntry;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaStatus;
@@ -39,17 +40,14 @@ class SagaCorrelatedPoisonCrashPointTest {
   enum CrashPoint {
     /** No crash: the page is delivered once, then twice again. */
     NONE,
-    /**
-     * Right after the first shield write of the saga row made on its own, outside an entry write.
-     * The poison handler makes none; the hold of the next event does.
-     */
-    AFTER_SHIELD,
     /** Right before the poison's entry and shield commit: neither is written. */
     BEFORE_ENTRY,
     /** Right after the poison's entry and shield committed, before the fault write. */
     AFTER_ENTRY,
     /** Right after the fault write committed. */
-    AFTER_FAULT
+    AFTER_FAULT,
+    /** Right after the next event's hold — its entry and shield — committed. */
+    AFTER_HOLD
   }
 
   private static final SagaId SAGA = SagaId.of("saga-1");
@@ -122,9 +120,13 @@ class SagaCorrelatedPoisonCrashPointTest {
     }
   }
 
-  /** The dead-letter store with one more seam: a crash right before an entry write delegates. */
+  /**
+   * The dead-letter store with two more seams: a crash right before the poison's entry write
+   * delegates, and one right after a hold wrote its entry.
+   */
   private static final class CrashingDeadLetters extends ForwardingSagaDeadLetterStore {
     private boolean crashBeforeTheNextEntry;
+    private boolean crashAfterTheNextHold;
 
     CrashingDeadLetters(InMemorySagaDeadLetterStore delegate) {
       super(delegate);
@@ -132,6 +134,20 @@ class SagaCorrelatedPoisonCrashPointTest {
 
     void crashOnceBeforeTheEntry() {
       crashBeforeTheNextEntry = true;
+    }
+
+    void crashOnceAfterTheNextHold() {
+      crashAfterTheNextHold = true;
+    }
+
+    @Override
+    public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+      HoldResult result = super.publishShieldedIfAbsent(entry);
+      if (crashAfterTheNextHold && result instanceof HoldResult.Written) {
+        crashAfterTheNextHold = false;
+        throw new ForwardingSagaStore.SimulatedCrash("the hold's entry and shield");
+      }
+      return result;
     }
 
     @Override
@@ -184,10 +200,10 @@ class SagaCorrelatedPoisonCrashPointTest {
     World world = started();
     switch (point) {
       case NONE -> {}
-      case AFTER_SHIELD -> world.sagaStore.crashOnceAfter("setDeadLetterPending");
       case BEFORE_ENTRY -> world.deadLetters.crashOnceBeforeTheEntry();
       case AFTER_ENTRY -> world.deadLetters.crashOnceAfter("publish");
       case AFTER_FAULT -> world.sagaStore.crashOnceAfter("markFaulted");
+      case AFTER_HOLD -> world.deadLetters.crashOnceAfterTheNextHold();
     }
 
     int crashes = 0;
@@ -205,5 +221,8 @@ class SagaCorrelatedPoisonCrashPointTest {
 
     assertThat(crashes).isEqualTo(point == CrashPoint.NONE ? 0 : 1);
     assertThat(world.endState()).isEqualTo(expected);
+    assertThat(world.sagaStore.calls())
+        .as("no shield is written on its own: always with its entry, at the dead-letter store")
+        .doesNotContain("setDeadLetterPending");
   }
 }

@@ -59,7 +59,7 @@ class SagaDeadLetterRetentionSweeperTest {
       }
 
       @Override
-      public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+      public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
         throw new UnsupportedOperationException("publishShieldedIfAbsent");
       }
 
@@ -171,7 +171,7 @@ class SagaDeadLetterRetentionSweeperTest {
           }
 
           @Override
-          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+          public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 
@@ -306,7 +306,7 @@ class SagaDeadLetterRetentionSweeperTest {
           }
 
           @Override
-          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+          public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 
@@ -548,7 +548,7 @@ class SagaDeadLetterRetentionSweeperTest {
           }
 
           @Override
-          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+          public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 

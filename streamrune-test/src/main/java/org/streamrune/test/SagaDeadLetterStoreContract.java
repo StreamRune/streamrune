@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.saga.SagaDeadLetterStore;
+import org.streamrune.core.saga.SagaDeadLetterStore.HoldResult;
 import org.streamrune.core.saga.SagaDeadLetterStore.SagaDeadLetterEntry;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaStatus;
@@ -385,7 +387,8 @@ public abstract class SagaDeadLetterStoreContract {
   @Test
   public void publishShieldedIfAbsent_writesTheEntry_andShieldsTheOwner() {
     row(A, SagaStatus.RUNNING);
-    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
+    assertInstanceOf(
+        HoldResult.Written.class, store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
     SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
     assertEquals(1, store.findBySaga(A).size());
     assertEquals("org.streamrune.runtime.SagaSkippedWhileFaultedException", e.errorType());
@@ -404,8 +407,14 @@ public abstract class SagaDeadLetterStoreContract {
     store.publishShielded(entry(A, 10L, T0)); // the poison: java.lang.RuntimeException "boom"
     sagaStore.setDeadLetterPending(A, TYPE, false);
 
-    assertFalse(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(60))));
-    assertFalse(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(120))));
+    HoldResult first = store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(60)));
+    assertInstanceOf(
+        HoldResult.Kept.class,
+        store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(120))));
+    SagaDeadLetterEntry handedBack = assertInstanceOf(HoldResult.Kept.class, first).entry();
+    assertEquals("java.lang.RuntimeException", handedBack.errorType());
+    assertEquals("boom", handedBack.errorMessage());
+    assertEquals(T0, handedBack.faultedAt());
 
     SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
     assertEquals(1, store.findBySaga(A).size());
@@ -420,7 +429,8 @@ public abstract class SagaDeadLetterStoreContract {
   @Test
   public void publishShielded_afterAHold_refreshesTheEntryWithThePoison() {
     row(A, SagaStatus.RUNNING);
-    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
+    assertInstanceOf(
+        HoldResult.Written.class, store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
     store.publishShielded(entry(A, 10L, T0.plusSeconds(30)));
     SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
     assertEquals(1, store.findBySaga(A).size());
@@ -436,7 +446,9 @@ public abstract class SagaDeadLetterStoreContract {
   @Test
   public void publishShieldedIfAbsent_replacesAnotherTypesEntryAtTheKey_asPublishDoes() {
     store.publish(held(A, OTHER, 10L, T0));
-    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(5))));
+    assertInstanceOf(
+        HoldResult.Written.class,
+        store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(5))));
     SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
     assertEquals(1, store.findBySaga(A).size());
     assertEquals(TYPE, e.sagaType());
@@ -446,8 +458,11 @@ public abstract class SagaDeadLetterStoreContract {
   @Test
   public void publishShieldedIfAbsent_absentOwnerRow_recordsTheEntry_andRejectsANullSaga() {
     var rowless = SagaId.of("dl-rowless-held");
-    assertTrue(store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0)));
-    assertFalse(store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0.plusSeconds(1))));
+    assertInstanceOf(
+        HoldResult.Written.class, store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0)));
+    assertInstanceOf(
+        HoldResult.Kept.class,
+        store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0.plusSeconds(1))));
     assertEquals(1, store.findBySaga(rowless).size());
     assertTrue(sagaStore.load(rowless, TYPE, ContractState.class).isEmpty());
     assertThrows(IllegalArgumentException.class, () -> store.publishShieldedIfAbsent(null));
@@ -455,6 +470,35 @@ public abstract class SagaDeadLetterStoreContract {
         IllegalArgumentException.class,
         () -> store.publishShieldedIfAbsent(held(null, TYPE, 12L, T0)));
     assertTrue(store.findAll(10).stream().noneMatch(e -> e.eventOffset().value() == 12L));
+  }
+
+  /**
+   * A hold of an event its owner row has applied records nothing — neither entry nor shield — and
+   * says so; a later event is recorded as usual.
+   */
+  @Test
+  public void publishShieldedIfAbsent_anEventTheRowHasApplied_writesNothing() {
+    row(A, SagaStatus.RUNNING);
+    sagaStore.applyEvent(
+        A,
+        TYPE,
+        new ContractState(SagaStatus.RUNNING, "applied"),
+        SagaStatus.RUNNING,
+        1L,
+        SagaStore.AppliedEvent.live(GlobalOffset.of(10L)));
+
+    HoldResult applied = store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0));
+    assertEquals(
+        10L, assertInstanceOf(HoldResult.AlreadyApplied.class, applied).lastAppliedOffset());
+    assertInstanceOf(
+        HoldResult.AlreadyApplied.class, store.publishShieldedIfAbsent(held(A, TYPE, 9L, T0)));
+    assertTrue(store.findBySaga(A).isEmpty(), "no entry for an applied event");
+    assertFalse(shield(A), "no shield either");
+
+    assertInstanceOf(
+        HoldResult.Written.class, store.publishShieldedIfAbsent(held(A, TYPE, 11L, T0)));
+    assertEquals(1, store.findBySaga(A).size());
+    assertTrue(shield(A));
   }
 
   @Test

@@ -254,14 +254,14 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
           + ROWLESS_NAMED;
 
   // The conditional shield clear, as ONE transaction of TWO statements.
-  // Statement 1 locks the saga row, so the runner's hold (T: set TRUE -> P: publishShielded, which
-  // writes the entry AND the shield in one transaction) queues its flag
-  // writes behind this transaction. Statement 2 then runs with a FRESH snapshot taken after the
+  // Statement 1 locks the saga row, so an entry write (P: publishShielded or
+  // publishShieldedIfAbsent, each the entry AND the shield in one transaction) queues its flag
+  // write behind this transaction. Statement 2 then runs with a FRESH snapshot taken after the
   // lock was granted, so its NOT EXISTS subqueries see every publish that committed before the
   // lock. A single UPDATE ... WHERE NOT EXISTS is NOT sufficient under READ COMMITTED: its
   // subqueries use the statement snapshot and EvalPlanQual re-checks a concurrently updated row
-  // with that SAME snapshot, so a clear whose snapshot predates the hold still writes FALSE behind
-  // a completed T->P->R. The two NOT EXISTS predicates are the same type-scoped populations the
+  // with that SAME snapshot, so a clear whose snapshot predates the write still writes FALSE behind
+  // a completed P. The two NOT EXISTS predicates are the same type-scoped populations the
   // drain folds (named entries of the type; null-saga entries whose resolved target is the saga) -
   // the exact set the shield exists for.
   private static final String LOCK_SAGA_ROW =
@@ -281,6 +281,18 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   // PostgresSagaStore.SET_DEAD_LETTER_PENDING); 0 rows = absent owner row, the documented no-op.
   private static final String ASSERT_SHIELD =
       "UPDATE saga_state SET dead_letter_pending = TRUE WHERE saga_id = ? AND saga_type = ?";
+
+  // The hold's shield write, which also answers whether the owner row has applied the event: it
+  // locks the saga row (after the hold's upsert locked the dead-letter row, the store's one lock
+  // order) and returns last_applied_offset as of the newest committed row version, so a drain of
+  // another process that applied the event first is seen here. No row = absent owner.
+  private static final String ASSERT_SHIELD_RETURNING_APPLIED =
+      ASSERT_SHIELD + " RETURNING last_applied_offset";
+
+  // The entry the hold's upsert kept. Read in the hold's transaction, which holds the row lock the
+  // conflict arm took, so it is the row the upsert decided on.
+  private static final String SELECT_NAMED_AT_OFFSET =
+      "SELECT " + COLUMNS + " FROM saga_dead_letters WHERE saga_id = ? AND event_offset = ?";
 
   private static final int DELETE_BATCH_SIZE = 1000;
 
@@ -387,12 +399,14 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>One transaction, as {@link #publishShielded}: the hold's upsert, whose conflict arm writes
-   * nothing over a stored row of the same saga type, then the owner's shield; commit. The shield is
-   * asserted whether or not the entry was written. Lock order dead-letter row → saga row, as {@link
-   * #publishShielded}.
+   * nothing over a stored row of the same saga type, then the owner's shield, whose {@code
+   * RETURNING} gives the row's {@code last_applied_offset}. When the row has applied the event the
+   * transaction is rolled back — neither the entry nor the shield is written. Otherwise the kept
+   * entry, if any, is read back, and the transaction commits. Lock order dead-letter row → saga
+   * row, as {@link #publishShielded}.
    */
   @Override
-  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+  public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
     if (entry == null) {
       throw new IllegalArgumentException("entry must not be null");
     }
@@ -400,23 +414,47 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       throw new IllegalArgumentException("sagaId is required");
     }
     try (var conn = dataSource.getConnection()) {
-      return inTransaction(
-          conn,
-          c -> {
-            boolean written = writeNamed(c, HOLD_UPSERT, entry) > 0;
-            try (var ps = c.prepareStatement(ASSERT_SHIELD)) {
-              rowWriteTimeout.applyTo(ps);
-              ps.setString(1, entry.sagaId().value());
-              ps.setString(2, entry.sagaType().value());
-              ps.executeUpdate(); // 0 rows = absent row: the documented no-op
-            }
-            return written;
-          });
+      return inTransaction(conn, c -> hold(c, entry));
     } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to record and shield held saga event: "
               + LogSanitizer.sanitizeForLog(entry.sagaId().value()),
           e);
+    }
+  }
+
+  /** The work of {@link #publishShieldedIfAbsent}'s transaction. */
+  private HoldResult hold(Connection c, SagaDeadLetterEntry entry) throws SQLException {
+    boolean written = writeNamed(c, HOLD_UPSERT, entry) > 0;
+    Long lastApplied = null;
+    try (var ps = c.prepareStatement(ASSERT_SHIELD_RETURNING_APPLIED)) {
+      rowWriteTimeout.applyTo(ps);
+      ps.setString(1, entry.sagaId().value());
+      ps.setString(2, entry.sagaType().value());
+      try (ResultSet rs = ps.executeQuery()) { // no row = absent owner: the documented no-op
+        if (rs.next()) {
+          long applied = rs.getLong(1);
+          lastApplied = rs.wasNull() ? null : applied;
+        }
+      }
+    }
+    if (lastApplied != null && lastApplied >= entry.eventOffset().value()) {
+      c.rollback(); // the event is applied: neither the entry nor the shield
+      return new HoldResult.AlreadyApplied(lastApplied);
+    }
+    if (written) {
+      return new HoldResult.Written();
+    }
+    try (var ps = c.prepareStatement(SELECT_NAMED_AT_OFFSET)) {
+      ps.setString(1, entry.sagaId().value());
+      ps.setLong(2, entry.eventOffset().value());
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw new SQLException(
+              "the kept saga dead-letter entry was not found in its transaction");
+        }
+        return new HoldResult.Kept(fromRow(rs));
+      }
     }
   }
 

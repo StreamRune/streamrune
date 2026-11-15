@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
+import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaDeadLetterStore.SagaDeadLetterEntry;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
@@ -123,6 +124,26 @@ class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
   }
 
   @Test
+  void aHoldBehindAHeldSagaRowFailsAtItsBound_andSucceedsOnceTheRowIsFree() throws Exception {
+    Connection holder = holdTheRow();
+
+    long started = System.nanoTime();
+    Throwable thrown = failureWithinCap(() -> deadLetters.publishShieldedIfAbsent(entry(1)));
+    long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+    assertThat(thrown).isInstanceOf(EventStoreException.class);
+    assertThat(sqlStateOf(thrown)).isEqualTo("57014");
+    assertThat(elapsed).isLessThan(BOUND_MILLIS + SLACK_MILLIS);
+    assertThat(deadLetters.findBySaga(ID)).as("the hold's entry is rolled back with it").isEmpty();
+
+    holder.rollback();
+    assertThat(deadLetters.publishShieldedIfAbsent(entry(1)))
+        .isInstanceOf(SagaDeadLetterStore.HoldResult.Written.class);
+    assertThat(deadLetters.findBySaga(ID)).hasSize(1);
+    assertThat(shield()).isTrue();
+  }
+
+  @Test
   void aShieldClearBehindAHeldSagaRowFailsAtItsBound_andSucceedsOnceTheRowIsFree()
       throws Exception {
     sagas.setDeadLetterPending(ID, TYPE, true);
@@ -170,8 +191,9 @@ class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
 
   /**
    * Which statements carry the bound, read from the driver's own statement as it executes: the
-   * shield writes and the row lock of the clear — every statement of this store that updates or
-   * locks a {@code saga_state} row — and none of the entry writes and reads.
+   * shield writes of the poison's and the hold's write and the row lock of the clear — every
+   * statement of this store that updates or locks a {@code saga_state} row — and none of the entry
+   * writes and reads.
    */
   @Test
   void theSagaRowStatementsCarryTheBound_theEntryStatementsDoNot() {
@@ -183,10 +205,13 @@ class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
 
     recorded.publishShielded(entry(1));
     recorded.publish(entry(2));
+    recorded.publishShieldedIfAbsent(entry(3)); // written
+    recorded.publishShieldedIfAbsent(entry(3)); // kept: the entry is read back
     recorded.findBySaga(ID);
     recorded.clearShieldIfDrained(ID, TYPE);
     recorded.discard(ID, TYPE, GlobalOffset.of(1));
     recorded.discard(ID, TYPE, GlobalOffset.of(2));
+    recorded.discard(ID, TYPE, GlobalOffset.of(3));
     assertThat(recorded.clearShieldIfDrained(ID, TYPE)).isTrue();
 
     List<String> bounded =
@@ -201,10 +226,11 @@ class PostgresSagaDeadLetterStoreRowWriteTimeoutTest {
             .toList();
     assertThat(bounded.size() + unbounded.size()).isEqualTo(executed.size());
     assertThat(bounded)
-        .as("the shield write, and the row lock and the conditional clear, twice")
-        .hasSize(5)
+        .as("the poison's and the hold's shield writes, and the row lock and the clear, twice")
+        .hasSize(7)
         .allMatch(sql -> sql.contains("saga_state"))
         .anyMatch(sql -> sql.startsWith("UPDATE saga_state SET dead_letter_pending = TRUE"))
+        .anyMatch(sql -> sql.endsWith("RETURNING last_applied_offset"))
         .anyMatch(sql -> sql.startsWith("UPDATE saga_state SET dead_letter_pending = FALSE"))
         .anyMatch(sql -> sql.endsWith("FOR UPDATE"));
     assertThat(unbounded)
