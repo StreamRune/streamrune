@@ -1195,11 +1195,22 @@ class AggregateLockerFactory {
 **The connection budget.** A command holds its lock connection for its whole run and borrows a
 second connection from the application's pool for its load and its append, so size the lock pool for
 the commands one replica runs at once, and the application's pool for the load and the append alone;
-the two pools of every replica together stay below PostgreSQL's `max_connections`. The dedicated lock
-pool keeps two connections open while the replica runs no command and opens the others on demand,
-up to its maximum; one beyond the two that stays idle for ten minutes is closed, so the budget of a
-replica's lock pool is its maximum under load and two at rest. A command whose
-`INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
+the two pools of every replica together stay below PostgreSQL's `max_connections`. The lock pool
+`withDedicatedPool(jdbcUrl, username, password, maxPoolSize)` builds is fixed-size: it opens
+`maxPoolSize` connections and keeps them open whether the replica runs commands or not, so the
+budget of a replica's lock pool is its maximum, at rest as under load. It does not grow on demand
+because HikariCP cannot be relied on to grow a pool under a burst: a pool below its maximum decides
+whether to open another connection from a count of waiting borrowers each one read when it arrived,
+so when the commands of a burst ask in another order than they arrived it opens fewer connections
+than they wait for. The command left over waits until another command returns its connection, or
+until the pool's housekeeping tops it up (every 30 seconds), and fails with a `LockException` after
+the 10-second connection timeout if every other command holds its lock that long, while the pool is
+still under its maximum. To hold fewer connections at rest, build the pool yourself and pass it to
+`withDedicatedPool(pool)`; a HikariCP pool then needs a `minimumIdle` of at least the commands a
+replica runs at once, since a larger `maximumPoolSize` alone does not keep a burst that the pool
+grows for out of the race. The application pool's recommended `minimumIdle` equal to
+`maximumPoolSize` (see [PostgreSQL setup](#postgresql-setup)) keeps it out of the same race. A
+command whose `INLINE` projection dispatches a command on another aggregate holds a second lock connection (see
 [the dedicated lock pool](#postgresql-setup) above). `streamrune.lock-timeout` bounds the wait for a
 lock with either locker.
 

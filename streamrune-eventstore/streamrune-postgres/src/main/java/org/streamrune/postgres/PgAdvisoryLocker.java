@@ -83,12 +83,6 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
 
   private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
 
-  /**
-   * The connections the pool of {@link #withDedicatedPool} keeps open while no command holds a
-   * lock, or its maximum when that is smaller.
-   */
-  static final int DEDICATED_POOL_MINIMUM_IDLE = 2;
-
   private final DataSource dataSource;
 
   /**
@@ -162,7 +156,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * library: the locker needs only connections. The pool is dedicated to the locker, separate from
    * the event store's pool, for the reason the class javadoc gives; size it for the expected
    * maximum number of concurrent in-flight commands, and let it fail a borrow after a bounded wait
-   * rather than queue forever.
+   * rather than queue forever. Keep that many connections open while it is idle: a HikariCP pool
+   * that grows on demand can open fewer connections than a burst waits for, whatever its maximum,
+   * as {@link #withDedicatedPool(String, String, String, int)} explains.
    *
    * <p>The returned locker <em>owns</em> the pool: {@link #close()} closes it when it is {@link
    * AutoCloseable}. Hand it the application's own pool and that pool is closed with the locker; use
@@ -193,12 +189,23 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    * <p>This overload and the next build a HikariCP pool, the pool library this module depends on,
    * as a convenience; {@link #withDedicatedPool(DataSource)} takes a pool built with any library.
    *
-   * <p><b>Idle connections.</b> While no command holds a lock the pool keeps two connections open
-   * ({@code maxPoolSize} when that is smaller), and it opens the others when commands hold locks at
-   * once, up to {@code maxPoolSize}. A connection beyond the two that stays idle for HikariCP's
-   * idle timeout, ten minutes, is closed. So a replica that runs no command holds two connections
-   * of PostgreSQL's {@code max_connections} for its locks, and a replica under load the connections
-   * its commands hold plus up to two idle ones, at most {@code maxPoolSize}.
+   * <p><b>A fixed-size pool.</b> The pool opens {@code maxPoolSize} connections and keeps them
+   * open, whether commands hold locks or not: a replica holds {@code maxPoolSize} connections of
+   * PostgreSQL's {@code max_connections} for its locks at rest as under load, so budget them in
+   * full. The pool does not grow on demand because HikariCP cannot be relied on to grow it under a
+   * burst. A pool below its maximum opens one connection per borrower that finds no idle one, and
+   * decides whether to ask for it from a count of waiting borrowers each one read when it arrived,
+   * against the connection requests already queued; when the borrowers of a burst ask in another
+   * order than they arrived, the pool asks for fewer connections than they wait for. The borrower
+   * left over gets a connection only when a command returns one, or when the pool's housekeeping,
+   * every 30 seconds, tops the idle connections up to the minimum; if every other command holds its
+   * lock for longer than the 10-second connection timeout, it fails with a {@code LockException}
+   * while the pool is below its maximum. A pool that keeps its maximum open never grows: it
+   * replaces a connection it retires by its idle count, which this race does not touch. For fewer
+   * connections at rest, build the pool yourself and pass it to {@link
+   * #withDedicatedPool(DataSource)}; a HikariCP pool then needs a {@code minimumIdle} of at least
+   * the commands a replica runs at once, since a larger {@code maximumPoolSize} alone does not keep
+   * a burst that the pool grows for out of the race.
    *
    * @param jdbcUrl the JDBC URL of the same database the event store uses (required)
    * @param username the database username (may be null if encoded in the URL)
@@ -250,9 +257,10 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
       config.setPassword(password);
     }
     config.setMaximumPoolSize(maxPoolSize);
-    // Idle, the pool holds a couple of connections, not its maximum: every replica holds its lock
-    // pool's idle connections of PostgreSQL's max_connections whether it writes or not.
-    config.setMinimumIdle(Math.min(DEDICATED_POOL_MINIMUM_IDLE, maxPoolSize));
+    // Fixed size: a HikariCP pool that grows on demand can open fewer connections than a burst of
+    // borrowers waits for (see the method's javadoc), and a command that waits for the missing
+    // one fails after the connection timeout below while the pool is under its maximum.
+    config.setMinimumIdle(maxPoolSize);
     config.setPoolName("streamrune-advisory-lock");
     // Fail fast instead of queueing forever if the dedicated pool is itself exhausted.
     config.setConnectionTimeout(10_000);
