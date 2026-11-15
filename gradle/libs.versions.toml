@@ -34,7 +34,7 @@ cron-utils = "9.2.1"
 
 # Validation
 jakarta-validation = "3.0.2"
-hibernate-validator = "8.0.1.Final"
+hibernate-validator = "9.1.6.Final"
 jakarta-el = "4.0.2"
 
 # Messaging
