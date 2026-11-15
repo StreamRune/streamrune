@@ -245,7 +245,7 @@ abstract class SagaRunnerHoldTest {
   }
 
   @Test
-  void poisonOnAnExistingRow_shieldThenEntryThenFault_recordsThePreFaultStatus() {
+  void poisonOnAnExistingRow_entryAndShieldThenFault_recordsThePreFaultStatus() {
     inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
     orchestrator.poisonCorrelated = true;
     var runner = runner();
@@ -564,38 +564,56 @@ abstract class SagaRunnerHoldTest {
   }
 
   /**
-   * The correlated-path analogue of the start-handle poison on an ACTIVE row (the start-handle
-   * poison proper — a START-path {@code handle} poison over the genesis-pending row — is {@code
-   * startHandlePoison_crashAfterTheShield_beforeTheEntry_rerunConverges} below).
+   * The poison handler writes no shield before its entry: the entry and the shield are one write. A
+   * process that stops before that write leaves the row as it was — not shielded, no entry — so the
+   * redelivery runs the event again, meets the poison again and ends where an uninterrupted
+   * delivery ends.
    */
   @Test
-  void correlatedPoison_crashAfterTheShield_beforeTheEntry_rerunConverges() {
+  void correlatedPoison_crashBeforeTheEntry_leavesNothing_andTheRedeliveryFaultsTheSaga() {
     inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
     orchestrator.poisonCorrelated = true;
-    store.crashOnceAfter("setDeadLetterPending");
-    var runner = runner();
+    var crashBeforeTheEntry =
+        new ForwardingSagaDeadLetterStore(dlq) {
+          private boolean crashed;
+
+          @Override
+          public void publishShielded(SagaDeadLetterEntry entry) {
+            if (!crashed) {
+              crashed = true;
+              throw new ForwardingSagaStore.SimulatedCrash("nothing: before the entry");
+            }
+            super.publishShielded(entry);
+          }
+        };
+    var runner =
+        SagaRunner.<StartState>builder()
+            .orchestrator(orchestrator)
+            .sagaStore(store)
+            .commandBus(bus)
+            .sagaDeadLetterStore(crashBeforeTheEntry)
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
+            .build();
 
     Throwable crash = catchThrowable(() -> deliver(runner, correlatedEvent(5L)));
     assertThat(crash).isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
-    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().deadLetterPending())
-        .isTrue();
-    assertThat(entries()).as("shield without entry: harmless").isEmpty();
+    var afterCrash = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(afterCrash.status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(afterCrash.deadLetterPending()).as("no shield without its entry").isFalse();
+    assertThat(entries()).isEmpty();
+    assertThat(store.calls()).doesNotContain("setDeadLetterPending");
 
-    deliver(runner, correlatedEvent(5L)); // redelivery: the shield holds it, nothing is re-run
-    var heldRow = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
-    assertThat(heldRow.status()).isEqualTo(SagaStatus.RUNNING);
-    assertThat(entries())
-        .singleElement()
-        .satisfies(e -> assertThat(e.errorMessage()).contains("BACKLOG_PENDING"));
-
-    // the drain is the convergence path: the replay feed meets the poison and records
-    // it
-    assertThat(runner.feedReplay(sagaId, correlatedEvent(5L), false, /* operatorForced= */ false))
-        .isEqualTo(StepOutcome.FAULTED);
+    deliver(runner, correlatedEvent(5L)); // the redelivery runs the event again
     var row = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
     assertThat(row.status()).isEqualTo(SagaStatus.FAULTED);
     assertThat(row.preFaultStatus()).isEqualTo(SagaStatus.RUNNING);
-    assertThat(entries()).as("the upsert refreshed the held entry; no second record").hasSize(1);
+    assertThat(row.deadLetterPending()).isTrue();
+    assertThat(entries())
+        .singleElement()
+        .satisfies(e -> assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName()));
+    assertThat(row.version()).as("one fault write").isEqualTo(2L);
   }
 
   @Test
@@ -687,9 +705,10 @@ abstract class SagaRunnerHoldTest {
   // ===== reload, and the still-poison refresh of an already-FAULTED row.
 
   /**
-   * Crash point (a): crash after {@code publish}, before {@code markFaulted} (row present). The
-   * rerun's live redelivery is held behind the shield, and the hold keeps the poison's own entry:
-   * its error type and message survive the redelivery. The drain then converges on the fault.
+   * Crash point (a): crash after {@code publish}, before {@code markFaulted} (row present). The row
+   * is shielded and carries the poison's own entry. The redelivery is held behind the shield, keeps
+   * that entry and makes the fault write: the rerun ends {@code FAULTED} with the poison's own
+   * cause, as an uninterrupted delivery does.
    */
   @Test
   void poisonOnAnExistingRow_crashAfterTheEntry_beforeTheFault_rerunConverges() {
@@ -720,9 +739,11 @@ abstract class SagaRunnerHoldTest {
         .singleElement()
         .satisfies(e -> assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName()));
 
-    deliver(runner, correlatedEvent(5L)); // rerun: the shield holds the redelivery
-    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().status())
-        .isEqualTo(SagaStatus.RUNNING);
+    deliver(runner, correlatedEvent(5L)); // rerun: held behind the shield, completes the fault
+    var row = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(row.status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(row.preFaultStatus()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(row.version()).isEqualTo(2L);
     assertThat(entries())
         .singleElement()
         .satisfies(
@@ -733,16 +754,59 @@ abstract class SagaRunnerHoldTest {
               assertThat(e.errorMessage()).isEqualTo("simulated poison");
             });
     assertThat(held).as("a redelivery of a recorded event is not a new hold").isEmpty();
+    assertThat(faulted.get()).isEqualTo(1);
 
-    assertThat(runner.feedReplay(sagaId, correlatedEvent(5L), false, /* operatorForced= */ false))
-        .isEqualTo(StepOutcome.FAULTED);
-    var drained = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
-    assertThat(drained.status()).isEqualTo(SagaStatus.FAULTED);
-    assertThat(drained.preFaultStatus()).isEqualTo(SagaStatus.RUNNING);
+    deliver(runner, correlatedEvent(5L)); // and again: the FAULTED row keeps the entry
+    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().version()).isEqualTo(2L);
     assertThat(entries())
         .singleElement()
         .satisfies(e -> assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName()));
     assertThat(faulted.get()).isEqualTo(1);
+  }
+
+  /**
+   * An entry a hold wrote over a shielded live row is an event held before: its redelivery keeps it
+   * held and never faults the saga.
+   */
+  @Test
+  void heldEntryOverAShieldedLiveRow_redelivered_staysHeld_neverFaultsTheSaga() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    inner.setDeadLetterPending(sagaId, TYPE, true);
+    var runner = runner();
+    deliver(runner, correlatedEvent(5L));
+    deliver(runner, correlatedEvent(5L));
+    var row = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(row.status()).isEqualTo(SagaStatus.RUNNING);
+    assertThat(row.version()).isEqualTo(1L);
+    assertThat(faulted.get()).isZero();
+  }
+
+  /**
+   * Another saga type's poison entry under the same saga id at the event's offset is not this
+   * saga's poison: the redelivery records this type's hold and faults nothing.
+   */
+  @Test
+  void anotherTypesPoisonEntryAtTheOffset_isNotThisSagasPoison_theEventIsHeld() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    inner.setDeadLetterPending(sagaId, TYPE, true);
+    dlq.publish(
+        new SagaDeadLetterEntry(
+            sagaId,
+            SagaType.of("Other"),
+            GlobalOffset.of(5L),
+            EventType.of("Advance"),
+            IllegalStateException.class.getName(),
+            "the other type's poison",
+            Instant.parse("2026-01-01T00:00:00Z")));
+    var runner = runner();
+    deliver(runner, correlatedEvent(5L));
+    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().status())
+        .isEqualTo(SagaStatus.RUNNING);
+    assertThat(entries())
+        .singleElement()
+        .satisfies(
+            e -> assertThat(e.errorType()).isEqualTo(SagaEventHeldException.class.getName()));
+    assertThat(faulted.get()).isZero();
   }
 
   /**
@@ -796,19 +860,52 @@ abstract class SagaRunnerHoldTest {
   }
 
   /**
-   * Start-handle poison: a START-path {@code handle} poison over the genesis-pending row, crashing
-   * after the shield and before the entry. The row is genesis-pending and shielded with no entry: a
-   * correlated event delivered now is held GENESIS_PENDING (the genesis rule precedes the backlog
-   * rule); the start's redelivery re-drives the genesis through the executor, meets the poison
-   * again and faults the row with {@code pre_fault_status = NULL} — a genesis-pending forward fault
-   * has nothing to resume (a replay re-evolves from {@code initialState}); both stores record NULL
-   * for it.
+   * Start-handle poison: a START-path {@code handle} poison over the genesis-pending row, with the
+   * process stopping before the entry write. The poison handler writes no shield before its entry,
+   * so the row is left genesis-pending and unshielded with no entry: a correlated event delivered
+   * now is held GENESIS_PENDING; the start's redelivery re-drives the genesis through the executor,
+   * meets the poison again and faults the row with {@code pre_fault_status = NULL} — a
+   * genesis-pending forward fault has nothing to resume (a replay re-evolves from {@code
+   * initialState}); both stores record NULL for it.
    */
   @Test
-  void startHandlePoison_crashAfterTheShield_beforeTheEntry_rerunConverges() {
+  void startHandlePoison_crashBeforeTheEntry_rerunConverges() {
     orchestrator.poisonStartHandle = true;
-    store.crashOnceAfter("setDeadLetterPending");
-    var runner = runner();
+    var crashBeforeTheEntry =
+        new ForwardingSagaDeadLetterStore(dlq) {
+          private boolean crashed;
+
+          @Override
+          public void publishShielded(SagaDeadLetterEntry entry) {
+            if (!crashed) {
+              crashed = true;
+              throw new ForwardingSagaStore.SimulatedCrash("nothing: before the entry");
+            }
+            super.publishShielded(entry);
+          }
+        };
+    var runner =
+        SagaRunner.<StartState>builder()
+            .orchestrator(orchestrator)
+            .sagaStore(store)
+            .commandBus(bus)
+            .sagaDeadLetterStore(crashBeforeTheEntry)
+            .metrics(
+                new StreamRuneMetrics() {
+                  @Override
+                  public void recordSagaEventHeld(String sagaType, String reason) {
+                    held.computeIfAbsent(reason, r -> new AtomicInteger()).incrementAndGet();
+                  }
+
+                  @Override
+                  public void recordSagaFaulted(String sagaType) {
+                    faulted.incrementAndGet();
+                  }
+                })
+            // The bus is a test double that stores nothing; the fence is tested in
+            // SagaForwardFence*Test.
+            .forwardFence(false)
+            .build();
 
     Throwable crash = catchThrowable(() -> deliver(runner, startEvent(3L)));
     assertThat(crash).isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
@@ -816,14 +913,12 @@ abstract class SagaRunnerHoldTest {
     assertThat(afterCrash.status()).isEqualTo(SagaStatus.RUNNING);
     assertThat(afterCrash.version()).isEqualTo(1L);
     assertThat(afterCrash.genesisApplied()).isFalse();
-    assertThat(afterCrash.deadLetterPending()).isTrue();
-    assertThat(entries()).as("shield without entry").isEmpty();
+    assertThat(afterCrash.deadLetterPending()).as("no shield without its entry").isFalse();
+    assertThat(entries()).isEmpty();
     assertThat(bus.count("step-1")).as("handle threw before any dispatch").isZero();
 
     deliver(runner, correlatedEvent(5L)); // in the window
-    assertThat(held.get("GENESIS_PENDING").get())
-        .as("the genesis rule precedes the backlog rule")
-        .isEqualTo(1);
+    assertThat(held.get("GENESIS_PENDING").get()).isEqualTo(1);
     assertThat(held.containsKey("BACKLOG_PENDING")).isFalse();
     assertThat(orchestrator.consumedCorrelatedOffsets).isEmpty();
 

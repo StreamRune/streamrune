@@ -86,7 +86,9 @@ import org.streamrune.core.types.SubscriptionName;
  *             last_applied_offset} dedups its redelivery forever.
  *         <li>shielded ({@code dead_letter_pending = true}) — held with {@link
  *             SagaEventHeldException.HoldReason#BACKLOG_PENDING}: the saga owns older quarantined
- *             entries that must drain first.
+ *             entries that must drain first. An event already recorded keeps its entry; when that
+ *             entry is the event's own poison, whose fault write did not land, the delivery makes
+ *             the fault write ({@link #completeInterruptedFault}).
  *         <li>otherwise — applied by the executor as a live {@code ForwardStep}; the executor's own
  *             redelivery check ({@code SagaStepExecutor.isRedelivery}) stays as defence in depth
  *             for adapters that drive it directly.
@@ -104,20 +106,29 @@ import org.streamrune.core.types.SubscriptionName;
  * fault time — the event payload is never serialized or copied, so GDPR crypto-shredding stays
  * authoritative in the event store; inspect the event by reading {@code event_stream} at the
  * entry's {@code eventOffset}) and faults the saga, in one fixed order on every event path: row
- * present → shield → entry → {@link SagaStore#markFaulted} (the only fault write; no state write,
- * it records {@code pre_fault_status}); row absent and {@code initialState} succeeds → entry →
- * {@link SagaStore#createFaulted} (so no FAULTED row can ever exist without its entry); row absent
- * and {@code initialState} throws → entry only (the documented row-less residual). A fault write
- * that conflicts is retried once on a reload and otherwise left with a WARNING — the entry and the
+ * present → entry and shield as one write ({@link SagaDeadLetterStore#publishShielded}) → {@link
+ * SagaStore#markFaulted} (the only fault write; no state write, it records {@code
+ * pre_fault_status}); row absent and {@code initialState} succeeds → entry → {@link
+ * SagaStore#createFaulted} (so no FAULTED row can ever exist without its entry); row absent and
+ * {@code initialState} throws → entry only (the documented row-less residual). A fault write that
+ * conflicts is retried once on a reload and otherwise left with a WARNING — the entry and the
  * shield ARE recorded, so live events are held and the next drain re-evaluates the saga. Processing
  * continues with the next event in the batch — no head-of-line blocking. {@link
  * SagaDeadLetterStore} is a <em>required</em> {@link Builder} field; {@link Builder#build()} throws
  * {@link NullPointerException} when it is absent. Infrastructure failures ({@link SagaStore}
  * load/create/update/CAS) are NOT caught; they propagate out of {@code onEvents} so the
  * subscription can retry — every write here is a single durable statement, and every crash point
- * between two of them converges on the rerun. The one such failure that is not propagated at once
- * is a lost compare-and-swap of the step's own saga-row write: the step is run again in place first
- * (see <b>Concurrency</b>).
+ * between two of them converges on the rerun. For a correlated poison on a live row: a crash before
+ * the entry write leaves nothing, and the redelivery runs the event again, meets the poison again
+ * and records it; a crash between the entry write and the fault write leaves the row shielded with
+ * the poison's own entry, and the redelivery, held behind the shield, finds that entry and makes
+ * the fault write ({@link #completeInterruptedFault}); a crash after the fault write leaves the row
+ * {@code FAULTED}, and the redelivery keeps the entry ({@link #recordHold}). Each rerun ends with
+ * the row {@code FAULTED} and the poison's own entry, as a run that is not interrupted does. The
+ * poison handler writes no shield before its entry: a shield without an entry would turn the
+ * redelivery into a hold behind a backlog that does not exist. The one such failure that is not
+ * propagated at once is a lost compare-and-swap of the step's own saga-row write: the step is run
+ * again in place first (see <b>Concurrency</b>).
  *
  * <p><b>State-conversion failures are the one exception.</b> A {@link
  * SagaStateSerializationException} means the store could not convert the state to or from its
@@ -860,8 +871,11 @@ public final class SagaRunner<S extends SagaState> {
       return DEFERRED;
     }
     if (row.deadLetterPending()) {
-      hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING);
-      return DEFERRED;
+      if (hold(sagaId, event, SagaEventHeldException.HoldReason.BACKLOG_PENDING)
+          || !completeInterruptedFault(sagaId, event, row)) {
+        return DEFERRED;
+      }
+      return FAULTED;
     }
     StepOutcome outcome =
         executor.execute(sagaId, existing, new SagaTrigger.ForwardStep(event, false, false));
@@ -916,12 +930,14 @@ public final class SagaRunner<S extends SagaState> {
    * the entry from its shield); on an absent row ({@code BEFORE_START}) both shield writes are the
    * stores' documented no-op. The entry is written only when the saga has none of this type at the
    * event's offset ({@link #recordHold}), so a redelivery storm converges on one record, the first.
+   * Returns whether the entry was written: {@code false} for an event already recorded.
    */
-  private void hold(SagaId sagaId, EventEnvelope event, SagaEventHeldException.HoldReason reason) {
+  private boolean hold(
+      SagaId sagaId, EventEnvelope event, SagaEventHeldException.HoldReason reason) {
     sagaStore.setDeadLetterPending(sagaId, SagaType.fromClass(orchestrator.stateType()), true);
     if (!recordHold(
         sagaId, event, new SagaEventHeldException(sagaId, event.globalOffset(), reason))) {
-      return;
+      return false;
     }
     recordMetric(
         () -> metrics.recordSagaEventHeld(sagaTypeTag(), reason.name()), "recordSagaEventHeld");
@@ -932,6 +948,47 @@ public final class SagaRunner<S extends SagaState> {
         event.globalOffset().value(),
         LogSanitizer.sanitizeForLog(sagaId.value()),
         reason);
+    return true;
+  }
+
+  /**
+   * The redelivery of a correlated event over a shielded live row found the event already recorded.
+   * When its entry is the event's own poison — written by {@link #recordPoison}, whose fault write
+   * did not land after it (the process stopped between the two writes, or the fault write lost its
+   * compare-and-swap twice) — this delivery makes the fault write, so the saga ends {@code FAULTED}
+   * with the poison's own entry, where a run that is not interrupted ends. An entry a hold wrote is
+   * an event held before, which stays held. A poison entry over a live row whose event is not
+   * applied exists only there: the drain discards an entry once its feed applied the event, and an
+   * applied event is skipped before any hold. Returns whether the event was the saga's recorded
+   * poison.
+   */
+  private boolean completeInterruptedFault(SagaId sagaId, EventEnvelope event, LoadedSaga<S> row) {
+    SagaType type = SagaType.fromClass(orchestrator.stateType());
+    boolean recordedPoison = false;
+    for (SagaDeadLetterStore.SagaDeadLetterEntry entry : sagaDeadLetterStore.findBySaga(sagaId)) {
+      if (type.equals(entry.sagaType())
+          && entry.eventOffset().value() == event.globalOffset().value()
+          && !isHoldRecord(entry)) {
+        recordedPoison = true;
+        break;
+      }
+    }
+    if (!recordedPoison) {
+      return false;
+    }
+    LOG.warn(
+        "Correlated event at offset {} is the recorded poison event of saga {}, which was not"
+            + " marked FAULTED when the poison was recorded; the redelivery makes the fault write",
+        event.globalOffset().value(),
+        LogSanitizer.sanitizeForLog(sagaId.value()));
+    faultExistingRow(sagaId, type, row.version());
+    return true;
+  }
+
+  /** Whether {@code entry} was written by a hold rather than by the poison handler. */
+  private static boolean isHoldRecord(SagaDeadLetterStore.SagaDeadLetterEntry entry) {
+    return SagaEventHeldException.class.getName().equals(entry.errorType())
+        || SagaSkippedWhileFaultedException.class.getName().equals(entry.errorType());
   }
 
   /**
@@ -968,8 +1025,8 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * The single poison handler: row present → shield, entry, {@code markFaulted}; row absent and
-   * {@code initialState} succeeds → entry, {@code createFaulted}; row absent and {@code
+   * The single poison handler: row present → entry and shield (one write), {@code markFaulted}; row
+   * absent and {@code initialState} succeeds → entry, {@code createFaulted}; row absent and {@code
    * initialState} throws → entry only (the documented residual). A deterministic conversion failure
    * on the load leaves the entry and the shield recorded and skips the fault write, exactly as it
    * always did. Package-private: {@link #feedReplay} and the live listener are its two callers.
@@ -992,7 +1049,6 @@ public final class SagaRunner<S extends SagaState> {
       row = Optional.empty();
       rowUnreadable = true;
     }
-    sagaStore.setDeadLetterPending(sagaId, type, true);
     quarantine(sagaId, event, cause);
     if (rowUnreadable) {
       return;
@@ -1304,16 +1360,15 @@ public final class SagaRunner<S extends SagaState> {
   private void quarantine(SagaId sagaId, EventEnvelope event, Throwable cause) {
     var entry = entryOf(sagaId, event, cause);
     if (sagaId != null) {
-      // Every named publish is preceded by a
-      // shield write (T) in its caller, and the drain's conditional clear (C) may legitimately
-      // land between T and this publish (it sees no entry yet). The entry and the shield are
-      // therefore written as ONE durable write at the store: a separate re-assert after the
-      // publish closed the race but left a crash window (entry recorded, shield FALSE) in which
-      // the redelivery was applied live and the entry became a duplicate the next drain evolved
-      // again. Now a crash before this write leaves T alone (shield without entry, the
-      // redelivery is re-held) and a crash after it leaves entry + shield together (the
-      // redelivery is held behind its own entry). Absent row: the entry is recorded and the
-      // shield write is the documented no-op.
+      // The poison's entry and the owner's shield are ONE durable write at the store, and no
+      // shield is written before it: a crash before this write leaves nothing (the redelivery runs
+      // the event again and meets the poison again), a crash after it leaves the entry and the
+      // shield together (the redelivery is held behind its own entry and completes the fault
+      // write). A shield written on its own first would leave a shield without an entry after a
+      // crash, and the redelivery would be held behind a backlog that does not exist instead of
+      // running again. An entry recorded with its shield is never left unshielded either, which
+      // a drain's conditional clear relies on. Absent row: the entry is recorded and the shield
+      // write is the documented no-op.
       sagaDeadLetterStore.publishShielded(entry);
     } else {
       sagaDeadLetterStore.publish(entry);

@@ -66,7 +66,7 @@ sequenceDiagram
         Runner-->>Bus: execute(compensationCommand, idempotencyKey)
         Runner->>Store: update(sagaId, state, COMPENSATED/FAILED, expectedVersion)
     else orchestrator method throws (poison)
-        Runner->>Store: shield + sagaDeadLetterStore.publishShielded(entry)
+        Runner->>Store: sagaDeadLetterStore.publishShielded(entry) — the entry and the shield, one write
         Runner->>Store: markFaulted(sagaId, expectedVersion) (createFaulted if no row)
     end
 ```
@@ -315,7 +315,7 @@ A correlated event for a known saga that cannot consume it yet is **held**: reco
 4. **Terminal** (`COMPLETED`/`COMPENSATED`/`FAILED`): dropped silently — the saga is done and can never consume it.
 5. **`COMPENSATING`:** the claimed episode is resumed; the event itself is never consumed, so ordering cannot be violated.
 6. **Genesis pending** (`genesis_applied = FALSE`): held as `GENESIS_PENDING`.
-7. **Shielded** (`dead_letter_pending = TRUE`): held as `BACKLOG_PENDING`.
+7. **Shielded** (`dead_letter_pending = TRUE`): held as `BACKLOG_PENDING`. When the event is the saga's own recorded poison whose fault write did not land (the process stopped in between), the delivery makes the fault write — see [Failure model](#failure-model-poison-events-and-faulted).
 8. Otherwise the event is applied.
 
 | Hold reason | Why the event cannot be consumed yet |
@@ -345,6 +345,14 @@ Exceptions thrown by `isStartEvent`, `correlateByEventData`, `extractSagaId`, `i
 1. The triggering event is quarantined into `SagaDeadLetterStore` — **metadata only** (saga id/type, event offset/type, exception class name and message, fault timestamp). The event payload is never copied there; `event_stream` stays the framework's single crypto-governed, shreddable source of truth for GDPR purposes. To inspect the offending event, read the event store at the entry's `eventOffset`.
 2. The saga is marked `FAULTED` — the row records the status the fault replaced (`pre_fault_status`) — and stops processing: it leaves the timeout sweeps, and its later correlated events are held behind the fault (recorded, not processed — see [Held events](#held-events)).
 3. The runner moves on to the next event in the batch — a poison event does not block the subscription (no head-of-line blocking) and does not retry.
+
+The entry and the shield are one durable write, and the fault write follows it; no shield is written on its own before the entry. A process that stops in between leaves a state the redelivery of the page completes, so every crash ends where an uninterrupted run ends — the row `FAULTED` and the entry carrying the poison's own exception class name and message:
+
+| The process stops | What is left | What the redelivery does |
+|---|---|---|
+| before the entry write | nothing | runs the event again, meets the poison again and records it |
+| after the entry write, before the fault write | the entry, the row shielded and not `FAULTED` | holds the event behind the shield, finds the poison's own entry and makes the fault write |
+| after the fault write | the entry, the row `FAULTED` | meets the `FAULTED` row and keeps the entry; it writes nothing |
 
 A **`null` return** from `extractSagaId` or `correlateByEventData` is classified exactly the same way. Both are contract violations — `extractSagaId` has no "ignore" signal (`isStartEvent` already claimed the event), and `correlateByEventData`'s one and only "not mine" signal is `Optional.empty()`, never a bare `null` — and both are ordinary user bugs (a metadata lookup that comes back `null` on a malformed producer event). The runner null-checks the router outputs inside the poison classification, so the violation is quarantined as a *null-saga* entry and the batch continues; without that check the `null` flowed downstream and the resulting failure (an NPE laundered into an infrastructure-classified store exception, or thrown outside the poison wrapper entirely) was retried forever — a permanently wedged saga subscription.
 

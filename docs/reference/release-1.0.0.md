@@ -818,8 +818,10 @@ license.
 - Failure model: an exception (or a `null` router result) from `isStartEvent`,
   `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle` or `compensate` is poison — the event is
   quarantined in the `SagaDeadLetterStore` as metadata only (never the payload), the saga is marked
-  `FAULTED` with its `pre_fault_status`, and the batch continues. Store and dead-letter-store
-  infrastructure failures propagate and the batch is retried.
+  `FAULTED` with its `pre_fault_status`, and the batch continues. The entry and the shield are one
+  write and the fault write follows it, so a process that stops between them leaves a state the
+  redelivery completes: the saga ends `FAULTED` with the poison's own entry. Store and
+  dead-letter-store infrastructure failures propagate and the batch is retried.
 - Held events: a correlated event its saga cannot consume yet is recorded under the saga, never
   dropped, and drained oldest-first by `replayAll`. A hold never replaces an entry already recorded
   at the event's offset (`SagaDeadLetterStore.publishShieldedIfAbsent`), so a poison event whose
