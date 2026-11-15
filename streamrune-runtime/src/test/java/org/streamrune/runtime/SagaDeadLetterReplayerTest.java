@@ -597,7 +597,8 @@ class SagaDeadLetterReplayerTest {
    * dedup-skipped by the runner, never held, so the drain after the fix feeds only the second event
    * and the first evolves exactly once. The replay feed's exact-match rule cannot catch this (a
    * deferred older entry must still feed), so the live guard is the only place the redelivery check
-   * can hold ahead of the FAULTED hold.
+   * can hold ahead of the FAULTED hold. The second event's redelivery meets the row its own poison
+   * faulted: its entry already exists, so the entry keeps the poison's own cause.
    */
   @Test
   void
@@ -618,6 +619,14 @@ class SagaDeadLetterReplayerTest {
         .as("the first event was applied: its redelivery is moot and records nothing")
         .extracting(e -> e.eventOffset().value())
         .containsExactly(h.offset(c2));
+    assertThat(h.entries())
+        .as("the redelivered poison keeps its own cause on its entry")
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("evolve poison at " + h.offset(c2));
+            });
     h.orchestrator.evolvePoison.clear(); // the operator ships the fix
 
     assertThat(h.replayer.replayAll(SAGA)).containsExactly(ReplayOutcome.REPLAYED);

@@ -82,6 +82,19 @@ class ForwardingSagaDeadLetterStore implements SagaDeadLetterStore {
     wrote("publish");
   }
 
+  /**
+   * Delegates; reports the seam as {@code "publish"} only when the entry was written — a hold that
+   * kept the stored entry committed no entry.
+   */
+  @Override
+  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+    boolean written = delegate.publishShieldedIfAbsent(entry);
+    if (written) {
+      wrote("publish");
+    }
+    return written;
+  }
+
   @Override
   public List<SagaDeadLetterEntry> findAll(int limit) {
     return delegate.findAll(limit);

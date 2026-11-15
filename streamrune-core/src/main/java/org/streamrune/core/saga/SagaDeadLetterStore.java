@@ -119,6 +119,36 @@ public interface SagaDeadLetterStore {
   void publishShielded(SagaDeadLetterEntry entry);
 
   /**
+   * {@link #publishShielded} for a HOLD, which never replaces an entry already recorded: when an
+   * entry of {@code entry.sagaType()} is stored at {@code (entry.sagaId(), entry.eventOffset())},
+   * it is kept exactly as stored — its error type, error message, {@code faultedAt} and every other
+   * column — and only the owner's shield is asserted; otherwise the entry is written exactly as
+   * {@link #publishShielded} writes it. Either way the decision and the shield are ONE durable
+   * write, as in {@link #publishShielded}, and an absent owner row leaves the shield write a no-op.
+   *
+   * <p><b>Why a hold must not refresh (normative for implementations).</b> The runner holds a
+   * correlated event it cannot consume yet (the saga is {@code FAULTED}, shielded, genesis-pending
+   * or has no row) and records it here. An entry already stored at that key records the same event:
+   * delivered before and held, or — the case that matters — the saga's own poison event, whose page
+   * is delivered again after the poison was recorded and now meets the saga that poison faulted. A
+   * refreshing upsert would replace the poison's exception class name and message, the only durable
+   * record of the cause, with the hold's, and the entry would then claim that the original poison
+   * event was "delivered while the saga is FAULTED". The poison path keeps {@link #publishShielded}
+   * and its refresh: a still-poison replay records the newest real failure.
+   *
+   * <p>The named key is {@code (sagaId, eventOffset)}, saga type not included, as for {@link
+   * #publish}. An entry of ANOTHER saga type stored at that key is not an entry of this hold's type
+   * and is replaced exactly as {@link #publish} would replace it — no store keeps two named entries
+   * at one key.
+   *
+   * @param entry the hold's entry; {@code sagaId} is required
+   * @return {@code true} iff this call wrote the entry; {@code false} if an entry of the same saga
+   *     type was already stored at the key and was kept
+   * @throws IllegalArgumentException if {@code entry} or its saga id is null
+   */
+  boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry);
+
+  /**
    * Returns the most recently faulted entries across all sagas, up to {@code limit}.
    *
    * @param limit maximum number of entries to return

@@ -59,6 +59,11 @@ class SagaDeadLetterRetentionSweeperTest {
       }
 
       @Override
+      public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+        throw new UnsupportedOperationException("publishShieldedIfAbsent");
+      }
+
+      @Override
       public void establishFirstReplayAnchor(
           SagaId sagaId,
           org.streamrune.core.types.SagaType sagaType,
@@ -163,6 +168,11 @@ class SagaDeadLetterRetentionSweeperTest {
           @Override
           public void publishShielded(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShielded");
+          }
+
+          @Override
+          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+            throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 
           @Override
@@ -293,6 +303,11 @@ class SagaDeadLetterRetentionSweeperTest {
           @Override
           public void publishShielded(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShielded");
+          }
+
+          @Override
+          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+            throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 
           @Override
@@ -530,6 +545,11 @@ class SagaDeadLetterRetentionSweeperTest {
           @Override
           public void publishShielded(SagaDeadLetterEntry entry) {
             throw new UnsupportedOperationException("publishShielded");
+          }
+
+          @Override
+          public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+            throw new UnsupportedOperationException("publishShieldedIfAbsent");
           }
 
           @Override

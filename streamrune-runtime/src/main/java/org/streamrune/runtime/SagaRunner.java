@@ -910,16 +910,19 @@ public final class SagaRunner<S extends SagaState> {
   /**
    * {@code hold(reason)}: shield → entry+shield (one write) → metric → WARNING. The shield is
    * written first (it may be TRUE without an entry after a crash in between, never the reverse) and
-   * written AGAIN, atomically with the entry, by {@link #quarantine} through {@link
-   * SagaDeadLetterStore#publishShielded} (a drain's conditional clear that observed an empty
-   * backlog between the two must not leave the entry unshielded, and no crash may separate the
-   * entry from its shield); on an absent row ({@code BEFORE_START}) both shield writes are the
-   * stores' documented no-op. {@code publish} is an upsert on (saga, offset), so a redelivery storm
-   * converges on one record.
+   * written AGAIN, atomically with the entry, by {@link #recordHold} through {@link
+   * SagaDeadLetterStore#publishShieldedIfAbsent} (a drain's conditional clear that observed an
+   * empty backlog between the two must not leave the entry unshielded, and no crash may separate
+   * the entry from its shield); on an absent row ({@code BEFORE_START}) both shield writes are the
+   * stores' documented no-op. The entry is written only when the saga has none of this type at the
+   * event's offset ({@link #recordHold}), so a redelivery storm converges on one record, the first.
    */
   private void hold(SagaId sagaId, EventEnvelope event, SagaEventHeldException.HoldReason reason) {
     sagaStore.setDeadLetterPending(sagaId, SagaType.fromClass(orchestrator.stateType()), true);
-    quarantine(sagaId, event, new SagaEventHeldException(sagaId, event.globalOffset(), reason));
+    if (!recordHold(
+        sagaId, event, new SagaEventHeldException(sagaId, event.globalOffset(), reason))) {
+      return;
+    }
     recordMetric(
         () -> metrics.recordSagaEventHeld(sagaTypeTag(), reason.name()), "recordSagaEventHeld");
     LOG.warn(
@@ -940,10 +943,19 @@ public final class SagaRunner<S extends SagaState> {
    * MetricNames#SAGA_SKIPPED_WHILE_FAULTED}). The saga row is NOT faulted again (it already is),
    * only shielded — the row's own recorded {@link LoadedSaga#preFaultStatus()} is what the executor
    * resumes from on replay; the entry carries no transitional copy.
+   *
+   * <p>The page that carried the poison itself is delivered again whenever the subscription retries
+   * it after the poison was recorded (a retry-later failure later in the page, a crash before the
+   * checkpoint, a handover): the poison event then meets the FAULTED row it faulted. Its entry is
+   * already recorded, so {@link #recordHold} keeps it — the poison's own exception class name and
+   * message — and this delivery writes and counts nothing.
    */
   private void holdWhileFaulted(SagaId sagaId, EventEnvelope event) {
     sagaStore.setDeadLetterPending(sagaId, SagaType.fromClass(orchestrator.stateType()), true);
-    quarantine(sagaId, event, new SagaSkippedWhileFaultedException(sagaId, event.globalOffset()));
+    if (!recordHold(
+        sagaId, event, new SagaSkippedWhileFaultedException(sagaId, event.globalOffset()))) {
+      return;
+    }
     recordMetric(
         () -> metrics.recordSagaSkippedWhileFaulted(sagaTypeTag()),
         "recordSagaSkippedWhileFaulted");
@@ -1278,8 +1290,9 @@ public final class SagaRunner<S extends SagaState> {
    * read the event store at {@link EventEnvelope#globalOffset()}. {@code faultedAt} is the
    * builder's clock, never {@code Instant.now()}: the replayer tests advance a {@code MutableClock}
    * to prove a still-poison feed refreshed the entry. {@code publish} is an upsert on (saga,
-   * offset) — a hold, a redelivery, a crash rerun and a still-poison replay all converge on ONE
-   * record per event, with the stored first-fault instant, replay anchor and target preserved.
+   * offset) — a crash rerun and a still-poison replay converge on ONE record per event, refreshed
+   * with the newest real failure, with the stored first-fault instant, replay anchor and target
+   * preserved. A hold does not come through here: {@link #recordHold} never replaces an entry.
    *
    * <p><b>The saga type is ALWAYS stamped — even when {@code sagaId} is null.</b> The quarantining
    * runner's type is well-defined regardless of whether the saga id could be resolved (it is the
@@ -1289,17 +1302,7 @@ public final class SagaRunner<S extends SagaState> {
    * can never match — and delete — the other type's only record that the event was never consumed.
    */
   private void quarantine(SagaId sagaId, EventEnvelope event, Throwable cause) {
-    var entry =
-        new SagaDeadLetterStore.SagaDeadLetterEntry(
-            sagaId,
-            SagaType.fromClass(orchestrator.stateType()),
-            event.globalOffset(),
-            event.eventType(),
-            cause.getClass().getName(),
-            // Persisted free text, sanitized at this sink. A pure function of the cause, so
-            // a re-quarantine of the same event (rerun, redelivery) writes the same text.
-            LogSanitizer.sanitizeFreeText(cause.getMessage()),
-            clock.instant());
+    var entry = entryOf(sagaId, event, cause);
     if (sagaId != null) {
       // Every named publish is preceded by a
       // shield write (T) in its caller, and the drain's conditional clear (C) may legitimately
@@ -1316,6 +1319,43 @@ public final class SagaRunner<S extends SagaState> {
       sagaDeadLetterStore.publish(entry);
     }
     recordMetric(() -> metrics.recordSagaQuarantined(sagaTypeTag()), "recordSagaQuarantined");
+  }
+
+  /**
+   * Records a held event: its entry and the owner's shield as one write, unless the saga already
+   * has an entry of this runner's type at the event's offset — then that entry is kept exactly as
+   * stored and only the shield is asserted ({@link SagaDeadLetterStore#publishShieldedIfAbsent}).
+   * An entry already there records this very event: an earlier hold of it, or its own poison, whose
+   * exception class name and message are the only durable record of the cause and must not be
+   * replaced by the hold's. Returns whether the entry was written; a kept entry is a redelivery,
+   * not a new hold: it is logged at DEBUG and counted in no metric.
+   */
+  private boolean recordHold(SagaId sagaId, EventEnvelope event, RuntimeException holdCause) {
+    if (!sagaDeadLetterStore.publishShieldedIfAbsent(entryOf(sagaId, event, holdCause))) {
+      LOG.debug(
+          "Correlated event at offset {} for saga {} is already recorded in the saga dead-letter"
+              + " store; the redelivery keeps that entry and writes nothing",
+          event.globalOffset().value(),
+          LogSanitizer.sanitizeForLog(sagaId.value()));
+      return false;
+    }
+    recordMetric(() -> metrics.recordSagaQuarantined(sagaTypeTag()), "recordSagaQuarantined");
+    return true;
+  }
+
+  /** The dead-letter entry for {@code event} with {@code cause}, stamped by the builder's clock. */
+  private SagaDeadLetterStore.SagaDeadLetterEntry entryOf(
+      SagaId sagaId, EventEnvelope event, Throwable cause) {
+    return new SagaDeadLetterStore.SagaDeadLetterEntry(
+        sagaId,
+        SagaType.fromClass(orchestrator.stateType()),
+        event.globalOffset(),
+        event.eventType(),
+        cause.getClass().getName(),
+        // Persisted free text, sanitized at this sink. A pure function of the cause, so a
+        // re-quarantine of the same event (rerun, redelivery) writes the same text.
+        LogSanitizer.sanitizeFreeText(cause.getMessage()),
+        clock.instant());
   }
 
   /**

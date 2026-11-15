@@ -120,6 +120,12 @@ final class SagaStartFixtures {
     /** {@code evolve} throws for {@link Advance} events while set. */
     volatile boolean poisonCorrelated;
 
+    /**
+     * {@code evolve} throws {@code IllegalStateException("poison at <offset>")} for the {@link
+     * Advance} at exactly this global offset; {@code -1} (the default) poisons none.
+     */
+    volatile long poisonCorrelatedAt = -1L;
+
     /** {@code evolve} throws for {@link StartEvent} events while set. */
     volatile boolean poisonStart;
 
@@ -161,6 +167,9 @@ final class SagaStartFixtures {
       if (event.event() instanceof Advance) {
         if (poisonCorrelated) {
           throw new RuntimeException("simulated poison");
+        }
+        if (event.globalOffset().value() == poisonCorrelatedAt) {
+          throw new IllegalStateException("poison at " + poisonCorrelatedAt);
         }
         consumedCorrelatedOffsets.add(event.globalOffset().value());
         return state;

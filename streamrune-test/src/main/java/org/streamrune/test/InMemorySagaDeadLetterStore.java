@@ -143,6 +143,31 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
   }
 
   /**
+   * {@inheritDoc}
+   *
+   * <p>Under {@link #entriesMonitor}, as {@link #publishShielded}: the entry is written unless one
+   * of the same saga type is stored at the key, then the saga store's flag is set either way.
+   */
+  @Override
+  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
+    if (entry.sagaId() == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
+    synchronized (entriesMonitor) {
+      SagaDeadLetterEntry stored = store.get(keyOf(entry));
+      boolean write = stored == null || !stored.sagaType().equals(entry.sagaType());
+      if (write) {
+        upsert(entry);
+      }
+      sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
+      return write;
+    }
+  }
+
+  /**
    * Mirrors PostgresSagaDeadLetterStore's UPSERT: a re-publish refreshes every column EXCEPT the
    * immutable first-fault instant — the stored firstFaultedAt always wins on a conflict, so a
    * failed-replay re-quarantine can never reset it. On a first insert a null input normalizes to

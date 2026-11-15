@@ -369,6 +369,94 @@ public abstract class SagaDeadLetterStoreContract {
     assertEquals(0, store.deleteOlderThan(T0.plus(Duration.ofDays(30))), "row-less: never pruned");
   }
 
+  /** A hold's entry, as the runner records a correlated event it holds. */
+  private static SagaDeadLetterEntry held(SagaId sagaId, SagaType type, long offset, Instant at) {
+    return new SagaDeadLetterEntry(
+        sagaId,
+        type,
+        GlobalOffset.of(offset),
+        EventType.of("Evt"),
+        "org.streamrune.runtime.SagaSkippedWhileFaultedException",
+        "held",
+        at);
+  }
+
+  /** A hold with no entry at its key writes its entry and shields the owner, in one call. */
+  @Test
+  public void publishShieldedIfAbsent_writesTheEntry_andShieldsTheOwner() {
+    row(A, SagaStatus.RUNNING);
+    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
+    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
+    assertEquals(1, store.findBySaga(A).size());
+    assertEquals("org.streamrune.runtime.SagaSkippedWhileFaultedException", e.errorType());
+    assertEquals(T0, e.faultedAt());
+    assertTrue(shield(A), "the owner row is shielded by the hold itself");
+  }
+
+  /**
+   * A hold never replaces an entry of its saga type already stored at its key — the poison's own
+   * cause above all: error type, message and fault instants are kept, and the shield is still
+   * asserted.
+   */
+  @Test
+  public void publishShieldedIfAbsent_keepsAStoredEntryOfTheSameType_andStillShields() {
+    row(A, SagaStatus.RUNNING);
+    store.publishShielded(entry(A, 10L, T0)); // the poison: java.lang.RuntimeException "boom"
+    sagaStore.setDeadLetterPending(A, TYPE, false);
+
+    assertFalse(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(60))));
+    assertFalse(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(120))));
+
+    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
+    assertEquals(1, store.findBySaga(A).size());
+    assertEquals("java.lang.RuntimeException", e.errorType());
+    assertEquals("boom", e.errorMessage());
+    assertEquals(T0, e.faultedAt());
+    assertEquals(T0, e.firstFaultedAt());
+    assertTrue(shield(A), "the shield is asserted although the entry was kept");
+  }
+
+  /** The poison path still refreshes over a held entry: a still-poison replay shows its failure. */
+  @Test
+  public void publishShielded_afterAHold_refreshesTheEntryWithThePoison() {
+    row(A, SagaStatus.RUNNING);
+    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0)));
+    store.publishShielded(entry(A, 10L, T0.plusSeconds(30)));
+    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
+    assertEquals(1, store.findBySaga(A).size());
+    assertEquals("java.lang.RuntimeException", e.errorType());
+    assertEquals(T0.plusSeconds(30), e.faultedAt());
+    assertEquals(T0, e.firstFaultedAt());
+  }
+
+  /**
+   * The named key carries no saga type: a hold over another type's entry at the key replaces it as
+   * {@code publish} would.
+   */
+  @Test
+  public void publishShieldedIfAbsent_replacesAnotherTypesEntryAtTheKey_asPublishDoes() {
+    store.publish(held(A, OTHER, 10L, T0));
+    assertTrue(store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(5))));
+    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
+    assertEquals(1, store.findBySaga(A).size());
+    assertEquals(TYPE, e.sagaType());
+    assertEquals(T0.plusSeconds(5), e.faultedAt());
+  }
+
+  @Test
+  public void publishShieldedIfAbsent_absentOwnerRow_recordsTheEntry_andRejectsANullSaga() {
+    var rowless = SagaId.of("dl-rowless-held");
+    assertTrue(store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0)));
+    assertFalse(store.publishShieldedIfAbsent(held(rowless, TYPE, 11L, T0.plusSeconds(1))));
+    assertEquals(1, store.findBySaga(rowless).size());
+    assertTrue(sagaStore.load(rowless, TYPE, ContractState.class).isEmpty());
+    assertThrows(IllegalArgumentException.class, () -> store.publishShieldedIfAbsent(null));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> store.publishShieldedIfAbsent(held(null, TYPE, 12L, T0)));
+    assertTrue(store.findAll(10).stream().noneMatch(e -> e.eventOffset().value() == 12L));
+  }
+
   @Test
   public void countFaultedBacklog_countsShieldedOrFaultedOwners_rowlessNamed_andResolvedNull() {
     row(A, SagaStatus.RUNNING);

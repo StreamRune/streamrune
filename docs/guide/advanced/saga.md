@@ -326,6 +326,8 @@ A correlated event for a known saga that cannot consume it yet is **held**: reco
 
 A held entry's `errorType` is `org.streamrune.runtime.SagaEventHeldException` and its message names the reason; every hold increments `streamrune.saga.event_held` (tagged `saga.type` and `hold.reason`) and logs a `WARNING`. The `FAULTED` hold is recorded as `org.streamrune.runtime.SagaSkippedWhileFaultedException` and counted by its own `streamrune.saga.skipped_while_faulted`. Both are also counted in `streamrune.saga.quarantined`. Held events are drained oldest-first by `SagaDeadLetterReplayer.replayAll(sagaId)` once the blocker is gone — see [Replaying quarantined events](#replaying-quarantined-events).
 
+A hold never replaces an entry the saga already has at the event's offset. The subscription delivers a page again whenever it retries it — a retry-later failure later in the page, a crash before the checkpoint, a handover — and an event that was recorded the first time then arrives again: an event held before keeps its first entry, and a poison event that meets the `FAULTED` row it faulted keeps its own exception class name and message. Such a redelivery writes nothing, counts in no metric and logs at `DEBUG`. Only a replay that meets the poison again refreshes an entry, with the newest failure.
+
 Start events are never held: a live start over a `FAULTED` or terminal row is skipped, a redelivered start over an applied genesis is a no-op, a start over a `COMPENSATING` row resumes the episode, and a start over a genesis-pending row re-drives it (commands that already ran dedup on their forward keys).
 
 ### The row-less residual

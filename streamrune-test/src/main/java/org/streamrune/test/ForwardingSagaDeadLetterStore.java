@@ -65,6 +65,11 @@ public class ForwardingSagaDeadLetterStore implements SagaDeadLetterStore {
   }
 
   @Override
+  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+    return schedule.call("publishShieldedIfAbsent", () -> delegate.publishShieldedIfAbsent(entry));
+  }
+
+  @Override
   public List<SagaDeadLetterEntry> findAll(int limit) {
     return schedule.call("findAll", () -> delegate.findAll(limit));
   }

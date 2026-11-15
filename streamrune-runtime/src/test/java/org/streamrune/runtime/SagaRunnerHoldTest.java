@@ -264,6 +264,91 @@ abstract class SagaRunnerHoldTest {
   }
 
   /**
+   * A correlated poison whose page is delivered again meets its own FAULTED row. The entry already
+   * exists, so the hold writes nothing: the entry keeps the poison's own error type, message and
+   * fault time however often the event comes again, and no hold or quarantine is counted for it.
+   */
+  @Test
+  void correlatedPoison_redeliveredNTimes_keepsThePoisonsOwnCauseOnItsEntry() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    orchestrator.poisonCorrelatedAt = 5L;
+    var runner = runner();
+    deliver(runner, correlatedEvent(5L));
+    SagaDeadLetterEntry recorded = entries().getFirst();
+    assertThat(recorded.errorType()).isEqualTo(IllegalStateException.class.getName());
+    assertThat(recorded.errorMessage()).isEqualTo("poison at 5");
+    int quarantinedByThePoison = quarantined.get();
+
+    for (int redelivery = 0; redelivery < 3; redelivery++) {
+      deliver(runner, correlatedEvent(5L));
+    }
+
+    assertThat(entries())
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(IllegalStateException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("poison at 5");
+              assertThat(e.faultedAt()).isEqualTo(recorded.faultedAt());
+            });
+    assertThat(skippedWhileFaulted.get()).as("a redelivery is not a new skip").isZero();
+    assertThat(quarantined.get()).isEqualTo(quarantinedByThePoison);
+    assertThat(faulted.get()).isEqualTo(1);
+    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().status())
+        .isEqualTo(SagaStatus.FAULTED);
+  }
+
+  /** A start-event poison redelivered: the executor skips the live start, the entry is kept. */
+  @Test
+  void startPoison_redeliveredNTimes_keepsThePoisonsOwnCauseOnItsEntry() {
+    orchestrator.poisonStart = true;
+    var runner = runner();
+    deliver(runner, startEvent(3L));
+    SagaDeadLetterEntry recorded = entries().getFirst();
+
+    for (int redelivery = 0; redelivery < 3; redelivery++) {
+      deliver(runner, startEvent(3L));
+    }
+
+    assertThat(entries())
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("simulated poison");
+              assertThat(e.faultedAt()).isEqualTo(recorded.faultedAt());
+            });
+    assertThat(faulted.get()).isEqualTo(1);
+  }
+
+  /**
+   * A held event delivered again keeps the entry its first hold wrote: no second hold sample, no
+   * second quarantine, the fault time of the first hold.
+   */
+  @Test
+  void heldEvent_redelivered_keepsItsEntry_andCountsNothing() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    inner.setDeadLetterPending(sagaId, TYPE, true); // an older backlog: live events are held
+    var runner = runner();
+    deliver(runner, correlatedEvent(5L));
+    SagaDeadLetterEntry recorded = entries().getFirst();
+
+    deliver(runner, correlatedEvent(5L));
+    deliver(runner, correlatedEvent(5L));
+
+    assertThat(entries())
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(SagaEventHeldException.class.getName());
+              assertThat(e.faultedAt()).isEqualTo(recorded.faultedAt());
+            });
+    assertThat(held.get("BACKLOG_PENDING").get()).isEqualTo(1);
+    assertThat(quarantined.get()).isEqualTo(1);
+    assertThat(orchestrator.consumedCorrelatedOffsets).isEmpty();
+  }
+
+  /**
    * The redelivery check precedes the holds. A redelivered correlated event at or below the
    * recorded {@code last_applied_offset} was delivered before — applied, held (its entry already
    * exists) or dropped — so over a FAULTED row it is dedup-skipped, never recorded as a NEW entry
@@ -603,9 +688,8 @@ abstract class SagaRunnerHoldTest {
 
   /**
    * Crash point (a): crash after {@code publish}, before {@code markFaulted} (row present). The
-   * rerun's live redelivery is held BACKLOG_PENDING behind the shield — and the upsert OVERWRITES
-   * the poison's error details with the hold's until the drain re-discovers the poison (pinned
-   * deliberately: an accepted end state); the drain then converges on the fault.
+   * rerun's live redelivery is held behind the shield, and the hold keeps the poison's own entry:
+   * its error type and message survive the redelivery. The drain then converges on the fault.
    */
   @Test
   void poisonOnAnExistingRow_crashAfterTheEntry_beforeTheFault_rerunConverges() {
@@ -644,10 +728,11 @@ abstract class SagaRunnerHoldTest {
         .satisfies(
             e -> {
               assertThat(e.errorType())
-                  .as("the hold's upsert overwrites the poison's details (accepted end state)")
-                  .isEqualTo(SagaEventHeldException.class.getName());
-              assertThat(e.errorMessage()).contains("BACKLOG_PENDING");
+                  .as("the hold keeps the poison's own entry")
+                  .isEqualTo(RuntimeException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("simulated poison");
             });
+    assertThat(held).as("a redelivery of a recorded event is not a new hold").isEmpty();
 
     assertThat(runner.feedReplay(sagaId, correlatedEvent(5L), false, /* operatorForced= */ false))
         .isEqualTo(StepOutcome.FAULTED);

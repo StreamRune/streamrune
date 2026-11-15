@@ -1219,6 +1219,7 @@ public final record org.streamrune.core.saga.SagaCommand
 public interface org.streamrune.core.saga.SagaDeadLetterStore
   public abstract boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
   public abstract boolean discard(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.types.GlobalOffset)
+  public abstract boolean publishShieldedIfAbsent(org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry)
   public abstract int deleteOlderThan(java.time.Instant)
   public abstract java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findAll(int)
   public abstract java.util.List<org.streamrune.core.saga.SagaDeadLetterStore$SagaDeadLetterEntry> findBySaga(org.streamrune.core.saga.SagaId)

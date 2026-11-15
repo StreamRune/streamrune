@@ -81,6 +81,13 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
           + "error_type = EXCLUDED.error_type, error_message = EXCLUDED.error_message, "
           + "faulted_at = EXCLUDED.faulted_at";
 
+  // The hold's write: UPSERT, except that a conflict with a stored row of the SAME saga type
+  // updates nothing — the stored entry (a poison's cause, or an earlier hold) is kept as it is.
+  // A stored row of another type at the key is replaced exactly as UPSERT replaces it (the named
+  // key has no type). The row count tells the two apart: 1 = inserted or replaced, 0 = kept.
+  private static final String HOLD_UPSERT =
+      UPSERT + " WHERE saga_dead_letters.saga_type <> EXCLUDED.saga_type";
+
   // Dedicated INSERT for NULL-saga entries. The UNIQUE
   // constraint treats NULLs as distinct, so a null-saga publish at an existing offset can never
   // conflict — it always INSERTs a fresh row (the accepted duplicate accumulation documented on
@@ -376,6 +383,43 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>One transaction, as {@link #publishShielded}: the hold's upsert, whose conflict arm writes
+   * nothing over a stored row of the same saga type, then the owner's shield; commit. The shield is
+   * asserted whether or not the entry was written. Lock order dead-letter row → saga row, as {@link
+   * #publishShielded}.
+   */
+  @Override
+  public boolean publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
+    if (entry == null) {
+      throw new IllegalArgumentException("entry must not be null");
+    }
+    if (entry.sagaId() == null) {
+      throw new IllegalArgumentException("sagaId is required");
+    }
+    try (var conn = dataSource.getConnection()) {
+      return inTransaction(
+          conn,
+          c -> {
+            boolean written = writeNamed(c, HOLD_UPSERT, entry) > 0;
+            try (var ps = c.prepareStatement(ASSERT_SHIELD)) {
+              rowWriteTimeout.applyTo(ps);
+              ps.setString(1, entry.sagaId().value());
+              ps.setString(2, entry.sagaType().value());
+              ps.executeUpdate(); // 0 rows = absent row: the documented no-op
+            }
+            return written;
+          });
+    } catch (SQLException e) {
+      throw new EventStoreException(
+          "Failed to record and shield held saga event: "
+              + LogSanitizer.sanitizeForLog(entry.sagaId().value()),
+          e);
+    }
+  }
+
   /** One transaction's work, run by {@link #inTransaction}. */
   @FunctionalInterface
   private interface TransactionWork<T> {
@@ -445,7 +489,13 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   }
 
   private static void upsertNamed(Connection conn, SagaDeadLetterEntry entry) throws SQLException {
-    try (var ps = conn.prepareStatement(UPSERT)) {
+    writeNamed(conn, UPSERT, entry);
+  }
+
+  /** Binds a named entry to {@code sql} (UPSERT or HOLD_UPSERT) and returns the row count. */
+  private static int writeNamed(Connection conn, String sql, SagaDeadLetterEntry entry)
+      throws SQLException {
+    try (var ps = conn.prepareStatement(sql)) {
       ps.setString(1, entry.sagaId().value());
       ps.setString(2, entry.sagaType().value());
       ps.setLong(3, entry.eventOffset().value());
@@ -472,7 +522,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       // re-quarantine can never strip the retention protection an earlier TARGET_PENDING
       // resolution established; setResolvedTarget is its sole writer for existing rows.
       ps.setString(10, entry.targetSagaId() == null ? null : entry.targetSagaId().value());
-      ps.executeUpdate();
+      return ps.executeUpdate();
     }
   }
 
