@@ -1970,6 +1970,12 @@ public class StreamRuneAutoConfiguration {
    * fall within GDPR forget scope. Without this the auto-configured read model was a silent
    * plaintext no-op even when a CryptoEngine was configured for events and saga state.
    *
+   * <p>Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean on the repository
+   * ({@link org.streamrune.postgres.JdbcProjectionRepository#declareIndex}), in bean order, before
+   * the bean is handed out: each index is created with its table if it does not exist. A {@code
+   * ProjectionRepository} bean of the application's own replaces this one, and its indexes are then
+   * the application's to declare.
+   *
    * @throws IllegalStateException if multiple CryptoEngine beans exist with none marked
    *     {@code @Primary} — silently skipping encryption would persist PII as plaintext
    */
@@ -1979,16 +1985,21 @@ public class StreamRuneAutoConfiguration {
   public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(
       DataSource dataSource,
       ObjectProvider<CryptoEngine> cryptoEngineProvider,
-      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
+      ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
+      ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
     CryptoEngine cryptoEngine =
         resolveCryptoEngine(cryptoEngineProvider, "the projection repository");
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when no metrics bean exists.
     org.streamrune.core.StreamRuneMetrics metrics =
         metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP);
-    return new org.streamrune.postgres.JdbcProjectionRepository(
-        dataSource,
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+    var repository =
+        new org.streamrune.postgres.JdbcProjectionRepository(
+            dataSource,
+            org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
+                cryptoEngine, metrics));
+    projectionIndexes.orderedStream().forEach(repository::declareIndex);
+    return repository;
   }
 
   /**

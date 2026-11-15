@@ -57,6 +57,12 @@ class BaseProjectionTest {
     }
 
     @Override
+    public <T> Page<T> findAllBy(
+        ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
+      return new Page<>(List.of(), 0, 0, pageRequest.size());
+    }
+
+    @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
       return Optional.empty();

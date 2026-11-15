@@ -33,6 +33,13 @@ class PageRequestTest {
   }
 
   @Test
+  void offset_isComputedInLong() {
+    var req = PageRequest.of(3_000_000, 1000);
+    assertEquals(3_000_000_000L, req.offset());
+    assertEquals((long) Integer.MAX_VALUE * 1000, PageRequest.of(Integer.MAX_VALUE, 1000).offset());
+  }
+
+  @Test
   void of_twoArg_usesUnsorted() {
     var req = PageRequest.of(0, 10);
     assertEquals(Sort.unsorted(), req.sort());

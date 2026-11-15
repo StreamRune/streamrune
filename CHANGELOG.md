@@ -62,6 +62,11 @@ jars. In brief:
   `TRANSACTIONAL_LOCAL`, `AT_LEAST_ONCE_IDEMPOTENT` or `EXTERNAL_EFFECT` — there is no default — and
   the runner checks the declaration against its processor before it reads an event, so at-least-once
   delivery is always a declared choice.
+- **Paged, filtered and indexed read models.** `ProjectionRepository.findAllBy` reads one page of
+  the rows whose field holds a value, `findAll` one page in a sort order; both order by code-point
+  text with the id as tiebreak and take the page and its total from one snapshot, on PostgreSQL and
+  in memory alike. A `ProjectionIndex` declares the index such a read needs, and the
+  PostgreSQL repository creates it with the table.
 - **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
   integrations: a trusted gateway's `X-User-Id` header when
   `streamrune.security.trust-user-id-header=true`, otherwise the authenticated principal, otherwise

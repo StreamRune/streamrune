@@ -59,7 +59,25 @@ public interface ProjectionRepository {
   void delete(ProjectionName projectionName, String id);
 
   /**
-   * Finds all read models for a projection with pagination.
+   * Finds one page of a projection's read models, in the order of {@code pageRequest.sort()}.
+   *
+   * <p><b>Order.</b> A sort order names a top-level field of the read model, or one of the
+   * repository's columns {@code id}, {@code version} and {@code updated_at}; a field outside {@code
+   * [A-Za-z0-9_]+} (nested paths included) is refused with an {@link IllegalArgumentException}. A
+   * field sorts by its text, as the stored JSON renders it ({@code data->>'field'} on PostgreSQL),
+   * compared by Unicode code point — byte order, PostgreSQL's {@code COLLATE "C"} — not by the
+   * database's linguistic collation and not by value: {@code "B"} sorts before {@code "a"}, the
+   * number {@code 10} before {@code 9}, and an ISO-8601 instant with fewer fraction digits after
+   * one with more within the same second ({@code "…00.5Z"} after {@code "…00.123Z"}). A missing or
+   * JSON-{@code null} field sorts after every value ascending and before every value descending.
+   * The id breaks every tie: a sort that does not order by {@code id} is followed by {@code id}
+   * ascending, so the order is total and a row appears on exactly one page of a stable table. An
+   * unsorted request orders by id.
+   *
+   * <p><b>Consistency.</b> {@link Page#content()} and {@link Page#totalElements()} come from one
+   * view of the table: a write committed while the page is read changes both or neither.
+   *
+   * <p>A page beyond the last is empty and still carries the total.
    *
    * @param projectionName the name of the projection
    * @param type the class type of the read model
@@ -67,6 +85,27 @@ public interface ProjectionRepository {
    * @return a page of read models
    */
   <T> Page<T> findAll(ProjectionName projectionName, Class<T> type, PageRequest pageRequest);
+
+  /**
+   * Finds one page of the read models whose top-level field holds a value, in the order of {@code
+   * pageRequest.sort()}. Order, consistency and the page beyond the last are as for {@link
+   * #findAll(ProjectionName, Class, PageRequest)}; the total counts the matching read models. The
+   * filter compares text (see {@link FieldEquals}).
+   *
+   * <p>On PostgreSQL the read is fast only with an index that starts with the filtered field and
+   * continues with the sort: declare it with {@link ProjectionIndex#forFilter}. Without one, every
+   * page and its count read the whole table.
+   *
+   * @param projectionName the name of the projection
+   * @param type the class type of the read model
+   * @param filter the field and the value it must hold
+   * @param pageRequest pagination and sort parameters
+   * @return a page of the matching read models
+   * @throws IllegalArgumentException if an argument is {@code null}, or the filter or a sort order
+   *     names a field the repository refuses
+   */
+  <T> Page<T> findAllBy(
+      ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest);
 
   /**
    * Finds a read model by ID with the specified lock mode. Returns a {@link Versioned} wrapper

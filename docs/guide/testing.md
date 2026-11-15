@@ -606,6 +606,22 @@ together, a stale epoch and an overlapping batch are rejected before the updater
 actions run only after a commit, and `writesTo` holds through a forwarding proxy.
 `InMemoryProjectionRepository` and `JdbcProjectionRepository` both pass it.
 
+The paged reads of `InMemoryProjectionRepository` return what `JdbcProjectionRepository` returns:
+`findAll(name, type, pageRequest)` honours the sort and `findAllBy(name, type, filter, pageRequest)`
+the filter, with the same text comparison, code-point order, id tiebreak and refusals (see
+[Reading read models](concepts.md#reading-read-models-pages-filters-and-indexes)), so a query
+handler's order and filter are tested without PostgreSQL. It reads a field as the JSON text a mapper
+renders — by default one configured as the JDBC repository's default mapper; pass the production
+mapper to `new InMemoryProjectionRepository(objectMapper)` when it differs (a naming strategy, a
+custom serializer). Its `declareIndex` checks the keys and creates nothing, so the wiring that
+declares indexes runs in a test too.
+
+`ProjectionRepositoryContract` (also in `streamrune-test`) is the JUnit suite of those reads: the
+filter, the order and its tiebreak, the paging, the total, a page past an `int` offset, the field
+rule and the index declaration. `InMemoryProjectionRepository` and `JdbcProjectionRepository` both
+pass it; extend it, implementing `repository()` and `declareIndex(index)`, to prove a repository of
+your own.
+
 ---
 
 ## Testing a listener that dispatches commands
@@ -1073,6 +1089,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `SagaEnvelopes` | The metadata and envelopes of the events a saga's commands, and the commands of a continuation, produce. |
 | `EventPayloadAssertions` | `assertRoundTrips(event)` and `assertUpcastBinds(...)`: an event that writes what it cannot read, or an upcaster that writes a misspelled key, fails the test instead of a read in production. |
 | `AtomicBatchProcessorContract` | The contract suite of `AtomicBatchProcessor.supportsFencing()`; extend it to prove a custom processor. |
+| `ProjectionRepositoryContract` | The contract suite of a `ProjectionRepository`'s paged reads: filter, code-point order with the id tiebreak, paging, totals, the field rule and index declaration. |
 | `CommandBusProvenanceContract` | The contract suite of where a `CommandBus` takes an event's saga origin and causation id from; extend it for a custom bus. |
 | `OutboxStoreContract` | The contract suite of every `OutboxStore`: status transitions, both ordering modes, retention and replay. |
 | `SagaStoreContract` | The contract suite of every `SagaStore`: the recovery state a saga runner, step executor and replayer depend on. |

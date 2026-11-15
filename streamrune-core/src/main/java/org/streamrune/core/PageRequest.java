@@ -32,8 +32,11 @@ public record PageRequest(int page, int size, Sort sort) {
     return new PageRequest(page, size, sort);
   }
 
-  /** Returns the row offset for use in SQL {@code OFFSET} clauses. */
-  public int offset() {
-    return page * size;
+  /**
+   * Returns the row offset for use in SQL {@code OFFSET} clauses: {@code page * size}, computed in
+   * {@code long} (it exceeds {@link Integer#MAX_VALUE} from page 2147484 at size 1000).
+   */
+  public long offset() {
+    return (long) page * size;
   }
 }

@@ -131,6 +131,15 @@ class CacheAwareProjectionCommitOrderTest {
     }
 
     @Override
+    public <T> Page<T> findAllBy(
+        ProjectionName projectionName,
+        Class<T> type,
+        org.streamrune.core.projection.FieldEquals filter,
+        PageRequest pageRequest) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
       throw new UnsupportedOperationException();

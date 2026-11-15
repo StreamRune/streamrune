@@ -274,6 +274,11 @@ public class StreamRuneProducers {
    * persisted as ciphertext instead of plaintext PII, and fall within GDPR forget scope. Without
    * this the auto-configured read model was a silent plaintext no-op.
    *
+   * <p>Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean on the repository
+   * ({@link JdbcProjectionRepository#declareIndex}) before the bean is handed out: each index is
+   * created with its table if it does not exist. A {@code ProjectionRepository} bean of the
+   * application's own replaces this one, and its indexes are then the application's to declare.
+   *
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
    *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
    */
@@ -283,7 +288,8 @@ public class StreamRuneProducers {
   public JdbcProjectionRepository jdbcProjectionRepository(
       DataSource dataSource,
       Instance<CryptoEngine> cryptoEngineInstance,
-      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance) {
+      Instance<org.streamrune.core.StreamRuneMetrics> metricsInstance,
+      Instance<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
     if (cryptoEngineInstance.isAmbiguous()) {
       throw new IllegalStateException(
           "Multiple CryptoEngine beans exist but none is marked @Priority — StreamRune cannot "
@@ -295,10 +301,13 @@ public class StreamRuneProducers {
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return new JdbcProjectionRepository(
-        dataSource,
-        JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
+    var repository =
+        new JdbcProjectionRepository(
+            dataSource,
+            JdbcProjectionRepository.createObjectMapper(
+                cryptoEngine, resolveMetricsOrDefault(metricsInstance)));
+    projectionIndexes.stream().forEach(repository::declareIndex);
+    return repository;
   }
 
   /** Produces a {@link PostgresOffsetStore} as the default {@link OffsetStore}. */

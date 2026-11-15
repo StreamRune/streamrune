@@ -245,7 +245,8 @@ there misses a row the same batch inserted and, on JDBC, can wait forever on a r
 holds.
 
 **Projection names under `JdbcProjectionRepository`.** Each name is stored in its own table,
-`<name>_view`, created by the first read or write of that name through the repository, or by the
+`<name>_view`, created by the first read or write of that name through the repository, by
+`declareIndex` (see [Reading read models](#reading-read-models-pages-filters-and-indexes)), or by the
 runner before the first batch of a `TRANSACTIONAL_LOCAL` / `EXTERNAL_EFFECT` registration; replicas
 that create it at once all succeed. An
 `AT_LEAST_ONCE_IDEMPOTENT` registration that keeps its read models elsewhere gets no table: the
@@ -280,6 +281,91 @@ reports "applied" for a dead-lettered range a self-fencing delegate ignored, so 
 [dead-letter replayer](advanced/retry-and-resilience.md#projection-dead-letter-replay) discards the
 range's only record. The shipped decorators (`TracingProjectionDecorator`,
 `ValidatingProjectionDecorator`, `CacheAwareProjection`) forward all of them.
+
+### Reading read models: pages, filters and indexes
+
+A query handler reads a projection's rows through its `ProjectionRepository`: one row by id
+(`findById`), every row (`findAll(name, type)`), one page of every row in a sort order
+(`findAll(name, type, pageRequest)`), or one page of the rows whose top-level field holds a value
+(`findAllBy(name, type, filter, pageRequest)`):
+
+```java
+import org.streamrune.core.Page;
+import org.streamrune.core.PageRequest;
+import org.streamrune.core.Sort;
+import org.streamrune.core.SortDirection;
+import org.streamrune.core.projection.FieldEquals;
+
+Sort newestFirst = Sort.by("createdAt", SortDirection.DESC);
+Page<OrderView> mine =
+    repository.findAllBy(
+        ORDERS, OrderView.class, FieldEquals.of("customerId", customerId),
+        PageRequest.of(page, 20, newestFirst));
+```
+
+What both paged reads promise, on `JdbcProjectionRepository` and on the in-memory repository of the
+test kit alike (`ProjectionRepositoryContract` runs against both):
+
+- **The filter compares text.** `FieldEquals.of("customerId", id)` selects the rows whose field, as
+  its stored JSON renders it as text (`data->>'customerId'`), equals the value character by
+  character: the number `42` matches `"42"`, not `"042"`; a missing or `null` field matches no
+  value. Filter on a scalar field; an `@Encrypted` field is ciphertext in the table and matches no
+  plaintext value. One field per read: a second condition, a range or a nested path is not offered.
+- **The order is code-point text order, with the id last.** A sort order names a top-level field
+  or one of the columns `id`, `version`, `updated_at`. A field sorts by its JSON text compared by
+  Unicode code point — PostgreSQL's `COLLATE "C"`, whatever the database's collation is — so
+  `"B"` sorts before `"a"`, the number `10` before `9`, and an ISO-8601 instant printed with fewer
+  fraction digits after one with more within the same second (`…00.5Z` after `…00.123Z`); a
+  missing field sorts last ascending and first descending. The id breaks every tie (it is appended
+  ascending unless the sort names it), so the order is total and a row of an unchanged table is on
+  exactly one page. An unsorted read orders by id; the `id` column is created `COLLATE "C"`, so its
+  primary key serves that order.
+- **One snapshot.** The page and its `totalElements` come from one statement: a write committed
+  meanwhile changes both or neither. A page beyond the last is empty and carries the total, and
+  `Page.hasNext()` is computed in `long`, so it is `false` there, also at `page ==
+  Integer.MAX_VALUE`; `PageRequest.offset()` is a `long`.
+- **Field names** match `[A-Za-z0-9_]+`; anything else — `customer.id`, a quote — is refused with
+  an `IllegalArgumentException`, as is a filter on `id`, `version` or `updated_at`.
+
+Offset paging under concurrent writes is what it is: a row inserted before the page you are on
+shifts the next page by one, so a client reading on can see a row twice; nothing is skipped as long
+as rows are not deleted.
+
+**Declare the indexes the reads need.** Without an index, PostgreSQL reads the whole table for
+every page and for its count — tens of milliseconds at a hundred thousand rows, growing with the
+table. A `ProjectionIndex` declares one, built for the read it serves:
+
+```java
+import org.streamrune.core.projection.ProjectionIndex;
+
+// findAllBy(ORDERS, …, FieldEquals.of("customerId", …), PageRequest.of(p, n, newestFirst))
+ProjectionIndex byCustomerNewestFirst = ProjectionIndex.forFilter(ORDERS, "customerId", newestFirst);
+// findAll(ORDERS, …, PageRequest.of(p, n, newestFirst))
+ProjectionIndex newestFirstIndex = ProjectionIndex.forSort(ORDERS, newestFirst);
+
+jdbcProjectionRepository.declareIndex(byCustomerNewestFirst);
+jdbcProjectionRepository.declareIndex(newestFirstIndex);
+```
+
+`declareIndex` creates the projection's table if needed and then the index, `CREATE INDEX IF NOT
+EXISTS <name> ON <name>_view ((data->>'customerId') COLLATE "C", (data->>'createdAt') COLLATE "C"
+DESC, id COLLATE "C")` — the expressions the reads compare, so the planner uses the index for the
+filter, the order and the count; the id is always the last key. Call it at wiring, before the
+application serves reads. In the Spring, Quarkus and Micronaut integrations, define each index as a
+`ProjectionIndex` bean: the auto-configured repository declares every one before it is handed out.
+It is idempotent and safe on several replicas at once: an index that exists is left alone without
+locking the table, and a replica that loses the creation race finds the winner's index.
+
+- **Name.** `<projection>_<keys>_ix_<hash>`, cut to PostgreSQL's 63-byte limit, the hash taken over
+  the exact keys; `JdbcProjectionRepository.createIndexSql(index)` prints the statement.
+- **Not `CONCURRENTLY`.** The build holds a `SHARE` lock on the table: reads continue, the
+  projection's writes wait until the build commits — milliseconds on a new or small table, longer
+  on a large one. `CREATE INDEX CONCURRENTLY` cannot run in a transaction and leaves an invalid
+  index behind when it fails, which `IF NOT EXISTS` would then skip. For a large existing table,
+  run `createIndexSql(index)`'s statement with `CONCURRENTLY` by hand before the deploy that
+  declares the index; `declareIndex` then finds it and does nothing.
+- **Cost.** Each index is written on every save of the projection.
+- **In memory**, `InMemoryProjectionRepository.declareIndex` checks the keys and creates nothing.
 
 ### Delivery modes — what a projection promises
 

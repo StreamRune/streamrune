@@ -111,7 +111,7 @@ public class org.streamrune.spring.StreamRuneAutoConfiguration
   public org.streamrune.core.tracing.StreamRuneTracing noopStreamRuneTracing()
   public org.streamrune.integration.MicrometerStreamRuneMetrics micrometerStreamRuneMetrics(io.micrometer.core.instrument.MeterRegistry, org.streamrune.spring.StreamRuneProperties)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.integration.AuthenticatedUserResolver>)
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
+  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ProjectionIndex>)
   public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource)

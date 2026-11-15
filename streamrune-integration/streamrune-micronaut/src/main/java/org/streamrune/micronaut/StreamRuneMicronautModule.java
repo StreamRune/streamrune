@@ -1274,7 +1274,16 @@ public class StreamRuneMicronautModule {
    * ({@code @ConditionalOnBean(DataSource.class)}) and Quarkus ({@code @DefaultBean}) have always
    * produced this bean; only Micronaut shipped the unfenced combination by default.
    *
+   * <p>Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean on the repository
+   * ({@link org.streamrune.postgres.JdbcProjectionRepository#declareIndex}) before the bean is
+   * handed out: each index is created with its table if it does not exist. A {@code
+   * ProjectionRepository} bean of the application's own replaces this one, and its indexes are then
+   * the application's to declare.
+   *
    * @param dataSource the JDBC data source
+   * @param cryptoEngines the crypto engine beans; at most one
+   * @param metrics the metrics bean, or {@code null}
+   * @param projectionIndexes the index beans to declare
    * @return a new {@link org.streamrune.postgres.JdbcProjectionRepository}
    */
   @Singleton
@@ -1284,7 +1293,8 @@ public class StreamRuneMicronautModule {
   public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(
       DataSource dataSource,
       List<CryptoEngine> cryptoEngines,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
+      List<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
     // Wire the CryptoEngine bean (if exactly one is present) into the
     // repository's ObjectMapper via CryptoShreddingModule, the same way sagaStore wires the saga
     // store — so @Encrypted read-model fields are ciphertext at rest and within GDPR forget scope.
@@ -1299,10 +1309,13 @@ public class StreamRuneMicronautModule {
     CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return new org.streamrune.postgres.JdbcProjectionRepository(
-        dataSource,
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics)));
+    var repository =
+        new org.streamrune.postgres.JdbcProjectionRepository(
+            dataSource,
+            org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
+                cryptoEngine, metricsOrNoop(metrics)));
+    projectionIndexes.forEach(repository::declareIndex);
+    return repository;
   }
 
   /**

@@ -31,14 +31,22 @@ public record Page<T>(List<T> content, long totalElements, int page, int size) {
     }
   }
 
-  /** Returns the total number of pages. */
+  /**
+   * Returns the total number of pages, or {@link Integer#MAX_VALUE} when there are more (the page
+   * index is an {@code int}, so no request reaches a page past it).
+   */
   public int totalPages() {
-    return size == 0 ? 0 : (int) Math.ceil((double) totalElements / size);
+    long pages = totalElements / size + (totalElements % size == 0 ? 0 : 1);
+    return (int) Math.min(pages, Integer.MAX_VALUE);
   }
 
-  /** Returns {@code true} if there is at least one more page after this one. */
+  /**
+   * Returns {@code true} if there is at least one more element after this page: computed in {@code
+   * long}, so it is {@code false} on a page beyond the last, also at {@code page ==
+   * Integer.MAX_VALUE}.
+   */
   public boolean hasNext() {
-    return page + 1 < totalPages();
+    return ((long) page + 1) * size < totalElements;
   }
 
   /** Returns {@code true} if this is not the first page. */

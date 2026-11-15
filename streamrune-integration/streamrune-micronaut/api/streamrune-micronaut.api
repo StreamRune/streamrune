@@ -168,7 +168,7 @@ public class org.streamrune.micronaut.StreamRuneMicronautModule
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()
   public org.streamrune.micronaut.MicronautAuthenticatedUserResolver micronautAuthenticatedUserResolver(io.micronaut.security.utils.SecurityService)
   public org.streamrune.micronaut.MicronautSecurityUserRoleResolver micronautSecurityUserRoleResolver(io.micronaut.security.utils.SecurityService)
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics, java.util.List<org.streamrune.core.projection.ProjectionIndex>)
   public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource)

@@ -28,9 +28,11 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.Versioned;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionEpochRegressionException;
+import org.streamrune.core.projection.ProjectionIndex;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
@@ -38,12 +40,14 @@ import org.streamrune.core.types.ProjectionName;
 
 /**
  * PostgreSQL-backed {@link ProjectionRepository} with automatic table creation. Tables are created
- * as: `{projection_name}_view` with JSONB storage — {@code id VARCHAR(255) PRIMARY KEY, data JSONB
- * NOT NULL, version BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ} — through {@code CREATE
- * TABLE IF NOT EXISTS}, so a table of that name the application created itself must already have
- * that shape. A projection name must match {@code [a-z_][a-z0-9_]{0,57}} and is used exactly as
- * given: any other name is rejected with an {@link IllegalArgumentException}, never rewritten, so
- * no two names share a table; the projection runners check the name at registration through {@link
+ * as: `{projection_name}_view` with JSONB storage — {@code id VARCHAR(255) COLLATE "C" PRIMARY KEY,
+ * data JSONB NOT NULL, version BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ} — through {@code
+ * CREATE TABLE IF NOT EXISTS}, so a table of that name the application created itself must already
+ * have that shape. The id is in code-point order ({@code COLLATE "C"}) so the primary key serves
+ * the paged reads' order by id (see {@link #findAll(ProjectionName, Class, PageRequest)}). A
+ * projection name must match {@code [a-z_][a-z0-9_]{0,57}} and is used exactly as given: any other
+ * name is rejected with an {@link IllegalArgumentException}, never rewritten, so no two names share
+ * a table; the projection runners check the name at registration through {@link
  * #checkProjectionName}. Also implements {@link AtomicBatchProcessor} to provide atomic projection
  * update + offset save within a single transaction, guarded against split-brain double-apply by
  * three checks under one checkpoint-row lock: the epoch fence, the first-offset overlap guard, and
@@ -52,10 +56,10 @@ import org.streamrune.core.types.ProjectionName;
  * and a live batch of one projection never interleave.
  *
  * <p><b>When a table is created.</b> By the first read or write of a projection name through this
- * repository, or by {@link #prepareReadModel}, which the runners call before each batch of a
- * registration that writes through the handed repository. A checkpoint commit alone creates no
- * table, so an at-least-once projection that keeps its read models elsewhere leaves no empty {@code
- * <name>_view} behind.
+ * repository, by {@link #declareIndex}, or by {@link #prepareReadModel}, which the runners call
+ * before each batch of a registration that writes through the handed repository. A checkpoint
+ * commit alone creates no table, so an at-least-once projection that keeps its read models
+ * elsewhere leaves no empty {@code <name>_view} behind.
  *
  * <p>{@link #supportsFencing()} is {@code true} and means all three of: the updater and the
  * checkpoint write run in one transaction; the repository handed to the updater is bound to it and
@@ -90,6 +94,13 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   private static final Pattern TABLE_NAMED_PROJECTION = Pattern.compile("[a-z_][a-z0-9_]{0,57}");
 
   private static final Set<String> DIRECT_COLUMNS = Set.of("id", "updated_at", "version");
+
+  /**
+   * A sort, filter or index field: a top-level read-model field (or a repository column) of ASCII
+   * letters, digits and underscores, so it is safe to splice into a statement as {@code
+   * data->>'field'}. No nested path.
+   */
+  private static final Pattern FIELD = Pattern.compile("[A-Za-z0-9_]+");
 
   // Rows fetched per driver round trip in findAll. pgjdbc honors fetchSize only inside an
   // explicit transaction (autocommit off); under autocommit it materializes the whole result
@@ -332,6 +343,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>One statement: the count and the page are two subqueries of one {@code SELECT}, so they read
+   * one snapshot whatever the connection's isolation level. The order is {@code ORDER BY} the
+   * sort's expressions, each JSON field as {@code (data->>'field') COLLATE "C"} and the id as
+   * {@code id COLLATE "C"}; {@link ProjectionIndex#forSort} declares the index that serves it.
+   */
   @Override
   public <T> Page<T> findAll(
       ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
@@ -342,10 +361,30 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     if (pageRequest == null) {
       throw new IllegalArgumentException("pageRequest cannot be null");
     }
+    return page(projectionName, type, null, pageRequest);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>One statement, as for {@link #findAll(ProjectionName, Class, PageRequest)}, with {@code
+   * WHERE (data->>'field') COLLATE "C" = ?} in the count and in the page. {@link
+   * ProjectionIndex#forFilter} declares the index that serves it.
+   */
+  @Override
+  public <T> Page<T> findAllBy(
+      ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
+    validateFilteredRead(projectionName, type, filter, pageRequest);
+    return page(projectionName, type, filter, pageRequest);
+  }
+
+  private <T> Page<T> page(
+      ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
+    String sql = pageSql(projectionName, filter, pageRequest.sort()); // validates before any I/O
     ensureTableExists(projectionName);
     Page<String> rows;
     try (var conn = dataSource.getConnection()) {
-      rows = findAllJsonOn(conn, projectionName, pageRequest);
+      rows = pageJsonOn(conn, projectionName, sql, filter, pageRequest);
     } catch (SQLException e) {
       throw new EventStoreException(
           "Failed to find paginated projections: " + shown(projectionName), e);
@@ -353,34 +392,88 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     return fromJson(rows, type, projectionName);
   }
 
-  private Page<String> findAllJsonOn(
-      Connection conn, ProjectionName projectionName, PageRequest pageRequest) {
+  private static void validateFilteredRead(
+      ProjectionName projectionName, Class<?> type, FieldEquals filter, PageRequest pageRequest) {
+    if (projectionName == null) {
+      throw new IllegalArgumentException("projectionName cannot be null");
+    }
+    if (type == null) {
+      throw new IllegalArgumentException("type cannot be null");
+    }
+    if (filter == null) {
+      throw new IllegalArgumentException("filter cannot be null");
+    }
+    if (pageRequest == null) {
+      throw new IllegalArgumentException("pageRequest cannot be null");
+    }
+  }
+
+  /**
+   * The statement of a paged read: the count of the selected rows and one page of them, as two
+   * subqueries joined into one result, so both come from one snapshot. Every row carries the count;
+   * a page beyond the last is one row with the count and a {@code NULL} {@code data} ({@code data}
+   * is {@code NOT NULL} in the table, so {@code NULL} means "no row"). The page subquery selects
+   * its sort keys too, so the outer {@code ORDER BY} restores its order after the join (at most
+   * {@link PageRequest} size rows). Parameters: the filter value twice when there is a filter, then
+   * {@code LIMIT} and {@code OFFSET}.
+   *
+   * @throws IllegalArgumentException if the projection name, the filter field or a sort field is
+   *     outside the rules
+   */
+  static String pageSql(ProjectionName projectionName, FieldEquals filter, Sort sort) {
     String table = tableName(projectionName);
-    String orderClause = buildOrderClause(pageRequest.sort());
+    String where = filter == null ? "" : " WHERE " + filterExpression(filter.field()) + " = ?";
+    List<Sort.Order> keys = keysWithIdTiebreak(sort.orders());
+    var selected = new ArrayList<String>();
+    var inner = new ArrayList<String>();
+    var outer = new ArrayList<String>();
+    for (int i = 0; i < keys.size(); i++) {
+      Sort.Order key = keys.get(i);
+      String direction = key.direction() == SortDirection.DESC ? " DESC" : "";
+      String expression = keyExpression(key.field());
+      selected.add(expression + " AS k" + i);
+      inner.add(expression + direction);
+      outer.add("page.k" + i + direction);
+    }
+    return "SELECT total.n, page.data FROM (SELECT count(*) AS n FROM "
+        + table
+        + where
+        + ") AS total LEFT JOIN (SELECT data, "
+        + String.join(", ", selected)
+        + " FROM "
+        + table
+        + where
+        + " ORDER BY "
+        + String.join(", ", inner)
+        + " LIMIT ? OFFSET ?) AS page ON true ORDER BY "
+        + String.join(", ", outer);
+  }
 
-    String contentSql =
-        String.format("SELECT data FROM %s %s LIMIT ? OFFSET ?", table, orderClause);
-    String countSql = String.format("SELECT COUNT(*) FROM %s", table);
-
-    try {
-      long totalElements;
-      try (var countStmt = conn.prepareStatement(countSql);
-          var countRs = countStmt.executeQuery()) {
-        countRs.next();
-        totalElements = countRs.getLong(1);
+  private Page<String> pageJsonOn(
+      Connection conn,
+      ProjectionName projectionName,
+      String sql,
+      FieldEquals filter,
+      PageRequest pageRequest) {
+    try (var ps = conn.prepareStatement(sql)) {
+      int parameter = 1;
+      if (filter != null) {
+        ps.setString(parameter++, filter.value());
+        ps.setString(parameter++, filter.value());
       }
-
+      ps.setInt(parameter++, pageRequest.size());
+      ps.setLong(parameter, pageRequest.offset());
+      long totalElements = 0;
       List<String> content = new ArrayList<>();
-      try (var ps = conn.prepareStatement(contentSql)) {
-        ps.setInt(1, pageRequest.size());
-        ps.setInt(2, pageRequest.offset());
-        try (var rs = ps.executeQuery()) {
-          while (rs.next()) {
-            content.add(rs.getString("data"));
+      try (var rs = ps.executeQuery()) {
+        while (rs.next()) {
+          totalElements = rs.getLong(1);
+          String data = rs.getString(2);
+          if (data != null) {
+            content.add(data);
           }
         }
       }
-
       return new Page<>(content, totalElements, pageRequest.page(), pageRequest.size());
     } catch (SQLException e) {
       throw new EventStoreException(
@@ -396,26 +489,213 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         rows.size());
   }
 
-  private String buildOrderClause(Sort sort) {
-    if (sort.orders().isEmpty()) {
-      return "ORDER BY id";
+  /** {@code orders}, then {@code id} ascending unless an order already names the id. */
+  private static List<Sort.Order> keysWithIdTiebreak(List<Sort.Order> orders) {
+    var keys = new ArrayList<>(orders);
+    if (orders.stream().noneMatch(order -> "id".equals(order.field()))) {
+      keys.add(new Sort.Order("id", SortDirection.ASC));
     }
-
-    var parts = new ArrayList<String>();
-    for (var order : sort.orders()) {
-      String field = order.field();
-      validateSortField(field);
-      String column = DIRECT_COLUMNS.contains(field) ? field : "data->>'" + field + "'";
-      String dir = order.direction() == SortDirection.DESC ? "DESC" : "ASC";
-      parts.add(column + " " + dir);
-    }
-    return "ORDER BY " + String.join(", ", parts);
+    return keys;
   }
 
-  private void validateSortField(String field) {
-    if (!field.matches("[a-zA-Z0-9_]+")) {
+  /**
+   * The SQL a sort or index key compares: a repository column as itself (the id in code-point
+   * order), any other name as the read model's top-level JSON field, as text in code-point order.
+   * The field rule keeps the name safe to splice into the statement.
+   */
+  private static String keyExpression(String field) {
+    validateField(field);
+    return switch (field) {
+      case "id" -> "id COLLATE \"C\"";
+      case "version", "updated_at" -> field;
+      default -> jsonFieldExpression(field);
+    };
+  }
+
+  /** The SQL a filter compares: only a read-model field, never a repository column. */
+  private static String filterExpression(String field) {
+    validateField(field);
+    if (DIRECT_COLUMNS.contains(field)) {
       throw new IllegalArgumentException(
-          "Sort field must contain only alphanumeric characters and underscores: " + field);
+          "A filter names a read-model field, not the repository column '"
+              + field
+              + "': read one row by id with findById; version and updated_at cannot be filtered");
+    }
+    return jsonFieldExpression(field);
+  }
+
+  private static String jsonFieldExpression(String field) {
+    return "(data->>'" + field + "') COLLATE \"C\"";
+  }
+
+  private static void validateField(String field) {
+    if (!FIELD.matcher(field).matches()) {
+      throw new IllegalArgumentException(
+          "A sort, filter or index field must be a top-level read-model field of ASCII letters,"
+              + " digits and underscores (no nested path): "
+              + LogSanitizer.sanitizeForLog(field));
+    }
+  }
+
+  // ---- declared indexes ----
+
+  /**
+   * Creates {@code index} on its projection's table, creating the table first if it does not exist:
+   * {@code CREATE INDEX IF NOT EXISTS <name> ON <name>_view (<keys>)}, committed before it returns.
+   * Call it at wiring, once per index the projection's reads need, before the application serves
+   * them; the Spring, Quarkus and Micronaut projection-repository beans call it for each {@link
+   * ProjectionIndex} bean. Idempotent: an index of that name that exists is left as it is, and no
+   * statement takes a lock on the table then.
+   *
+   * <p><b>Keys.</b> Each JSON field is indexed as {@code (data->>'field') COLLATE "C"}, the
+   * expression the reads compare, so the planner can use the index for the filter and for the
+   * {@code ORDER BY}; the id is the last key ({@code id COLLATE "C"}, appended unless the keys name
+   * it).
+   *
+   * <p><b>Name.</b> {@code <projection>_<keys>_ix_<hash>}: the projection name and the lower-cased
+   * keys ({@code _desc} after a descending one), cut so the name stays within PostgreSQL's 63-byte
+   * identifier limit, then the first ten hex digits of a SHA-256 of the table and the exact keys,
+   * so two indexes that differ only in letter case, direction or a cut-off tail have two names.
+   * {@link #createIndexSql} prints the statement.
+   *
+   * <p><b>Not {@code CONCURRENTLY}.</b> {@code CREATE INDEX} holds a {@code SHARE} lock on the
+   * table while it builds: reads go on, writes to that projection wait until the build commits. On
+   * a new or small table that is milliseconds; on a large one it stalls the projection's batches
+   * for the build. {@code CREATE INDEX CONCURRENTLY} would not block writes, but it cannot run in a
+   * transaction (so not on a pool that hands out manual-commit connections), waits for every open
+   * transaction that touched the table, and a failed or interrupted build leaves an {@code INVALID}
+   * index that {@code IF NOT EXISTS} then skips for ever. For a large existing table, run {@link
+   * #createIndexSql}'s statement with {@code CONCURRENTLY} by hand before the deploy that declares
+   * it; this method then finds the index and does nothing.
+   *
+   * <p><b>Replicas.</b> Several replicas declaring one index at once all succeed: each finds the
+   * index missing and builds it; PostgreSQL commits one and fails the others on the catalog ({@code
+   * 23505}, {@code 42P07}), and a loser checks again, finds the index and returns, as table
+   * creation does ({@link #lostCreationRace}).
+   *
+   * @param index the index to create
+   * @throws IllegalArgumentException if {@code index} is {@code null}, or its projection name or a
+   *     key is outside the rules
+   * @throws EventStoreException if the table or the index cannot be created
+   */
+  public void declareIndex(ProjectionIndex index) {
+    if (index == null) {
+      throw new IllegalArgumentException("index cannot be null");
+    }
+    String ddl = createIndexSql(index); // validates the name and the keys before any I/O
+    String name = indexName(index);
+    ensureTableExists(index.projection());
+    SQLException lost = null;
+    for (int attempt = 1; ; attempt++) {
+      try (var conn = dataSource.getConnection()) {
+        boolean created =
+            PostgresTransactions.commitIfManual(
+                conn,
+                "projection index creation",
+                c -> {
+                  if (indexExists(c, name)) {
+                    return false;
+                  }
+                  try (var stmt = c.createStatement()) {
+                    stmt.execute(ddl);
+                  }
+                  return true;
+                });
+        if (created) {
+          log.info(
+              "Created index {} on projection table {}",
+              LogSanitizer.sanitizeForLog(name),
+              tableName(index.projection()));
+        }
+        return;
+      } catch (SQLException failure) {
+        if (lost != null) {
+          failure.addSuppressed(lost);
+        }
+        if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
+          throw new EventStoreException(
+              "Failed to create projection index: " + LogSanitizer.sanitizeForLog(name), failure);
+        }
+        log.debug(
+            "Projection index {} was created concurrently by another session; checking again",
+            LogSanitizer.sanitizeForLog(name));
+        lost = failure;
+      }
+    }
+  }
+
+  /**
+   * The statement {@link #declareIndex} runs for {@code index}: {@code CREATE INDEX IF NOT EXISTS
+   * <name> ON <table> (<keys>)}. For a large existing table, run it with {@code CONCURRENTLY}
+   * inserted after {@code INDEX} before the deploy that declares the index.
+   *
+   * @param index the index
+   * @return the statement
+   * @throws IllegalArgumentException if the projection name or a key is outside the rules
+   */
+  public static String createIndexSql(ProjectionIndex index) {
+    if (index == null) {
+      throw new IllegalArgumentException("index cannot be null");
+    }
+    String table = tableName(index.projection());
+    var columns = new ArrayList<String>();
+    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
+      columns.add(
+          keyExpression(key.field()) + (key.direction() == SortDirection.DESC ? " DESC" : ""));
+    }
+    return "CREATE INDEX IF NOT EXISTS "
+        + indexName(index)
+        + " ON "
+        + table
+        + " ("
+        + String.join(", ", columns)
+        + ")";
+  }
+
+  private static final int INDEX_NAME_HASH_DIGITS = 10;
+  private static final String INDEX_NAME_MARK = "_ix_";
+  private static final int POSTGRES_IDENTIFIER_BYTES = 63;
+
+  /** The deterministic name of {@code index} (see {@link #declareIndex}). */
+  static String indexName(ProjectionIndex index) {
+    String table = tableName(index.projection());
+    var readable = new StringBuilder(index.projection().value());
+    var canonical = new StringBuilder(table);
+    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
+      validateField(key.field());
+      boolean descending = key.direction() == SortDirection.DESC;
+      readable.append('_').append(key.field().toLowerCase(java.util.Locale.ROOT));
+      if (descending) {
+        readable.append("_desc");
+      }
+      canonical.append('|').append(key.field()).append(descending ? " DESC" : " ASC");
+    }
+    int room = POSTGRES_IDENTIFIER_BYTES - INDEX_NAME_MARK.length() - INDEX_NAME_HASH_DIGITS;
+    String prefix = readable.length() > room ? readable.substring(0, room) : readable.toString();
+    return prefix + INDEX_NAME_MARK + sha256Hex(canonical.toString(), INDEX_NAME_HASH_DIGITS);
+  }
+
+  private static String sha256Hex(String text, int digits) {
+    try {
+      byte[] hash =
+          java.security.MessageDigest.getInstance("SHA-256")
+              .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(hash).substring(0, digits);
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required of every Java platform", e);
+    }
+  }
+
+  /** Whether a relation named {@code name} exists in the schema the projection tables go to. */
+  private static boolean indexExists(Connection conn, String name) throws SQLException {
+    try (var ps =
+        conn.prepareStatement(
+            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+                + " WHERE c.relname = ? AND n.nspname = current_schema()")) {
+      ps.setString(1, name);
+      try (var rs = ps.executeQuery()) {
+        return rs.next();
+      }
     }
   }
 
@@ -639,7 +919,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         "CREATE TABLE IF NOT EXISTS "
             + table
             + " ("
-            + "id VARCHAR(255) PRIMARY KEY, "
+            + "id VARCHAR(255) COLLATE \"C\" PRIMARY KEY, "
             + "data JSONB NOT NULL, "
             + "version BIGINT NOT NULL DEFAULT 0, "
             + "updated_at TIMESTAMPTZ DEFAULT NOW()"
@@ -1318,8 +1598,20 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       if (pageRequest == null) {
         throw new IllegalArgumentException("pageRequest cannot be null");
       }
+      String sql = pageSql(projectionName, null, pageRequest.sort());
       ensureTableOnConnection(projectionName);
-      return fromJson(findAllJsonOn(conn, projectionName, pageRequest), type, projectionName);
+      return fromJson(
+          pageJsonOn(conn, projectionName, sql, null, pageRequest), type, projectionName);
+    }
+
+    @Override
+    public <T> Page<T> findAllBy(
+        ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
+      validateFilteredRead(projectionName, type, filter, pageRequest);
+      String sql = pageSql(projectionName, filter, pageRequest.sort());
+      ensureTableOnConnection(projectionName);
+      return fromJson(
+          pageJsonOn(conn, projectionName, sql, filter, pageRequest), type, projectionName);
     }
 
     @Override

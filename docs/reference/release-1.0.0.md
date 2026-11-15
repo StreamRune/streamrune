@@ -502,12 +502,26 @@ license.
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
 - Projection names, subscription names and offsets share one `projection_offset` namespace; the modes
   use no extra table.
+- Paged reads: `ProjectionRepository.findAll(name, type, pageRequest)` and `findAllBy(name, type,
+  FieldEquals.of(field, value), pageRequest)` — equality on one top-level read-model field, compared
+  as text (`data->>'field'`). Both order by the sort's fields as JSON text in code-point order
+  (`COLLATE "C"`, whatever the database collation), a missing field last ascending, and break every
+  tie by the id; unsorted reads order by id (the `<name>_view.id` column is `COLLATE "C"`). The page
+  and its total come from one statement. A field outside `[A-Za-z0-9_]+`, and a filter on `id`,
+  `version` or `updated_at`, are refused. `InMemoryProjectionRepository` sorts and filters the same
+  way; `ProjectionRepositoryContract` runs against both.
+- `ProjectionIndex.forFilter(name, field, sort)` / `forSort(name, sort)` declare the index a read
+  needs; `JdbcProjectionRepository.declareIndex(index)` creates it with the table (`CREATE INDEX IF
+  NOT EXISTS`, not `CONCURRENTLY`, deterministic name within 63 bytes, safe on concurrent replicas),
+  and the Spring, Quarkus and Micronaut repository beans declare every `ProjectionIndex` bean.
+  `createIndexSql(index)` prints the statement for a manual `CONCURRENTLY` build on a large table.
 
 ## Queries and the query cache
 
 - `QueryBus` (`dispatch(Query<R>)`, `register(Class<Q>, QueryHandler<Q, R>)`) with `SimpleQueryBus`,
   `AuditingQueryBus` (for `@Auditable` queries) and `CachingQueryBus`; `Page`, `PageRequest`, `Sort`
-  for paginated read models.
+  for paginated read models (`PageRequest.offset()` is a `long`; `Page.hasNext()` does not overflow
+  at the last page index).
 - `@Cacheable(ttlSeconds, maxEntries, scope, invalidateOn)` on a query record opts it into a
   per-query-type Caffeine cache (defaults: 60 s, 1000 entries, `Scope.USER` — keyed by the calling
   `UserId`; anonymous callers bypass the cache; `Scope.GLOBAL` keys by the query alone). The

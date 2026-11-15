@@ -24,11 +24,13 @@ import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStatus;
+import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.LateDataPolicy;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorClass;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
+import org.streamrune.core.projection.ProjectionIndex;
 import org.streamrune.core.projection.Window;
 import org.streamrune.core.projection.WindowResult;
 import org.streamrune.core.saga.LoadedSaga;
@@ -131,8 +133,10 @@ import org.streamrune.core.types.Version;
       // Core enums — org.streamrune.core.outbox (2)
       OutboxStatus.class,
       OutboxOrderingMode.class,
-      // Core records — org.streamrune.core.projection (3)
+      // Core records — org.streamrune.core.projection (5)
+      FieldEquals.class,
       ProjectionDeadLetterEntry.class,
+      ProjectionIndex.class,
       Window.class,
       WindowResult.class,
       // Core records — org.streamrune.core.saga (3)
