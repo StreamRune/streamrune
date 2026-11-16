@@ -62,6 +62,17 @@ import org.streamrune.core.types.ProjectionName;
  * commit alone creates no table, so an at-least-once projection that keeps its read models
  * elsewhere leaves no empty {@code <name>_view} behind.
  *
+ * <p><b>Where the checkpoints live.</b> Every repository checkpoints in {@code
+ * readmodel_checkpoint} on its own DataSource — the read-model series ({@code
+ * db/readmodel-migration}), which {@link PostgresReadModelStore#create} applies — never in the
+ * event store's {@code subscription_checkpoint}. A runner that commits through this processor must
+ * therefore read the projection's position through {@link PostgresReadModelCheckpoints} on the same
+ * DataSource; paired with a {@link PostgresOffsetStore} it would read the wrong table and never see
+ * the batches it commits. {@link PostgresReadModelStore} is the way to get the matching pair
+ * ({@link PostgresReadModelStore#checkpointTarget()}); an at-least-once projection that writes
+ * elsewhere checkpoints with the events instead, through {@link
+ * PostgresOffsetStore#subscriptionCheckpoint()}.
+ *
  * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}: the updater
  * and the checkpoint write run in one transaction; the repository handed to the updater is bound to
  * it and never {@code null}; a superseded epoch is rejected before any read-model write and stamped
@@ -195,30 +206,26 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     return mapper;
   }
 
-  public JdbcProjectionRepository(DataSource dataSource, ObjectMapper objectMapper) {
-    this(dataSource, objectMapper, CheckpointTable.SUBSCRIPTION);
-  }
-
   /**
-   * A repository whose checkpoints live in {@code checkpointTable}. The public constructors keep
-   * them in {@link CheckpointTable#SUBSCRIPTION}.
+   * Creates a repository whose read models are (de)serialised with {@code objectMapper} — build it
+   * with {@link #createObjectMapper(CryptoEngine, StreamRuneMetrics)} to encrypt {@code @Encrypted}
+   * fields at rest. Its checkpoints live in {@code readmodel_checkpoint} on {@code dataSource} (see
+   * the class documentation, "Where the checkpoints live").
    *
-   * @param checkpointTable the table the checkpoint-row fence locks, checks and writes
+   * @param dataSource the read-model database's pool, used as given
+   * @param objectMapper serialises the read models
+   * @throws IllegalArgumentException if an argument is {@code null}
    */
-  JdbcProjectionRepository(
-      DataSource dataSource, ObjectMapper objectMapper, CheckpointTable checkpointTable) {
+  public JdbcProjectionRepository(DataSource dataSource, ObjectMapper objectMapper) {
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource is required");
     }
     if (objectMapper == null) {
       throw new IllegalArgumentException("objectMapper is required");
     }
-    if (checkpointTable == null) {
-      throw new IllegalArgumentException("checkpointTable is required");
-    }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
-    this.checkpointFence = new PostgresCheckpointFence(checkpointTable);
+    this.checkpointFence = new PostgresCheckpointFence(CheckpointTable.READ_MODEL);
   }
 
   // Connection discipline: with PostgresCryptoEngine (all three integrations wire it onto the
@@ -1225,8 +1232,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * AfterCommitActions} class lists the crash and failure points.
    *
    * <p>Implements {@link AtomicBatchProcessor#executeAtomically}. The {@code offsetStore} parameter
-   * is ignored — the offset is saved internally within the same transaction as the projection
-   * update.
+   * is ignored — the offset is saved internally, in {@code readmodel_checkpoint}, within the same
+   * transaction as the projection update.
    *
    * @param projectionName the name of the projection
    * @param batch the batch of events; its first offset is checked against the committed checkpoint

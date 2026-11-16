@@ -413,6 +413,12 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    * through a factory that holds a configured engine to the {@code data} column as plaintext PII,
    * out of the reach of a GDPR forget. With no {@code cryptoEngine} the mapper is crypto-blind.
    *
+   * <p><b>Its checkpoints are not in this factory's schema.</b> As a batch processor the repository
+   * checkpoints in {@code readmodel_checkpoint}, a table of the read-model series, which this
+   * factory never applies: to run projections through it, build the store with {@link
+   * PostgresReadModelStore#create} instead, which applies that series and pairs the repository with
+   * the checkpoints its batches advance.
+   *
    * @return configured JdbcProjectionRepository, crypto-aware iff this factory has a {@link
    *     CryptoEngine}
    */

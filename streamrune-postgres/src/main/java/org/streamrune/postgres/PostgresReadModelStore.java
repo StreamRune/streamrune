@@ -100,7 +100,7 @@ public final class PostgresReadModelStore implements ReadModelStore {
     }
     return new PostgresReadModelStore(
         name,
-        new JdbcProjectionRepository(dataSource, objectMapper, CheckpointTable.READ_MODEL),
+        new JdbcProjectionRepository(dataSource, objectMapper),
         new PostgresReadModelCheckpoints(dataSource));
   }
 

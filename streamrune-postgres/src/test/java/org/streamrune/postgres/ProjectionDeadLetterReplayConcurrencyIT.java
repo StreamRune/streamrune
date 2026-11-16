@@ -25,7 +25,10 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
@@ -66,6 +69,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  *
  * <p>A crash after the discard leaves nothing to converge: the range is applied and its entry is
  * gone.
+ *
+ * <p>Each mode runs on the checkpoint pair routing gives it: a transactional mode on the read-model
+ * store's ({@link JdbcProjectionRepository} over {@code readmodel_checkpoint}), an at-least-once
+ * projection that writes through its own repository on the event store's subscription checkpoint
+ * ({@link PostgresSubscriptionCheckpointProcessor} over {@code subscription_checkpoint}). Both
+ * processors serialize a replay with a live batch under their checkpoint row.
  */
 @Testcontainers
 class ProjectionDeadLetterReplayConcurrencyIT {
@@ -96,6 +105,9 @@ class ProjectionDeadLetterReplayConcurrencyIT {
         .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
         .load()
         .migrate();
+    // The read-model series beside it (the default single-database deployment): the JDBC
+    // processor checkpoints in its readmodel_checkpoint.
+    ReadModelTestSchema.apply(ds);
   }
 
   @BeforeEach
@@ -103,6 +115,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
     try (var c = observerDs.getConnection();
         var st = c.createStatement()) {
       st.execute("DELETE FROM subscription_checkpoint");
+      st.execute("DELETE FROM readmodel_checkpoint");
       st.execute("DELETE FROM projection_dead_letters");
       st.execute("DROP TABLE IF EXISTS product_view");
     }
@@ -158,16 +171,28 @@ class ProjectionDeadLetterReplayConcurrencyIT {
     }
   }
 
-  /** The fixture every test starts from: the seeded row, the two events, the dead-letter entry. */
+  /**
+   * The fixture every test starts from: the seeded row, the two events, the dead-letter entry, and
+   * the checkpoint pair routing gives {@code mode}.
+   */
   private static final class Fixture {
     final ProjectionName name = ProjectionName.of("product");
     final JdbcProjectionRepository repo = new JdbcProjectionRepository(ds);
     final ProductProjection projection = new ProductProjection(repo);
-    final PostgresOffsetStore offsets = new PostgresOffsetStore(ds);
     final PostgresProjectionDeadLetterStore deadLetters = new PostgresProjectionDeadLetterStore(ds);
     final InMemoryEventStore events = new InMemoryEventStore(TYPES);
+    final ProjectionDeliveryMode mode;
+    final OffsetStore offsets;
+    final AtomicBatchProcessor processor;
 
-    Fixture() {
+    Fixture(ProjectionDeliveryMode mode) {
+      this.mode = mode;
+      CheckpointTarget target =
+          mode.writesInCheckpointTransaction()
+              ? new CheckpointTarget("postgres", new PostgresReadModelCheckpoints(ds), repo)
+              : new PostgresOffsetStore(ds).subscriptionCheckpoint();
+      this.offsets = target.checkpoints();
+      this.processor = target.processor();
       events.append(
           TestStreams.stream(ROW),
           List.of(
@@ -194,13 +219,13 @@ class ProjectionDeadLetterReplayConcurrencyIT {
               "boom",
               1,
               Instant.now()));
-      repo.executeAtomically(name, List.of(), GlobalOffset.of(1), 0L, tx -> {}, offsets);
+      processor.executeAtomically(name, List.of(), GlobalOffset.of(1), 0L, tx -> {}, offsets);
     }
 
     /** What a runner does with the batch after the checkpoint, under {@code mode}. */
-    void runLiveBatch(ProjectionDeliveryMode mode) {
+    void runLiveBatch() {
       List<EventEnvelope> batch = events.readGlobalStream(GlobalOffset.of(1), 10);
-      repo.executeAtomically(
+      processor.executeAtomically(
           name,
           batch,
           batch.getLast().globalOffset(),
@@ -209,8 +234,8 @@ class ProjectionDeadLetterReplayConcurrencyIT {
           offsets);
     }
 
-    ReplayResult replay(ProjectionDeliveryMode mode, ProjectionDeadLetterStore store) {
-      return new ProjectionDeadLetterReplayer(events, store, repo)
+    ReplayResult replay(ProjectionDeadLetterStore store) {
+      return new ProjectionDeadLetterReplayer(events, store, processor)
           .replay(name, projection, mode, 10);
     }
 
@@ -228,7 +253,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
   })
   void replayBesideAnOpenLiveBatch_waitsForTheCheckpointRow_andBothEffectsSurvive(
       ProjectionDeliveryMode mode, HoldPoint holdPoint) throws Exception {
-    var fixture = new Fixture();
+    var fixture = new Fixture(mode);
     var liveIsOpen = new CountDownLatch(1);
     var releaseLive = new CountDownLatch(1);
     Runnable hold =
@@ -250,7 +275,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
             .start(
                 () -> {
                   try {
-                    fixture.runLiveBatch(mode);
+                    fixture.runLiveBatch();
                   } catch (Throwable t) {
                     liveFailure.set(t);
                   }
@@ -261,7 +286,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
             .start(
                 () -> {
                   try {
-                    replayOutcome.set(fixture.replay(mode, fixture.deadLetters));
+                    replayOutcome.set(fixture.replay(fixture.deadLetters));
                   } catch (Throwable t) {
                     replayFailure.set(t);
                   }
@@ -300,11 +325,11 @@ class ProjectionDeadLetterReplayConcurrencyIT {
 
   @Test
   void crashBeforeTheReplayCommit_rollsTheRangeBack_keepsTheEntry_andTheNextReplayAppliesItOnce() {
-    var fixture = new Fixture();
+    var fixture = new Fixture(TRANSACTIONAL_LOCAL);
     fixture.projection.afterPriceWrite =
         () -> CrashItSupport.terminateIdleInTransaction(observerDs, APP);
 
-    ReplayResult crashed = fixture.replay(TRANSACTIONAL_LOCAL, fixture.deadLetters);
+    ReplayResult crashed = fixture.replay(fixture.deadLetters);
 
     assertThat(crashed).isEqualTo(new ReplayResult(0, 1, 0));
     assertThat(fixture.row())
@@ -314,7 +339,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
     assertThat(fixture.offsets.getLastOffset(fixture.name)).isEqualTo(GlobalOffset.of(1));
 
     fixture.projection.afterPriceWrite = () -> {};
-    ReplayResult rerun = fixture.replay(TRANSACTIONAL_LOCAL, fixture.deadLetters);
+    ReplayResult rerun = fixture.replay(fixture.deadLetters);
 
     assertThat(rerun).isEqualTo(new ReplayResult(1, 0, 0));
     assertThat(fixture.row()).isEqualTo(new ProductView(ROW, 150, 10));
@@ -324,10 +349,10 @@ class ProjectionDeadLetterReplayConcurrencyIT {
 
   @Test
   void crashAfterTheReplayCommit_beforeTheDiscard_keepsTheEntry_andTheNextReplayConverges() {
-    var fixture = new Fixture();
+    var fixture = new Fixture(TRANSACTIONAL_LOCAL);
     var failingOnce = new FailingOnceDiscard(fixture.deadLetters);
 
-    ReplayResult crashed = fixture.replay(TRANSACTIONAL_LOCAL, failingOnce);
+    ReplayResult crashed = fixture.replay(failingOnce);
 
     assertThat(crashed).isEqualTo(new ReplayResult(0, 1, 0));
     assertThat(fixture.row())
@@ -335,7 +360,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
         .isEqualTo(new ProductView(ROW, 150, 10));
     assertThat(fixture.deadLetters.read(fixture.name, 10)).hasSize(1);
 
-    ReplayResult rerun = fixture.replay(TRANSACTIONAL_LOCAL, failingOnce);
+    ReplayResult rerun = fixture.replay(failingOnce);
 
     assertThat(rerun).isEqualTo(new ReplayResult(1, 0, 0));
     assertThat(fixture.row())
@@ -347,9 +372,9 @@ class ProjectionDeadLetterReplayConcurrencyIT {
 
   @Test
   void atLeastOnceReplay_runsUnderTheCheckpointRow_andWritesThroughTheProjectionsOwnRepository() {
-    var fixture = new Fixture();
+    var fixture = new Fixture(AT_LEAST_ONCE_IDEMPOTENT);
 
-    ReplayResult result = fixture.replay(AT_LEAST_ONCE_IDEMPOTENT, fixture.deadLetters);
+    ReplayResult result = fixture.replay(fixture.deadLetters);
 
     assertThat(result).isEqualTo(new ReplayResult(1, 0, 0));
     assertThat(fixture.row()).isEqualTo(new ProductView(ROW, 150, 10));
