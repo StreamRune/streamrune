@@ -144,6 +144,11 @@ class SagaStateWriteRatchetTest {
               Kind.KEEPS_FORWARD_PHASE,
               "the shield flag; the fence does not read it"));
 
+  /** Why a write of {@code PostgresCheckpointFence} never targets {@code saga_state}. */
+  private static final String CHECKPOINT_TABLE =
+      "a checkpoint table, named only by the CheckpointTable enum: subscription_checkpoint or"
+          + " readmodel_checkpoint";
+
   /**
    * Every write whose table the statement's text does not name, with the reason its table is never
    * {@code saga_state}. Keyed by {@code File.CONSTANT}, or for an unnamed statement by {@code File:
@@ -162,7 +167,17 @@ class SagaStateWriteRatchetTest {
               + " encryption_keys)",
           "PostgresCryptoEngine.java: INSERT INTO #1",
           "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
-              + " encryption_keys)");
+              + " encryption_keys)",
+          "PostgresCheckpointFence.SEED",
+          CHECKPOINT_TABLE,
+          "PostgresCheckpointFence.SAVE_LOCKED",
+          CHECKPOINT_TABLE,
+          "PostgresCheckpointFence.STAMP",
+          CHECKPOINT_TABLE,
+          "PostgresCheckpointFence.RESET",
+          CHECKPOINT_TABLE,
+          "PostgresCheckpointFence.SAVE_UNLOCKED",
+          CHECKPOINT_TABLE);
 
   /** The files whose literals may name {@code saga_state} alone, with the reason. */
   private static final Map<String, String> LITERAL_TABLE_NAMES =
