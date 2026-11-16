@@ -417,6 +417,11 @@
       "defaultValue": true
     },
     {
+      "name": "streamrune.read-model.schema.auto-initialize",
+      "type": "java.lang.Boolean",
+      "description": "Whether the default read-model store (postgres) applies its migration series (db/readmodel-migration) at startup. Unset, it follows streamrune.event-store.schema.auto-initialize."
+    },
+    {
       "name": "streamrune.inbox.retention-max-age",
       "type": "java.time.Duration",
       "description": "How long processed command-inbox rows are kept; 0s or negative keeps them.",

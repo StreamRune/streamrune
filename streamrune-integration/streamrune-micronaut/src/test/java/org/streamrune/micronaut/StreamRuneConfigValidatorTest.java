@@ -107,7 +107,8 @@ class StreamRuneConfigValidatorTest {
             true,
             true,
             true,
-            true);
+            true,
+            null);
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -175,7 +176,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   /**
@@ -292,7 +294,8 @@ class StreamRuneConfigValidatorTest {
             true,
             true,
             true,
-            true);
+            true,
+            null);
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -364,7 +367,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   @Test
@@ -552,7 +556,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────
