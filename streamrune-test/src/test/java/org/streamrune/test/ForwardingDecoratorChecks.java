@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.LongSupplier;
@@ -25,6 +26,8 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrigin;
@@ -45,7 +48,8 @@ import org.streamrune.core.types.Version;
  * What every forwarding decorator of the kit does, checked over every method of its interface by
  * reflection, so a method added to the interface later cannot fall through to a default: the
  * decorator declares it, forwards it to the same method of the delegate with the same arguments and
- * returns what the delegate returned, and consults its fault schedule under the method's name.
+ * returns what the delegate returned (or, for a method the decorator test names, a documented
+ * rebuild of it), and consults its fault schedule under the method's name.
  *
  * <p>The delegate is a {@link Proxy} that records each call: a proxy receives the interface's
  * default methods too, so a decorator that left one to its default would forward another method
@@ -94,6 +98,29 @@ final class ForwardingDecoratorChecks {
    */
   static <T> void assertEveryMethodForwards(
       Class<T> type, BiFunction<T, FaultSchedule, T> decorate) {
+    assertEveryMethodForwards(type, decorate, Map.of());
+  }
+
+  /**
+   * What a decorator returns from a method it forwards but does not return as it is: given the
+   * delegate's answer, what the decorator returned and the decorator, it fails unless the result is
+   * the documented rebuild of the answer.
+   */
+  @FunctionalInterface
+  interface RebuiltAnswer {
+    void check(Object delegateAnswer, Object result, Object decorator);
+  }
+
+  /**
+   * {@link #assertEveryMethodForwards(Class, BiFunction)}, except that the methods named in {@code
+   * rebuilt} may return a value built from the delegate's answer rather than the answer itself:
+   * they still forward to the same method of the delegate with the same arguments, exactly once,
+   * and their result is checked by its {@link RebuiltAnswer}. The one documented case is {@code
+   * ForwardingOffsetStore#subscriptionCheckpoint}, which returns the delegate's pair with the
+   * decorator as its checkpoints, so the fault schedule stays on the subscription's checkpoint.
+   */
+  static <T> void assertEveryMethodForwards(
+      Class<T> type, BiFunction<T, FaultSchedule, T> decorate, Map<String, RebuiltAnswer> rebuilt) {
     for (Method method : methodsOf(type)) {
       for (int variant = 0; variant < 2; variant++) {
         List<Received> received = new ArrayList<>();
@@ -108,7 +135,12 @@ final class ForwardingDecoratorChecks {
         assertEquals(method, received.getFirst().method(), () -> method + " forwarded another");
         assertArrayEquals(
             args, received.getFirst().args(), () -> method + " changed its arguments");
-        assertEquals(answer, result, () -> method + " did not return the delegate's answer");
+        RebuiltAnswer rebuild = rebuilt.get(method.getName());
+        if (rebuild != null) {
+          rebuild.check(answer, result, decorator);
+        } else {
+          assertEquals(answer, result, () -> method + " did not return the delegate's answer");
+        }
       }
     }
   }
@@ -236,6 +268,10 @@ final class ForwardingDecoratorChecks {
     }
     if (type == Duration.class) {
       return Duration.ofMillis(n);
+    }
+    if (type == CheckpointTarget.class) {
+      return new CheckpointTarget(
+          "target-" + n, new InMemoryOffsetStore(), AtomicBatchProcessor.nonAtomicAtLeastOnce());
     }
     if (type == GlobalOffset.class) {
       return GlobalOffset.of(n);

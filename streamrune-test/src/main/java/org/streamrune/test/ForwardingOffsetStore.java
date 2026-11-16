@@ -67,14 +67,23 @@ public class ForwardingOffsetStore implements OffsetStore {
   }
 
   /**
-   * The delegate's subscription checkpoint, as the delegate builds it. Its checkpoints are the
-   * delegate's, so a runner given this pair reads and commits past the schedule: to inject faults
-   * into a subscription's checkpoint, give the runner this store and the processor separately.
+   * The delegate's subscription checkpoint with this store as its checkpoints: the delegate's name
+   * and processor, read through the schedule. A runner given the pair reads its position through
+   * this decorator, and a processor that saves through the store it is handed (the non-atomic one)
+   * saves through it too, so a fault scheduled on {@code getLastOffset} or {@code saveOffset} fires
+   * on the subscription's checkpoint. A processor that saves on its own (the PostgreSQL
+   * subscription checkpoint processor) still commits to the delegate's table, which this store
+   * reads.
    *
-   * @return the delegate's pair
+   * <p>The one method that does not return the delegate's answer as it is: the pair is rebuilt
+   * around this store, or the fault schedule would never see the subscription's checkpoint.
+   *
+   * @return the delegate's pair, with this store as its checkpoints
    */
   @Override
   public CheckpointTarget subscriptionCheckpoint() {
-    return schedule.call("subscriptionCheckpoint", delegate::subscriptionCheckpoint);
+    CheckpointTarget pair =
+        schedule.call("subscriptionCheckpoint", delegate::subscriptionCheckpoint);
+    return new CheckpointTarget(pair.name(), this, pair.processor());
   }
 }
