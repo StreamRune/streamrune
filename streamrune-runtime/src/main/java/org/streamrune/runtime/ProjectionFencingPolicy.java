@@ -2,6 +2,7 @@ package org.streamrune.runtime;
 
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.subscription.SubscriptionLeadership;
+import org.streamrune.core.types.LogSanitizer;
 
 /**
  * Single place where the three leadership-aware projection runner builders refuse to assemble a
@@ -39,6 +40,52 @@ final class ProjectionFencingPolicy {
    */
   static void requireFencingCapable(
       SubscriptionLeadership leadership, AtomicBatchProcessor processor, String runnerName) {
+    require(
+        leadership,
+        processor,
+        runnerName,
+        processor == null ? "null" : processor.getClass().getName());
+  }
+
+  /**
+   * {@link #requireFencingCapable(SubscriptionLeadership, AtomicBatchProcessor, String)} for one
+   * registration of a runner that commits each registration through its own pair: {@code processor}
+   * is that registration's processor, and a refusal names the registration and the checkpoint
+   * target its processor came from, so a runner whose other registrations fence is refused for this
+   * one alone.
+   *
+   * @param leadership the configured leadership; {@link SubscriptionLeadership#NOOP} is always
+   *     accepted
+   * @param processor the registration's batch processor
+   * @param runnerName the runner type, for the error message
+   * @param projectionName the registration's projection name, for the message (sanitized here)
+   * @param targetName the registration's checkpoint target name, or {@code null} for the runner's
+   *     default pair
+   * @throws IllegalArgumentException if leadership is real and {@code processor} cannot fence
+   */
+  static void requireFencingCapable(
+      SubscriptionLeadership leadership,
+      AtomicBatchProcessor processor,
+      String runnerName,
+      String projectionName,
+      String targetName) {
+    require(
+        leadership,
+        processor,
+        runnerName + " projection '" + LogSanitizer.sanitizeForLog(projectionName) + "'",
+        processor == null
+            ? "null"
+            : processor.getClass().getName()
+                + (targetName == null
+                    ? ""
+                    : " (checkpoint target '" + LogSanitizer.sanitizeForLog(targetName) + "')"));
+  }
+
+  private static void require(
+      SubscriptionLeadership leadership,
+      AtomicBatchProcessor processor,
+      String subject,
+      String processorDescription) {
     if (leadership == SubscriptionLeadership.NOOP) {
       return;
     }
@@ -46,11 +93,11 @@ final class ProjectionFencingPolicy {
       return;
     }
     throw new IllegalArgumentException(
-        runnerName
+        subject
             + " was configured with single-active-consumer leadership ("
             + (leadership.getClass().getName())
             + ") but its AtomicBatchProcessor cannot honour the leadership fencing epoch ("
-            + (processor == null ? "null" : processor.getClass().getName())
+            + processorDescription
             + "). The epoch fence, the first-offset overlap guard and the atomic checkpoint would"
             + " all be inert: a superseded leader resuming after a GC/VM pause would re-apply its"
             + " in-flight batch to the read model with nothing to reject it, and the offset store's"

@@ -23,6 +23,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionCheckpointSaveException;
@@ -50,6 +51,11 @@ import org.streamrune.core.types.ProjectionName;
  * Mirrors {@link MultiProjectionRunner} shape.
  *
  * <p>Each registered projection runs on its own virtual thread.
+ *
+ * <p>Each registration reads its checkpoint from and commits through one pair: its own {@link
+ * CheckpointTarget} when it was registered with one, otherwise the runner-wide {@link
+ * Builder#offsetStore} and {@link Builder#atomicProcessor} (the default pair). The two halves never
+ * mix. Dead-letter store, leadership, metrics, classifier, health and tracing stay runner-wide.
  */
 public final class ScheduledProjectionRunner implements AutoCloseable {
 
@@ -71,11 +77,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   private static final AtomicBatchProcessor.ProjectionUpdater NO_OP_UPDATER = repository -> {};
 
   private final List<ScheduledProjectionRegistration> registrations;
+  // Each registration's pair, resolved once at build(): its target's, or the runner's default.
+  private final Map<ProjectionName, RegistrationCheckpoints> checkpoints;
   private final EventStore eventStore;
-  private final OffsetStore offsetStore;
   private final int fetchSize;
   private final int batchSize;
-  private final AtomicBatchProcessor atomicProcessor;
   private final ProjectionDeadLetterStore deadLetterStore;
   private final StreamRuneMetrics metrics;
   private final SubscriptionLeadership leadership;
@@ -140,13 +146,13 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
                             reg.name(), reg.projection(), projectionTracing),
                         reg.cron(),
                         reg.errorStrategy(),
-                        reg.deliveryMode()))
+                        reg.deliveryMode(),
+                        reg.target()))
             .toList();
+    this.checkpoints = Map.copyOf(b.resolvedCheckpoints);
     this.eventStore = b.eventStore;
-    this.offsetStore = b.offsetStore;
     this.fetchSize = b.fetchSize;
     this.batchSize = b.batchSize;
-    this.atomicProcessor = b.atomicProcessor;
     this.deadLetterStore = b.deadLetterStore;
     this.metrics = b.metrics;
     this.leadership = b.leadership;
@@ -190,18 +196,20 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       registerHealth(reg.name());
       // The one INFO line per registration — build() already accepted the pairing, so this
       // re-evaluation of the pure policy only names the verdict — and the delivery-mode gauge.
+      RegistrationCheckpoints pair = checkpointsOf(reg.name());
       var verdict =
           ProjectionDeliveryPolicy.require(
               reg.projection(),
               reg.deliveryMode(),
-              atomicProcessor,
+              pair.processor(),
               RUNNER_NAME,
-              reg.name().value());
+              reg.name().value(),
+              pair.targetName());
       logger.info(
           "Projection '{}' delivery mode {} on {} — {}",
           LogSanitizer.sanitizeForLog(reg.name().value()),
           reg.deliveryMode(),
-          ProjectionDeliveryPolicy.processorLabel(atomicProcessor),
+          pair.processorLabel(),
           verdict.describe());
       recordDeliveryMode(reg.name(), reg.deliveryMode());
       interrupts.put(reg.name(), new InterruptDeferral());
@@ -468,7 +476,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       runHeldFromStop(
           projectionName,
           () -> {
-            atomicProcessor.stampFencingEpoch(projectionName, epoch);
+            checkpointsOf(projectionName).processor().stampFencingEpoch(projectionName, epoch);
             return null;
           });
       return StampOutcome.STAMPED;
@@ -612,7 +620,8 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
             reg.name().value());
         return batches;
       }
-      GlobalOffset currentOffset = offsetStore.getLastOffset(reg.name());
+      GlobalOffset currentOffset =
+          checkpointsOf(reg.name()).checkpoints().getLastOffset(reg.name());
       List<EventEnvelope> events;
       try {
         events = eventStore.readGlobalStream(currentOffset, fetchSize);
@@ -686,27 +695,30 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           // epoch 0 is unfenced.
           // Held from stop()'s interrupt: one landing in the commit would fail it at the socket and
           // hand an intact chunk to the error strategy. stop() waits for it.
+          // The registration's own pair: the processor commits the checkpoint it read.
+          RegistrationCheckpoints pair = checkpointsOf(reg.name());
           runHeldFromStop(
               reg.name(),
               () -> {
                 // Only a registration that writes through the handed repository has a read model
                 // in the processor's store to prepare.
                 if (reg.deliveryMode().writesInCheckpointTransaction()) {
-                  atomicProcessor.prepareReadModel(reg.name());
+                  pair.processor().prepareReadModel(reg.name());
                 }
-                atomicProcessor.executeAtomically(
-                    reg.name(),
-                    chunk,
-                    newOffset,
-                    lease.get().epoch(),
-                    txRepository ->
-                        reg.projection()
-                            .process(
-                                chunk,
-                                reg.deliveryMode().writesInCheckpointTransaction()
-                                    ? txRepository
-                                    : null),
-                    offsetStore);
+                pair.processor()
+                    .executeAtomically(
+                        reg.name(),
+                        chunk,
+                        newOffset,
+                        lease.get().epoch(),
+                        txRepository ->
+                            reg.projection()
+                                .process(
+                                    chunk,
+                                    reg.deliveryMode().writesInCheckpointTransaction()
+                                        ? txRepository
+                                        : null),
+                        pair.checkpoints());
                 return null;
               });
           commitRejectionsFor(reg.name()).reset();
@@ -1024,8 +1036,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       runHeldFromStop(
           name,
           () -> {
-            atomicProcessor.executeAtomically(
-                name, List.of(), toOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
+            RegistrationCheckpoints pair = checkpointsOf(name);
+            pair.processor()
+                .executeAtomically(
+                    name, List.of(), toOffset, fencingEpoch, NO_OP_UPDATER, pair.checkpoints());
             return null;
           });
       commitRejectionsFor(name).reset();
@@ -1068,7 +1082,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     }
     long checkpoint;
     try {
-      checkpoint = offsetStore.getLastOffset(name).value();
+      checkpoint = checkpointsOf(name).checkpoints().getLastOffset(name).value();
     } catch (RuntimeException readFailed) {
       // Whether the checkpoint moved is unknown; the next rejection decides.
       return false;
@@ -1301,13 +1315,47 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
           new ScheduledProjectionStatus(
               reg.name(),
               rs.state,
-              offsetStore.getLastOffset(reg.name()),
+              checkpointsOf(reg.name()).checkpoints().getLastOffset(reg.name()),
               rs.lastFireAt,
               rs.nextFireAt,
               rs.batchesProcessedLastFire,
               rs.lastError));
     }
     return result;
+  }
+
+  /**
+   * Rewinds one registration's checkpoint to the start so it replays from the beginning on its next
+   * fire after {@link #start()}. The checkpoint rewound is the one the registration reads: in its
+   * {@link CheckpointTarget}'s store when it was registered with one, otherwise in the runner-wide
+   * offset store. As with {@link org.streamrune.core.projection.ProjectionRunner#reset}, the
+   * checkpoint is all this resets: read models and dead-letter entries are left untouched.
+   *
+   * @param name the registered projection to rewind
+   * @throws IllegalArgumentException if no projection of that name is registered
+   * @throws IllegalStateException if the runner is started (a running drain could save a higher
+   *     offset after the reset, undoing it), or if the offset store's reset returned without
+   *     rewinding the checkpoint
+   */
+  public void reset(ProjectionName name) {
+    RegistrationCheckpoints pair = checkpoints.get(name);
+    if (pair == null) {
+      throw new IllegalArgumentException(
+          "No projection registered as '" + LogSanitizer.sanitizeForLog(name.value()) + "'");
+    }
+    if (started.get()) {
+      throw new IllegalStateException(
+          RUNNER_NAME
+              + " is started: stop it before resetting '"
+              + LogSanitizer.sanitizeForLog(name.value())
+              + "'");
+    }
+    pair.reset(name);
+  }
+
+  /** The pair {@code name} reads its checkpoint from and commits through. */
+  private RegistrationCheckpoints checkpointsOf(ProjectionName name) {
+    return checkpoints.get(name);
   }
 
   @Override
@@ -1401,6 +1449,9 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     private Clock clock;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private final List<ScheduledProjectionRegistration> registrations = new ArrayList<>();
+    // Filled by build(): each registration's resolved pair, handed to the runner.
+    private final Map<ProjectionName, RegistrationCheckpoints> resolvedCheckpoints =
+        new LinkedHashMap<>();
 
     /**
      * Test-only: overrides the whole-tick drain-retry backoff bounds. Production uses {@link
@@ -1449,7 +1500,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       return this;
     }
 
-    /** Sets the offset store that tracks the last processed offset per projection. */
+    /**
+     * Sets the offset store of the runner's default pair: the checkpoints of every registration
+     * registered without a {@link CheckpointTarget} are read from it, and committed by {@link
+     * #atomicProcessor}. Set both or neither; neither requires a target on every registration.
+     */
     public Builder offsetStore(OffsetStore os) {
       this.offsetStore = os;
       return this;
@@ -1470,16 +1525,18 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
     }
 
     /**
-     * Sets the atomic batch processor. Required: pass the {@code JdbcProjectionRepository} your
-     * {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} projections write to, so each chunk's
-     * read-model write and its offset checkpoint commit — or roll back — in one transaction for
-     * those registrations, giving SCHEDULED projections the same split-brain guard the continuous
-     * and polling runners have; or {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for a runner
-     * of {@code AT_LEAST_ONCE_IDEMPOTENT} projections. A transactional registration's {@code
-     * process(batch, repository)} override must write through the supplied transaction-scoped
-     * repository (the framework's {@link org.streamrune.core.projection.BaseProjection} does this
-     * transparently); {@link #build()} checks each registration's declared mode against the
-     * processor.
+     * Sets the processor of the runner's default pair: every registration registered without a
+     * {@link CheckpointTarget} commits through it, advancing its checkpoint in {@link
+     * #offsetStore}. Set both or neither; neither requires a target on every registration. Pass the
+     * {@code JdbcProjectionRepository} your {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
+     * projections write to, so each chunk's read-model write and its offset checkpoint commit — or
+     * roll back — in one transaction for those registrations, giving SCHEDULED projections the same
+     * split-brain guard the continuous and polling runners have; or {@link
+     * AtomicBatchProcessor#nonAtomicAtLeastOnce()} for a runner of {@code AT_LEAST_ONCE_IDEMPOTENT}
+     * projections. A transactional registration's {@code process(batch, repository)} override must
+     * write through the supplied transaction-scoped repository (the framework's {@link
+     * org.streamrune.core.projection.BaseProjection} does this transparently); {@link #build()}
+     * checks each registration's declared mode against the processor.
      *
      * @throws IllegalArgumentException if {@code processor} is {@code null}
      */
@@ -1622,8 +1679,35 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
         String cron,
         ProjectionErrorStrategy strategy,
         ProjectionDeliveryMode mode) {
+      return register(name, p, cron, strategy, mode, null);
+    }
+
+    /**
+     * Registers a projection with a cron expression, an explicit error strategy and its delivery
+     * mode, reading its checkpoint from and committing through {@code target} instead of the
+     * runner's default pair. {@link #build()} checks its delivery mode, its name and (under real
+     * leadership) its fencing against {@code target}'s processor.
+     *
+     * @param name unique projection name
+     * @param p the projection
+     * @param cron Spring 6-field cron expression
+     * @param strategy how to handle processing failures
+     * @param mode the delivery guarantee this projection declares
+     * @param target the pair this registration reads and commits through; {@code null} uses the
+     *     runner's default pair
+     * @return this builder
+     * @throws IllegalArgumentException if the cron is invalid
+     */
+    public Builder register(
+        ProjectionName name,
+        Projection p,
+        String cron,
+        ProjectionErrorStrategy strategy,
+        ProjectionDeliveryMode mode,
+        CheckpointTarget target) {
       var parsed = CronExpression.parse(cron, ZoneOffset.UTC);
-      registrations.add(new ScheduledProjectionRegistration(name, p, parsed, strategy, mode));
+      registrations.add(
+          new ScheduledProjectionRegistration(name, p, parsed, strategy, mode, target));
       return this;
     }
 
@@ -1636,28 +1720,26 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       if (eventStore == null) {
         throw new IllegalArgumentException("eventStore is required");
       }
-      if (offsetStore == null) {
-        throw new IllegalArgumentException("offsetStore is required");
-      }
-      if (atomicProcessor == null) {
-        throw new IllegalArgumentException(
-            "atomicProcessor is required: pass the JdbcProjectionRepository your"
-                + " TRANSACTIONAL_LOCAL projections write to, or"
-                + " AtomicBatchProcessor.nonAtomicAtLeastOnce() for a runner of"
-                + " AT_LEAST_ONCE_IDEMPOTENT projections");
-      }
+      RegistrationCheckpoints.requireWholeDefaultPair(offsetStore, atomicProcessor);
       if (registrations.isEmpty()) {
         throw new IllegalArgumentException("at least one projection must be registered");
       }
       var names = new HashSet<ProjectionName>();
+      var pairs = new LinkedHashMap<ProjectionName, RegistrationCheckpoints>();
       for (var reg : registrations) {
+        // Each registration's pair — its target's, or the runner's default — resolved once; a
+        // registration with neither fails here, by name.
+        RegistrationCheckpoints pair =
+            RegistrationCheckpoints.resolve(
+                reg.target(), offsetStore, atomicProcessor, RUNNER_NAME, reg.name());
         // A name the processor cannot store read models under fails here, at startup. With
         // the JDBC repository every valid name has a table of its own, so the exact-name duplicate
         // check below is also the check that no two registrations share a read-model table.
-        atomicProcessor.checkProjectionName(reg.name());
+        pair.processor().checkProjectionName(reg.name());
         if (!names.add(reg.name())) {
           throw new IllegalArgumentException("Duplicate projection name: " + reg.name().value());
         }
+        pairs.put(reg.name(), pair);
       }
       boolean hasDlq =
           registrations.stream().anyMatch(r -> r.errorStrategy() == ProjectionErrorStrategy.DLQ);
@@ -1666,15 +1748,25 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
             "deadLetterStore is required when any registration uses DLQ strategy");
       }
       // The scheduled drain runs the same acquire → stamp → chunked-commit protocol as
-      // the continuous runner, so it needs the same fencing-capable processor.
-      ProjectionFencingPolicy.requireFencingCapable(leadership, atomicProcessor, RUNNER_NAME);
-      // Every registration shares this runner's single atomicProcessor, so each is checked
-      // against its OWN declared mode — one at-least-once projection never loosens the check for a
-      // sibling that declares a transactional mode.
+      // the continuous runner, so each registration needs the same fencing-capable processor.
+      // Each is checked against the processor IT commits through and its OWN declared mode — a
+      // runner that mixes targets refuses only the offending registration, by name, and one
+      // at-least-once projection never loosens the check for a sibling that declares a
+      // transactional mode.
       for (var reg : registrations) {
+        RegistrationCheckpoints pair = pairs.get(reg.name());
+        ProjectionFencingPolicy.requireFencingCapable(
+            leadership, pair.processor(), RUNNER_NAME, reg.name().value(), pair.targetName());
         ProjectionDeliveryPolicy.require(
-            reg.projection(), reg.deliveryMode(), atomicProcessor, RUNNER_NAME, reg.name().value());
+            reg.projection(),
+            reg.deliveryMode(),
+            pair.processor(),
+            RUNNER_NAME,
+            reg.name().value(),
+            pair.targetName());
       }
+      resolvedCheckpoints.clear();
+      resolvedCheckpoints.putAll(pairs);
       return new ScheduledProjectionRunner(this);
     }
   }

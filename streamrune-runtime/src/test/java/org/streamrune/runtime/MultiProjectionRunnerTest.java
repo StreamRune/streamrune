@@ -10,13 +10,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
@@ -25,11 +33,13 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.subscription.SubscriptionConfig;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -37,6 +47,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
+import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -649,5 +660,371 @@ class MultiProjectionRunnerTest {
     } finally {
       runner.stop();
     }
+  }
+
+  // ── per-registration checkpoint targets ──────────────────────────────────────────────────────
+
+  /** An offset store that remembers every projection name it was asked about. */
+  private static final class RecordingOffsetStore implements OffsetStore {
+    final InMemoryOffsetStore delegate = new InMemoryOffsetStore();
+    final Set<ProjectionName> touched = ConcurrentHashMap.newKeySet();
+
+    @Override
+    public GlobalOffset getLastOffset(ProjectionName projectionName) {
+      touched.add(projectionName);
+      return delegate.getLastOffset(projectionName);
+    }
+
+    @Override
+    public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
+      touched.add(projectionName);
+      delegate.saveOffset(projectionName, offset);
+    }
+
+    @Override
+    public void reset(ProjectionName projectionName) {
+      touched.add(projectionName);
+      delegate.reset(projectionName);
+    }
+  }
+
+  /** A leadership that issues real, non-zero fencing epochs — a multi-replica deployment. */
+  private static final class EpochLeadership implements SubscriptionLeadership {
+    @Override
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
+      return Optional.of(new Lease(5L));
+    }
+
+    @Override
+    public Optional<Lease> current(SubscriptionName consumerName) {
+      return Optional.of(new Lease(5L));
+    }
+
+    @Override
+    public void resign(SubscriptionName consumerName) {}
+
+    @Override
+    public void close() {}
+  }
+
+  private static void awaitCheckpoint(OffsetStore store, ProjectionName name)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (store.getLastOffset(name).equals(GlobalOffset.initial())
+        && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+    }
+  }
+
+  @Test
+  void registrationsCommitThroughTheirOwnTargets() throws Exception {
+    StreamId s = StreamId.of(TYPE, AggregateId.of("routed-1"));
+    eventStore.append(s, List.of(envelope(s, 1, "a")), Version.initial());
+    var storeA = new InMemoryProjectionRepository();
+    var storeB = new InMemoryProjectionRepository();
+    var runnerWide = new RecordingOffsetStore();
+    var orders = ProjectionName.of("orders");
+    var search = ProjectionName.of("search");
+
+    var runner =
+        MultiProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(runnerWide)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .subscriptionConfig(fastConfig())
+            .register(
+                orders,
+                events -> {},
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("a", storeA, storeA))
+            .register(
+                search,
+                events -> {},
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("b", storeB, storeB))
+            .build();
+    runner.start();
+    try {
+      awaitCheckpoint(storeA, orders);
+      awaitCheckpoint(storeB, search);
+    } finally {
+      runner.stop();
+    }
+
+    assertNotEquals(GlobalOffset.initial(), storeA.committedOffset(orders));
+    assertNotEquals(GlobalOffset.initial(), storeB.committedOffset(search));
+    assertEquals(GlobalOffset.initial(), storeA.committedOffset(search), "b's checkpoint in a");
+    assertEquals(GlobalOffset.initial(), storeB.committedOffset(orders), "a's checkpoint in b");
+    // Neither registration ever read or wrote the runner-wide default.
+    assertEquals(Set.of(), runnerWide.touched);
+    // status() reads each registration's checkpoint from its own target.
+    assertEquals(storeA.committedOffset(orders), runner.status().get(orders).lastOffset());
+    assertEquals(storeB.committedOffset(search), runner.status().get(search).lastOffset());
+  }
+
+  @Test
+  void resetHitsTheRoutedStoresCheckpoint() throws Exception {
+    StreamId s = StreamId.of(TYPE, AggregateId.of("reset-1"));
+    eventStore.append(s, List.of(envelope(s, 1, "a")), Version.initial());
+    var store = new InMemoryProjectionRepository();
+    var routed = ProjectionName.of("routed");
+    var plain = ProjectionName.of("plain");
+    // The runner-wide store holds a row under the routed name too: a reset that went to the
+    // runner-wide default would rewind this row instead of the routed store's.
+    offsetStore.saveOffset(routed, GlobalOffset.of(7));
+
+    var runner =
+        MultiProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .subscriptionConfig(fastConfig())
+            .register(
+                routed,
+                events -> {},
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", store, store))
+            .register(plain, events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .build();
+    runner.start();
+    try {
+      awaitCheckpoint(store, routed);
+      awaitCheckpoint(offsetStore, plain);
+      assertThrows(IllegalStateException.class, () -> runner.reset(routed), "reset while running");
+    } finally {
+      runner.stop();
+    }
+    GlobalOffset plainBefore = offsetStore.getLastOffset(plain);
+    assertNotEquals(GlobalOffset.initial(), store.committedOffset(routed));
+
+    runner.reset(routed);
+
+    assertEquals(GlobalOffset.initial(), store.committedOffset(routed));
+    assertEquals(GlobalOffset.of(7), offsetStore.getLastOffset(routed), "runner-wide row moved");
+    assertEquals(plainBefore, offsetStore.getLastOffset(plain));
+
+    // An unrouted registration resets the runner-wide default.
+    runner.reset(plain);
+    assertEquals(GlobalOffset.initial(), offsetStore.getLastOffset(plain));
+
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class, () -> runner.reset(ProjectionName.of("unknown")));
+    assertTrue(ex.getMessage().contains("unknown"), ex.getMessage());
+  }
+
+  @Test
+  void resetRefusesACheckpointThatDidNotRewind() {
+    var stuck =
+        new OffsetStore() {
+          @Override
+          public GlobalOffset getLastOffset(ProjectionName projectionName) {
+            return GlobalOffset.of(3);
+          }
+
+          @Override
+          public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {}
+
+          @Override
+          public void reset(ProjectionName projectionName) {}
+        };
+    var runner =
+        MultiProjectionRunner.builder()
+            .eventStore(eventStore)
+            .register(
+                ProjectionName.of("stuck"),
+                events -> {},
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget(
+                    "stuck-store", stuck, AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+            .build();
+    var ex =
+        assertThrows(IllegalStateException.class, () -> runner.reset(ProjectionName.of("stuck")));
+    assertTrue(ex.getMessage().contains("did not rewind"), ex.getMessage());
+  }
+
+  @Test
+  void buildFailsWithoutAnyCheckpointSource() {
+    var store = new InMemoryProjectionRepository();
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                MultiProjectionRunner.builder()
+                    .eventStore(eventStore)
+                    .register(
+                        ProjectionName.of("routed"),
+                        events -> {},
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .register(ProjectionName.of("orphan"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+                    .build());
+    assertTrue(ex.getMessage().contains("'orphan'"), ex.getMessage());
+    assertFalse(ex.getMessage().contains("'routed'"), ex.getMessage());
+
+    // Every registration routed: no runner-wide pair is needed.
+    assertDoesNotThrow(
+        () ->
+            MultiProjectionRunner.builder()
+                .eventStore(eventStore)
+                .register(
+                    ProjectionName.of("routed"),
+                    events -> {},
+                    ProjectionErrorStrategy.HALT,
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    new CheckpointTarget("search", store, store))
+                .build());
+
+    // Half a runner-wide pair is refused even when every registration is routed: the default
+    // pair is read and committed together, never one half of it.
+    var half =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                MultiProjectionRunner.builder()
+                    .eventStore(eventStore)
+                    .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+                    .register(
+                        ProjectionName.of("routed"),
+                        events -> {},
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .build());
+    assertTrue(half.getMessage().startsWith("offsetStore is required"), half.getMessage());
+  }
+
+  @Test
+  void fencingCheckIsPerRegistration() {
+    var fencing = new InMemoryProjectionRepository();
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                MultiProjectionRunner.builder()
+                    .eventStore(eventStore)
+                    .leadership(new EpochLeadership())
+                    .register(
+                        ProjectionName.of("orders"),
+                        events -> {},
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("postgres", fencing, fencing))
+                    .register(
+                        ProjectionName.of("audit"),
+                        events -> {},
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget(
+                            "unfenced-store",
+                            new InMemoryOffsetStore(),
+                            AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+                    .build());
+    assertTrue(ex.getMessage().contains("'audit'"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("'unfenced-store'"), ex.getMessage());
+    assertFalse(ex.getMessage().contains("orders"), ex.getMessage());
+
+    // The fencing registration alone builds under the same leadership.
+    assertDoesNotThrow(
+        () ->
+            MultiProjectionRunner.builder()
+                .eventStore(eventStore)
+                .leadership(new EpochLeadership())
+                .register(
+                    ProjectionName.of("orders"),
+                    events -> {},
+                    ProjectionErrorStrategy.HALT,
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    new CheckpointTarget("postgres", fencing, fencing))
+                .build());
+  }
+
+  @Test
+  void deliveryCheckIsPerRegistration() {
+    var transactional = new InMemoryProjectionRepository();
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                MultiProjectionRunner.builder()
+                    .eventStore(eventStore)
+                    // The runner-wide default is transactional; the routed target is not.
+                    .offsetStore(transactional)
+                    .atomicProcessor(transactional)
+                    .register(
+                        ProjectionName.of("orders"),
+                        new WriteThroughProjection(),
+                        TRANSACTIONAL_LOCAL)
+                    .register(
+                        ProjectionName.of("audit"),
+                        new WriteThroughProjection(),
+                        ProjectionErrorStrategy.HALT,
+                        TRANSACTIONAL_LOCAL,
+                        new CheckpointTarget(
+                            "at-least-once-store",
+                            new InMemoryOffsetStore(),
+                            AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+                    .build());
+    assertTrue(ex.getMessage().contains("'audit'"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("'at-least-once-store'"), ex.getMessage());
+    assertFalse(ex.getMessage().contains("orders"), ex.getMessage());
+  }
+
+  @Test
+  void deliveryModeLineNamesTheCheckpointTarget() throws Exception {
+    var log = (Logger) LoggerFactory.getLogger(ContinuousProjectionRunner.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    var levelBefore = log.getLevel();
+    log.setLevel(Level.INFO);
+    appender.start();
+    log.addAppender(appender);
+    var store = new InMemoryProjectionRepository();
+    var runner =
+        MultiProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(offsetStore)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .subscriptionConfig(fastConfig())
+            .register(
+                ProjectionName.of("routed"),
+                events -> {},
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", store, store))
+            .register(ProjectionName.of("plain"), events -> {}, AT_LEAST_ONCE_IDEMPOTENT)
+            .build();
+    try {
+      runner.start();
+      awaitLive(runner, "routed");
+      awaitLive(runner, "plain");
+    } finally {
+      runner.stop();
+      log.detachAppender(appender);
+      log.setLevel(levelBefore);
+    }
+    var lines =
+        appender.list.stream()
+            .map(ILoggingEvent::getFormattedMessage)
+            .filter(m -> m.contains("delivery mode"))
+            .toList();
+    assertTrue(
+        lines.stream()
+            .anyMatch(
+                m ->
+                    m.startsWith("Projection 'routed'")
+                        && m.contains(
+                            InMemoryProjectionRepository.class.getName()
+                                + " (checkpoint target 'search')")),
+        lines.toString());
+    assertTrue(
+        lines.stream()
+            .anyMatch(
+                m -> m.startsWith("Projection 'plain'") && m.contains("on nonAtomicAtLeastOnce —")),
+        lines.toString());
   }
 }

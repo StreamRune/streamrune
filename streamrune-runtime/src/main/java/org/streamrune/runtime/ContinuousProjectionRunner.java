@@ -70,6 +70,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   private final SubscriptionFactory subscriptionFactory;
   private final Consumer<Throwable> errorHandler;
   private final AtomicBatchProcessor atomicProcessor;
+  // The name of the checkpoint target offsetStore + atomicProcessor came from, for the processor
+  // label in the delivery-mode line and in refusals; null: the runner's own pair.
+  private final String checkpointTargetName;
   private final ProjectionErrorStrategy errorStrategy;
   private final ProjectionDeadLetterStore deadLetterStore;
   private final StreamRuneMetrics metrics;
@@ -171,7 +174,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       Duration readRetryMaxBackoff,
       int maxReadPoisonRetries,
       Clock clock,
-      StreamRuneTracing tracing) {
+      StreamRuneTracing tracing,
+      String checkpointTargetName) {
     if (eventStore == null) {
       throw new IllegalArgumentException("eventStore is required");
     }
@@ -195,6 +199,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     this.subscriptionFactory = subscriptionFactory;
     this.errorHandler = errorHandler;
     this.atomicProcessor = atomicProcessor;
+    this.checkpointTargetName = checkpointTargetName;
     this.errorStrategy = errorStrategy != null ? errorStrategy : ProjectionErrorStrategy.HALT;
     this.deadLetterStore = deadLetterStore;
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
@@ -230,7 +235,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
             mode,
             atomicProcessor,
             "ContinuousProjectionRunner",
-            projectionName.value());
+            projectionName.value(),
+            checkpointTargetName);
     CountDownLatch done = new CountDownLatch(1);
     // A stop held from before this call (STOP_HELD) is consumed here — the run claims the
     // runner already STOPPING, so it takes exactly the path of a stop that lands just after the
@@ -1289,7 +1295,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         "Projection '{}' delivery mode {} on {} — {}",
         LogSanitizer.sanitizeForLog(projectionName.value()),
         mode,
-        ProjectionDeliveryPolicy.processorLabel(atomicProcessor),
+        ProjectionDeliveryPolicy.processorLabel(atomicProcessor, checkpointTargetName),
         verdict.describe());
     try {
       metrics.recordProjectionDeliveryMode(projectionName, mode);
@@ -2228,6 +2234,19 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     private int maxReadPoisonRetries = DEFAULT_MAX_READ_POISON_RETRIES;
     private Clock clock;
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
+    private String checkpointTargetName;
+
+    /**
+     * Names the {@link org.streamrune.core.projection.CheckpointTarget} this runner's {@link
+     * #offsetStore} and {@link #atomicProcessor} were taken from, so the delivery-mode line and a
+     * delivery-mode refusal name it next to the processor. Package-private: {@link
+     * MultiProjectionRunner} sets it for a registration routed to a target, and hands the target's
+     * own pair as the offset store and processor. Unset: the pair is named by the processor alone.
+     */
+    Builder checkpointTargetName(String name) {
+      this.checkpointTargetName = name;
+      return this;
+    }
 
     /**
      * Test-only: overrides the catch-up read-retry backoff bounds. Production uses {@link
@@ -2432,7 +2451,8 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           readRetryMaxBackoff,
           maxReadPoisonRetries,
           clock,
-          GuardedTracing.of(tracing, metrics));
+          GuardedTracing.of(tracing, metrics),
+          checkpointTargetName);
     }
   }
 }
