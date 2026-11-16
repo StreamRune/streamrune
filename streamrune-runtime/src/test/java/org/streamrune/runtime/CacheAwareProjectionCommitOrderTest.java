@@ -243,8 +243,8 @@ class CacheAwareProjectionCommitOrderTest {
             .eventStore(eventStore)
             .offsetStore(offsetStore)
             // The write-through projection below is handed the transaction-scoped repository only
-            // under a transactional mode, which needs a processor that claims fencing.
-            .atomicProcessor(TestFencingProcessor.fencing(transactional))
+            // under a transactional mode, which needs a processor that claims transactional().
+            .atomicProcessor(TestTransactionalProcessor.transactional(transactional))
             .subscriptionConfig(
                 new SubscriptionConfig(false, Duration.ofMillis(50), Duration.ofMillis(10)))
             .build();

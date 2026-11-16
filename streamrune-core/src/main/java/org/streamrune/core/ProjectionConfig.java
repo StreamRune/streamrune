@@ -64,6 +64,22 @@ public @interface ProjectionConfig {
    */
   ProjectionDeliveryMode deliveryMode();
 
+  /**
+   * The {@link org.streamrune.core.projection.ReadModelStore} this projection is routed to, by its
+   * {@link org.streamrune.core.projection.ReadModelStore#name() name}. Empty (the default) leaves
+   * the choice to routing: the store whose repository the projection's {@link
+   * org.streamrune.core.projection.Projection#writeTarget() writeTarget()} is, otherwise the single
+   * transactional store for a transactional mode, otherwise the event store's subscription
+   * checkpoint for an at-least-once one.
+   *
+   * <p>A name no store carries is a startup error, and so is a declaration that disagrees with the
+   * projection's own {@code writeTarget()}. Declare it when routing cannot decide alone — several
+   * transactional stores, or a {@code writeTarget()} that no store owns.
+   *
+   * @return the name of the read-model store, or empty to let routing choose
+   */
+  String readModelStore() default "";
+
   enum Mode {
     /** Continuous polling — runs on {@code MultiProjectionRunner}. */
     CONTINUOUS,

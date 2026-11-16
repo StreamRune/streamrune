@@ -66,12 +66,12 @@ public interface AtomicBatchProcessor {
    * @param fencingEpoch the caller's held leadership epoch (see {@link
    *     org.streamrune.core.subscription.SubscriptionLeadership.Lease#epoch()}); {@code 0} means
    *     unfenced (single-node / {@link
-   *     org.streamrune.core.subscription.SubscriptionLeadership#NOOP}). Transactional
-   *     implementations reject a commit whose epoch is below the epoch already stored for this
-   *     projection and stamp the epoch on commit, fencing out a superseded leader. An
-   *     implementation whose {@link #supportsFencing()} is {@code false} must never be handed a
-   *     non-zero epoch (the leadership-aware runners reject that pairing at build time) and must
-   *     refuse the commit if it is — see {@link #nonAtomicAtLeastOnce()}.
+   *     org.streamrune.core.subscription.SubscriptionLeadership#NOOP}). Fencing implementations
+   *     reject a commit whose epoch is below the epoch already stored for this projection and stamp
+   *     the epoch on commit, fencing out a superseded leader. An implementation whose {@link
+   *     #fencesCheckpoint()} is {@code false} must never be handed a non-zero epoch (the
+   *     leadership-aware runners reject that pairing at build time) and must refuse the commit if
+   *     it is — see {@link #nonAtomicAtLeastOnce()}.
    * @param projectionUpdater code that performs the projection update; receives the
    *     transaction-scoped repository (or {@code null} from non-transactional implementations)
    * @param offsetStore the offset store to save the offset to (ignored by transactional
@@ -86,39 +86,84 @@ public interface AtomicBatchProcessor {
       OffsetStore offsetStore);
 
   /**
-   * Whether this processor is transactional and fenced. {@code true} means all three of:
+   * Whether {@link #executeAtomically} runs the updater's writes and the checkpoint commit in one
+   * transaction. {@code true} means both of:
    *
    * <ol>
-   *   <li>{@link #executeAtomically} runs the updater and the checkpoint write in one transaction;
+   *   <li>the updater's writes through the handed repository and the checkpoint write commit — or
+   *       roll back — together;
    *   <li>the repository handed to the updater is bound to that transaction and is never {@code
-   *       null};
-   *   <li>a commit from a superseded epoch is rejected before any read-model write, and {@link
-   *       #stampFencingEpoch} stamps the epoch durably.
+   *       null}.
    * </ol>
    *
-   * <p>A processor that cannot say all three returns {@code false}. The delivery policy relies on
-   * it: a {@link ProjectionDeliveryMode#TRANSACTIONAL_LOCAL} or {@link
-   * ProjectionDeliveryMode#EXTERNAL_EFFECT} registration is refused on a processor that returns
-   * {@code false}.
+   * <p>The processor's two capabilities are independent; each is required by different
+   * registrations:
+   *
+   * <table>
+   *   <caption>Processor capabilities</caption>
+   *   <tr><th>capability</th><th>meaning</th><th>required by</th></tr>
+   *   <tr><td>{@code transactional()}</td><td>the updater's writes through the handed repository and
+   *   the checkpoint commit in one transaction; the handed repository is non-null and bound to
+   *   it</td><td>{@link ProjectionDeliveryMode#TRANSACTIONAL_LOCAL}, {@link
+   *   ProjectionDeliveryMode#EXTERNAL_EFFECT}</td></tr>
+   *   <tr><td>{@link #fencesCheckpoint()}</td><td>{@link #stampFencingEpoch} is durable; {@link
+   *   #executeAtomically} rejects a superseded epoch before running the updater, and the checkpoint
+   *   write is conditional on the epoch</td><td>every registration under real (multi-replica)
+   *   {@link org.streamrune.core.subscription.SubscriptionLeadership}</td></tr>
+   * </table>
+   *
+   * <p>The framework's {@code JdbcProjectionRepository} has both; {@link #nonAtomicAtLeastOnce()}
+   * has neither. A store that commits its checkpoint conditionally on the epoch but cannot share a
+   * transaction with its read models (a search index) fences without being transactional; a
+   * single-instance embedded database is transactional without fencing.
+   *
+   * <p>The delivery policy relies on this capability: a {@link
+   * ProjectionDeliveryMode#TRANSACTIONAL_LOCAL} or {@link ProjectionDeliveryMode#EXTERNAL_EFFECT}
+   * registration is refused on a processor that returns {@code false}. {@link
+   * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} registrations are handed {@code null} whatever
+   * this answers.
+   *
+   * <p>Defaults to {@code false}: a processor that has not deliberately implemented the shared
+   * transaction does not have one.
+   *
+   * @return {@code true} if the updater's writes and the checkpoint commit in one transaction
+   */
+  default boolean transactional() {
+    return false;
+  }
+
+  /**
+   * Whether this processor fences its checkpoint against a superseded leadership epoch. {@code
+   * true} means all of:
+   *
+   * <ol>
+   *   <li>{@link #stampFencingEpoch} stamps the epoch durably on the checkpoint;
+   *   <li>{@link #executeAtomically} rejects a commit from a superseded epoch <b>before running the
+   *       updater</b>, so a stale leader cannot re-apply a batch past the check;
+   *   <li>the checkpoint write is conditional on the epoch, so a stale leader cannot move the
+   *       checkpoint forward either (a SKIP or dead-letter advance included).
+   * </ol>
+   *
+   * <p>Required by every registration under real (multi-replica) {@link
+   * org.streamrune.core.subscription.SubscriptionLeadership}, whatever its delivery mode. See
+   * {@link #transactional()} for how the two capabilities relate.
    *
    * <p>This is what makes the fence fail <b>closed</b>. Before it existed, pairing a real
-   * (multi-replica) {@link org.streamrune.core.subscription.SubscriptionLeadership} with a
-   * processor that ignores the epoch was accepted silently: the takeover stamp was a no-op that
-   * reported success, a non-transactional processor dropped the epoch on the floor, and a
-   * superseded leader's batch was applied to the read model before anything could reject it. The
-   * leadership-aware runners now refuse to build that pairing, so an unfenced multi-replica
-   * projection is a configuration error surfaced at startup rather than a silent double-apply in
-   * production.
+   * leadership with a processor that ignores the epoch was accepted silently: the takeover stamp
+   * was a no-op that reported success, a non-transactional processor dropped the epoch on the
+   * floor, and a superseded leader's batch was applied to the read model before anything could
+   * reject it. The leadership-aware runners now refuse to build that pairing, so an unfenced
+   * multi-replica projection is a configuration error surfaced at startup rather than a silent
+   * double-apply in production.
    *
    * <p>Defaults to {@code false}: a processor that has not deliberately implemented the fence does
-   * not have one. Transactional implementations override it — the framework's {@code
-   * JdbcProjectionRepository} does, under the same {@code FOR UPDATE} checkpoint-row lock that
-   * carries the overlap and monotonic guards.
+   * not have one. The framework's {@code JdbcProjectionRepository} overrides it, under the same
+   * {@code FOR UPDATE} checkpoint-row lock that carries the overlap and monotonic guards.
    *
-   * @return {@code true} if a commit from a superseded epoch is rejected before any read-model
-   *     write
+   * @return {@code true} if a commit from a superseded epoch is rejected before the updater runs
+   *     and cannot move the checkpoint
    */
-  default boolean supportsFencing() {
+  default boolean fencesCheckpoint() {
     return false;
   }
 
@@ -148,10 +193,10 @@ public interface AtomicBatchProcessor {
    * previous unconditional empty body made a processor that cannot fence indistinguishable from one
    * that durably stamped — the runners' {@code stampTakeoverEpoch} treats "did not throw" as "the
    * fence is armed" and proceeds to read and process. Reaching this default with a non-zero epoch
-   * now means an implementation claimed {@link #supportsFencing()} without implementing the stamp
+   * now means an implementation claimed {@link #fencesCheckpoint()} without implementing the stamp
    * (the runners reject the non-fencing pairing at build time), and that must fail loudly rather
    * than leave the takeover window open — the same fail-loudly policy as {@link
-   * OffsetStore#reset}'s default. Transactional implementations override; the framework's {@code
+   * OffsetStore#reset}'s default. Fencing implementations override; the framework's {@code
    * JdbcProjectionRepository} does.
    *
    * @param projectionName the projection whose checkpoint row is stamped
@@ -174,7 +219,7 @@ public interface AtomicBatchProcessor {
               + "': it does not implement stampFencingEpoch. Silently accepting the takeover stamp"
               + " would leave the epoch fence inert and let a superseded leader re-apply its"
               + " in-flight batch to the read model. Implement stampFencingEpoch (and"
-              + " executeAtomically's epoch check) or leave supportsFencing() at false.");
+              + " executeAtomically's epoch check) or leave fencesCheckpoint() at false.");
     }
   }
 
@@ -325,12 +370,12 @@ public interface AtomicBatchProcessor {
    * runners can print its name in the startup INFO line and tests can assert on it; the singleton
    * lives here and not on the interface so the only way to reach it is the factory method.
    *
-   * <p>Being non-transactional it cannot fence: {@link #supportsFencing()} stays {@code false} and
-   * a non-zero {@code fencingEpoch} is <b>refused</b>, not ignored. The refusal is defence in depth
-   * — the leadership-aware runners already reject this pairing at build time — and it sits at the
-   * damage site: the read-model write happens inside {@code projectionUpdater.update}, so a
-   * processor that shrugged off the epoch would apply a superseded leader's batch before any guard
-   * could run.
+   * <p>It is neither {@link #transactional()} nor {@link #fencesCheckpoint()}: both stay {@code
+   * false}, and a non-zero {@code fencingEpoch} is <b>refused</b>, not ignored. The refusal is
+   * defence in depth — the leadership-aware runners already reject this pairing at build time — and
+   * it sits at the damage site: the read-model write happens inside {@code
+   * projectionUpdater.update}, so a processor that shrugged off the epoch would apply a superseded
+   * leader's batch before any guard could run.
    *
    * @hidden
    */
@@ -358,9 +403,9 @@ public interface AtomicBatchProcessor {
                     ? LogSanitizer.sanitizeForLog(projectionName.value())
                     : "null")
                 + "' but is non-transactional and cannot fence. Refusing the commit rather than"
-                + " applying a possibly-superseded leader's batch to the read model. Pass a"
-                + " transactional AtomicBatchProcessor (JdbcProjectionRepository) or run unfenced"
-                + " with SubscriptionLeadership.NOOP.");
+                + " applying a possibly-superseded leader's batch to the read model. Pass an"
+                + " AtomicBatchProcessor that fences its checkpoint (JdbcProjectionRepository) or"
+                + " run unfenced with SubscriptionLeadership.NOOP.");
       }
       projectionUpdater.update(null);
       try {

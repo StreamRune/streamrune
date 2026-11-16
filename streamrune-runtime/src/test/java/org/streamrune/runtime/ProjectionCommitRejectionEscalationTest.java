@@ -320,8 +320,13 @@ class ProjectionCommitRejectionEscalationTest {
     }
 
     @Override
-    public boolean supportsFencing() {
-      return true;
+    public boolean transactional() {
+      return store.transactional();
+    }
+
+    @Override
+    public boolean fencesCheckpoint() {
+      return store.fencesCheckpoint();
     }
 
     @Override

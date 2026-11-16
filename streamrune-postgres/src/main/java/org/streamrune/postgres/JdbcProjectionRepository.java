@@ -63,9 +63,9 @@ import org.streamrune.core.types.ProjectionName;
  * commit alone creates no table, so an at-least-once projection that keeps its read models
  * elsewhere leaves no empty {@code <name>_view} behind.
  *
- * <p>{@link #supportsFencing()} is {@code true} and means all three of: the updater and the
- * checkpoint write run in one transaction; the repository handed to the updater is bound to it and
- * never {@code null}; a superseded epoch is rejected before any read-model write and stamped
+ * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}: the updater
+ * and the checkpoint write run in one transaction; the repository handed to the updater is bound to
+ * it and never {@code null}; a superseded epoch is rejected before any read-model write and stamped
  * durably. No mode makes an effect outside this database exactly-once.
  *
  * <p><b>No statement bound of its own.</b> Unlike {@link PostgresEventStore}, whose {@code
@@ -1894,6 +1894,19 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
+   * This repository runs the updater's writes through the handed repository and the checkpoint
+   * write in one transaction, and the handed repository is bound to it and never {@code null}. The
+   * delivery policy consults this to accept a {@code TRANSACTIONAL_LOCAL} or {@code
+   * EXTERNAL_EFFECT} registration.
+   *
+   * @return always {@code true}
+   */
+  @Override
+  public boolean transactional() {
+    return true;
+  }
+
+  /**
    * This repository honours the leadership fencing epoch: {@link #executeAtomically} runs {@code
    * rejectStaleEpoch} under the checkpoint row's {@code FOR UPDATE} lock <em>before</em> the
    * updater writes anything, and {@link #stampFencingEpoch} durably arms the fence at takeover. The
@@ -1903,7 +1916,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * @return always {@code true}
    */
   @Override
-  public boolean supportsFencing() {
+  public boolean fencesCheckpoint() {
     return true;
   }
 

@@ -9,10 +9,11 @@ import org.streamrune.core.subscription.SubscriptionLeadership;
  * epoch.
  *
  * <p>Leadership issues a strictly-increasing epoch per acquisition and the runners thread it into
- * every commit, but only a <em>transactional</em> processor turns that token into a guarantee: it
- * rejects a commit from a superseded epoch under the checkpoint row's lock, before the updater
- * writes a single read-model row. Paired with a processor that ignores the epoch, the whole
- * protocol is theatre — the takeover stamp reported success from an empty method body, the
+ * every commit, but only a processor that fences its checkpoint ({@link
+ * AtomicBatchProcessor#fencesCheckpoint()}) turns that token into a guarantee: it rejects a commit
+ * from a superseded epoch before the updater writes a single read-model row, and moves the
+ * checkpoint only under the current epoch. Paired with a processor that ignores the epoch, the
+ * whole protocol is theatre — the takeover stamp reported success from an empty method body, the
  * nonatomic processor dropped the epoch, and the read-model write and the checkpoint became two
  * independent auto-commit statements. A stale leader resuming inside its local lease-staleness
  * window then double-applied its in-flight batch to a non-idempotent read model, and the offset
@@ -27,7 +28,8 @@ final class ProjectionFencingPolicy {
   private ProjectionFencingPolicy() {}
 
   /**
-   * Rejects a real (multi-replica) leadership paired with a processor that cannot fence.
+   * Rejects a real (multi-replica) leadership paired with a processor whose {@link
+   * AtomicBatchProcessor#fencesCheckpoint()} is {@code false}.
    *
    * @param leadership the configured leadership; {@link SubscriptionLeadership#NOOP} is the
    *     unfenced single-instance contract (epoch {@code 0}) and is always accepted
@@ -40,7 +42,7 @@ final class ProjectionFencingPolicy {
     if (leadership == SubscriptionLeadership.NOOP) {
       return;
     }
-    if (processor != null && processor.supportsFencing()) {
+    if (processor != null && processor.fencesCheckpoint()) {
       return;
     }
     throw new IllegalArgumentException(
@@ -53,9 +55,10 @@ final class ProjectionFencingPolicy {
             + " all be inert: a superseded leader resuming after a GC/VM pause would re-apply its"
             + " in-flight batch to the read model with nothing to reject it, and the offset store's"
             + " monotonic guard would swallow the trailing checkpoint save so nothing would even"
-            + " log. Define an AtomicBatchProcessor bean — org.streamrune.postgres"
-            + ".JdbcProjectionRepository implements it — and keep leadership on, or — if exactly"
-            + " one instance runs this projection — disable leadership with"
+            + " log. Route the projection to a store whose processor fences its checkpoint"
+            + " (AtomicBatchProcessor.fencesCheckpoint() — org.streamrune.postgres"
+            + ".JdbcProjectionRepository does) and keep leadership on, or — if exactly one instance"
+            + " runs this projection — disable leadership with"
             + " streamrune.subscription.single-active-consumer.enabled=false so it falls back to"
             + " SubscriptionLeadership.NOOP (epoch 0, unfenced).");
   }

@@ -762,7 +762,12 @@ public final class InMemoryProjectionRepository
   // ---- AtomicBatchProcessor ----
 
   @Override
-  public boolean supportsFencing() {
+  public boolean transactional() {
+    return true;
+  }
+
+  @Override
+  public boolean fencesCheckpoint() {
     return true;
   }
 

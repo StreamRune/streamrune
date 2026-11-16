@@ -161,7 +161,8 @@ class AtomicBatchProcessorTest {
     assertSame(p, AtomicBatchProcessor.nonAtomicAtLeastOnce());
     assertInstanceOf(AtomicBatchProcessor.NonAtomicAtLeastOnce.class, p);
     assertEquals("nonAtomicAtLeastOnce", p.toString());
-    assertFalse(p.supportsFencing());
+    assertFalse(p.transactional());
+    assertFalse(p.fencesCheckpoint());
     assertThrows(
         UnsupportedOperationException.class,
         () -> p.stampFencingEpoch(ProjectionName.of("orders"), 1L));
