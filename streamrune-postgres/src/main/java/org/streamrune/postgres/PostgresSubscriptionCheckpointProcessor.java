@@ -97,7 +97,8 @@ public final class PostgresSubscriptionCheckpointProcessor implements AtomicBatc
    * @param offsetStore ignored: the checkpoint is saved in this processor's transaction
    * @throws ProjectionCommitFencedException if a guard rejects the batch
    * @throws ProjectionCheckpointSaveException if the save or the commit failed after the updater
-   *     returned
+   *     returned, or giving the connection back failed after the commit (the checkpoint then did
+   *     advance)
    * @throws EventStoreException if the transaction failed before the updater ran
    * @throws IllegalArgumentException if {@code projectionName} is {@code null}
    */
