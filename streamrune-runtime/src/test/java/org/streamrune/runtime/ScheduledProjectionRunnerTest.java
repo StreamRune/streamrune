@@ -153,14 +153,15 @@ class ScheduledProjectionRunnerTest {
         .hasMessageContaining("at least one");
   }
 
-  // A fencing-claiming processor that hands null to the updater: a plain projection declared
+  // A transactional()-claiming processor that hands null to the updater: a plain projection
+  // declared
   // AT_LEAST_ONCE_IDEMPOTENT runs under it; a write-through projection declared TRANSACTIONAL_LOCAL
   // is accepted as declared (it exposes no write target). Every registration shares this runner's
   // single atomicProcessor, so build() checks each one against its own declared mode.
   private static AtomicBatchProcessor transactionalProcessor() {
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
+      public boolean transactional() {
         return true;
       }
 
@@ -249,7 +250,7 @@ class ScheduledProjectionRunnerTest {
   }
 
   @Test
-  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() {
+  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor() {
     var store = listStore(List.of(evt(Instant.parse("2026-01-01T00:00:00Z"))));
     var offsets = memOffsetStore();
     var processed = new ConcurrentLinkedQueue<EventEnvelope>();
@@ -557,7 +558,7 @@ class ScheduledProjectionRunnerTest {
     var stampingProcessor =
         new AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 
@@ -636,7 +637,7 @@ class ScheduledProjectionRunnerTest {
     var failingThenStampingProcessor =
         new AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 

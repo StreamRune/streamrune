@@ -498,7 +498,7 @@ class JdbcProjectionRepositoryAtomicityTest {
     // fence, and this is the declaration they consult. The three tests above are what makes it
     // true — the stale-epoch rejection, the monotonic stamp, and the untouched offset.
     assertTrue(
-        repo.supportsFencing(),
+        repo.fencesCheckpoint(),
         "JdbcProjectionRepository honours the fencing epoch, so it must declare it — otherwise the"
             + " projection runners reject every multi-replica configuration that uses it");
   }

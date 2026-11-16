@@ -1024,7 +1024,7 @@ class ProjectionRunnerLeadershipTest {
   private static AtomicBatchProcessor regressingStampProcessor(long storedEpoch) {
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
+      public boolean fencesCheckpoint() {
         return true;
       }
 
@@ -1161,8 +1161,8 @@ class ProjectionRunnerLeadershipTest {
     AtomicBatchProcessor delegate = regressingStampProcessor(storedEpoch);
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
-        return delegate.supportsFencing();
+      public boolean fencesCheckpoint() {
+        return delegate.fencesCheckpoint();
       }
 
       @Override
@@ -1418,7 +1418,7 @@ class ProjectionRunnerLeadershipTest {
         new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     @Override
-    public boolean supportsFencing() {
+    public boolean fencesCheckpoint() {
       return true;
     }
 

@@ -16,7 +16,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** {@link JdbcProjectionRepository} honours the {@code supportsFencing()} contract. */
+/**
+ * {@link JdbcProjectionRepository} honours the {@code transactional()} and {@code
+ * fencesCheckpoint()} contract.
+ */
 @Testcontainers
 class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract {
 

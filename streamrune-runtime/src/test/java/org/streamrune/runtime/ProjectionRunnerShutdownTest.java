@@ -130,7 +130,7 @@ class ProjectionRunnerShutdownTest {
       }
 
       @Override
-      public boolean supportsFencing() {
+      public boolean fencesCheckpoint() {
         return true;
       }
     };

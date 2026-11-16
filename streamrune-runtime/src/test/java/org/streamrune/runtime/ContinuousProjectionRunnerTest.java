@@ -247,12 +247,13 @@ class ContinuousProjectionRunnerTest {
   // ==================== Delivery mode: refusal at run(), before the claim ====================
 
   /**
-   * Claims fencing and hands {@code null} to the updater — a plain projection runs at-least-once.
+   * Claims transactional() and hands {@code null} to the updater — a plain projection runs
+   * at-least-once.
    */
   private static final org.streamrune.core.projection.AtomicBatchProcessor TRANSACTIONAL =
       new org.streamrune.core.projection.AtomicBatchProcessor() {
         @Override
-        public boolean supportsFencing() {
+        public boolean transactional() {
           return true;
         }
 
@@ -371,7 +372,8 @@ class ContinuousProjectionRunnerTest {
   }
 
   @Test
-  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() throws Exception {
+  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor()
+      throws Exception {
     var runner =
         ContinuousProjectionRunner.builder()
             .eventStore(eventStore)
@@ -1286,7 +1288,7 @@ class ContinuousProjectionRunnerTest {
     var stampingProcessor =
         new org.streamrune.core.projection.AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 
@@ -1378,7 +1380,7 @@ class ContinuousProjectionRunnerTest {
     var failingThenStampingProcessor =
         new org.streamrune.core.projection.AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 

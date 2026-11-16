@@ -264,11 +264,11 @@ class PollingProjectionRunnerTest {
     eventStore.addEvents(envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")));
 
     // Stands in for the transaction-scoped repository a JDBC-backed processor would supply. Only a
-    // transactional registration is handed it, so the processor must claim fencing and the
-    // projection must declare TRANSACTIONAL_LOCAL.
+    // transactional registration is handed it, so the processor must claim transactional() and
+    // the projection must declare TRANSACTIONAL_LOCAL.
     ProjectionRepository txRepository = mock(ProjectionRepository.class);
     AtomicBatchProcessor processor =
-        TestFencingProcessor.fencing(
+        TestTransactionalProcessor.transactional(
             (name, batch, newOffset, fencingEpoch, projectionUpdater, offsets) -> {
               projectionUpdater.update(txRepository);
               offsets.saveOffset(name, newOffset);
@@ -329,13 +329,14 @@ class PollingProjectionRunnerTest {
         GlobalOffset.of(1), offsetStore.getLastOffset(ProjectionName.of("nonatomic-proj")));
   }
 
-  // A fencing-claiming processor that hands null to the updater: a plain projection declared
+  // A transactional()-claiming processor that hands null to the updater: a plain projection
+  // declared
   // AT_LEAST_ONCE_IDEMPOTENT runs under it; one declared TRANSACTIONAL_LOCAL is refused, since its
   // read-model writes would silently NOT be part of the checkpoint's transaction.
   private static final AtomicBatchProcessor TRANSACTIONAL =
       new AtomicBatchProcessor() {
         @Override
-        public boolean supportsFencing() {
+        public boolean transactional() {
           return true;
         }
 
@@ -424,7 +425,7 @@ class PollingProjectionRunnerTest {
   }
 
   @Test
-  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() {
+  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor() {
     StreamId s1 = StreamId.of(TYPE, AggregateId.of("s1"));
     eventStore.addEvents(envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")));
     runner =

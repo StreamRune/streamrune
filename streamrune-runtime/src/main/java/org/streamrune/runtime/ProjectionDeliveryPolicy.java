@@ -88,14 +88,14 @@ final class ProjectionDeliveryPolicy {
     if (!mode.writesInCheckpointTransaction()) {
       // writesThroughRepository() matters in this mode only for the INFO line's verdict.
       boolean upgradeAvailable =
-          processor.supportsFencing()
+          processor.transactional()
               && projection.writeTarget().map(processor::writesTo).orElse(false)
               && projection.writesThroughRepository();
       return upgradeAvailable
           ? Verdict.AT_LEAST_ONCE_TRANSACTIONAL_AVAILABLE
           : Verdict.AT_LEAST_ONCE;
     }
-    if (!processor.supportsFencing()) {
+    if (!processor.transactional()) {
       throw new IllegalArgumentException(
           runnerName
               + " projection '"

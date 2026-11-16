@@ -225,14 +225,15 @@ class MultiProjectionRunnerTest {
                 .build());
   }
 
-  // A fencing-claiming processor that hands null to the updater: a plain projection declared
+  // A transactional()-claiming processor that hands null to the updater: a plain projection
+  // declared
   // AT_LEAST_ONCE_IDEMPOTENT runs under it; a write-through projection declared TRANSACTIONAL_LOCAL
   // is accepted as declared (it exposes no write target). Every registration shares this runner's
   // single atomicProcessor, so build() checks each one against its own declared mode.
   private static AtomicBatchProcessor transactionalProcessor() {
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
+      public boolean transactional() {
         return true;
       }
 
@@ -304,7 +305,8 @@ class MultiProjectionRunnerTest {
   }
 
   @Test
-  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() throws Exception {
+  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor()
+      throws Exception {
     StreamId s = StreamId.of(TYPE, AggregateId.of("at-least-once-stream"));
     eventStore.append(s, List.of(envelope(s, 1, "a")), Version.initial());
 

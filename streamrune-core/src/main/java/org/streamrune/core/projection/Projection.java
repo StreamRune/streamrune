@@ -49,7 +49,7 @@ public interface Projection {
    * Declares whether this projection overrides {@link #process(List, ProjectionRepository)} and
    * writes through the repository it is handed, rather than falling back to {@link #process(List)}
    * via the inherited default above. A transactional runner — one whose {@link
-   * AtomicBatchProcessor#supportsFencing()} is {@code true} — consults this when a projection is
+   * AtomicBatchProcessor#transactional()} is {@code true} — consults this when a projection is
    * registered, to refuse one that would silently downgrade the runner's promised atomicity
    * (projection writes committing in the SAME transaction as the checkpoint save) to an undeclared
    * at-least-once.
