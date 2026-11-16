@@ -34,10 +34,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * a replica could read the table as absent, then find the schema made non-empty by a replica that
  * had just created the table, try to baseline it and fail with {@code Unable to baseline schema
  * history table ... as it already exists, and is empty}. Without {@link
- * PostgresEventStoreFactory#migrateConverging}, which then runs the migration again under Flyway's
- * lock, eight replicas on direct connections failed that way in about one start in five to eight,
- * so twenty starts all but always meet the race. Each repetition uses a database of its own, so
- * every one of them is a first start.
+ * SeriesMigration#migrateConverging}, which then runs the migration again under Flyway's lock,
+ * eight replicas on direct connections failed that way in about one start in five to eight, so
+ * twenty starts all but always meet the race. Each repetition uses a database of its own, so every
+ * one of them is a first start.
  */
 @Testcontainers
 class ConcurrentSchemaInitializationIT {
@@ -113,8 +113,7 @@ class ConcurrentSchemaInitializationIT {
 
       var refusal = assertThrows(FlywayException.class, flyway::baseline);
       assertTrue(
-          refusal.getMessage().startsWith(PostgresEventStoreFactory.BASELINE_REFUSAL),
-          refusal::getMessage);
+          refusal.getMessage().startsWith(SeriesMigration.BASELINE_REFUSAL), refusal::getMessage);
     } finally {
       execute(dataSource(PG.getDatabaseName()), "DROP DATABASE " + db + " WITH (FORCE)");
     }
