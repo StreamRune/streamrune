@@ -169,6 +169,44 @@ class PostgresReadModelStoreTest {
   }
 
   /**
+   * The event-store factory builds the default store on its own DataSource, named {@code postgres},
+   * with the factory's crypto-aware mapper, applying the read-model series under the factory's
+   * auto-initialize switch and validating it.
+   */
+  @Test
+  void theEventStoreFactoryBuildsTheDefaultStoreOnItsDataSource() throws SQLException {
+    var dataSource = freshDatabase();
+    var factory =
+        new PostgresEventStoreFactory(dataSource, SimpleEventTypeRegistry.builder().build());
+
+    PostgresReadModelStore store = factory.createReadModelStore();
+
+    assertEquals("postgres", store.name());
+    assertInstanceOf(JdbcProjectionRepository.class, store.repository());
+    assertSame(store.repository(), store.processor());
+    assertTrue(tableExists(dataSource, "readmodel_checkpoint"));
+    assertEquals(
+        List.of("V001__readmodel_baseline.sql"),
+        appliedScripts(dataSource, PostgresReadModelStore.READ_MODEL_HISTORY_TABLE));
+    assertFalse(
+        tableExists(dataSource, "subscription_checkpoint"),
+        "the read-model store applies its own series only");
+  }
+
+  /** With auto-initialize off, the factory's store migrates nothing and validation refuses. */
+  @Test
+  void theEventStoreFactoryWithAutoInitializeOff_neitherMigratesNorAcceptsAMissingSchema()
+      throws SQLException {
+    var dataSource = freshDatabase();
+    var factory =
+        new PostgresEventStoreFactory(dataSource, SimpleEventTypeRegistry.builder().build())
+            .autoInitializeSchema(false);
+
+    assertThrows(SchemaValidationException.class, factory::createReadModelStore);
+    assertFalse(tableExists(dataSource, "readmodel_checkpoint"));
+  }
+
+  /**
    * The read-model series is baselined at 0 like the framework's other series, so it applies in
    * full to a schema that already holds the event-store series (the default single-database
    * deployment), and a second start applies nothing. The event-store factory, in turn, leaves the
