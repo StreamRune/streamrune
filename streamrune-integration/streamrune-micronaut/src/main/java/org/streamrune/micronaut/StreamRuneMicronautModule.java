@@ -110,6 +110,21 @@ public class StreamRuneMicronautModule {
    */
   static final String FRAMEWORK_SSE_EVENT_FEED = "streamRuneSseEventFeed";
 
+  /**
+   * The bean name — and the {@link org.streamrune.core.projection.ReadModelStore#name()} — of the
+   * default read-model store, {@value}. A projection declares {@code readModelStore = "postgres"}
+   * to route to it explicitly.
+   */
+  static final String DEFAULT_READ_MODEL_STORE = "postgres";
+
+  /**
+   * The bean name of the event store's subscription checkpoint, {@value}: the {@link
+   * org.streamrune.core.projection.CheckpointTarget} the framework's projection runners route an
+   * {@code AT_LEAST_ONCE_IDEMPOTENT} registration to when the registration matches no read-model
+   * store. Define a {@code CheckpointTarget} under that name to replace it.
+   */
+  static final String SUBSCRIPTION_CHECKPOINT = "streamRuneSubscriptionCheckpoint";
+
   /** Creates a {@link StreamRuneMicronautModule}. */
   public StreamRuneMicronautModule() {}
 
@@ -1250,45 +1265,54 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates a {@link org.streamrune.postgres.JdbcProjectionRepository} as the default {@link
-   * org.streamrune.core.projection.ProjectionRepository} when a DataSource is present and the
-   * application does not define its own. It also implements {@link
-   * org.streamrune.core.projection.AtomicBatchProcessor}: a projection runner is given it when one
-   * of its registrations declares {@code TRANSACTIONAL_LOCAL} or {@code EXTERNAL_EFFECT}, or when
-   * single-active-consumer leadership must fence. The runner then commits each batch's offset
-   * checkpoint in ONE transaction, under the checkpoint row's {@code FOR UPDATE} lock that runs the
-   * epoch fence, the overlap guard and the monotonic guard, together with the read-model writes of
-   * its {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} registrations. An {@code
-   * AT_LEAST_ONCE_IDEMPOTENT} registration is never handed that transaction, so its writes are not
-   * part of it. The bean's presence alone selects nothing: a runner of {@code
-   * AT_LEAST_ONCE_IDEMPOTENT} registrations without leadership does not use it ({@link
-   * org.streamrune.integration.ProjectionProcessorResolution}).
+   * Creates the default read-model store, {@value #DEFAULT_READ_MODEL_STORE}, on the application's
+   * {@code DataSource}: a {@link org.streamrune.postgres.PostgresReadModelStore} whose read models
+   * live in {@code <name>_view} tables and whose checkpoints live beside them in {@code
+   * readmodel_checkpoint}, so a routed {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
+   * registration's read-model writes and its checkpoint commit in one transaction, under the
+   * checkpoint row's lock that runs the epoch fence, the overlap guard and the monotonic guard.
+   * {@link ProjectionFactory} routes to it every registration that names it, writes to its
+   * repository, or (transactional, with no write target of its own) has no other transactional
+   * store to go to.
    *
-   * <p>This producer was missing while {@link #subscriptionLeadership} was not. The module handed
-   * the runners a real, epoch-issuing lease leadership and no processor that could honour an epoch,
-   * so every projection ran on the nonatomic processor ({@link
-   * org.streamrune.core.projection.AtomicBatchProcessor#nonAtomicAtLeastOnce()}): the takeover
-   * stamp was a no-op, the fence and overlap guards never ran, and a superseded leader resuming
-   * inside its local staleness window re-applied its in-flight batch to the read model — silently,
-   * since the offset store's monotonic guard then swallowed the trailing checkpoint save. Spring
-   * ({@code @ConditionalOnBean(DataSource.class)}) and Quarkus ({@code @DefaultBean}) have always
-   * produced this bean; only Micronaut shipped the unfenced combination by default.
+   * <p>Creating the store checks the server version, applies the read-model migration series
+   * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
+   * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
+   * read-model schema. A Micronaut singleton is created when it is first resolved: in an
+   * application with projections, while the context starts, on the starting thread — {@link
+   * StreamRuneLifecycle} resolves the framework's runners on the startup event, and the runners'
+   * factory methods collect the stores (as does a {@code BaseProjection} that injects the {@link
+   * #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer} when index
+   * beans exist).
+   *
+   * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if exactly one is
+   * present) through {@code CryptoShreddingModule}, the same way {@link #sagaStore} wires the saga
+   * store — so {@code @Encrypted} read-model fields are ciphertext at rest and within GDPR forget
+   * scope.
+   *
+   * <p>It backs off when the application defines any {@link
+   * org.streamrune.core.projection.ReadModelStore} bean.
    *
    * @param dataSource the JDBC data source
-   * @return a new {@link org.streamrune.postgres.JdbcProjectionRepository}
+   * @param properties the StreamRune configuration properties
+   * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
+   *     more than one triggers an {@link IllegalStateException})
+   * @param metrics optional metrics collector the read-model decrypt path reports redactions to
+   * @return the default read-model store
+   * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
+   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
    */
   @Singleton
   @Secondary
+  @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE)
   @Requires(beans = DataSource.class)
-  @Requires(missingBeans = org.streamrune.core.projection.ProjectionRepository.class)
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(
+  @Requires(missingBeans = org.streamrune.core.projection.ReadModelStore.class)
+  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(
       DataSource dataSource,
+      StreamRuneMicronautProperties properties,
       List<CryptoEngine> cryptoEngines,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
-    // Wire the CryptoEngine bean (if exactly one is present) into the
-    // repository's ObjectMapper via CryptoShreddingModule, the same way sagaStore wires the saga
-    // store — so @Encrypted read-model fields are ciphertext at rest and within GDPR forget scope.
-    // Without this the auto-configured read model was a silent plaintext no-op.
+    // Checked before the database is touched.
     if (cryptoEngines.size() > 1) {
       throw new IllegalStateException(
           "Multiple CryptoEngine beans found ("
@@ -1299,10 +1323,92 @@ public class StreamRuneMicronautModule {
     CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return new org.streamrune.postgres.JdbcProjectionRepository(
+    return org.streamrune.postgres.PostgresReadModelStore.create(
+        DEFAULT_READ_MODEL_STORE,
         dataSource,
         org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics)));
+            cryptoEngine, metricsOrNoop(metrics)),
+        properties.readModelAutoInitialize(),
+        true);
+  }
+
+  /**
+   * Creates the default read-model store's repository as the injectable {@link
+   * org.streamrune.core.projection.ProjectionRepository}, so query handlers and {@code
+   * BaseProjection} constructors that take a {@code ProjectionRepository} read and write the store
+   * named {@value #DEFAULT_READ_MODEL_STORE}. It backs off when the application defines a {@code
+   * ProjectionRepository} bean.
+   *
+   * <p>The stores are collected with {@link io.micronaut.context.BeanContext#getBeansOfType}, as
+   * {@link ProjectionFactory} collects them: Micronaut does not reliably collect a
+   * runtime-registered singleton into an injected {@code List}.
+   *
+   * @param beanContext the context the read-model stores are collected from
+   * @return the repository of the store named {@value #DEFAULT_READ_MODEL_STORE}
+   * @throws IllegalStateException when the application's read-model stores replace the default one
+   *     and none is named {@value #DEFAULT_READ_MODEL_STORE}: there is no default store to take the
+   *     repository from
+   */
+  @Singleton
+  @Secondary
+  @Requires(beans = org.streamrune.core.projection.ReadModelStore.class)
+  @Requires(missingBeans = org.streamrune.core.projection.ProjectionRepository.class)
+  public org.streamrune.core.projection.ProjectionRepository projectionRepository(
+      io.micronaut.context.BeanContext beanContext) {
+    return org.streamrune.integration.ProjectionStoreRouting.defaultRepository(
+        readModelStores(beanContext), DEFAULT_READ_MODEL_STORE);
+  }
+
+  /**
+   * Every {@link org.streamrune.core.projection.ReadModelStore} bean in the context, compiled or
+   * registered at run time. {@link io.micronaut.context.BeanContext#getBeansOfType} sees both;
+   * Micronaut does not reliably collect a runtime-registered singleton into an injected {@code
+   * List}, so a store the application registers with {@code registerSingleton} would be missed.
+   *
+   * @param beanContext the context to collect from
+   * @return the stores, in the context's order
+   */
+  static List<org.streamrune.core.projection.ReadModelStore> readModelStores(
+      io.micronaut.context.BeanContext beanContext) {
+    return List.copyOf(
+        beanContext.getBeansOfType(org.streamrune.core.projection.ReadModelStore.class));
+  }
+
+  /**
+   * Creates the event store's subscription checkpoint, {@value #SUBSCRIPTION_CHECKPOINT}: the pair
+   * {@link ProjectionFactory}'s runners read and commit an {@code AT_LEAST_ONCE_IDEMPOTENT}
+   * registration through when the registration matches no read-model store — the {@link
+   * org.streamrune.core.projection.OffsetStore} bean's {@link
+   * org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()}.
+   *
+   * <ul>
+   *   <li>A {@link PostgresOffsetStore} (the default one, or one the application defines on any
+   *       {@code DataSource}) pairs itself with a {@link
+   *       org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on the {@code
+   *       DataSource} it reads — it fences the checkpoint under its row lock and hands the
+   *       projection no repository, so the projection writes where it writes (at least once).
+   *   <li>Any other offset store keeps the default: itself and {@link
+   *       org.streamrune.core.projection.AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which saves
+   *       each checkpoint into it. It does not fence, so routing refuses an at-least-once
+   *       registration onto it under real leadership.
+   * </ul>
+   *
+   * <p>No {@code DataSource} is looked up here: both halves of the pair come from the offset store,
+   * so the processor commits where the offset store reads. {@code @Secondary}: a {@code
+   * CheckpointTarget} the application defines under the same name wins the named injection point.
+   *
+   * @param offsetStore the offset store
+   * @return the subscription checkpoint pair
+   */
+  @Singleton
+  @Secondary
+  @jakarta.inject.Named(SUBSCRIPTION_CHECKPOINT)
+  @Requires(beans = org.streamrune.core.projection.OffsetStore.class)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint(
+      org.streamrune.core.projection.OffsetStore offsetStore) {
+    // A PostgresOffsetStore overrides it with the fencing processor built on the DataSource it
+    // reads; any other offset store keeps the nonatomic default.
+    return offsetStore.subscriptionCheckpoint();
   }
 
   /**

@@ -26,12 +26,12 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.SimpleEventTypeRegistry;
-import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
@@ -78,11 +78,13 @@ class MicronautInterceptedProjectionWiringTest {
       return new InMemoryOffsetStore();
     }
 
-    // The only processor candidate, and a fencing one: no DataSource bean, so the module produces
-    // no JdbcProjectionRepository of its own.
+    // The only read-model store, transactional and fencing: no DataSource bean, so the module
+    // defines no default store of its own. A TRANSACTIONAL_LOCAL projection with no write target
+    // is routed to it as the one transactional store.
     @Singleton
-    AtomicBatchProcessor processor() {
-      return new InMemoryProjectionRepository();
+    ReadModelStore memoryStore() {
+      var repository = new InMemoryProjectionRepository();
+      return ReadModelStore.of("memory", repository, repository, repository);
     }
   }
 

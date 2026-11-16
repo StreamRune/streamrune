@@ -11,7 +11,8 @@ import org.streamrune.core.projection.ProjectionRepository;
 
 /**
  * Declares every {@link ProjectionIndex} bean on the application's {@link ProjectionRepository}
- * bean — the module's {@code JdbcProjectionRepository} or one the application defines — on the
+ * bean — the default read-model store's repository ({@code
+ * StreamRuneMicronautModule#projectionRepository}) or one the application defines — on the
  * context's {@link StartupEvent}, in the startup validators' tier, below {@link
  * StreamRuneLifecycle}, so before any projection runner starts and before the first request. A
  * refused key, an index that cannot be created, or index beans without a repository bean fail the
@@ -57,7 +58,7 @@ public class ProjectionIndexDeclarer implements ApplicationEventListener<Startup
       throw new IllegalStateException(
           projectionIndexes.size()
               + " ProjectionIndex bean(s) but no ProjectionRepository bean to declare them on:"
-              + " define one, or a DataSource for the module's JdbcProjectionRepository");
+              + " define one, or a DataSource for the default read-model store");
     }
     ProjectionRepository repository = repositories.get();
     projectionIndexes.forEach(repository::declareIndex);
