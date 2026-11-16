@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import java.util.Objects;
 import java.util.Set;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
@@ -13,9 +14,10 @@ import org.streamrune.core.types.ProjectionName;
  * crashAfter("saveOffset")}), and prove that the next start delivers each event at least once.
  *
  * <p>Every method of the interface is overridden and forwarded to the same method of the delegate,
- * {@code reset} included, so a rebuild reaches the delegate's own rewind, never the throwing
- * default. A subclass may override a method to observe, block or fail it; {@code super} applies the
- * schedule, {@link #delegate} does not.
+ * {@code reset} and {@code subscriptionCheckpoint} included, so a rebuild reaches the delegate's
+ * own rewind, never the throwing default, and the subscription checkpoint keeps the delegate's
+ * processor. A subclass may override a method to observe, block or fail it; {@code super} applies
+ * the schedule, {@link #delegate} does not.
  */
 public class ForwardingOffsetStore implements OffsetStore {
 
@@ -62,5 +64,17 @@ public class ForwardingOffsetStore implements OffsetStore {
   @Override
   public void reset(ProjectionName projectionName) {
     schedule.run("reset", () -> delegate.reset(projectionName));
+  }
+
+  /**
+   * The delegate's subscription checkpoint, as the delegate builds it. Its checkpoints are the
+   * delegate's, so a runner given this pair reads and commits past the schedule: to inject faults
+   * into a subscription's checkpoint, give the runner this store and the processor separately.
+   *
+   * @return the delegate's pair
+   */
+  @Override
+  public CheckpointTarget subscriptionCheckpoint() {
+    return schedule.call("subscriptionCheckpoint", delegate::subscriptionCheckpoint);
   }
 }

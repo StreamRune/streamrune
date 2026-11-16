@@ -13,9 +13,9 @@ class ForwardingOffsetStoreTest {
   private static final ProjectionName ORDERS = ProjectionName.of("orders");
 
   @Test
-  void everyMethodOfTheInterfaceIsOverridden_resetIncluded() {
+  void everyMethodOfTheInterfaceIsOverridden_resetAndSubscriptionCheckpointIncluded() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        OffsetStore.class, ForwardingOffsetStore.class, 3);
+        OffsetStore.class, ForwardingOffsetStore.class, 4);
   }
 
   @Test

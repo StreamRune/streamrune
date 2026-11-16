@@ -486,6 +486,7 @@ public class org.streamrune.test.ForwardingOffsetStore implements org.streamrune
   protected final org.streamrune.test.FaultSchedule schedule
   public <init>(org.streamrune.core.projection.OffsetStore)
   public <init>(org.streamrune.core.projection.OffsetStore, org.streamrune.test.FaultSchedule)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
   public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
   public void reset(org.streamrune.core.types.ProjectionName)
   public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
