@@ -94,6 +94,31 @@ class PostgresSubscriptionCheckpointProcessorTest {
         IllegalArgumentException.class, () -> new PostgresSubscriptionCheckpointProcessor(null));
   }
 
+  /**
+   * The offset store's own subscription checkpoint pairs it with a processor over the same
+   * DataSource: what the processor commits is what the offset store reads, and what a reset rewinds
+   * is what the processor's overlap guard sees.
+   */
+  @Test
+  void anOffsetStoresSubscriptionCheckpointCommitsWhereTheOffsetStoreReads() {
+    var offsetStore = new PostgresOffsetStore(dataSource);
+    var pair = offsetStore.subscriptionCheckpoint();
+    assertEquals("subscription_checkpoint", pair.name());
+    assertSame(offsetStore, pair.checkpoints());
+    var pairProcessor =
+        assertInstanceOf(PostgresSubscriptionCheckpointProcessor.class, pair.processor());
+    assertTrue(pairProcessor.fencesCheckpoint());
+    assertFalse(pairProcessor.transactional());
+
+    var name = freshName();
+    pairProcessor.executeAtomically(name, batch(1, 4), GlobalOffset.of(4), 0L, repo -> {}, null);
+    assertEquals(GlobalOffset.of(4), offsetStore.getLastOffset(name));
+
+    offsetStore.reset(name);
+    pairProcessor.executeAtomically(name, batch(1, 2), GlobalOffset.of(2), 0L, repo -> {}, null);
+    assertEquals(GlobalOffset.of(2), offsetStore.getLastOffset(name));
+  }
+
   @Test
   void handsTheUpdaterNull() {
     var name = freshName();

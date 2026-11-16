@@ -107,7 +107,7 @@ public class org.streamrune.spring.StreamRuneAutoConfiguration
   public org.streamrune.core.audit.AuditStore postgresAuditStore(javax.sql.DataSource)
   public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(javax.sql.DataSource)
   public org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery(javax.sql.DataSource)
-  public org.streamrune.core.projection.CheckpointTarget streamRuneSubscriptionCheckpoint(org.springframework.beans.factory.ObjectProvider<javax.sql.DataSource>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.OffsetStore>)
+  public org.streamrune.core.projection.CheckpointTarget streamRuneSubscriptionCheckpoint(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.OffsetStore>)
   public org.streamrune.core.projection.ProjectionRepository streamRuneProjectionRepository(org.springframework.beans.factory.ObjectProvider<org.streamrune.core.projection.ReadModelStore>)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.subscription.SubscriptionLeadership streamRuneSubscriptionLeadership(javax.sql.DataSource, org.streamrune.spring.StreamRuneProperties)

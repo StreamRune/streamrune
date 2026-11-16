@@ -231,6 +231,7 @@ public static final class org.streamrune.postgres.PostgresNotificationSubscripti
 
 public final class org.streamrune.postgres.PostgresOffsetStore implements org.streamrune.core.projection.OffsetStore
   public <init>(javax.sql.DataSource)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
   public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
   public void reset(org.streamrune.core.types.ProjectionName)
   public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
