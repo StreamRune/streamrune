@@ -2036,45 +2036,27 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnMissingBean(org.streamrune.core.projection.ProjectionRepository.class)
   public org.streamrune.core.projection.ProjectionRepository streamRuneProjectionRepository(
       ObjectProvider<org.streamrune.core.projection.ReadModelStore> stores) {
-    var all = stores.orderedStream().toList();
-    return all.stream()
-        .filter(store -> DEFAULT_READ_MODEL_STORE.equals(store.name()))
-        .findFirst()
-        .map(org.streamrune.core.projection.ReadModelStore::repository)
-        .orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "No read-model store is named '"
-                        + DEFAULT_READ_MODEL_STORE
-                        + "' (stores: "
-                        + all.stream()
-                            .map(store -> "'" + LogSanitizer.sanitizeForLog(store.name()) + "'")
-                            .collect(java.util.stream.Collectors.joining(", "))
-                        + "), so there is no default store to take the ProjectionRepository bean"
-                        + " from. Define a ProjectionRepository bean, or name one store '"
-                        + DEFAULT_READ_MODEL_STORE
-                        + "'."));
+    return org.streamrune.integration.ProjectionStoreRouting.defaultRepository(
+        stores.orderedStream().toList(), DEFAULT_READ_MODEL_STORE);
   }
 
   /**
    * Registers the event store's subscription checkpoint, {@value #SUBSCRIPTION_CHECKPOINT}: the
    * pair an auto-configured projection runner reads and commits an {@code AT_LEAST_ONCE_IDEMPOTENT}
-   * registration through when the registration matches no read-model store.
+   * registration through when the registration matches no read-model store: the {@code OffsetStore}
+   * bean's {@link org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()}.
    *
    * <ul>
-   *   <li>When the {@code OffsetStore} bean is a {@link
-   *       org.streamrune.postgres.PostgresOffsetStore} (the one auto-configured on the {@code
-   *       DataSource}, or one the application defines on any DataSource): {@link
-   *       org.streamrune.postgres.PostgresOffsetStore#subscriptionCheckpoint()}, that offset store
-   *       and a {@link org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on the same
+   *   <li>A {@link org.streamrune.postgres.PostgresOffsetStore} (the one auto-configured on the
+   *       {@code DataSource}, or one the application defines on any DataSource) pairs itself with a
+   *       {@link org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on its own
    *       DataSource, over the same {@code subscription_checkpoint} table — it fences the
    *       checkpoint under its row lock and hands the projection no repository, so the projection
    *       writes where it writes (at least once).
-   *   <li>Otherwise (no {@code DataSource}, or an {@code OffsetStore} of another kind the
-   *       application defines): the {@code OffsetStore} bean and {@link
+   *   <li>Any other offset store keeps the default: itself and {@link
    *       org.streamrune.core.projection.AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which saves
-   *       each checkpoint into that offset store. It does not fence, so routing refuses an
-   *       at-least-once registration onto it under real leadership.
+   *       each checkpoint into it. It does not fence, so routing refuses an at-least-once
+   *       registration onto it under real leadership.
    * </ul>
    *
    * <p>The {@code OffsetStore} is resolved at instantiation, for the reason {@link
@@ -2090,16 +2072,9 @@ public class StreamRuneAutoConfiguration {
       // Spring skips a null @Bean product.
       return null;
     }
-    // The Postgres processor saves into its own transaction and ignores the offset store it is
-    // handed, so it is built from the offset store itself — on the DataSource that store reads —
-    // and never paired with an offset store of another kind, whose reads would never see the saves.
-    if (offsetStore instanceof org.streamrune.postgres.PostgresOffsetStore postgres) {
-      return postgres.subscriptionCheckpoint();
-    }
-    return new org.streamrune.core.projection.CheckpointTarget(
-        "subscription_checkpoint",
-        offsetStore,
-        org.streamrune.core.projection.AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    // A PostgresOffsetStore overrides it with the fencing processor built on the DataSource it
+    // reads; any other offset store keeps the nonatomic default.
+    return offsetStore.subscriptionCheckpoint();
   }
 
   /**

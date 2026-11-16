@@ -169,7 +169,7 @@ class EventStoreWiringAutoConfigurationTest {
    */
   @Test
   void anApplicationOffsetStore_isPairedWithTheNonatomicProcessor() {
-    var offsetStore = mock(OffsetStore.class);
+    var offsetStore = new org.streamrune.test.InMemoryOffsetStore();
     runner
         .withBean(OffsetStore.class, () -> offsetStore)
         .run(
@@ -212,7 +212,7 @@ class EventStoreWiringAutoConfigurationTest {
 
   @Test
   void withoutADataSource_theSubscriptionCheckpointIsTheOffsetStoreBeanAndTheNonatomicProcessor() {
-    var offsetStore = mock(OffsetStore.class);
+    var offsetStore = new org.streamrune.test.InMemoryOffsetStore();
     new ApplicationContextRunner()
         .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
         .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))

@@ -31,15 +31,17 @@ public final class PostgresOffsetStore implements OffsetStore {
   /**
    * The event store's subscription checkpoint over this offset store: this store as the checkpoints
    * and a {@link PostgresSubscriptionCheckpointProcessor} on the same {@link DataSource} as the
-   * processor, under the name {@code subscription_checkpoint}. The processor saves the checkpoint
-   * in its own transaction and ignores the offset store it is handed, so it must reach the database
+   * processor, under the name {@value OffsetStore#SUBSCRIPTION_CHECKPOINT}, overriding the
+   * nonatomic default: the processor fences the checkpoint. The processor saves the checkpoint in
+   * its own transaction and ignores the offset store it is handed, so it must reach the database
    * this store reads; building both from one DataSource is what guarantees that.
    *
    * @return the pair a runner reads and commits an at-least-once registration's position through
    */
+  @Override
   public CheckpointTarget subscriptionCheckpoint() {
     return new CheckpointTarget(
-        "subscription_checkpoint", this, new PostgresSubscriptionCheckpointProcessor(dataSource));
+        SUBSCRIPTION_CHECKPOINT, this, new PostgresSubscriptionCheckpointProcessor(dataSource));
   }
 
   @Override

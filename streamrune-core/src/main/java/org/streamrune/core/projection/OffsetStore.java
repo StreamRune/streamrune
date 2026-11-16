@@ -87,4 +87,26 @@ public interface OffsetStore {
             + " PostgresOffsetStore), or — if this store has no guard — override it to explicitly"
             + " delegate to saveOffset(projectionName, GlobalOffset.initial()).");
   }
+
+  /**
+   * The name of the event store's subscription checkpoint, {@value}: the {@link
+   * CheckpointTarget#name()} of {@link #subscriptionCheckpoint()}.
+   */
+  String SUBSCRIPTION_CHECKPOINT = "subscription_checkpoint";
+
+  /**
+   * This store as the event store's subscription checkpoint: the pair an event-store backend uses
+   * for event listeners and for at-least-once projections that are routed to no read-model store.
+   *
+   * <p>The default pairs this store with {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which
+   * saves each batch's checkpoint into this store after the batch; it does not fence the
+   * checkpoint, so routing refuses it under real leadership. A store that can fence its checkpoint
+   * overrides this with a processor that commits where this store reads.
+   *
+   * @return the pair, named {@value #SUBSCRIPTION_CHECKPOINT}
+   */
+  default CheckpointTarget subscriptionCheckpoint() {
+    return new CheckpointTarget(
+        SUBSCRIPTION_CHECKPOINT, this, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+  }
 }

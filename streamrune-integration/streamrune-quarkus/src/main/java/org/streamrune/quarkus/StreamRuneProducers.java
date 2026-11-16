@@ -366,41 +366,26 @@ public class StreamRuneProducers {
         storeInstance.isUnsatisfied()
             ? List.of()
             : storeInstance.stream().filter(java.util.Objects::nonNull).toList();
-    return stores.stream()
-        .filter(store -> DEFAULT_READ_MODEL_STORE.equals(store.name()))
-        .findFirst()
-        .map(ReadModelStore::repository)
-        .orElseThrow(
-            () ->
-                new IllegalStateException(
-                    "No read-model store is named '"
-                        + DEFAULT_READ_MODEL_STORE
-                        + "' (stores: "
-                        + stores.stream()
-                            .map(store -> "'" + LogSanitizer.sanitizeForLog(store.name()) + "'")
-                            .collect(java.util.stream.Collectors.joining(", "))
-                        + "), so there is no default store to take the ProjectionRepository bean"
-                        + " from. Produce a ProjectionRepository bean, or name one store '"
-                        + DEFAULT_READ_MODEL_STORE
-                        + "'."));
+    return org.streamrune.integration.ProjectionStoreRouting.defaultRepository(
+        stores, DEFAULT_READ_MODEL_STORE);
   }
 
   /**
    * Produces the event store's subscription checkpoint, {@value #SUBSCRIPTION_CHECKPOINT}: the pair
    * the framework's projection runners read and commit an {@code AT_LEAST_ONCE_IDEMPOTENT}
-   * registration through when the registration matches no read-model store.
+   * registration through when the registration matches no read-model store: the {@link OffsetStore}
+   * bean's {@link OffsetStore#subscriptionCheckpoint()}.
    *
    * <ul>
-   *   <li>When the {@link OffsetStore} bean is a {@link PostgresOffsetStore} (the default one, or
-   *       one the application produces on any {@code DataSource}): {@link
-   *       PostgresOffsetStore#subscriptionCheckpoint()}, that offset store and a {@link
-   *       org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} built from it, on the
-   *       {@code DataSource} it reads — it fences the checkpoint under its row lock and hands the
+   *   <li>A {@link PostgresOffsetStore} (the default one, or one the application produces on any
+   *       {@code DataSource}) pairs itself with a {@link
+   *       org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on the {@code
+   *       DataSource} it reads — it fences the checkpoint under its row lock and hands the
    *       projection no repository, so the projection writes where it writes (at least once).
-   *   <li>Otherwise: the {@code OffsetStore} bean and {@link
-   *       AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which saves each checkpoint into that
-   *       offset store. It does not fence, so routing refuses an at-least-once registration onto it
-   *       under real leadership.
+   *   <li>Any other offset store keeps the default: itself and {@link
+   *       AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which saves each checkpoint into it. It
+   *       does not fence, so routing refuses an at-least-once registration onto it under real
+   *       leadership.
    * </ul>
    *
    * <p>No {@code DataSource} is looked up here: both halves of the pair come from the offset store,
@@ -411,14 +396,9 @@ public class StreamRuneProducers {
   @DefaultBean
   @jakarta.inject.Named(SUBSCRIPTION_CHECKPOINT)
   public CheckpointTarget subscriptionCheckpoint(OffsetStore offsetStore) {
-    // The Postgres processor saves in its own transaction and ignores the offset store it is
-    // handed, so it is built from the offset store itself and never paired with an offset store of
-    // another kind, whose reads would never see the saves.
-    if (offsetStore instanceof PostgresOffsetStore postgres) {
-      return postgres.subscriptionCheckpoint();
-    }
-    return new CheckpointTarget(
-        "subscription_checkpoint", offsetStore, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    // A PostgresOffsetStore overrides it with the fencing processor built on the DataSource it
+    // reads; any other offset store keeps the nonatomic default.
+    return offsetStore.subscriptionCheckpoint();
   }
 
   /** Produces a {@link PostgresOffsetStore} as the default {@link OffsetStore}. */

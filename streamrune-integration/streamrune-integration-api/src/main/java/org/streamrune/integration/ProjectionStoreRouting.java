@@ -143,6 +143,44 @@ public final class ProjectionStoreRouting {
   }
 
   /**
+   * The repository of the store named {@code name} — the integrations' injectable {@code
+   * ProjectionRepository} bean, which query handlers and {@code BaseProjection} constructors read
+   * and write: the default read-model store's.
+   *
+   * @param stores every store defined (0, 1 or more)
+   * @param name the default store's name
+   * @return that store's {@link ReadModelStore#repository()}
+   * @throws NullPointerException if an argument or an element of {@code stores} is {@code null}
+   * @throws IllegalStateException when no store has that name (the application's stores replaced
+   *     the default one without taking its name), naming the stores and the fix
+   */
+  public static ProjectionRepository defaultRepository(List<ReadModelStore> stores, String name) {
+    Objects.requireNonNull(stores, "stores is required");
+    Objects.requireNonNull(name, "name is required");
+    return stores.stream()
+        .map(store -> Objects.requireNonNull(store, "stores must not hold null"))
+        .filter(store -> name.equals(store.name()))
+        .findFirst()
+        .map(ReadModelStore::repository)
+        .orElseThrow(
+            () ->
+                new IllegalStateException(
+                    "No read-model store is named '"
+                        + LogSanitizer.sanitizeForLog(name)
+                        + "' ("
+                        + (stores.isEmpty()
+                            ? "no read-model store is defined"
+                            : "stores: "
+                                + stores.stream()
+                                    .map(store -> "'" + safeName(store) + "'")
+                                    .collect(Collectors.joining(", ")))
+                        + "), so there is no default store to take the ProjectionRepository bean"
+                        + " from. Define a ProjectionRepository bean, or name one store '"
+                        + LogSanitizer.sanitizeForLog(name)
+                        + "'."));
+  }
+
+  /**
    * Routes one registration, then checks the routed target's processor against the registration's
    * mode and the leadership. Validates {@code stores} first ({@link #validateStores}), so rule 2
    * never sees two matches.

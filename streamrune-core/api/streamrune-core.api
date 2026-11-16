@@ -1070,7 +1070,9 @@ public enum org.streamrune.core.projection.LateDataPolicy
 public interface org.streamrune.core.projection.OffsetStore
   public abstract org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
   public abstract void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public default org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
   public default void reset(org.streamrune.core.types.ProjectionName)
+  public static final java.lang.String SUBSCRIPTION_CHECKPOINT = "subscription_checkpoint"
 
 public interface org.streamrune.core.projection.Projection
   public abstract void process(java.util.List<org.streamrune.core.EventEnvelope>)
