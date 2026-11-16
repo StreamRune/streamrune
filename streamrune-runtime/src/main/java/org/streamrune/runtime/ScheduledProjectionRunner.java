@@ -1549,8 +1549,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
      * AtomicBatchProcessor#nonAtomicAtLeastOnce()} for a runner of {@code AT_LEAST_ONCE_IDEMPOTENT}
      * projections. A transactional registration's {@code process(batch, repository)} override must
      * write through the supplied transaction-scoped repository (the framework's {@link
-     * org.streamrune.core.projection.BaseProjection} does this transparently); {@link #build()}
-     * checks each registration's declared mode against the processor.
+     * org.streamrune.core.projection.BaseProjection} does this transparently). A {@code
+     * JdbcProjectionRepository} checkpoints in {@code readmodel_checkpoint}, so its {@link
+     * #offsetStore} is {@code PostgresReadModelCheckpoints} on the same {@code DataSource} ({@code
+     * PostgresReadModelStore#checkpointTarget()}), never a {@code PostgresOffsetStore}. {@link
+     * #build()} checks each registration's declared mode against the processor.
      *
      * @throws IllegalArgumentException if {@code processor} is {@code null}
      */
