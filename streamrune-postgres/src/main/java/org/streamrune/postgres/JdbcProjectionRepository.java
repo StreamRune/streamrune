@@ -1348,28 +1348,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         });
   }
 
-  /** The two transactions that hold a projection's checkpoint row, and how each reports failure. */
-  private enum CheckpointTransaction {
-    BATCH(
-        "projection batch",
-        "Transaction failed during projection update",
-        "Failed to process projection batch atomically"),
-    REPLAY(
-        "projection dead-letter replay",
-        "Transaction failed during projection dead-letter replay",
-        "Failed to replay a projection dead-letter range");
-
-    private final String label;
-    private final String bodyFailure;
-    private final String connectionFailure;
-
-    CheckpointTransaction(String label, String bodyFailure, String connectionFailure) {
-      this.label = label;
-      this.bodyFailure = bodyFailure;
-      this.connectionFailure = connectionFailure;
-    }
-  }
-
   /**
    * What runs inside a checkpoint transaction. Its first statement locks the checkpoint row through
    * {@link #checkpointFence}, so every batch and every replay of the projection serializes there.
@@ -1390,7 +1368,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       ProjectionName projectionName, CheckpointTransaction kind, CheckpointTransactionBody body) {
     var afterCommitActions = new AfterCommitActions(projectionName);
     try {
-      commitUnderCheckpointLock(projectionName, kind, body, afterCommitActions);
+      commitUnderCheckpointLock(kind, body, afterCommitActions);
     } catch (Throwable inFlight) {
       afterCommitActions.runIfCommitIssued(inFlight);
       throw inFlight;
@@ -1399,69 +1377,32 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * One transaction under the projection's checkpoint-row lock: runs {@code body}, which locks the
-   * row first, and commits. {@link #executeAtomically} runs the lock with its fences, the updater
-   * and the offset save in it; {@link #executeReplay} runs the lock and the updater. The
-   * after-commit actions the updater registers are queued on {@code afterCommitActions}; the caller
-   * runs them once this method has returned or thrown.
+   * One transaction under the projection's checkpoint-row lock, in the shell {@link
+   * CheckpointTransaction#run} shares with {@code PostgresSubscriptionCheckpointProcessor}: runs
+   * {@code body}, which locks the row first, and commits. {@link #executeAtomically} runs the lock
+   * with its fences, the updater and the offset save in it; {@link #executeReplay} runs the lock
+   * and the updater. The after-commit actions the updater registers are queued on {@code
+   * afterCommitActions}; the caller runs them once this method has returned or thrown.
    */
   private void commitUnderCheckpointLock(
-      ProjectionName projectionName,
       CheckpointTransaction kind,
       CheckpointTransactionBody body,
       AfterCommitActions afterCommitActions) {
-    try (var conn = dataSource.getConnection()) {
-      conn.setAutoCommit(false);
-      var transactionScopedRepository = new TransactionScopedRepository(conn, afterCommitActions);
-      boolean committed = false;
-      try {
-        // The body locks the checkpoint row first, so every batch and every replay of this
-        // projection serializes there.
-        body.run(conn, transactionScopedRepository);
+    kind.run(
+        dataSource,
+        conn -> {
+          var transactionScopedRepository =
+              new TransactionScopedRepository(conn, afterCommitActions);
+          // The body locks the checkpoint row first, so every batch and every replay of this
+          // projection serializes there.
+          body.run(conn, transactionScopedRepository);
 
-        // From here on the outcome may be "committed" even if commit() throws (see
-        // AfterCommitActions), so the after-commit actions run whatever commit() reports.
-        afterCommitActions.commitIssued();
-        conn.commit();
-        committed = true;
-        // Tables created inside the transaction survive only after commit
-        tablesChecked.addAll(transactionScopedRepository.tablesEnsuredInTransaction);
-      } catch (SQLException e) {
-        // Wrap the transaction-body SQLException (rollback happens once, in the finally).
-        throw new EventStoreException(kind.bodyFailure, e);
-      } finally {
-        // The SINGLE rollback point for every non-committed exit — a
-        // RuntimeException (e.g. an updater IllegalStateException or the checkpoint fence's
-        // ProjectionCommitFencedException), the wrapped SQLException above, OR any OTHER Throwable
-        // (an Error such as StackOverflowError / OutOfMemoryError / AssertionError from user
-        // mapping code in projectionUpdater.update()). It must run BEFORE restoring autoCommit:
-        // pgjdbc's
-        // setAutoCommit(true) COMMITS an open transaction, so without this rollback a
-        // partially-applied read-model write would become durable WITHOUT the offset advance, and
-        // the retried batch would re-apply the same events (the overlap guard passes
-        // because the checkpoint never moved) — double-applying a non-idempotent projection.
-        // Mirrors PostgresEventStore's append discipline. A FAILED rollback must not
-        // be followed by that restore, and the pool must not be left to commit the transaction on
-        // return (Agroal resets autoCommit with no rollback first), so the physical connection is
-        // aborted instead and autoCommit is left alone (PostgresTransactions). An Error from the
-        // rollback propagates after the abort.
-        if (committed || PostgresTransactions.rollbackOrAbort(conn, kind.label)) {
-          // Restore auto-commit before the connection returns to the pool. Swallow a throw here:
-          // on the success path the tx has already committed (a throw must not fail a durable
-          // apply); on the abort path the rollback is already done.
-          try {
-            conn.setAutoCommit(true);
-          } catch (SQLException restoreEx) {
-            log.debug(
-                "Failed to restore autoCommit before returning connection to pool (benign — pool"
-                    + " resets on return): {}",
-                restoreEx.getMessage());
-          }
-        }
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException(kind.connectionFailure, e);
-    }
+          // From here on the outcome may be "committed" even if commit() throws (see
+          // AfterCommitActions), so the after-commit actions run whatever commit() reports.
+          afterCommitActions.commitIssued();
+          // Tables created inside the transaction survive only after commit
+          return () -> tablesChecked.addAll(transactionScopedRepository.tablesEnsuredInTransaction);
+        });
   }
 
   /**
