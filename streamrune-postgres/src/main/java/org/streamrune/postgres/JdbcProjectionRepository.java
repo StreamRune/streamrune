@@ -1378,7 +1378,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   /**
    * One transaction under the projection's checkpoint-row lock, in the shell {@link
-   * CheckpointTransaction#run} shares with {@code PostgresSubscriptionCheckpointProcessor}: runs
+   * CheckpointTransaction#run} shares with {@link PostgresSubscriptionCheckpointProcessor}: runs
    * {@code body}, which locks the row first, and commits. {@link #executeAtomically} runs the lock
    * with its fences, the updater and the offset save in it; {@link #executeReplay} runs the lock
    * and the updater. The after-commit actions the updater registers are queued on {@code

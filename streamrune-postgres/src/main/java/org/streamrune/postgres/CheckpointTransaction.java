@@ -10,7 +10,7 @@ import org.streamrune.core.EventStoreException;
 /**
  * The two transactions that hold a projection's checkpoint row — a batch and a dead-letter replay —
  * how each reports a failure, and the one transaction shell both run in ({@link #run}). {@link
- * JdbcProjectionRepository} and {@code PostgresSubscriptionCheckpointProcessor} share it, so a
+ * JdbcProjectionRepository} and {@link PostgresSubscriptionCheckpointProcessor} share it, so a
  * checkpoint transaction commits, rolls back and gives its connection back the same way in both.
  *
  * <p>The shell does not lock: the body's first statement locks the checkpoint row through {@link

@@ -313,6 +313,15 @@ public final class org.streamrune.postgres.PostgresSnapshotStorePurger implement
   public java.lang.String name()
   public void purge(org.streamrune.core.types.SubjectId)
 
+public final class org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor implements org.streamrune.core.projection.AtomicBatchProcessor
+  public <init>(javax.sql.DataSource)
+  public boolean fencesCheckpoint()
+  public boolean serializesReplay()
+  public boolean transactional()
+  public void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+
 public final record org.streamrune.postgres.SchemaIssue
   public <init>(org.streamrune.postgres.SchemaIssue$Severity, java.lang.String, java.lang.String)
   public final boolean equals(java.lang.Object)
