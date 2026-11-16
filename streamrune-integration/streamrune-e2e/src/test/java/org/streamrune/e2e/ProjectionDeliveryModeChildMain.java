@@ -14,7 +14,6 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresEventStore;
-import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.PollingProjectionRunner;
 
 /**
@@ -76,7 +75,7 @@ public final class ProjectionDeliveryModeChildMain {
     var store =
         PostgresEventStore.builder().dataSource(ds).typeRegistry(E2ETestBase.TYPE_REGISTRY).build();
     var repo = new JdbcProjectionRepository(ds);
-    OffsetStore offsets = new PostgresOffsetStore(ds);
+    OffsetStore offsets = ProjectionDeliveryModeProcessKillIT.checkpoints(mode, ds);
 
     AtomicBatchProcessor processor =
         mode == ProjectionDeliveryMode.TRANSACTIONAL_LOCAL

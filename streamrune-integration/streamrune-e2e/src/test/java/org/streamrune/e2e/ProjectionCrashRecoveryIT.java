@@ -17,13 +17,13 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresEventStore;
-import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelCheckpoints;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 import org.streamrune.runtime.ProjectionState;
 
 /**
  * Runner-level crash recovery: a {@link ContinuousProjectionRunner} processes part of a stream and
- * commits its offset into a real {@link PostgresOffsetStore}; the runner is then "crashed"
+ * commits its offset into a real {@link PostgresReadModelCheckpoints}; the runner is then "crashed"
  * (closed); a FRESH runner is started against the SAME offset store; the rest of the stream is
  * appended; and we assert every event is applied EXACTLY ONCE — the fresh runner resumes from the
  * persisted offset rather than replaying from zero.
@@ -43,9 +43,11 @@ class ProjectionCrashRecoveryIT extends E2ETestBase {
     StreamId stream = StreamId.of(AggregateType.of("crash"), AggregateId.of("crash-stream"));
 
     PostgresEventStore store = eventStore(dataSource);
-    PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
-    // JdbcProjectionRepository is BOTH the read-model repository and the transactional
-    // AtomicBatchProcessor: each batch's projection writes + the offset save commit together.
+    // The pair a PostgresReadModelStore hands out: JdbcProjectionRepository is BOTH the read-model
+    // repository and the transactional AtomicBatchProcessor, and it advances readmodel_checkpoint,
+    // which PostgresReadModelCheckpoints reads: each batch's projection writes + the offset save
+    // commit together.
+    PostgresReadModelCheckpoints offsetStore = new PostgresReadModelCheckpoints(dataSource);
     JdbcProjectionRepository repo = new JdbcProjectionRepository(dataSource);
 
     // ---- Phase 1: append the first half, process it, commit the offset, then crash. ----
@@ -97,7 +99,7 @@ class ProjectionCrashRecoveryIT extends E2ETestBase {
     long finalOffset = secondOffsets.getLast().value();
 
     // A brand-new projection instance (empty in-memory counters) and a brand-new runner — only the
-    // durable PostgresOffsetStore carries state across the "restart".
+    // durable readmodel_checkpoint carries state across the "restart".
     var proj2 = new OffsetCountingProjection(projection);
     var runner2 =
         ContinuousProjectionRunner.builder()

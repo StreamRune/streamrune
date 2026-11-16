@@ -21,6 +21,7 @@ import org.streamrune.core.types.Version;
 import org.streamrune.postgres.PostgresEventStore;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOutboxStore;
+import org.streamrune.postgres.PostgresReadModelStore;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -33,7 +34,18 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * framework schema the same way the streamrune-postgres tests do: {@link
  * PostgresEventStoreFactory#create()} runs the bundled Flyway migrations from {@code
  * classpath:db/streamrune-migration} (the postgres module ships them) and returns a HikariCP-pooled
- * {@link DataSource}. No schema is hand-written here.
+ * {@link DataSource}; {@link PostgresReadModelStore#create} applies the read-model series ({@code
+ * classpath:db/readmodel-migration}) beside it, as the integrations do for the default store. No
+ * schema is hand-written here.
+ *
+ * <p><b>Which table a projection checkpoints in.</b> A projection committed through a {@link
+ * org.streamrune.postgres.JdbcProjectionRepository} (a {@link PostgresReadModelStore}'s processor)
+ * checkpoints in {@code readmodel_checkpoint}, read through {@link
+ * org.streamrune.postgres.PostgresReadModelCheckpoints}; an at-least-once projection that writes
+ * elsewhere, and every event listener, checkpoints with the events in {@code
+ * subscription_checkpoint}, read through {@link org.streamrune.postgres.PostgresOffsetStore} and
+ * committed through its {@link org.streamrune.postgres.PostgresOffsetStore#subscriptionCheckpoint()
+ * subscription checkpoint} processor.
  *
  * <p>Subclasses get a real pooled {@link #dataSource}, factories for a {@link PostgresEventStore}
  * (with an outbox store wired so the transactional-outbox append path works) and a {@link
@@ -96,6 +108,14 @@ abstract class E2ETestBase {
     // the returned EventStore — the tests build their own stores against `dataSource` so they can
     // wrap it (fault injection) and run multiple independent instances against one database.
     new PostgresEventStoreFactory(dataSource, TYPE_REGISTRY).create();
+    // The read-model series, on its own history table, in the same database (the default
+    // single-database deployment): readmodel_checkpoint, where the JDBC processor checkpoints.
+    PostgresReadModelStore.create(
+        "postgres",
+        dataSource,
+        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(null),
+        true,
+        true);
   }
 
   @BeforeEach
@@ -111,6 +131,7 @@ abstract class E2ETestBase {
       // never deleted) and which the reader's contiguity guard correctly treats as a hole.
       stmt.execute("UPDATE global_offset_sequence SET next_value = 0 WHERE id = 1");
       stmt.execute("DELETE FROM subscription_checkpoint");
+      stmt.execute("DELETE FROM readmodel_checkpoint");
       // Clear leases so no test inherits a live lease (and its epoch numbering) from a previous
       // method — a stale live lease would make a later lease-based IT's acquire silently fail.
       stmt.execute("DELETE FROM subscription_leases");
@@ -173,7 +194,7 @@ abstract class E2ETestBase {
         java.time.Duration.ofMillis(50));
   }
 
-  private static EventMetadata metadata(int n) {
+  static EventMetadata metadata(int n) {
     return new EventMetadata(
         IdGenerator.generateEventId(),
         IdGenerator.generateCommandId(),
@@ -223,9 +244,11 @@ abstract class E2ETestBase {
    * the read model is exactly-once-effective.
    *
    * <p>Drive it through {@link org.streamrune.postgres.JdbcProjectionRepository} as the runner's
-   * {@code AtomicBatchProcessor}: each batch's writes and the offset save then commit (or roll
-   * back) in one transaction, so a committed offset N guarantees offsets ≤ N are applied to the
-   * read model exactly once.
+   * {@code AtomicBatchProcessor}, paired with {@link
+   * org.streamrune.postgres.PostgresReadModelCheckpoints} on the same DataSource as the runner's
+   * offset store: each batch's writes and the offset save then commit (or roll back) in one
+   * transaction, so a committed offset N guarantees offsets ≤ N are applied to the read model
+   * exactly once.
    */
   static final class OffsetCountingProjection implements org.streamrune.core.projection.Projection {
 
