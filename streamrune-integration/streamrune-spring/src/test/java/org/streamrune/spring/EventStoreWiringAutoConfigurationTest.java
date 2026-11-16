@@ -157,6 +157,9 @@ class EventStoreWiringAutoConfigurationTest {
           assertThat(checkpoint.processor())
               .isInstanceOf(PostgresSubscriptionCheckpointProcessor.class);
           assertThat(checkpoint.processor().fencesCheckpoint()).isTrue();
+          assertThat(ReflectionTestUtils.getField(checkpoint.processor(), "dataSource"))
+              .as("the processor is built on the DataSource its offset store reads")
+              .isSameAs(ReflectionTestUtils.getField(checkpoint.checkpoints(), "dataSource"));
         });
   }
 
@@ -177,6 +180,33 @@ class EventStoreWiringAutoConfigurationTest {
               assertThat(checkpoint.checkpoints()).isSameAs(offsetStore);
               assertThat(checkpoint.processor())
                   .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
+            });
+  }
+
+  /**
+   * A PostgresOffsetStore the application defines on its own DataSource — here with no {@code
+   * DataSource} bean at all — gets the Postgres processor on that same DataSource: the bean looks
+   * up no DataSource of its own.
+   */
+  @Test
+  void anApplicationPostgresOffsetStore_getsTheProcessorOnItsOwnDataSource() {
+    DataSource own = mock(DataSource.class);
+    var offsetStore = new PostgresOffsetStore(own);
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(OffsetStore.class, () -> offsetStore)
+        .run(
+            ctx -> {
+              var checkpoint =
+                  ctx.getBean(
+                      StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT, CheckpointTarget.class);
+              assertThat(checkpoint.checkpoints()).isSameAs(offsetStore);
+              assertThat(checkpoint.processor())
+                  .isInstanceOf(PostgresSubscriptionCheckpointProcessor.class);
+              assertThat(ReflectionTestUtils.getField(checkpoint.processor(), "dataSource"))
+                  .isSameAs(own);
             });
   }
 

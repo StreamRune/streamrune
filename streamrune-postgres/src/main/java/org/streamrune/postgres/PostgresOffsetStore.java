@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import javax.sql.DataSource;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
@@ -25,6 +26,20 @@ public final class PostgresOffsetStore implements OffsetStore {
       throw new IllegalArgumentException("dataSource is required");
     }
     this.dataSource = dataSource;
+  }
+
+  /**
+   * The event store's subscription checkpoint over this offset store: this store as the checkpoints
+   * and a {@link PostgresSubscriptionCheckpointProcessor} on the same {@link DataSource} as the
+   * processor, under the name {@code subscription_checkpoint}. The processor saves the checkpoint
+   * in its own transaction and ignores the offset store it is handed, so it must reach the database
+   * this store reads; building both from one DataSource is what guarantees that.
+   *
+   * @return the pair a runner reads and commits an at-least-once registration's position through
+   */
+  public CheckpointTarget subscriptionCheckpoint() {
+    return new CheckpointTarget(
+        "subscription_checkpoint", this, new PostgresSubscriptionCheckpointProcessor(dataSource));
   }
 
   @Override

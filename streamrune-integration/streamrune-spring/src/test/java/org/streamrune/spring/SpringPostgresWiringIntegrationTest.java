@@ -357,6 +357,71 @@ class SpringPostgresWiringIntegrationTest {
             });
   }
 
+  /**
+   * An application that keeps its subscription checkpoints on a second database — its own {@code
+   * PostgresOffsetStore} over a DataSource that is not the application's {@code DataSource} bean —
+   * gets a subscription checkpoint whose processor commits to that same second database: the batch
+   * the processor commits is the offset the offset store reads, and nothing lands in the primary
+   * database's {@code subscription_checkpoint}.
+   */
+  @Test
+  void anApplicationOffsetStoreOnASecondDatabase_getsAProcessorOnThatDatabase() throws Exception {
+    PGSimpleDataSource second = secondDatabase();
+    var name =
+        org.streamrune.core.types.ProjectionName.of(
+            "second_db_" + UUID.randomUUID().toString().replace("-", ""));
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withBean(
+            org.streamrune.core.projection.OffsetStore.class,
+            () -> new org.streamrune.postgres.PostgresOffsetStore(second))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var pair =
+                  ctx.getBean(
+                      StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT,
+                      org.streamrune.core.projection.CheckpointTarget.class);
+              assertThat(pair.checkpoints())
+                  .isSameAs(ctx.getBean(org.streamrune.core.projection.OffsetStore.class));
+              pair.processor()
+                  .executeAtomically(
+                      name,
+                      List.of(),
+                      GlobalOffset.of(7),
+                      0L,
+                      repository -> {},
+                      pair.checkpoints());
+              assertThat(pair.checkpoints().getLastOffset(name))
+                  .as("the offset store reads what the processor committed")
+                  .isEqualTo(GlobalOffset.of(7));
+              assertThat(checkpoint("subscription_checkpoint", name.value()))
+                  .as("nothing lands in the primary database")
+                  .isEmpty();
+            });
+  }
+
+  /** A second database on the container, carrying the event-store series. */
+  private static PGSimpleDataSource secondDatabase() throws Exception {
+    String database = "second_" + UUID.randomUUID().toString().replace("-", "");
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE DATABASE " + database);
+    }
+    var second = new PGSimpleDataSource();
+    second.setUrl(PG.getJdbcUrl().replace("/streamrune_spring_it", "/" + database));
+    second.setUser(PG.getUsername());
+    second.setPassword(PG.getPassword());
+    new PostgresEventStoreFactory(second, typeRegistry)
+        .cryptoEngine(new InMemoryCryptoEngine())
+        .create();
+    return second;
+  }
+
   /** The two projections of the routing test, over the injected default repository. */
   @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
   static class RoutedProjectionsConfig {
