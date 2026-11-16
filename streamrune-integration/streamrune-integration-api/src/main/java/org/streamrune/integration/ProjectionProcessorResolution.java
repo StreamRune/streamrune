@@ -31,10 +31,11 @@ public final class ProjectionProcessorResolution {
   /** One discovered registration: its name and the mode its {@code @ProjectionConfig} declares. */
   public record Registration(String projectionName, ProjectionDeliveryMode mode) {}
 
-  /** The one INFO sentence the integrations log per INLINE registration. */
-  public static final String INLINE_INFO =
-      "Projection '{}' delivery mode AT_LEAST_ONCE_IDEMPOTENT inline — post-commit on the command"
-          + " thread, no checkpoint; a failure is logged and the batch is not retried";
+  /**
+   * The one INFO sentence the integrations log per INLINE registration; the text lives in {@link
+   * ProjectionStoreRouting#INLINE_INFO}.
+   */
+  public static final String INLINE_INFO = ProjectionStoreRouting.INLINE_INFO;
 
   /**
    * Selects the processor for one runner.
@@ -145,17 +146,9 @@ public final class ProjectionProcessorResolution {
    * @param projectionName the INLINE projection's name (sanitized into the message)
    * @param mode the mode its {@code @ProjectionConfig} declares
    * @throws IllegalStateException when {@code mode} is not {@code AT_LEAST_ONCE_IDEMPOTENT}
+   * @see ProjectionStoreRouting#requireInlineMode
    */
   public static void requireInlineMode(String projectionName, ProjectionDeliveryMode mode) {
-    if (mode == ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT) {
-      return;
-    }
-    throw new IllegalStateException(
-        "projection '"
-            + LogSanitizer.sanitizeForLog(projectionName)
-            + "' is INLINE and declares "
-            + mode
-            + ": INLINE runs post-commit on the command thread with no checkpoint and no transaction"
-            + " of its own. Declare AT_LEAST_ONCE_IDEMPOTENT, or run it CONTINUOUS or SCHEDULED.");
+    ProjectionStoreRouting.requireInlineMode(projectionName, mode);
   }
 }
