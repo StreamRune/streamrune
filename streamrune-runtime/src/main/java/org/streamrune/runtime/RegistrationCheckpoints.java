@@ -39,7 +39,9 @@ record RegistrationCheckpoints(
           "atomicProcessor is required: pass the JdbcProjectionRepository your"
               + " TRANSACTIONAL_LOCAL projections write to, or"
               + " AtomicBatchProcessor.nonAtomicAtLeastOnce() for a runner of"
-              + " AT_LEAST_ONCE_IDEMPOTENT projections");
+              + " AT_LEAST_ONCE_IDEMPOTENT projections. The runner-wide offsetStore and"
+              + " atomicProcessor are a pair: set both, or neither and register every projection"
+              + " with a CheckpointTarget.");
     }
     if (offsetStore == null && atomicProcessor != null) {
       throw new IllegalArgumentException(

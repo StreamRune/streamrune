@@ -126,6 +126,12 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
   private final ConcurrentHashMap<ProjectionName, CommitRejectionTracker> commitRejections =
       new ConcurrentHashMap<>();
   private final AtomicBoolean started = new AtomicBoolean(false);
+  // Makes reset() and start()'s claim mutually exclusive: reset() holds it for its whole rewind
+  // (checking that the runner is not started inside it), start() claims `started` inside it. The
+  // `started` flag alone cannot serve as reset's claim, because stop() clears it unconditionally
+  // once every thread has exited: a stop() landing during a reset would release the claim, let a
+  // start() through, and the reset's own release would then clear a running runner's flag.
+  private final Object resetLock = new Object();
   private final AtomicBoolean stopping = new AtomicBoolean(false);
   // Set false the first time countPending() throws UnsupportedOperationException, so the
   // projection dead-letter depth gauge degrades gracefully without retrying every tick — mirrors
@@ -184,8 +190,11 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
   /** Starts the runner — spawns a virtual thread per registered projection. */
   public void start() {
-    if (!started.compareAndSet(false, true)) {
-      throw new IllegalStateException("ScheduledProjectionRunner already started");
+    // A reset in progress finishes before the claim: start() waits for it rather than racing it.
+    synchronized (resetLock) {
+      if (!started.compareAndSet(false, true)) {
+        throw new IllegalStateException("ScheduledProjectionRunner already started");
+      }
     }
 
     for (var reg : registrations) {
@@ -1009,8 +1018,9 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
 
   /**
    * Advances the checkpoint past a SKIP'd or dead-lettered chunk through the EPOCH-FENCED
-   * empty-batch commit ({@code atomicProcessor.executeAtomically(name, List.of(), toOffset,
-   * fencingEpoch, ...)}) rather than a raw {@link OffsetStore#saveOffset}.
+   * empty-batch commit of the registration's processor ({@code executeAtomically(name, List.of(),
+   * toOffset, fencingEpoch, ...)} with the registration's own checkpoints) rather than a raw {@link
+   * OffsetStore#saveOffset}.
    *
    * <p>A raw forward {@code saveOffset} of the skip/DLQ endpoint cannot be rejected by the
    * monotonic guard, so a stale leader still inside its local {@code
@@ -1333,6 +1343,7 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    *
    * @param name the registered projection to rewind
    * @throws IllegalArgumentException if no projection of that name is registered
+   *     <p>A {@link #start()} called while the reset runs waits for it to finish.
    * @throws IllegalStateException if the runner is started (a running drain could save a higher
    *     offset after the reset, undoing it), or if the offset store's reset returned without
    *     rewinding the checkpoint
@@ -1343,14 +1354,17 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
       throw new IllegalArgumentException(
           "No projection registered as '" + LogSanitizer.sanitizeForLog(name.value()) + "'");
     }
-    if (started.get()) {
-      throw new IllegalStateException(
-          RUNNER_NAME
-              + " is started: stop it before resetting '"
-              + LogSanitizer.sanitizeForLog(name.value())
-              + "'");
+    // Held for the whole rewind, so a concurrent start() waits until it is done.
+    synchronized (resetLock) {
+      if (started.get()) {
+        throw new IllegalStateException(
+            RUNNER_NAME
+                + " is started: stop it before resetting '"
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "'");
+      }
+      pair.reset(name);
     }
-    pair.reset(name);
   }
 
   /** The pair {@code name} reads its checkpoint from and commits through. */
