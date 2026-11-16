@@ -135,13 +135,97 @@ class StreamRuneProducersTest {
   }
 
   @Test
-  void jdbcProjectionRepositoryProduced() {
+  void theProjectionRepositoryIsTheDefaultStoresRepository() {
     var producers = new StreamRuneProducers();
+    var defaultRepository = new org.streamrune.test.InMemoryProjectionRepository();
+    var other = new org.streamrune.test.InMemoryProjectionRepository();
     var repository =
-        producers.jdbcProjectionRepository(mock(DataSource.class), unsatisfied(), unsatisfied());
-    assertNotNull(repository);
-    // The repository doubles as the AtomicBatchProcessor wired into projection runners.
-    assertInstanceOf(org.streamrune.core.projection.AtomicBatchProcessor.class, repository);
+        producers.projectionRepository(
+            storesOf(
+                org.streamrune.core.projection.ReadModelStore.of("search", other, other, other),
+                org.streamrune.core.projection.ReadModelStore.of(
+                    StreamRuneProducers.DEFAULT_READ_MODEL_STORE,
+                    defaultRepository,
+                    defaultRepository,
+                    defaultRepository)));
+    assertSame(defaultRepository, repository);
+  }
+
+  @Test
+  void theProjectionRepositoryRefusesStoresWithoutTheDefaultOne() {
+    var producers = new StreamRuneProducers();
+    var other = new org.streamrune.test.InMemoryProjectionRepository();
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.projectionRepository(
+                    storesOf(
+                        org.streamrune.core.projection.ReadModelStore.of(
+                            "search", other, other, other))));
+    assertTrue(
+        ex.getMessage().contains("No read-model store is named 'postgres'"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("(stores: 'search')"), ex.getMessage());
+  }
+
+  /** A Postgres offset store brings the fencing processor, built from the offset store itself. */
+  @Test
+  void aPostgresOffsetStoreBringsTheFencingSubscriptionCheckpoint() {
+    var producers = new StreamRuneProducers();
+    var dataSource = mock(DataSource.class);
+    var offsetStore = producers.offsetStore(dataSource);
+
+    var target = producers.subscriptionCheckpoint(offsetStore);
+
+    assertEquals("subscription_checkpoint", target.name());
+    assertSame(offsetStore, target.checkpoints());
+    assertInstanceOf(
+        org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor.class, target.processor());
+    assertSame(
+        getField(offsetStore, "dataSource"),
+        getField(target.processor(), "dataSource"),
+        "the processor commits on the DataSource the offset store reads");
+  }
+
+  /** Any other offset store is paired with the nonatomic processor, which saves into it. */
+  @Test
+  void anotherOffsetStoreIsPairedWithTheNonatomicProcessor() {
+    var producers = new StreamRuneProducers();
+    var offsetStore = new org.streamrune.test.InMemoryOffsetStore();
+
+    var target = producers.subscriptionCheckpoint(offsetStore);
+
+    assertEquals("subscription_checkpoint", target.name());
+    assertSame(offsetStore, target.checkpoints());
+    assertSame(
+        org.streamrune.core.projection.AtomicBatchProcessor.nonAtomicAtLeastOnce(),
+        target.processor());
+  }
+
+  @Test
+  void theReadModelSeriesFollowsTheEventStoreSwitchUnlessSetItself() {
+    assertTrue(StreamRuneProducers.readModelAutoInitialize(TestProperties.defaults()));
+    assertFalse(
+        StreamRuneProducers.readModelAutoInitialize(
+            TestProperties.of(Map.of("streamrune.event-store.schema.auto-initialize", "false"))));
+    assertTrue(
+        StreamRuneProducers.readModelAutoInitialize(
+            TestProperties.of(
+                Map.of(
+                    "streamrune.event-store.schema.auto-initialize", "false",
+                    "streamrune.read-model.schema.auto-initialize", "true"))));
+    assertFalse(
+        StreamRuneProducers.readModelAutoInitialize(
+            TestProperties.of(Map.of("streamrune.read-model.schema.auto-initialize", "false"))));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Instance<org.streamrune.core.projection.ReadModelStore> storesOf(
+      org.streamrune.core.projection.ReadModelStore... stores) {
+    Instance<org.streamrune.core.projection.ReadModelStore> instance = mock(Instance.class);
+    when(instance.isUnsatisfied()).thenReturn(stores.length == 0);
+    when(instance.stream()).thenAnswer(inv -> java.util.Arrays.stream(stores));
+    return instance;
   }
 
   @Test
@@ -1104,45 +1188,26 @@ class StreamRuneProducersTest {
                 mock(DataSource.class), TestProperties.defaults(), ambiguous, unsatisfied()));
   }
 
-  // The projection repository producer must wire the CryptoEngine the same way
-  // the saga store producer does, so @Encrypted read-model fields are ciphertext at rest.
-
-  @Test
-  void jdbcProjectionRepositoryWiresCryptoEngine_whenPresent() {
-    var producers = new StreamRuneProducers();
-    var cryptoEngine = new org.streamrune.test.InMemoryCryptoEngine();
-
-    var repo =
-        producers.jdbcProjectionRepository(
-            mock(DataSource.class), satisfied(cryptoEngine), unsatisfied());
-
-    assertNotNull(repo);
-    var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(repo, "objectMapper");
-    assertTrue(mapper.getRegisteredModuleIds().contains("CryptoShreddingModule"));
-  }
-
-  @Test
-  void jdbcProjectionRepositoryMapperIsCryptoBlind_whenNoCryptoEngine() {
-    var producers = new StreamRuneProducers();
-
-    var repo =
-        producers.jdbcProjectionRepository(mock(DataSource.class), unsatisfied(), unsatisfied());
-
-    assertNotNull(repo);
-    var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(repo, "objectMapper");
-    assertFalse(mapper.getRegisteredModuleIds().contains("CryptoShreddingModule"));
-  }
+  // The default read-model store's repository is built with the crypto-aware mapper (asserted on a
+  // real database in QuarkusReadModelStoreWiringTest); an ambiguous engine is refused before the
+  // database is touched.
 
   @Test
   @SuppressWarnings("unchecked")
-  void jdbcProjectionRepositoryThrows_whenCryptoEngineAmbiguous() {
+  void postgresReadModelStoreThrows_whenCryptoEngineAmbiguous() {
     var producers = new StreamRuneProducers();
     Instance<CryptoEngine> ambiguous = mock(Instance.class);
     when(ambiguous.isAmbiguous()).thenReturn(true);
+    DataSource dataSource = mock(DataSource.class);
 
-    assertThrows(
-        IllegalStateException.class,
-        () -> producers.jdbcProjectionRepository(mock(DataSource.class), ambiguous, unsatisfied()));
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.postgresReadModelStore(
+                    dataSource, TestProperties.defaults(), ambiguous, unsatisfied()));
+    assertTrue(ex.getMessage().contains("PLAINTEXT"), ex.getMessage());
+    org.mockito.Mockito.verifyNoInteractions(dataSource);
   }
 
   @Test

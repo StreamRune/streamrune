@@ -12,11 +12,12 @@ import org.streamrune.core.projection.ProjectionRepository;
 
 /**
  * Declares every {@link ProjectionIndex} bean on the application's {@link ProjectionRepository}
- * bean — the framework's {@code JdbcProjectionRepository} or one the application produces — on the
- * startup event, at {@link Interceptor.Priority#LIBRARY_BEFORE} with the startup validators, so
- * before any projection runner starts and before the first request. A refused key, an index that
- * cannot be created, or index beans without a repository bean fail the start. The Spring and
- * Micronaut integrations declare at the same point of their startup.
+ * bean — the default read-model store's repository ({@code
+ * StreamRuneProducers#projectionRepository}) or one the application produces — on the startup
+ * event, at {@link Interceptor.Priority#LIBRARY_BEFORE} with the startup validators, so before any
+ * projection runner starts and before the first request. A refused key, an index that cannot be
+ * created, or index beans without a repository bean fail the start. The Spring and Micronaut
+ * integrations declare at the same point of their startup.
  */
 @ApplicationScoped
 public class ProjectionIndexDeclarer {
@@ -48,7 +49,7 @@ public class ProjectionIndexDeclarer {
               + " ProjectionIndex bean(s) but "
               + (repositories.isAmbiguous() ? "several" : "no")
               + " ProjectionRepository bean(s) to declare them on: define exactly one, or a"
-              + " DataSource for the framework's JdbcProjectionRepository");
+              + " DataSource for the default read-model store");
     }
     ProjectionRepository repository = repositories.get();
     indexes.forEach(repository::declareIndex);
