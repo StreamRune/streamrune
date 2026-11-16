@@ -82,12 +82,7 @@ class JdbcProjectionRepositoryAfterCommitTest {
     dataSource.setUrl(PG.getJdbcUrl());
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    ReadModelTestSchema.apply(dataSource);
   }
 
   private static EventEnvelope orderPlaced(long offset, String orderId) {

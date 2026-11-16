@@ -54,13 +54,8 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
     dataSource.setURL(PG.getJdbcUrl());
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
-    // the batch transaction locks the projection's checkpoint row in the event-store baseline
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    // the batch transaction locks the projection's checkpoint row in the read-model series
+    ReadModelTestSchema.apply(dataSource);
   }
 
   @AfterAll
@@ -182,7 +177,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
         GlobalOffset.of(1),
         0L,
         tx -> tx.save(name, "a", new View("a")),
-        new PostgresOffsetStore(dataSource));
+        new PostgresReadModelCheckpoints(dataSource));
 
     assertThat(injecting.creates.get()).isEqualTo(2);
     assertThat(new JdbcProjectionRepository(dataSource).findById(name, "a", View.class))
@@ -203,7 +198,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
                     GlobalOffset.of(1),
                     0L,
                     tx -> tx.save(name, "a", new View("a")),
-                    new PostgresOffsetStore(dataSource)))
+                    new PostgresReadModelCheckpoints(dataSource)))
         .isInstanceOf(EventStoreException.class)
         .hasMessageContaining("dup_in_batch_twice_view");
     assertThat(injecting.creates.get()).isEqualTo(3);
@@ -215,7 +210,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
         GlobalOffset.of(1),
         0L,
         tx -> tx.save(name, "a", new View("a")),
-        new PostgresOffsetStore(dataSource));
+        new PostgresReadModelCheckpoints(dataSource));
     assertThat(injecting.creates.get()).isEqualTo(4);
     assertThat(new JdbcProjectionRepository(dataSource).findById(name, "a", View.class))
         .contains(new View("a"));
@@ -235,7 +230,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
                     GlobalOffset.of(1),
                     0L,
                     tx -> tx.save(name, "a", new View("a")),
-                    new PostgresOffsetStore(dataSource)))
+                    new PostgresReadModelCheckpoints(dataSource)))
         .isInstanceOf(EventStoreException.class)
         .hasMessageContaining("denied_in_batch_view");
     assertThat(injecting.creates.get()).isEqualTo(1);
@@ -279,7 +274,7 @@ class JdbcProjectionRepositoryConcurrentTableCreationTest {
                       GlobalOffset.of(1),
                       0L,
                       tx -> tx.save(name, "a", new View("a")),
-                      new PostgresOffsetStore(dataSource)));
+                      new PostgresReadModelCheckpoints(dataSource)));
       awaitBlockedCreate("real_race_batch_view");
       other.commit();
       batch.get(30, TimeUnit.SECONDS);

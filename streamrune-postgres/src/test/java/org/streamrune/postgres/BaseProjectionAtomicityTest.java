@@ -38,7 +38,7 @@ class BaseProjectionAtomicityTest {
       new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_baseproj_test");
 
   static PGSimpleDataSource dataSource;
-  static PostgresOffsetStore offsetStore;
+  static PostgresReadModelCheckpoints offsetStore;
 
   record Counter(String id, int applyCount) {}
 
@@ -66,25 +66,21 @@ class BaseProjectionAtomicityTest {
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
     createOffsetTable();
-    offsetStore = new PostgresOffsetStore(dataSource);
+    offsetStore = new PostgresReadModelCheckpoints(dataSource);
   }
 
   static void createOffsetTable() {
-    // The shipped event-store baseline, applied the way the factory applies it. This test only
-    // uses subscription_checkpoint (with its epoch fencing column).
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    // The shipped read-model series, applied the way PostgresReadModelStore applies it. This test
+    // only uses readmodel_checkpoint (with its epoch fencing column), where the repository
+    // checkpoints.
+    ReadModelTestSchema.apply(dataSource);
   }
 
   @BeforeEach
   void clean() throws SQLException {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("DELETE FROM subscription_checkpoint");
+      stmt.execute("DELETE FROM readmodel_checkpoint");
       stmt.execute("DROP TABLE IF EXISTS base_counting_view");
     }
   }

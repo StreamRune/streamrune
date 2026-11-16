@@ -63,12 +63,7 @@ class JdbcProjectionRepositoryQueryContractTest extends ProjectionRepositoryQuer
     dataSource.setUrl(PG.getJdbcUrl());
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    ReadModelTestSchema.apply(dataSource);
     repo = new JdbcProjectionRepository(dataSource);
   }
 

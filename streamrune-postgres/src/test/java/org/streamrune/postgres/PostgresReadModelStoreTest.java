@@ -127,6 +127,48 @@ class PostgresReadModelStoreTest {
   }
 
   /**
+   * A {@link JdbcProjectionRepository} built by either public constructor is the same processor as
+   * the store's: its batches and its fence stamps land in {@code readmodel_checkpoint}, read
+   * through {@link PostgresReadModelCheckpoints} on the same DataSource, and never in the event
+   * store's {@code subscription_checkpoint}.
+   */
+  @Test
+  void aRepositoryFromEitherPublicConstructorCheckpointsInTheReadModelTable() throws SQLException {
+    var dataSource = freshDatabase();
+    new PostgresEventStoreFactory(dataSource, SimpleEventTypeRegistry.builder().build())
+        .initializeSchema();
+    PostgresReadModelStore.create("postgres", dataSource, mapper, true, true);
+    var readModelCheckpoints = new PostgresReadModelCheckpoints(dataSource);
+    var subscriptionCheckpoints = new PostgresOffsetStore(dataSource);
+
+    var repositories =
+        List.of(
+            new JdbcProjectionRepository(dataSource),
+            new JdbcProjectionRepository(dataSource, mapper));
+    for (int i = 0; i < repositories.size(); i++) {
+      var repository = repositories.get(i);
+      var name = ProjectionName.of("public_ctor_" + i);
+
+      repository.stampFencingEpoch(name, 3L);
+      repository.executeAtomically(
+          name,
+          List.of(),
+          GlobalOffset.of(5),
+          3L,
+          repo -> repo.save(name, "v-1", new View("v-1")),
+          readModelCheckpoints);
+
+      assertEquals(GlobalOffset.of(5), readModelCheckpoints.getLastOffset(name));
+      assertEquals(3L, epochIn(dataSource, "readmodel_checkpoint", name));
+      assertEquals(
+          GlobalOffset.initial(),
+          subscriptionCheckpoints.getLastOffset(name),
+          "nothing lands in the subscription checkpoint");
+      assertEquals(-1L, epochIn(dataSource, "subscription_checkpoint", name), "no row stamped");
+    }
+  }
+
+  /**
    * The read-model series is baselined at 0 like the framework's other series, so it applies in
    * full to a schema that already holds the event-store series (the default single-database
    * deployment), and a second start applies nothing. The event-store factory, in turn, leaves the
@@ -228,6 +270,19 @@ class PostgresReadModelStoreTest {
     ds.setUser(PG.getUsername());
     ds.setPassword(PG.getPassword());
     return ds;
+  }
+
+  /** The epoch stamped on {@code name}'s row in {@code table}, or {@code -1} when it has none. */
+  private static long epochIn(DataSource dataSource, String table, ProjectionName name)
+      throws SQLException {
+    try (Connection conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement("SELECT epoch FROM " + table + " WHERE projection_name = ?")) {
+      ps.setString(1, name.value());
+      try (var rs = ps.executeQuery()) {
+        return rs.next() ? rs.getLong(1) : -1L;
+      }
+    }
   }
 
   private static boolean tableExists(DataSource dataSource, String table) throws SQLException {

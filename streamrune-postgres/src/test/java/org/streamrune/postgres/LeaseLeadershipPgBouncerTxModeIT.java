@@ -117,7 +117,10 @@ class LeaseLeadershipPgBouncerTxModeIT {
     return ds;
   }
 
-  /** Migrate the schema to the baseline DIRECTLY against PostgreSQL, bypassing the pooler. */
+  /**
+   * Migrate the schema DIRECTLY against PostgreSQL, bypassing the pooler: the event-store baseline
+   * (the leases) and the read-model series (the JDBC processor's {@code readmodel_checkpoint}).
+   */
   private static void migrateDirectlyAgainstPostgres() {
     var direct = new PGSimpleDataSource();
     direct.setUrl(PG.getJdbcUrl());
@@ -130,6 +133,7 @@ class LeaseLeadershipPgBouncerTxModeIT {
         .baselineOnMigrate(false)
         .load()
         .migrate();
+    ReadModelTestSchema.apply(direct);
   }
 
   /** Reads the epoch fencing token stamped on the projection's checkpoint row (0 if no row). */
@@ -138,7 +142,7 @@ class LeaseLeadershipPgBouncerTxModeIT {
     try (var conn = ds.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?")) {
+                "SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, projectionName);
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;
@@ -194,7 +198,7 @@ class LeaseLeadershipPgBouncerTxModeIT {
       // is fenced out even though its offset advances (200 > 100) and its empty batch cannot
       // overlap.
       var repo = new JdbcProjectionRepository(pooled);
-      var offsetStore = new PostgresOffsetStore(pooled);
+      var offsetStore = new PostgresReadModelCheckpoints(pooled);
       var projection = ProjectionName.of("pgbouncer_txmode");
 
       repo.executeAtomically(

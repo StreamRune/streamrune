@@ -29,6 +29,7 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
+import org.streamrune.core.projection.ProjectionCheckpointSaveException;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.projection.ProjectionRepository;
@@ -61,13 +62,20 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * <tr><td>(b) atLeastOnce_nonAtomic_…</td><td>between the autocommit write and the checkpoint</td><td>the autocommit write
  * stands, checkpoint behind</td><td>re-applied: counter doubles (pinned), upsert unchanged, no
  * dead-letter row, checkpoint at the top</td></tr>
- * <tr><td>(c) atLeastOnce_underJdbcProcessor_…</td><td>between the projection's autocommit write and the checkpoint; the epoch fence</td><td>the projection's
- * autocommit write stands, the processor's checkpoint transaction rolled back; a pre-stamped higher
- * epoch rejects before the updater and nothing is written</td><td>a two-event batch: applied 2
- * after the crash, 4 after the rerun; in the fence case 2 (the new leader applies once)</td></tr>
+ * <tr><td>(c) atLeastOnce_underSubscriptionCheckpointProcessor_…</td><td>between the projection's autocommit write and the checkpoint; the epoch fence</td><td>the projection's
+ * autocommit write stands, the processor's checkpoint transaction rolled back (a {@code
+ * ProjectionCheckpointSaveException}: applied, checkpoint not moved); a pre-stamped higher epoch
+ * rejects before the updater and nothing is written</td><td>a two-event batch: applied 2 after the
+ * crash, 4 after the rerun; in the fence case 2 (the new leader applies once)</td></tr>
  * <tr><td>(d) atLeastOnce_baseProjectionOver…</td><td>after the write to schema B, checkpoint in schema A</td><td>rows in B only,
  * checkpoint in A</td><td>re-applied to B (counter 2) — converges iff idempotent</td></tr>
  * </table>
+ *
+ * <p>Each registration runs on the checkpoint pair routing gives it: (a) on the read-model store's
+ * ({@link JdbcProjectionRepository} over {@code readmodel_checkpoint}, read through {@link
+ * PostgresReadModelCheckpoints}); (c) and (d), at-least-once projections that write elsewhere, on
+ * the event store's subscription checkpoint ({@link PostgresOffsetStore#subscriptionCheckpoint()}:
+ * a {@link PostgresSubscriptionCheckpointProcessor} over {@code subscription_checkpoint}).
  */
 @Testcontainers
 class ProjectionDeliveryModeCrashIT {
@@ -95,6 +103,9 @@ class ProjectionDeliveryModeCrashIT {
         .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
         .load()
         .migrate();
+    // The read-model series beside it (the default single-database deployment): the JDBC
+    // processor checkpoints in its readmodel_checkpoint.
+    ReadModelTestSchema.apply(processorDs);
     try (var c = killerDs.getConnection();
         var st = c.createStatement()) {
       st.execute("CREATE SCHEMA IF NOT EXISTS b");
@@ -107,6 +118,7 @@ class ProjectionDeliveryModeCrashIT {
     try (var c = killerDs.getConnection();
         var st = c.createStatement()) {
       st.execute("DELETE FROM subscription_checkpoint");
+      st.execute("DELETE FROM readmodel_checkpoint");
       st.execute("DELETE FROM projection_dead_letters");
       st.execute("DROP SCHEMA b CASCADE");
       st.execute("CREATE SCHEMA b");
@@ -133,7 +145,7 @@ class ProjectionDeliveryModeCrashIT {
     var repo = new JdbcProjectionRepository(processorDs);
     var projection = new CountingProjection(repo, name.value());
     var batch = CrashItSupport.batch(1, 3);
-    var offsets = new PostgresOffsetStore(processorDs);
+    var offsets = new PostgresReadModelCheckpoints(processorDs);
 
     assertCrashedAtTheCheckpointSave(
         () ->
@@ -222,18 +234,20 @@ class ProjectionDeliveryModeCrashIT {
     assertThat(failingOnce.saveAttempts.get()).isEqualTo(2);
   }
 
-  // ---------- (c) AT_LEAST_ONCE_IDEMPOTENT under the JDBC processor ----------
+  // ---------- (c) AT_LEAST_ONCE_IDEMPOTENT under the subscription checkpoint processor ----------
 
   @Test
-  void atLeastOnce_underJdbcProcessor_crashBeforeCommit_writeStands_checkpointDoesNot() {
-    var name = ProjectionName.of("alo_jdbc_crash");
-    var processor = new JdbcProjectionRepository(processorDs);
+  void
+      atLeastOnce_underSubscriptionCheckpointProcessor_crashBeforeCommit_writeStands_checkpointDoesNot() {
+    var name = ProjectionName.of("alo_sub_crash");
+    var subscription = new PostgresOffsetStore(processorDs).subscriptionCheckpoint();
+    var processor = subscription.processor();
+    var offsets = subscription.checkpoints();
     var own = new JdbcProjectionRepository(ownDs);
     var projection = new CountingProjection(own, name.value());
     var batch = CrashItSupport.batch(1, 2);
-    var offsets = new PostgresOffsetStore(processorDs);
 
-    assertCrashedAtTheCheckpointSave(
+    assertCrashedAfterTheUpdater(
         () ->
             processor.executeAtomically(
                 name,
@@ -263,13 +277,15 @@ class ProjectionDeliveryModeCrashIT {
   }
 
   @Test
-  void atLeastOnce_underJdbcProcessor_staleEpochIsRejectedBeforeTheProjectionWrites() {
-    var name = ProjectionName.of("alo_jdbc_fence");
-    var processor = new JdbcProjectionRepository(processorDs);
+  void
+      atLeastOnce_underSubscriptionCheckpointProcessor_staleEpochIsRejectedBeforeTheProjectionWrites() {
+    var name = ProjectionName.of("alo_sub_fence");
+    var subscription = new PostgresOffsetStore(processorDs).subscriptionCheckpoint();
+    var processor = subscription.processor();
+    var offsets = subscription.checkpoints();
     var own = new JdbcProjectionRepository(ownDs);
     var projection = new CountingProjection(own, name.value());
     var batch = CrashItSupport.batch(1, 2);
-    var offsets = new PostgresOffsetStore(processorDs);
     processor.stampFencingEpoch(name, 2L); // the new leader took over
 
     assertThatThrownBy(
@@ -297,13 +313,14 @@ class ProjectionDeliveryModeCrashIT {
   void
       atLeastOnce_baseProjectionOverSecondSchema_underProcessorA_writesOnlyToB_andReappliesAfterACrash() {
     var name = ProjectionName.of("alo_schema_b");
-    var processorA = new JdbcProjectionRepository(processorDs);
+    var subscriptionA = new PostgresOffsetStore(processorDs).subscriptionCheckpoint();
+    var processorA = subscriptionA.processor();
+    var offsets = subscriptionA.checkpoints();
     var repoB = new JdbcProjectionRepository(schemaBDs);
     var projection = new CountingProjection(repoB, name.value());
     var batch = CrashItSupport.batch(1, 1);
-    var offsets = new PostgresOffsetStore(processorDs);
 
-    assertCrashedAtTheCheckpointSave(
+    assertCrashedAfterTheUpdater(
         () ->
             processorA.executeAtomically(
                 name,
@@ -332,16 +349,16 @@ class ProjectionDeliveryModeCrashIT {
   }
 
   @Test
-  void atLeastOnce_baseProjectionOverInMemory_underJdbcProcessor_throughAPollingRunner() {
+  void atLeastOnce_baseProjectionOverInMemory_underSubscriptionCheckpoint_throughAPollingRunner() {
     var name = ProjectionName.of("alo_mem");
-    var processorA = new JdbcProjectionRepository(processorDs);
+    var subscriptionA = new PostgresOffsetStore(processorDs).subscriptionCheckpoint();
     var memory = new InMemoryProjectionRepository();
     var projection = new CountingProjection(memory, name.value());
     var events = new InMemoryEventStore(TYPES);
     CrashItSupport.appendPings(events, 3);
     var runner =
         new PollingProjectionRunner(
-            events, new PostgresOffsetStore(processorDs), 100, 10, processorA);
+            events, subscriptionA.checkpoints(), 100, 10, subscriptionA.processor());
 
     runner.run(name, projection, AT_LEAST_ONCE_IDEMPOTENT);
 
@@ -365,6 +382,24 @@ class ProjectionDeliveryModeCrashIT {
         .isInstanceOf(EventStoreException.class)
         .hasCauseInstanceOf(SQLException.class)
         .extracting(e -> ((SQLException) e.getCause()).getSQLState())
+        .as("admin_shutdown (57P01) or connection_failure (08006) from the terminated backend")
+        .isIn("57P01", "08006");
+  }
+
+  /**
+   * The kill landed after the updater returned, on the subscription checkpoint processor: the
+   * checkpoint save failed on the terminated connection, so the batch is applied and the checkpoint
+   * did not move — a {@link ProjectionCheckpointSaveException} around the processor's {@link
+   * EventStoreException}, whose SQLState pins the cause to the terminated backend.
+   */
+  private static void assertCrashedAfterTheUpdater(ThrowingCallable processorCall) {
+    assertThatThrownBy(processorCall)
+        .isInstanceOf(ProjectionCheckpointSaveException.class)
+        .cause()
+        .isInstanceOf(EventStoreException.class)
+        .cause()
+        .isInstanceOf(SQLException.class)
+        .extracting(e -> ((SQLException) e).getSQLState())
         .as("admin_shutdown (57P01) or connection_failure (08006) from the terminated backend")
         .isIn("57P01", "08006");
   }
