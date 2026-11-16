@@ -267,6 +267,19 @@ public final class org.streamrune.postgres.PostgresProjectionDeadLetterStore imp
   public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
   public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
 
+public final class org.streamrune.postgres.PostgresReadModelCheckpoints implements org.streamrune.core.projection.OffsetStore
+  public <init>(javax.sql.DataSource)
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public final class org.streamrune.postgres.PostgresReadModelStore implements org.streamrune.core.projection.ReadModelStore
+  public java.lang.String name()
+  public org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public org.streamrune.core.projection.OffsetStore checkpoints()
+  public org.streamrune.core.projection.ProjectionRepository repository()
+  public static org.streamrune.postgres.PostgresReadModelStore create(java.lang.String, javax.sql.DataSource, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
+
 public final class org.streamrune.postgres.PostgresSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(javax.sql.DataSource)
   public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)

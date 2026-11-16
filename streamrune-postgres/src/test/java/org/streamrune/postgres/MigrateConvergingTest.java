@@ -11,8 +11,8 @@ import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.Test;
 
 /**
- * When {@link PostgresEventStoreFactory#migrateConverging} runs a series a second time. The race
- * itself, with real replicas against a real database, is {@link ConcurrentSchemaInitializationIT}.
+ * When {@link SeriesMigration#migrateConverging} runs a series a second time. The race itself, with
+ * real replicas against a real database, is {@link ConcurrentSchemaInitializationIT}.
  */
 class MigrateConvergingTest {
 
@@ -31,14 +31,14 @@ class MigrateConvergingTest {
 
   @Test
   void aSuccessfulRunIsNotRepeated() {
-    PostgresEventStoreFactory.migrateConverging(runs::incrementAndGet);
+    SeriesMigration.migrateConverging(runs::incrementAndGet);
 
     assertThat(runs).hasValue(1);
   }
 
   @Test
   void aRunRefusedBecauseAnotherInstanceCreatedTheHistoryTableIsRunAgainOnce() {
-    PostgresEventStoreFactory.migrateConverging(
+    SeriesMigration.migrateConverging(
         failingFrom(new ArrayDeque<>(List.of(new FlywayException(REFUSAL)))));
 
     assertThat(runs).hasValue(2);
@@ -51,8 +51,7 @@ class MigrateConvergingTest {
 
     assertThatThrownBy(
             () ->
-                PostgresEventStoreFactory.migrateConverging(
-                    failingFrom(new ArrayDeque<>(List.of(failure)))))
+                SeriesMigration.migrateConverging(failingFrom(new ArrayDeque<>(List.of(failure)))))
         .isSameAs(failure);
     assertThat(runs).hasValue(1);
   }
@@ -63,8 +62,7 @@ class MigrateConvergingTest {
 
     assertThatThrownBy(
             () ->
-                PostgresEventStoreFactory.migrateConverging(
-                    failingFrom(new ArrayDeque<>(List.of(failure)))))
+                SeriesMigration.migrateConverging(failingFrom(new ArrayDeque<>(List.of(failure)))))
         .isSameAs(failure);
     assertThat(runs).hasValue(1);
   }
@@ -76,7 +74,7 @@ class MigrateConvergingTest {
 
     assertThatThrownBy(
             () ->
-                PostgresEventStoreFactory.migrateConverging(
+                SeriesMigration.migrateConverging(
                     failingFrom(new ArrayDeque<>(List.of(refusal, second)))))
         .isSameAs(second)
         .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(refusal));
@@ -90,7 +88,7 @@ class MigrateConvergingTest {
 
     assertThatThrownBy(
             () ->
-                PostgresEventStoreFactory.migrateConverging(
+                SeriesMigration.migrateConverging(
                     failingFrom(new ArrayDeque<>(List.of(refusal, again)))))
         .isSameAs(again);
     assertThat(runs).hasValue(2);
