@@ -124,17 +124,18 @@ class JdbcProjectionRepositoryCryptoTest {
   @Test
   void factoryCreatedRepository_encryptsColumn_andForgetRedacts() throws Exception {
     // An earlier change wired the optional CryptoEngine into the three
-    // AUTO-CONFIG projection-repository beans, but the factory's own createProjectionRepository()
+    // AUTO-CONFIG projection-repository beans, but the factory's own projection-repository path
     // — a documented, public path — still returned the crypto-BLIND 1-arg repository even though
     // the factory HOLDS a configured CryptoEngine. So an @Encrypted read-model field built through
     // the factory was written to the data column as PLAINTEXT PII and GDPR-forget never reached it
     // — the exact same gap, on the sibling path. The factory must build the repository's mapper
-    // from its own cryptoEngine (and metrics), mirroring the three auto-configs.
+    // from its own cryptoEngine (and metrics), mirroring the three auto-configs — today through
+    // createReadModelStore(), whose repository is the store's.
     var engine = new InMemoryCryptoEngine();
     var factory =
         new PostgresEventStoreFactory(dataSource, SimpleEventTypeRegistry.builder().build())
             .cryptoEngine(engine);
-    var repo = factory.createProjectionRepository();
+    var repo = factory.createReadModelStore().repository();
     var projection = ProjectionName.of("factory_customer");
 
     repo.save(projection, "c-factory", new CustomerView("c-factory", "carol@example.com"));

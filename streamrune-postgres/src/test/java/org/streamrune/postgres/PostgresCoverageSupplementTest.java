@@ -309,11 +309,11 @@ class PostgresCoverageSupplementTest {
   }
 
   @Test
-  void factoryCreatesProjectionRepository() {
+  void factoryCreatesTheReadModelStore() {
     var factory = new PostgresEventStoreFactory(dataSource, TYPE_REGISTRY);
     factory.initializeSchema();
-    var repo = factory.createProjectionRepository();
-    assertNotNull(repo);
+    var store = factory.createReadModelStore();
+    assertNotNull(store.repository());
   }
 
   @Test

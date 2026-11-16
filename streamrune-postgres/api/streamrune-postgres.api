@@ -191,7 +191,6 @@ public static final class org.streamrune.postgres.PostgresEventStore$Builder
 public final class org.streamrune.postgres.PostgresEventStoreFactory implements org.streamrune.core.EventStoreFactory
   public <init>(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry)
   public org.streamrune.core.EventStore create()
-  public org.streamrune.core.projection.ProjectionRepository createProjectionRepository()
   public org.streamrune.postgres.PostgresEventStoreFactory autoInitializeSchema(boolean)
   public org.streamrune.postgres.PostgresEventStoreFactory commandInbox(org.streamrune.postgres.PostgresCommandInbox)
   public org.streamrune.postgres.PostgresEventStoreFactory cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
@@ -205,6 +204,7 @@ public final class org.streamrune.postgres.PostgresEventStoreFactory implements 
   public org.streamrune.postgres.PostgresEventStoreFactory tracing(org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.postgres.PostgresEventStoreFactory upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
   public org.streamrune.postgres.PostgresEventStoreFactory validateSchema(boolean)
+  public org.streamrune.postgres.PostgresReadModelStore createReadModelStore()
 
 public final class org.streamrune.postgres.PostgresNotificationSubscription implements org.streamrune.core.subscription.EventSubscription, org.streamrune.runtime.ReadPoisonAware
   public boolean isRunning()

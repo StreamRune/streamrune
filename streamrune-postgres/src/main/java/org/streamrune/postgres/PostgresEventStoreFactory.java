@@ -13,7 +13,6 @@ import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEventMapper;
-import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.upcasting.EventUpcaster;
@@ -399,31 +398,39 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
   }
 
   /**
-   * Creates a new {@link JdbcProjectionRepository} on the DataSource as given. Tables are
-   * automatically created on first access.
+   * Creates the default read-model store on this factory's DataSource: a {@link
+   * PostgresReadModelStore} named {@code postgres}, whose {@link JdbcProjectionRepository} is the
+   * repository and the processor and whose checkpoints live in {@code readmodel_checkpoint}, read
+   * through {@link PostgresReadModelCheckpoints}. {@link PostgresReadModelStore#checkpointTarget()}
+   * is the pair a runner of its {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} projections
+   * reads and commits through.
+   *
+   * <p><b>Its own schema series.</b> The store applies the read-model series ({@code
+   * db/readmodel-migration}, on its own history table) when this factory's {@link
+   * #autoInitializeSchema(boolean) autoInitializeSchema} is on — the same switch as the event-store
+   * series — and always validates it, so with the switch off the series must have been applied
+   * out-of-band. The read-model tables ({@code <name>_view}) are created on first use.
    *
    * <p><b>Crypto-aware, mirroring the auto-configs.</b> The repository's {@link
    * com.fasterxml.jackson.databind.ObjectMapper} is built from THIS factory's own {@link
    * #cryptoEngine(CryptoEngine) cryptoEngine} and {@link #metrics(StreamRuneMetrics) metrics} via
    * {@link JdbcProjectionRepository#createObjectMapper(CryptoEngine, StreamRuneMetrics)} — the same
-   * way the factory-equivalent Spring/Quarkus/Micronaut projection-repository beans and the
-   * saga/DLQ stores build theirs. So when a {@link CryptoEngine} is configured, an
-   * {@code @Encrypted} read-model field is ciphertext at rest and within {@code forget(subjectId)}
-   * scope. The crypto-BLIND 1-arg repository would write an {@code @Encrypted} read model built
-   * through a factory that holds a configured engine to the {@code data} column as plaintext PII,
-   * out of the reach of a GDPR forget. With no {@code cryptoEngine} the mapper is crypto-blind.
+   * way the Spring/Quarkus/Micronaut default stores and the saga/DLQ stores build theirs. So when a
+   * {@link CryptoEngine} is configured, an {@code @Encrypted} read-model field is ciphertext at
+   * rest and within {@code forget(subjectId)} scope. With no {@code cryptoEngine} the mapper is
+   * crypto-blind.
    *
-   * <p><b>Its checkpoints are not in this factory's schema.</b> As a batch processor the repository
-   * checkpoints in {@code readmodel_checkpoint}, a table of the read-model series, which this
-   * factory never applies: to run projections through it, build the store with {@link
-   * PostgresReadModelStore#create} instead, which applies that series and pairs the repository with
-   * the checkpoints its batches advance.
-   *
-   * @return configured JdbcProjectionRepository, crypto-aware iff this factory has a {@link
-   *     CryptoEngine}
+   * @return the store, crypto-aware iff this factory has a {@link CryptoEngine}
+   * @throws UnsupportedServerVersionException if the server is older than {@link
+   *     PostgresServerVersion#MINIMUM_MAJOR_VERSION}
+   * @throws SchemaValidationException if the read-model schema is missing or invalid
    */
-  public ProjectionRepository createProjectionRepository() {
-    return new JdbcProjectionRepository(
-        dataSource, JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+  public PostgresReadModelStore createReadModelStore() {
+    return PostgresReadModelStore.create(
+        "postgres",
+        dataSource,
+        JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics),
+        autoInitializeSchema,
+        true);
   }
 }
