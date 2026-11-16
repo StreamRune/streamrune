@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -139,6 +140,41 @@ class PostgresCheckpointFenceTest {
     assertEquals(5L, fence.readEpoch(dataSource, name), "a lock never stamps the epoch");
   }
 
+  /**
+   * A batch that is both stale and overlapping is the epoch fence's: the runners treat that guard
+   * as lost leadership, so the epoch check runs first and names it.
+   */
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void epochFenceWinsOverOverlap(CheckpointTable table) throws Exception {
+    var fence = new PostgresCheckpointFence(table);
+    var name = freshName();
+    fence.stampEpoch(dataSource, name, 5L);
+    fence.saveUnlocked(dataSource, name, GlobalOffset.of(10));
+
+    try (Connection conn = begin()) {
+      var fenced =
+          assertThrows(
+              ProjectionCommitFencedException.class,
+              () -> fence.lockForBatch(conn, name, 3L, GlobalOffset.of(4)));
+      assertSame(ProjectionCommitFencedException.Guard.EPOCH_FENCE, fenced.guard());
+      assertTrue(
+          fenced.getMessage().contains("caller epoch 3 is below the stored epoch 5"),
+          fenced.getMessage());
+      conn.rollback();
+    }
+
+    // The same overlapping batch at the current epoch is the overlap guard's.
+    try (Connection conn = begin()) {
+      var overlap =
+          assertThrows(
+              ProjectionCommitFencedException.class,
+              () -> fence.lockForBatch(conn, name, 5L, GlobalOffset.of(4)));
+      assertSame(ProjectionCommitFencedException.Guard.OVERLAP, overlap.guard());
+      conn.rollback();
+    }
+  }
+
   @ParameterizedTest
   @EnumSource(CheckpointTable.class)
   void overlapIsRejected(CheckpointTable table) throws Exception {
@@ -223,8 +259,10 @@ class PostgresCheckpointFenceTest {
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(20));
     assertEquals(GlobalOffset.of(20), fence.lastOffset(dataSource, name));
     var unseen = freshName();
+    assertFalse(rowExists(table, unseen));
     assertEquals(GlobalOffset.initial(), fence.lastOffset(dataSource, unseen));
     fence.saveUnlocked(dataSource, unseen, GlobalOffset.of(4));
+    assertTrue(rowExists(table, unseen));
     assertEquals(GlobalOffset.of(4), fence.lastOffset(dataSource, unseen));
   }
 
@@ -236,11 +274,12 @@ class PostgresCheckpointFenceTest {
 
     // Epoch 0 is a no-op: no row appears.
     fence.stampEpoch(dataSource, name, 0L);
-    assertEquals(0L, fence.readEpoch(dataSource, name));
-    assertEquals(GlobalOffset.initial(), fence.lastOffset(dataSource, name));
+    assertFalse(rowExists(table, name), "an epoch-0 stamp writes no row");
 
     // The first stamp seeds the row at offset 0 and never moves the offset afterwards.
     fence.stampEpoch(dataSource, name, 5L);
+    assertTrue(rowExists(table, name), "the first stamp seeds the row");
+    assertEquals(GlobalOffset.initial(), fence.lastOffset(dataSource, name));
     assertEquals(5L, fence.readEpoch(dataSource, name));
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(9));
     fence.stampEpoch(dataSource, name, 6L);
@@ -252,7 +291,12 @@ class PostgresCheckpointFenceTest {
     var regression =
         assertThrows(
             ProjectionEpochRegressionException.class, () -> fence.stampEpoch(dataSource, name, 4L));
-    assertTrue(regression.getMessage().contains("6"), regression.getMessage());
+    assertTrue(
+        regression
+            .getMessage()
+            .contains(
+                "was handed leadership epoch 4 but its checkpoint row already stores epoch 6"),
+        regression.getMessage());
     assertEquals(6L, fence.readEpoch(dataSource, name));
     assertEquals(GlobalOffset.of(9), fence.lastOffset(dataSource, name));
   }
@@ -272,7 +316,9 @@ class PostgresCheckpointFenceTest {
 
     // A reset of a projection never seen seeds it at 0.
     var unseen = freshName();
+    assertFalse(rowExists(table, unseen));
     fence.reset(dataSource, unseen);
+    assertTrue(rowExists(table, unseen), "the reset seeds the row");
     try (Connection conn = begin()) {
       assertEquals(0L, fence.lockForBatch(conn, unseen, 0L, GlobalOffset.of(1)));
       conn.rollback();
@@ -298,6 +344,7 @@ class PostgresCheckpointFenceTest {
     // A replay of a projection that never committed seeds the 0 row it locks (uncommitted, so
     // invisible to another connection until the replay commits).
     var unseen = freshName();
+    assertFalse(rowExists(table, unseen));
     try (Connection conn = begin()) {
       fence.lockForReplay(conn, unseen);
       conn.commit();
@@ -316,6 +363,8 @@ class PostgresCheckpointFenceTest {
     subscription.stampEpoch(dataSource, name, 9L);
     subscription.saveUnlocked(dataSource, name, GlobalOffset.of(30));
 
+    assertTrue(rowExists(CheckpointTable.SUBSCRIPTION, name));
+    assertFalse(rowExists(CheckpointTable.READ_MODEL, name), "the other table has no row");
     assertEquals(GlobalOffset.initial(), readModel.lastOffset(dataSource, name));
     assertEquals(0L, readModel.readEpoch(dataSource, name));
     try (Connection conn = begin()) {
