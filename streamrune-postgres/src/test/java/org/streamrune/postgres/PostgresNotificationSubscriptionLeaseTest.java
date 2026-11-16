@@ -128,7 +128,7 @@ class PostgresNotificationSubscriptionLeaseTest {
     try (var conn = eventDataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
       stmt.execute("UPDATE global_offset_sequence SET next_value = 0 WHERE id = 1");
     }
   }
@@ -394,7 +394,7 @@ class PostgresNotificationSubscriptionLeaseTest {
     try (var conn = eventDataSource.getConnection();
         var stmt =
             conn.prepareStatement(
-                "SELECT count(*) FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT count(*) FROM subscription_checkpoint WHERE projection_name = ?")) {
       stmt.setString(1, NAME);
       try (var rs = stmt.executeQuery()) {
         rs.next();

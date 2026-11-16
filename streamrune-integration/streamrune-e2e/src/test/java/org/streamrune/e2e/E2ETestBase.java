@@ -110,7 +110,7 @@ abstract class E2ETestBase {
       // a fresh projection's checkpoint 0 — a state production never reaches (event_stream is
       // never deleted) and which the reader's contiguity guard correctly treats as a hole.
       stmt.execute("UPDATE global_offset_sequence SET next_value = 0 WHERE id = 1");
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
       // Clear leases so no test inherits a live lease (and its epoch numbering) from a previous
       // method — a stale live lease would make a later lease-based IT's acquire silently fail.
       stmt.execute("DELETE FROM subscription_leases");

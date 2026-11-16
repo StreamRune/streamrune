@@ -90,12 +90,40 @@ class ShippedMigrationSeriesTest {
   @Test
   void tellsFlywayToLogThroughSlf4j() throws Exception {
     for (ShippedMigrationSeries series :
-        List.of(ShippedMigrationSeries.EVENT_STORE, ShippedMigrationSeries.CRYPTO)) {
+        List.of(
+            ShippedMigrationSeries.EVENT_STORE,
+            ShippedMigrationSeries.CRYPTO,
+            ShippedMigrationSeries.READ_MODEL)) {
       assertArrayEquals(new String[] {"slf4j"}, series.configure(null).getLoggers());
     }
     assertTrue(
         org.flywaydb.core.api.logging.LogCreator.class.isAssignableFrom(
             Class.forName("org.flywaydb.core.internal.logging.slf4j.Slf4jLogCreator")));
+  }
+
+  /** The listed scripts are exactly the {@code .sql} files the series directory holds. */
+  @Test
+  void everySeriesOfThisModuleListsExactlyTheScriptsOnItsDirectory() throws Exception {
+    // The crypto series lives in a jar of another module; its list is checked there.
+    for (ShippedMigrationSeries series :
+        List.of(ShippedMigrationSeries.EVENT_STORE, ShippedMigrationSeries.READ_MODEL)) {
+      String directory = series.location().substring("classpath:".length());
+      URL url = getClass().getClassLoader().getResource(directory);
+      assertNotNull(url, directory + " is on the class path");
+      java.util.List<String> onDisk;
+      try (var files = java.nio.file.Files.list(java.nio.file.Path.of(url.toURI()))) {
+        onDisk =
+            files
+                .map(f -> directory + "/" + f.getFileName())
+                .filter(f -> f.endsWith(".sql"))
+                .sorted()
+                .toList();
+      }
+      assertEquals(onDisk, series.scriptPaths(), directory);
+    }
+    assertEquals(
+        List.of("db/readmodel-migration/V001__readmodel_baseline.sql"),
+        ShippedMigrationSeries.READ_MODEL.scriptPaths());
   }
 
   @Test

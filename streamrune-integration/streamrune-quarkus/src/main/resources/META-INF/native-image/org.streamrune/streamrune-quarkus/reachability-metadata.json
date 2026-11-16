@@ -35,6 +35,7 @@
   "resources": [
     { "glob": "db/streamrune-migration/*.sql" },
     { "glob": "db/crypto-migration/*.sql" },
+    { "glob": "db/readmodel-migration/*.sql" },
     { "glob": "org/flywaydb/core/internal/version.txt" }
   ]
 }

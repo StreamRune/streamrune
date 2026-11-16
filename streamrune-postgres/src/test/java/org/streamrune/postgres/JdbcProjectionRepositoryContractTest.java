@@ -71,7 +71,7 @@ class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract 
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT last_offset FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, name.value());
       try (var rs = ps.executeQuery()) {
         return rs.next() ? GlobalOffset.of(rs.getLong(1)) : GlobalOffset.initial();

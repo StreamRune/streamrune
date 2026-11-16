@@ -1172,19 +1172,19 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * never requests a second pooled connection, so a single-connection pool cannot self-deadlock.
    *
    * <p><b>Split-brain double-apply protection.</b> The transaction first {@code SELECT ... FOR
-   * UPDATE}-locks this projection's {@code projection_offset} row (seeding a 0 checkpoint if none
-   * exists), so <em>all</em> writers for one projection serialize on that row. It then rejects a
-   * batch whose <b>first</b> offset is at or before the committed checkpoint: such a batch overlaps
-   * events another writer already applied — the exact split-brain window where a stale/superseded
-   * leader read at an older checkpoint and fetched a range extending past a newer leader's advance.
-   * The monotonic guard alone (endpoint {@literal >} stored) would let that overlapping batch
-   * commit and re-apply its already-applied prefix a second time, silently corrupting a
-   * non-idempotent read model (count++/balance/list-append). The overlap guard rolls the whole
-   * transaction back instead. <b>Empty batches</b> (a bare offset advance) are still governed by
-   * the monotonic guard in {@link #saveOffsetInternal}. This makes the read-model write — the write
-   * through the handed repository — exactly-once under an overlapping-batch split-brain; it does
-   * <em>not</em> remove the need for single-active-consumer leadership, which is what keeps two
-   * writers from racing in the first place.
+   * UPDATE}-locks this projection's {@code subscription_checkpoint} row (seeding a 0 checkpoint if
+   * none exists), so <em>all</em> writers for one projection serialize on that row. It then rejects
+   * a batch whose <b>first</b> offset is at or before the committed checkpoint: such a batch
+   * overlaps events another writer already applied — the exact split-brain window where a
+   * stale/superseded leader read at an older checkpoint and fetched a range extending past a newer
+   * leader's advance. The monotonic guard alone (endpoint {@literal >} stored) would let that
+   * overlapping batch commit and re-apply its already-applied prefix a second time, silently
+   * corrupting a non-idempotent read model (count++/balance/list-append). The overlap guard rolls
+   * the whole transaction back instead. <b>Empty batches</b> (a bare offset advance) are still
+   * governed by the monotonic guard in {@link #saveOffsetInternal}. This makes the read-model write
+   * — the write through the handed repository — exactly-once under an overlapping-batch
+   * split-brain; it does <em>not</em> remove the need for single-active-consumer leadership, which
+   * is what keeps two writers from racing in the first place.
    *
    * <p><b>Epoch fencing.</b> Under the same {@code FOR UPDATE} lock the transaction also reads the
    * row's stored fencing {@code epoch} and rejects — before the updater writes a single read-model
@@ -1268,8 +1268,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * A replay and a batch of one projection both lock its {@code projection_offset} row {@code FOR
-   * UPDATE}, so one waits for the other.
+   * A replay and a batch of one projection both lock its {@code subscription_checkpoint} row {@code
+   * FOR UPDATE}, so one waits for the other.
    *
    * @return always {@code true}
    */
@@ -1280,8 +1280,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   /**
    * Applies a dead-lettered range in one transaction that first locks this projection's {@code
-   * projection_offset} row {@code FOR UPDATE} (seeding a 0 checkpoint if none exists) — the lock
-   * {@link #executeAtomically} takes — and never writes that row. A live batch of the same
+   * subscription_checkpoint} row {@code FOR UPDATE} (seeding a 0 checkpoint if none exists) — the
+   * lock {@link #executeAtomically} takes — and never writes that row. A live batch of the same
    * projection, in this process or another, waits for the replay's commit, and the replay waits for
    * an open batch; whichever comes second reads the rows the first one committed.
    *
@@ -1565,14 +1565,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   private Checkpoint lockAndReadCheckpoint(Connection conn, ProjectionName projectionName)
       throws SQLException {
     String seed =
-        "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
+        "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at) "
             + "VALUES (?, 0, NOW()) ON CONFLICT (projection_name) DO NOTHING";
     try (var ps = conn.prepareStatement(seed)) {
       ps.setString(1, projectionName.value());
       ps.executeUpdate();
     }
     String select =
-        "SELECT last_offset, epoch FROM projection_offset WHERE projection_name = ? FOR UPDATE";
+        "SELECT last_offset, epoch FROM subscription_checkpoint WHERE projection_name = ? FOR UPDATE";
     try (var ps = conn.prepareStatement(select)) {
       ps.setString(1, projectionName.value());
       try (var rs = ps.executeQuery()) {
@@ -1856,12 +1856,12 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     // an unfenced epoch-0 caller leaves the stored epoch unchanged. The stamp rides the
     // SAME monotonic WHERE guard, so a rejected (0-row) advance stamps nothing.
     String upsert =
-        "INSERT INTO projection_offset (projection_name, last_offset, epoch, updated_at) "
+        "INSERT INTO subscription_checkpoint (projection_name, last_offset, epoch, updated_at) "
             + "VALUES (?, ?, ?, NOW()) "
             + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = EXCLUDED.last_offset, "
-            + "epoch = GREATEST(projection_offset.epoch, EXCLUDED.epoch), "
+            + "epoch = GREATEST(subscription_checkpoint.epoch, EXCLUDED.epoch), "
             + "updated_at = NOW() "
-            + "WHERE EXCLUDED.last_offset > projection_offset.last_offset";
+            + "WHERE EXCLUDED.last_offset > subscription_checkpoint.last_offset";
     try (var ps = conn.prepareStatement(upsert)) {
       ps.setString(1, projectionName.value());
       ps.setLong(2, offset.value());
@@ -2008,8 +2008,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * stamp and still lands — no takeover-time stamping can reject a fence check that already
    * happened; every transaction the old leader STARTS after this stamp commits is rejected).
    *
-   * <p>Idempotent and monotonic: the {@code WHERE EXCLUDED.epoch > projection_offset.epoch} guard
-   * makes a same-epoch re-stamp (every scheduled tick) a 0-row no-op — the stored epoch never
+   * <p>Idempotent and monotonic: the {@code WHERE EXCLUDED.epoch > subscription_checkpoint.epoch}
+   * guard makes a same-epoch re-stamp (every scheduled tick) a 0-row no-op — the stored epoch never
    * regresses (same {@code GREATEST} discipline as the commit stamp), and an unchanged row is not
    * rewritten. The INSERT arm seeds {@code last_offset = 0} for a projection that has never
    * committed — the same floor {@link #lockAndReadCheckpoint} seeds and {@code
@@ -2047,11 +2047,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       return;
     }
     String stamp =
-        "INSERT INTO projection_offset (projection_name, last_offset, epoch, updated_at) "
+        "INSERT INTO subscription_checkpoint (projection_name, last_offset, epoch, updated_at) "
             + "VALUES (?, 0, ?, NOW()) "
             + "ON CONFLICT (projection_name) DO UPDATE SET "
-            + "epoch = GREATEST(projection_offset.epoch, EXCLUDED.epoch), updated_at = NOW() "
-            + "WHERE EXCLUDED.epoch > projection_offset.epoch";
+            + "epoch = GREATEST(subscription_checkpoint.epoch, EXCLUDED.epoch), updated_at = NOW() "
+            + "WHERE EXCLUDED.epoch > subscription_checkpoint.epoch";
     try (var conn = dataSource.getConnection()) {
       int stamped =
           PostgresTransactions.commitIfManual(
@@ -2086,7 +2086,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    */
   private long readStoredEpoch(Connection conn, ProjectionName projectionName) throws SQLException {
     try (var ps =
-        conn.prepareStatement("SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+        conn.prepareStatement(
+            "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, projectionName.value());
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong("epoch") : 0L;
@@ -2105,7 +2106,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   public void resetOffset(ProjectionName projectionName) {
     validateProjectionName(projectionName);
     String reset =
-        "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
+        "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at) "
             + "VALUES (?, 0, NOW()) "
             + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0, updated_at = NOW()";
     try (var conn = dataSource.getConnection();

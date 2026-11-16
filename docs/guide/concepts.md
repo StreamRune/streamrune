@@ -445,7 +445,7 @@ checks that at startup; see [a processor and an offset store that disagree](#a-p
 the framework default; any bean scope — identity survives proxies); annotate
 `@ProjectionConfig(name = "orders", deliveryMode = TRANSACTIONAL_LOCAL)`; construct the projection
 over that bean. Startup refuses anything else. The bean must use the `DataSource` whose
-`projection_offset` table the runner's `OffsetStore` bean reads — the integrations build the
+`subscription_checkpoint` table the runner's `OffsetStore` bean reads — the integrations build the
 `PostgresOffsetStore` over the primary `DataSource`. Nothing checks that at startup.
 
 #### A processor and an offset store that disagree
@@ -461,7 +461,7 @@ puts the registration in `ERROR`, the health contributor reports the subscriptio
 `lastError` carries a `ProjectionCheckpointDivergedException` message naming the two likely causes:
 
 - the `AtomicBatchProcessor` and the `OffsetStore` are not over the same `DataSource` (or the same
-  `projection_offset` table);
+  `subscription_checkpoint` table);
 - two runners are registered under one projection name and commit through one processor while
   reading their checkpoint from different offset stores.
 

@@ -77,7 +77,7 @@ license.
 - One Flyway baseline per series, each on its own history table so it never collides with the
   application's own migrations: `classpath:db/streamrune-migration/V001__streamrune_baseline.sql`
   recorded in `flyway_schema_history_streamrune` creates `event_stream`, `global_offset_sequence`,
-  `snapshot_store`, `projection_offset`, `subscription_leases`, `projection_dead_letters`,
+  `snapshot_store`, `subscription_checkpoint`, `subscription_leases`, `projection_dead_letters`,
   `command_inbox`, `dead_letter_queue`, `audit_log`, `event_audit_log`, `outbox_events`, `saga_state`
   and `saga_dead_letters`; the crypto series `classpath:db/crypto-migration/V001__crypto_baseline.sql`
   (in `streamrune-postgres-crypto`, history table `flyway_schema_history_crypto`) creates
@@ -438,7 +438,7 @@ license.
   `AtomicBatchProcessor` the projection's runner commits through.
   `replay(name, projection, deliveryMode, max)` re-reads each range from the event store
   oldest-first and applies it through `AtomicBatchProcessor.executeReplay`, under the lock a live
-  batch of that projection takes (on `JdbcProjectionRepository`, the `projection_offset` row
+  batch of that projection takes (on `JdbcProjectionRepository`, the `subscription_checkpoint` row
   `FOR UPDATE`): a replay and a live batch never interleave, so a read-modify-write projection keeps
   both writes, and a replay is safe while the runner is live. A `TRANSACTIONAL_LOCAL` /
   `EXTERNAL_EFFECT` projection is handed the replay transaction's repository and its range is
@@ -499,7 +499,7 @@ license.
 - Decorators `TracingProjectionDecorator`, `ValidatingProjectionDecorator` and `CacheAwareProjection`
   forward `process(List, ProjectionRepository)`, `writesThroughRepository()`, `writeTarget()` and
   `processDeadLetterReplay(List, ProjectionRepository)` to their delegate.
-- Projection names, subscription names and offsets share one `projection_offset` namespace; the modes
+- Projection names, subscription names and offsets share one `subscription_checkpoint` namespace; the modes
   use no extra table.
 - Paged reads: `ProjectionRepository.findAll(name, type, pageRequest)` and `findAllBy(name, type,
   FieldEquals.of(field, value), pageRequest)` — equality on one top-level read-model field, compared

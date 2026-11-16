@@ -280,8 +280,8 @@ public final class SubscriptionHealthContributor {
    * <p><b>A failed read must not look healthy.</b> Swallowing every {@link RuntimeException} and
    * returning {@code 0}, silently, would report the value a perfectly caught-up subscription
    * reports. So a {@code statement_timeout} on {@code lastGlobalOffset()}, a revoked {@code
-   * projection_offset} SELECT grant, or a momentarily exhausted pool would make every scrape read
-   * lag=0 while the projection makes no progress and the backlog grows — and {@code
+   * subscription_checkpoint} SELECT grant, or a momentarily exhausted pool would make every scrape
+   * read lag=0 while the projection makes no progress and the backlog grows — and {@code
    * docs/guide/production.md}'s "alert on rising {@code streamrune.subscriptions.lag}" would be
    * structurally unfirable during exactly the store trouble it exists to catch, with no log line to
    * correlate against.

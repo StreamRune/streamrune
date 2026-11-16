@@ -3,6 +3,7 @@
     "includes": [
       { "pattern": "\\Qdb/streamrune-migration/\\E[^/]*\\.sql" },
       { "pattern": "\\Qdb/crypto-migration/\\E[^/]*\\.sql" },
+      { "pattern": "\\Qdb/readmodel-migration/\\E[^/]*\\.sql" },
       { "pattern": "\\Qorg/flywaydb/core/internal/version.txt\\E" }
     ]
   },

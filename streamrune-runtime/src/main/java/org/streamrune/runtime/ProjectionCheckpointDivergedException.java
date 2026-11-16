@@ -42,7 +42,7 @@ public final class ProjectionCheckpointDivergedException extends RuntimeExceptio
             + " read from "
             + checkpoint
             + " is rejected and no retry can succeed. Likely causes: (1) the AtomicBatchProcessor"
-            + " and the OffsetStore are not over the same DataSource (or the same projection_offset"
+            + " and the OffsetStore are not over the same DataSource (or the same subscription_checkpoint"
             + " table) — for example a JdbcProjectionRepository over a read-model DataSource with a"
             + " PostgresOffsetStore over the primary one; (2) two runners are registered under this"
             + " projection name and commit through this processor while reading their checkpoint"

@@ -103,7 +103,7 @@ class ProjectionProcessorResolutionTest {
             "streamRuneMultiProjectionRunner: projection 'orders' declares TRANSACTIONAL_LOCAL and"
                 + " projection 'fx' declares EXTERNAL_EFFECT, but no AtomicBatchProcessor bean is"
                 + " available. Define one — org.streamrune.postgres.JdbcProjectionRepository over"
-                + " the DataSource whose projection_offset table the runner's OffsetStore reads,"
+                + " the DataSource whose subscription_checkpoint table the runner's OffsetStore reads,"
                 + " declared with its CONCRETE type — or declare these projections"
                 + " AT_LEAST_ONCE_IDEMPOTENT.");
   }
@@ -119,7 +119,7 @@ class ProjectionProcessorResolutionTest {
         .hasMessage(
             "runner: projection 'orders' declares TRANSACTIONAL_LOCAL, but no AtomicBatchProcessor"
                 + " bean is available. Define one — org.streamrune.postgres.JdbcProjectionRepository"
-                + " over the DataSource whose projection_offset table the runner's OffsetStore"
+                + " over the DataSource whose subscription_checkpoint table the runner's OffsetStore"
                 + " reads, declared with its CONCRETE type — or declare the projection"
                 + " AT_LEAST_ONCE_IDEMPOTENT.");
   }
@@ -134,7 +134,7 @@ class ProjectionProcessorResolutionTest {
                 + RealLeadership.class.getName()
                 + ") is on, but no AtomicBatchProcessor bean is available to honour its epoch."
                 + " Define one — org.streamrune.postgres.JdbcProjectionRepository over the"
-                + " DataSource whose projection_offset table the runner's OffsetStore reads,"
+                + " DataSource whose subscription_checkpoint table the runner's OffsetStore reads,"
                 + " declared with its CONCRETE type — or disable leadership for a single instance"
                 + " (streamrune.subscription.single-active-consumer.enabled=false).");
   }

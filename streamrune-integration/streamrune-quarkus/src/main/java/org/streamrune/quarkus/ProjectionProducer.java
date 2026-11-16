@@ -409,7 +409,8 @@ public class ProjectionProducer {
               // Check for duplicate names across ALL registrations BEFORE filtering by mode,
               // so a cross-mode duplicate (e.g. a CONTINUOUS and a SCHEDULED projection both named
               // "orders") fails loudly at boot instead of booting silently and sharing one
-              // projection_offset checkpoint row — where whichever runner commits later advances
+              // subscription_checkpoint checkpoint row — where whichever runner commits later
+              // advances
               // the offset past events the other never processed. Matches the Spring/Micronaut
               // order.
               if (!seen.add(name)) {

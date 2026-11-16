@@ -102,7 +102,7 @@ class ProjectionDeadLetterReplayConcurrencyIT {
   void clean() throws Exception {
     try (var c = observerDs.getConnection();
         var st = c.createStatement()) {
-      st.execute("DELETE FROM projection_offset");
+      st.execute("DELETE FROM subscription_checkpoint");
       st.execute("DELETE FROM projection_dead_letters");
       st.execute("DROP TABLE IF EXISTS product_view");
     }

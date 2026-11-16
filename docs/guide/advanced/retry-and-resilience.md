@@ -472,7 +472,7 @@ never moved — replay fills the hole behind it.
 
 **Replay is serialized with the live runner.** Each range runs through
 `AtomicBatchProcessor.executeReplay`, which takes the lock a live batch takes: on
-`JdbcProjectionRepository`, the projection's `projection_offset` row, `FOR UPDATE`. A replay and a
+`JdbcProjectionRepository`, the projection's `subscription_checkpoint` row, `FOR UPDATE`. A replay and a
 live batch of one projection therefore never run at the same time, in one process or across
 replicas, and a replay is safe while the runner is live. The lock is what protects a
 read-modify-write projection (`findById` → change a field → `save`): without it both sides can read

@@ -35,8 +35,8 @@ import org.streamrune.runtime.ProjectionState;
  * JdbcProjectionRepository} — another object over the same {@code DataSource}.
  *
  * <p>The fence protects the checkpoint, not the read model. The epoch fence and the overlap guard
- * run under the {@code projection_offset} row lock BEFORE the projection's updater, so the two
- * replicas' updaters are serialised and a stale or overlapping batch is rejected before it is
+ * run under the {@code subscription_checkpoint} row lock BEFORE the projection's updater, so the
+ * two replicas' updaters are serialised and a stale or overlapping batch is rejected before it is
  * applied; a range is re-applied only when a checkpoint transaction dies after the projection's
  * autocommit write, which this test does not induce. The checkpoint converges exactly, the row's
  * applied count is at least the number of events (here it equals it; the assertion stays at the

@@ -118,7 +118,7 @@ public final class ProjectionProcessorResolution {
     }
     sb.append(
         ". Define one — org.streamrune.postgres.JdbcProjectionRepository over the DataSource"
-            + " whose projection_offset table the runner's OffsetStore reads, declared with its"
+            + " whose subscription_checkpoint table the runner's OffsetStore reads, declared with its"
             + " CONCRETE type — or ");
     if (!transactional.isEmpty()) {
       sb.append(

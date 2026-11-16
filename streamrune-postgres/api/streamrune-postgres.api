@@ -344,6 +344,7 @@ public final record org.streamrune.postgres.SchemaValidationResult
 public final class org.streamrune.postgres.SchemaValidator
   public static org.streamrune.postgres.SchemaValidationResult validate(javax.sql.DataSource)
   public static org.streamrune.postgres.SchemaValidationResult validateCryptoTables(javax.sql.DataSource, java.util.Set<java.lang.String>)
+  public static org.streamrune.postgres.SchemaValidationResult validateReadModel(javax.sql.DataSource)
 
 public final class org.streamrune.postgres.UnsupportedServerVersionException extends java.lang.RuntimeException
   public int minimumMajorVersion()
