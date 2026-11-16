@@ -114,9 +114,8 @@ license.
 
 ### Modules
 
-Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the four
-aggregator projects (`streamrune-eventstore`, `streamrune-crypto`, `streamrune-integration`,
-`streamrune-outbox`) and the two test projects, which are not published:
+Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
+aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the two test projects, which are not published:
 `streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites) and
 `streamrune-integration:streamrune-integration-tck` (the wiring contract, the configuration oracle
 and the doc reading that the tests of the three integrations share). The artifact id is the project
@@ -128,7 +127,7 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 |---|---|---|---|
 | `streamrune-core` | `:streamrune-core` | `org.streamrune.core` | Contracts and value types: `EventStore`, `Decider`, `CommandBus`, `Projection`, `ProjectionDeliveryMode`, `QueryBus`, saga, subscription, outbox, audit, GDPR and `CryptoEngine` SPIs, typed ids, `MetricNames`. Depends only on Jackson. |
 | `streamrune-runtime` | `:streamrune-runtime` | `org.streamrune.runtime` | `StreamRune` facade, `VirtualThreadCommandBus`, interceptors, projection runners, subscriptions, `SagaRunner` and its sweepers, outbox poller and replayer, GDPR services, retention sweepers, SSE publisher. |
-| `streamrune-postgres` | `:streamrune-eventstore:streamrune-postgres` | `org.streamrune.postgres` | `PostgresEventStore` and its factory, the Flyway baseline, `SchemaValidator`, `PgAdvisoryLocker`, `LeaseBasedLeadership`, `JdbcProjectionRepository`, the PostgreSQL inbox, outbox, saga, dead-letter, audit and offset stores, LISTEN/NOTIFY subscriptions. |
+| `streamrune-postgres` | `:streamrune-postgres` | `org.streamrune.postgres` | `PostgresEventStore` and its factory, the Flyway baseline, `SchemaValidator`, `PgAdvisoryLocker`, `LeaseBasedLeadership`, `JdbcProjectionRepository`, the PostgreSQL inbox, outbox, saga, dead-letter, audit and offset stores, LISTEN/NOTIFY subscriptions. |
 | `streamrune-crypto-api` | `:streamrune-crypto:streamrune-crypto-api` | `org.streamrune.crypto` | `CryptoShreddingModule` (Jackson), `CachedCryptoEngine`, `ForgottenSubjectStore`. |
 | `streamrune-filesystem-crypto` | `:streamrune-crypto:streamrune-filesystem-crypto` | `org.streamrune.crypto.filesystem` | `FileSystemCryptoEngine` — AES-256-GCM keys on disk. |
 | `streamrune-postgres-crypto` | `:streamrune-crypto:streamrune-postgres-crypto` | `org.streamrune.crypto.postgres` | `PostgresCryptoEngine`, `JdbcForgottenSubjectStore`, `PostgresCryptoForgetSignal`, the crypto Flyway baseline. |
