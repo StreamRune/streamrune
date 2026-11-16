@@ -135,15 +135,15 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * </ul>
  *
  * <p><b>How the cases are driven.</b> Events are delivered by a delivery loop driven by hand, one
- * event at a time: it reads the event after the checkpoint stored in {@code projection_offset},
- * hands it to the listener and saves the checkpoint — what a subscription's poll does — so a case
- * decides which loop moves next, and no case waits for a poll thread. One case runs the whole loop
- * on two started {@link PollingEventSubscription}s and compares what they store with the same
- * outcome. The compensation-retry sweeper and the timeout runner are run through their public
- * lifecycle: started with a short interval, awaited on the saga row with a bound, and stopped.
- * Their clock runs ten minutes ahead of the database's, so a row is due on their first cycle
- * whatever the clocks of the test JVM and of the database container say to each other, and the
- * saga's five-minute deadline has passed.
+ * event at a time: it reads the event after the checkpoint stored in {@code
+ * subscription_checkpoint}, hands it to the listener and saves the checkpoint — what a
+ * subscription's poll does — so a case decides which loop moves next, and no case waits for a poll
+ * thread. One case runs the whole loop on two started {@link PollingEventSubscription}s and
+ * compares what they store with the same outcome. The compensation-retry sweeper and the timeout
+ * runner are run through their public lifecycle: started with a short interval, awaited on the saga
+ * row with a bound, and stopped. Their clock runs ten minutes ahead of the database's, so a row is
+ * due on their first cycle whatever the clocks of the test JVM and of the database container say to
+ * each other, and the saga's five-minute deadline has passed.
  */
 @Timeout(600)
 class SagaContinuationCrashPointIT extends E2ETestBase {

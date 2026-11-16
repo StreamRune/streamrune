@@ -271,7 +271,7 @@ class MigrationScriptLookupIT {
   static final class NativeImageLikeClassLoader extends ClassLoader {
 
     private static final List<String> DIRECTORIES =
-        List.of("db/streamrune-migration", "db/crypto-migration");
+        List.of("db/streamrune-migration", "db/crypto-migration", "db/readmodel-migration");
 
     private final Set<String> unregistered;
 

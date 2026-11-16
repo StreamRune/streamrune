@@ -1621,7 +1621,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * is alive here".
    *
    * <p>What makes a standby entry useful rather than noise: the contributor computes lag against
-   * the SHARED {@code projection_offset} checkpoint, so a registered standby answers "is this
+   * the SHARED {@code subscription_checkpoint} checkpoint, so a registered standby answers "is this
    * subscription making progress ANYWHERE?". A healthy leader keeps the shared lag low and every
    * standby reports UP; a subscription frozen on every replica reads DEGRADED everywhere, never
    * DOWN, with the growing lag in its detail — which is how the all-replicas-standby freeze this

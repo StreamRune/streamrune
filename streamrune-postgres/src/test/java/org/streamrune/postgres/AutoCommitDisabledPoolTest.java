@@ -159,7 +159,7 @@ class AutoCommitDisabledPoolTest {
     try (var conn = plain.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute(
-          "DELETE FROM outbox_events; DELETE FROM projection_offset; DELETE FROM dead_letter_queue;"
+          "DELETE FROM outbox_events; DELETE FROM subscription_checkpoint; DELETE FROM dead_letter_queue;"
               + " DELETE FROM command_inbox; DELETE FROM audit_log; DELETE FROM event_audit_log;"
               + " DELETE FROM snapshot_store; DELETE FROM saga_state; DELETE FROM saga_dead_letters;"
               + " DELETE FROM subscription_leases; DELETE FROM projection_dead_letters");
@@ -568,15 +568,17 @@ class AutoCommitDisabledPoolTest {
     assertEquals(1, count("SELECT COUNT(*) FROM autocommit_off_batch_view WHERE id = ?", "b"));
     assertEquals(
         7,
-        count("SELECT last_offset FROM projection_offset WHERE projection_name = ?", name.value()));
+        count(
+            "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?",
+            name.value()));
   }
 
   @Test
   void projectionRepository_fencingStampAndOffsetResetAreDurable() {
     var repository = new JdbcProjectionRepository(pool);
     var name = ProjectionName.of("autocommit_off_fenced");
-    String epoch = "SELECT epoch FROM projection_offset WHERE projection_name = ?";
-    String offset = "SELECT last_offset FROM projection_offset WHERE projection_name = ?";
+    String epoch = "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?";
+    String offset = "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?";
 
     repository.stampFencingEpoch(name, 3L);
     assertEquals(3, count(epoch, name.value()));

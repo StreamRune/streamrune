@@ -39,13 +39,13 @@ import org.streamrune.postgres.PostgresOffsetStore;
  *
  * <p>This composes the two real primitives against one shared PostgreSQL: a DB-clocked,
  * epoch-issuing {@link LeaseBasedLeadership} lease over {@code subscription_leases}, and the epoch
- * write-fence in {@link JdbcProjectionRepository#executeAtomically} over {@code projection_offset}.
- * Rather than drive a full {@link org.streamrune.runtime.ContinuousProjectionRunner} (whose
- * failover liveness is proven under load by {@code ProjectionCrashRecoveryIT} / {@code
- * HaDualInstanceProjectionIT}), each leader's commit is issued directly through {@code
- * executeAtomically} carrying its held fencing epoch — exactly what the runner threads into every
- * commit — so the fence seam is exercised deterministically, with no timing dependence on batch
- * draining.
+ * write-fence in {@link JdbcProjectionRepository#executeAtomically} over {@code
+ * subscription_checkpoint}. Rather than drive a full {@link
+ * org.streamrune.runtime.ContinuousProjectionRunner} (whose failover liveness is proven under load
+ * by {@code ProjectionCrashRecoveryIT} / {@code HaDualInstanceProjectionIT}), each leader's commit
+ * is issued directly through {@code executeAtomically} carrying its held fencing epoch — exactly
+ * what the runner threads into every commit — so the fence seam is exercised deterministically,
+ * with no timing dependence on batch draining.
  *
  * <p><b>What is proven (non-vacuous):</b>
  *
@@ -402,7 +402,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, PROJECTION.value());
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;

@@ -51,7 +51,7 @@ class JdbcProjectionRepositoryTest {
     dataSource.setPassword(PG.getPassword());
 
     // The shipped event-store baseline, applied the way the factory applies it: executeAtomically
-    // locks and advances the projection_offset row.
+    // locks and advances the subscription_checkpoint row.
     org.flywaydb.core.Flyway.configure()
         .dataSource(dataSource)
         .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)

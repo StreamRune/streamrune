@@ -79,6 +79,62 @@ class SchemaValidatorTest {
   }
 
   @Test
+  void validateReadModelReportsMissingCheckpointTable() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE SCHEMA IF NOT EXISTS readmodel_empty");
+    }
+    var emptyDs = new PGSimpleDataSource();
+    emptyDs.setUrl(PG.getJdbcUrl() + "&currentSchema=readmodel_empty");
+    emptyDs.setUser(PG.getUsername());
+    emptyDs.setPassword(PG.getPassword());
+
+    var result = SchemaValidator.validateReadModel(emptyDs);
+
+    assertFalse(result.isValid());
+    assertTrue(
+        result.issues().stream()
+            .anyMatch(
+                i ->
+                    i.severity() == SchemaIssue.Severity.ERROR
+                        && "readmodel_checkpoint".equals(i.table())),
+        () -> "Should report the missing readmodel_checkpoint table: " + result.issues());
+  }
+
+  @Test
+  void validateReadModelAcceptsTheShippedSeriesAndReportsAMissingColumn() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("CREATE SCHEMA IF NOT EXISTS readmodel_full");
+    }
+    var ds = new PGSimpleDataSource();
+    ds.setUrl(PG.getJdbcUrl() + "&currentSchema=readmodel_full");
+    ds.setUser(PG.getUsername());
+    ds.setPassword(PG.getPassword());
+    ShippedMigrationSeries.READ_MODEL
+        .configure(ds)
+        .table("flyway_schema_history_readmodel")
+        .load()
+        .migrate();
+
+    var ok = SchemaValidator.validateReadModel(ds);
+    assertTrue(ok.isValid(), () -> "Shipped read-model series must validate: " + ok.issues());
+
+    try (var conn = ds.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute("ALTER TABLE readmodel_checkpoint DROP COLUMN epoch");
+    }
+    var broken = SchemaValidator.validateReadModel(ds);
+    assertTrue(
+        broken.issues().stream()
+            .anyMatch(
+                i ->
+                    "readmodel_checkpoint".equals(i.table())
+                        && i.message().contains("Missing column: epoch")),
+        () -> "Should report the missing epoch column: " + broken.issues());
+  }
+
+  @Test
   void missingColumnReportsError() throws Exception {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {

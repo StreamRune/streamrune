@@ -23,7 +23,7 @@ import org.streamrune.core.types.ProjectionName;
  * <p><b>Reset caveat.</b> Because the guard blocks regressions, an intentional offset
  * <em>reset</em> or rebuild (e.g. replaying a projection from 0 after a read-model schema change)
  * must <b>not</b> go through {@link #saveOffset} — use the rebuild path (a direct {@code UPDATE
- * projection_offset SET last_offset = ?} / delete-and-reinsert invoked by an operator/rebuild
+ * subscription_checkpoint SET last_offset = ?} / delete-and-reinsert invoked by an operator/rebuild
  * tool), never the runner.
  *
  * <p><b>Shared namespace.</b> The offset table is keyed by a plain string. Subscriptions that

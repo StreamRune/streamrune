@@ -27,9 +27,9 @@ import java.util.stream.Stream;
  */
 public final class ShippedMigrationScripts {
 
-  /** The class-path directories of the two shipped migration series. */
+  /** The class-path directories of the shipped migration series. */
   public static final List<String> DIRECTORIES =
-      List.of("db/streamrune-migration", "db/crypto-migration");
+      List.of("db/streamrune-migration", "db/crypto-migration", "db/readmodel-migration");
 
   private ShippedMigrationScripts() {}
 

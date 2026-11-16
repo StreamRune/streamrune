@@ -138,7 +138,7 @@ class LeaseLeadershipPgBouncerTxModeIT {
     try (var conn = ds.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, projectionName);
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;

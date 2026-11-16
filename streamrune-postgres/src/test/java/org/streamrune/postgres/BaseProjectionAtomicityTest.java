@@ -71,7 +71,7 @@ class BaseProjectionAtomicityTest {
 
   static void createOffsetTable() {
     // The shipped event-store baseline, applied the way the factory applies it. This test only
-    // uses projection_offset (with its epoch fencing column).
+    // uses subscription_checkpoint (with its epoch fencing column).
     org.flywaydb.core.Flyway.configure()
         .dataSource(dataSource)
         .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
@@ -84,7 +84,7 @@ class BaseProjectionAtomicityTest {
   void clean() throws SQLException {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
       stmt.execute("DROP TABLE IF EXISTS base_counting_view");
     }
   }

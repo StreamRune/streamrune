@@ -14,7 +14,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** The shared offset-store contract against {@code projection_offset} on the shipped baseline. */
+/**
+ * The shared offset-store contract against {@code subscription_checkpoint} on the shipped baseline.
+ */
 @Testcontainers
 class PostgresOffsetStoreContractTest extends OffsetStoreContract {
 
@@ -43,7 +45,7 @@ class PostgresOffsetStoreContractTest extends OffsetStoreContract {
   protected OffsetStore newStore() {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
     } catch (SQLException e) {
       throw new IllegalStateException(e);
     }

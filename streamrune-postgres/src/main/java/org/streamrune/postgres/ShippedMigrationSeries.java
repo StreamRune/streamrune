@@ -26,7 +26,7 @@ import org.flywaydb.core.api.resource.LoadableResource;
  * schema validation that follows refuses every framework table as missing, so the default
  * auto-initialization could not work in a native image. Each script is instead looked up by its
  * exact name with {@link ClassLoader#getResource(String)}, which a native image answers for every
- * resource registered at build time; the Spring, Quarkus and Micronaut integrations register both
+ * resource registered at build time; the Spring, Quarkus and Micronaut integrations register every
  * series. A script that cannot be found is refused, naming the script and the registration it
  * needs, before Flyway touches the database.
  *
@@ -52,6 +52,16 @@ final class ShippedMigrationSeries {
           "classpath:db/crypto-migration",
           "streamrune-postgres-crypto",
           List.of("V001__crypto_baseline.sql"));
+
+  /**
+   * The read-model series, shipped in {@code streamrune-postgres}: the checkpoint table of a
+   * read-model store, applied to the database that holds the read models.
+   */
+  static final ShippedMigrationSeries READ_MODEL =
+      new ShippedMigrationSeries(
+          "classpath:db/readmodel-migration",
+          "streamrune-postgres",
+          List.of("V001__readmodel_baseline.sql"));
 
   private static final String CLASSPATH_PREFIX = "classpath:";
 

@@ -10,28 +10,28 @@ import org.streamrune.core.types.ProjectionName;
 
 /**
  * PostgreSQL-backed {@link OffsetStore} using upsert semantics. Stores the last processed global
- * offset for each named projection in the {@code projection_offset} table.
+ * offset for each named projection in the {@code subscription_checkpoint} table.
  */
 public final class PostgresOffsetStore implements OffsetStore {
 
   private static final String SELECT_OFFSET =
-      "SELECT last_offset FROM projection_offset WHERE projection_name = ?";
+      "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?";
 
   // Monotonic guard: a backward/sideways save updates 0 rows and is a silent no-op (no throw).
   // Regressions must not be possible even in a brief split-brain window; an intentional rewind
   // uses the rebuild/reset path, never saveOffset (see OffsetStore javadoc).
   private static final String UPSERT_OFFSET =
-      "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
+      "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at) "
           + "VALUES (?, ?, NOW()) "
           + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = EXCLUDED.last_offset, "
           + "updated_at = NOW() "
-          + "WHERE EXCLUDED.last_offset > projection_offset.last_offset";
+          + "WHERE EXCLUDED.last_offset > subscription_checkpoint.last_offset";
 
   // Unguarded rewind for the reset/rebuild path. Deliberately omits the monotonic guard so an
   // intentional rewind to 0 is not rejected as a regression. Upserts so a not-yet-seen projection
   // name resets cleanly to 0 as well (a no-op semantically, but keeps the contract uniform).
   private static final String RESET_OFFSET =
-      "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
+      "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at) "
           + "VALUES (?, 0, NOW()) "
           + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0, updated_at = NOW()";
 

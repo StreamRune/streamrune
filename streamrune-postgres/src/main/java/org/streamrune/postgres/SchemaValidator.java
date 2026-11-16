@@ -45,7 +45,7 @@ public final class SchemaValidator {
                   "state_payload",
                   "snapshot_version",
                   "purge_generation")),
-          Map.entry("projection_offset", Set.of("projection_name", "last_offset", "epoch")),
+          Map.entry("subscription_checkpoint", Set.of("projection_name", "last_offset", "epoch")),
           Map.entry(
               "subscription_leases", Set.of("consumer_name", "holder_id", "epoch", "lease_until")),
           // PostgresEventStore reserves every global offset from this single-row
@@ -232,6 +232,13 @@ public final class SchemaValidator {
           "key_created_at", "TIMESTAMPTZ",
           "max_erased_version", "SMALLINT NOT NULL");
 
+  /**
+   * The tables the read-model series ({@code db/readmodel-migration}) creates, with the columns the
+   * runtime reads and writes.
+   */
+  private static final Map<String, Set<String>> READ_MODEL_REQUIRED_COLUMNS =
+      Map.of("readmodel_checkpoint", Set.of("projection_name", "last_offset", "epoch"));
+
   private SchemaValidator() {}
 
   /**
@@ -300,6 +307,61 @@ public final class SchemaValidator {
                 SchemaIssue.Severity.WARNING,
                 PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE,
                 "Flyway history table not found — schema may not be managed by Flyway"));
+      }
+    } catch (SQLException e) {
+      issues.add(
+          new SchemaIssue(
+              SchemaIssue.Severity.ERROR,
+              "<connection>",
+              "Failed to connect to database: " + e.getMessage()));
+    }
+    return new SchemaValidationResult(List.copyOf(issues));
+  }
+
+  /**
+   * Validates the read-model schema — the tables of the {@code db/readmodel-migration} series —
+   * against the database a read-model store points at.
+   *
+   * <p>That series is a separate Flyway history from the event-store series and is applied to the
+   * database that holds the read models, which need not be the event-store database, so {@link
+   * #validate(DataSource)} does not check it. Only the presence of the tables and the columns the
+   * runtime reads and writes is checked; there is no version check.
+   *
+   * @param dataSource the data source of the read-model database
+   * @return validation result, with an ERROR issue per missing table or column
+   */
+  public static SchemaValidationResult validateReadModel(DataSource dataSource) {
+    var issues = new ArrayList<SchemaIssue>();
+    try (var conn = dataSource.getConnection()) {
+      DatabaseMetaData meta = conn.getMetaData();
+      String schema = conn.getSchema();
+      if (schema == null) {
+        issues.add(
+            new SchemaIssue(
+                SchemaIssue.Severity.ERROR,
+                "<schema>",
+                "Cannot determine current schema — the connection's search_path resolves to no"
+                    + " existing schema; fix currentSchema/search_path before validating"));
+        return new SchemaValidationResult(List.copyOf(issues));
+      }
+      for (var entry : READ_MODEL_REQUIRED_COLUMNS.entrySet()) {
+        String table = entry.getKey();
+        if (!tableExists(meta, schema, table)) {
+          issues.add(
+              new SchemaIssue(
+                  SchemaIssue.Severity.ERROR,
+                  table,
+                  "Required table missing — apply classpath:db/readmodel-migration as a SEPARATE"
+                      + " Flyway history to the read-model database"));
+          continue;
+        }
+        Set<String> actualCols = getColumns(meta, schema, table);
+        for (String col : entry.getValue()) {
+          if (!actualCols.contains(col)) {
+            issues.add(
+                new SchemaIssue(SchemaIssue.Severity.ERROR, table, "Missing column: " + col));
+          }
+        }
       }
     } catch (SQLException e) {
       issues.add(

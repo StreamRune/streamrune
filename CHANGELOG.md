@@ -112,6 +112,10 @@ test kit — and the guarantees of the shipped code are described in detail in
 The parts below list its modules, its API stability policy, requirements, known limitations and
 license.
 
+Unreleased changes to the schema: the event-store table `projection_offset` is renamed
+`subscription_checkpoint`, and `streamrune-postgres` ships a separate read-model migration series
+(`classpath:db/readmodel-migration`, its own Flyway history) that creates `readmodel_checkpoint`.
+
 ### Modules
 
 Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three

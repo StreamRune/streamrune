@@ -222,6 +222,7 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
       List.of(
           "db/streamrune-migration/*.sql",
           "db/crypto-migration/*.sql",
+          "db/readmodel-migration/*.sql",
           "org/flywaydb/core/internal/version.txt");
 
   @Override

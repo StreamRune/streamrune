@@ -44,7 +44,7 @@ The schema ships with the module as one Flyway baseline, `V001__streamrune_basel
 `classpath:db/streamrune-migration`. It is recorded in its own history table,
 `flyway_schema_history_streamrune`, so it never shares a version namespace with the application's
 own migrations, and every object is created unqualified in the connection's current schema. The
-baseline creates `event_stream`, `global_offset_sequence`, `snapshot_store`, `projection_offset`,
+baseline creates `event_stream`, `global_offset_sequence`, `snapshot_store`, `subscription_checkpoint`,
 `subscription_leases`, `projection_dead_letters`, `command_inbox`, `dead_letter_queue`,
 `audit_log`, `event_audit_log`, `outbox_events`, `saga_state` and `saga_dead_letters`. Read the
 file itself for the column definitions.

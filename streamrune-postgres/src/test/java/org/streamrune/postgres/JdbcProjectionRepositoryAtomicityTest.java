@@ -72,7 +72,7 @@ class JdbcProjectionRepositoryAtomicityTest {
 
   static void createOffsetTable() {
     // The shipped event-store baseline, applied the way the factory applies it. This test only
-    // uses projection_offset (with its epoch fencing column).
+    // uses subscription_checkpoint (with its epoch fencing column).
     org.flywaydb.core.Flyway.configure()
         .dataSource(dataSource)
         .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
@@ -86,7 +86,7 @@ class JdbcProjectionRepositoryAtomicityTest {
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, projectionName);
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;
@@ -98,7 +98,7 @@ class JdbcProjectionRepositoryAtomicityTest {
   void cleanOffsets() throws SQLException {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
     }
   }
 
@@ -707,7 +707,8 @@ class JdbcProjectionRepositoryAtomicityTest {
     // than dropped, so the finally block can put the migrated table back as it was.
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("ALTER TABLE projection_offset RENAME TO projection_offset_moved_aside");
+      stmt.execute(
+          "ALTER TABLE subscription_checkpoint RENAME TO subscription_checkpoint_moved_aside");
     }
     try {
       var thrown =
@@ -732,7 +733,8 @@ class JdbcProjectionRepositoryAtomicityTest {
     } finally {
       try (var conn = dataSource.getConnection();
           var stmt = conn.createStatement()) {
-        stmt.execute("ALTER TABLE projection_offset_moved_aside RENAME TO projection_offset");
+        stmt.execute(
+            "ALTER TABLE subscription_checkpoint_moved_aside RENAME TO subscription_checkpoint");
       }
     }
   }
@@ -882,7 +884,8 @@ class JdbcProjectionRepositoryAtomicityTest {
   void concurrentDoubleWriterAtTheSameOffsetAppliesExactlyOnce() throws Exception {
     // The real two-leader race. Two writers concurrently process the SAME overlapping range
     // and target the SAME offset against the same read-model row. Exactly one commits; the other is
-    // serialized on the projection_offset row lock and rejected. The non-idempotent increment is
+    // serialized on the subscription_checkpoint row lock and rejected. The non-idempotent increment
+    // is
     // applied exactly once and the checkpoint lands on the target offset.
     var repo = new JdbcProjectionRepository(dataSource);
     var name = ProjectionName.of("concurrent_same_row");
@@ -902,7 +905,8 @@ class JdbcProjectionRepositoryAtomicityTest {
   @Test
   void concurrentDoubleWriterOnDisjointRowsStillAppliesExactlyOnce() throws Exception {
     // Same race, but the two writers touch DISJOINT read-model rows — so there is no
-    // read-model row contention and the serialization rests SOLELY on the projection_offset row
+    // read-model row contention and the serialization rests SOLELY on the subscription_checkpoint
+    // row
     // lock + rollback. Still exactly one commits; the loser's disjoint write is rolled back with
     // the
     // rejected offset advance, so only the winner's row exists.
