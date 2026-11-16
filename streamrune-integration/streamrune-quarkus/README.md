@@ -70,6 +70,9 @@ streamrune.event-store.schema.auto-initialize=true
 # bound on every event-store statement (per transaction or statement, never on the
 # Agroal session); PT0S sets none
 streamrune.event-store.statement-timeout=PT30S
+# the default read-model store's migration series; unset, it follows
+# streamrune.event-store.schema.auto-initialize
+# streamrune.read-model.schema.auto-initialize=
 streamrune.polling-interval=PT5S
 streamrune.polling-jitter=PT1S
 streamrune.projections.auto-discovery.enabled=true
@@ -431,7 +434,7 @@ which keeps the bus producer itself even in an application that injects no `Comm
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)); aborts with `400` for an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
-| `ProjectionIndexDeclarer` | Startup observer: declares every `ProjectionIndex` bean on the application's `ProjectionRepository` bean (the framework's `JdbcProjectionRepository` or its own) before the projection runners start; a refused key or a failed creation fails startup |
+| `ProjectionIndexDeclarer` | Startup observer: declares every `ProjectionIndex` bean on the application's `ProjectionRepository` bean (the default read-model store's repository or its own) before the projection runners start; a refused key or a failed creation fails startup |
 | `StreamRuneAuthorizationValidator` | Startup observer: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneRequestContextHolder` | Request-scoped holder carrying the parsed `RequestContext`; `ofCurrentRequest()` answers it for the request the calling thread serves, the source the command and query buses dispatch as (see [Request context propagation](#request-context-propagation)) |
 
@@ -474,9 +477,7 @@ wrapped in `new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolde
 ## Lifecycle
 
 `StreamRuneLifecycle` observes `StartupEvent` and starts whichever of these beans exist:
-`MultiProjectionRunner` (its `AtomicBatchProcessor` is the `JdbcProjectionRepository` bean when a
-registration declares `TRANSACTIONAL_LOCAL`/`EXTERNAL_EFFECT` or leadership must fence, otherwise
-`AtomicBatchProcessor.nonAtomicAtLeastOnce()`), `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga
+`MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga
 dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner`. On
 `ShutdownEvent` it closes them in reverse order and closes the `VirtualThreadCommandBus`. Do not
 inject the runner types directly — ask `StreamRuneLifecycle` for the running instances.
@@ -494,6 +495,23 @@ auto-assembles from your `@ProjectionConfig` beans, and only while
 stopped by the framework — you own its lifecycle. To supply and fully manage your own runner, set
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
+
+**Where each projection checkpoints.** The integration produces the default read-model store, a
+`PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean `@Named("postgres")`) on your
+`DataSource`: read models in `<name>_view` tables, their checkpoints beside them in
+`readmodel_checkpoint`. The injectable `ProjectionRepository` bean is that store's repository. Each
+discovered projection is routed on its own: a projection that names a store
+(`@ProjectionConfig(readModelStore = "postgres")`) or writes to its repository (a `BaseProjection`
+over the injected `ProjectionRepository`) goes to that store, so a `TRANSACTIONAL_LOCAL`
+projection's read-model writes and its checkpoint commit in one transaction. An
+`AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in the event store's
+`subscription_checkpoint` table (the `CheckpointTarget` bean `@Named("streamRuneSubscriptionCheckpoint")`;
+with an `OffsetStore` of your own that is not a `PostgresOffsetStore` it saves into that store,
+unfenced, which routing refuses while leadership is on). Creating the store applies the read-model
+migration series (`db/readmodel-migration`) when `streamrune.read-model.schema.auto-initialize` is
+on; unset, it follows `streamrune.event-store.schema.auto-initialize`. Arc creates the store when
+the first bean that needs it is created — in an application with projections, the projection
+runners' producers on the startup event; a `ReadModelStore` bean you produce replaces it.
 
 ## Known Limitations
 

@@ -100,6 +100,9 @@ public interface StreamRuneQuarkusProperties {
   /** Event-store configuration, {@code streamrune.event-store.*}. */
   EventStoreConfig eventStore();
 
+  /** Configuration of the default read-model store, {@code streamrune.read-model.*}. */
+  ReadModelConfig readModel();
+
   /** Saga configuration, {@code streamrune.saga.*}. */
   SagaConfig saga();
 
@@ -242,6 +245,30 @@ public interface StreamRuneQuarkusProperties {
       @WithDefault("true")
       @WithConverter(StrictBooleanConverter.class)
       boolean autoInitialize();
+    }
+  }
+
+  /**
+   * Read-model section, {@code streamrune.read-model.*}: the default read-model store, {@code
+   * postgres}, the {@code PostgresReadModelStore} the integration produces on the application's
+   * {@code DataSource}.
+   */
+  interface ReadModelConfig {
+
+    /** Read-model schema management, {@code streamrune.read-model.schema.*}. */
+    SchemaConfig schema();
+
+    /** Schema management section, {@code streamrune.read-model.schema.*}. */
+    interface SchemaConfig {
+
+      /**
+       * Whether the default read-model store applies the read-model migration series ({@code
+       * db/readmodel-migration}) at startup, {@code streamrune.read-model.schema.auto-initialize}.
+       * Unset, it follows {@code streamrune.event-store.schema.auto-initialize}. The schema is
+       * validated either way.
+       */
+      @WithConverter(StrictBooleanConverter.class)
+      Optional<Boolean> autoInitialize();
     }
   }
 
