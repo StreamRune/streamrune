@@ -343,8 +343,12 @@ public final class MultiProjectionRunner implements AutoCloseable {
      * #offsetStore}. Pass the {@code JdbcProjectionRepository} your {@code TRANSACTIONAL_LOCAL} /
      * {@code EXTERNAL_EFFECT} projections write to, or {@link
      * AtomicBatchProcessor#nonAtomicAtLeastOnce()} for {@code AT_LEAST_ONCE_IDEMPOTENT}
-     * projections. Set both or neither; neither requires a target on every registration. {@link
-     * #build()} checks each registration's declared mode against the processor it commits through.
+     * projections. A {@code JdbcProjectionRepository} checkpoints in {@code readmodel_checkpoint},
+     * so its {@link #offsetStore} is {@code PostgresReadModelCheckpoints} on the same {@code
+     * DataSource}, never a {@code PostgresOffsetStore}; or register its projections with {@code
+     * PostgresReadModelStore#checkpointTarget()}. Set both or neither; neither requires a target on
+     * every registration. {@link #build()} checks each registration's declared mode against the
+     * processor it commits through.
      */
     public Builder atomicProcessor(AtomicBatchProcessor processor) {
       this.atomicProcessor = processor;

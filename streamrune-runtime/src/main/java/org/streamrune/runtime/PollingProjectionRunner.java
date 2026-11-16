@@ -30,8 +30,10 @@ import org.streamrune.core.types.ProjectionName;
  *
  * <p>The processor is required: {@code JdbcProjectionRepository} for {@code TRANSACTIONAL_LOCAL} /
  * {@code EXTERNAL_EFFECT} projections, {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for a
- * runner of {@code AT_LEAST_ONCE_IDEMPOTENT} ones. The commit is unfenced (epoch 0) — this runner
- * has no leadership.
+ * runner of {@code AT_LEAST_ONCE_IDEMPOTENT} ones. The offset store must read the checkpoint that
+ * processor advances: for a {@code JdbcProjectionRepository}, {@code PostgresReadModelCheckpoints}
+ * on the same {@code DataSource} (a {@code PostgresReadModelStore} hands out the pair), never a
+ * {@code PostgresOffsetStore}. The commit is unfenced (epoch 0) — this runner has no leadership.
  *
  * <p>Under the nonatomic processor a checkpoint save that fails after the batch was applied ({@link
  * ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner backs off (100 ms

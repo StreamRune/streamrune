@@ -175,7 +175,12 @@ through the factory, so they provision the schema at startup unless
 `streamrune.event-store.schema.auto-initialize=false` (see the production guide's Flyway section).
 All three — `PostgresEventStore.create(...)`, `initializeSchema()` and the factory's `create()` —
 refuse a server older than PostgreSQL 17 with `UnsupportedServerVersionException` before they
-write anything.
+write anything. They apply the event-store series only. Read models kept in PostgreSQL have a
+series of their own (`db/readmodel-migration`, with `readmodel_checkpoint`, where those projections
+keep their checkpoints): `PostgresReadModelStore.create("postgres", dataSource,
+JdbcProjectionRepository.createObjectMapper(null), true, true)` applies and validates it and returns
+the read-model store (`new PostgresEventStoreFactory(...).createReadModelStore()` does the same under
+the factory's settings).
 
 For testing, use the in-memory store. It needs no database, but it stores events the way
 PostgreSQL does — as JSON, read back through the same registry — so an event type you forgot to
@@ -240,9 +245,11 @@ that a **projection runner** drives. Every registration declares a `ProjectionDe
 default. The projection below writes to its own store with upsert semantics, so it is
 `AT_LEAST_ONCE_IDEMPOTENT`: a redelivered batch is applied again and must leave the same rows, and its
 runner takes `AtomicBatchProcessor.nonAtomicAtLeastOnce()` — process, then save the checkpoint, two
-commits. For a read model whose writes must commit in one transaction with the checkpoint, extend
-`BaseProjection` over a `JdbcProjectionRepository`, declare `TRANSACTIONAL_LOCAL` and pass the same
-repository as the runner's `atomicProcessor(...)` — see
+commits. For a read model whose writes must commit in one transaction with the checkpoint, build a
+`PostgresReadModelStore` (above), extend `BaseProjection` over `store.repository()`, declare
+`TRANSACTIONAL_LOCAL`, and give the runner `store.checkpoints()` as its `offsetStore(...)` and
+`store.processor()` as its `atomicProcessor(...)`: that projection checkpoints in
+`readmodel_checkpoint`, so the `PostgresOffsetStore` below is not its offset store — see
 [Delivery modes](guide/concepts.md#delivery-modes--what-a-projection-promises). Registering a
 projection alone is not enough: you must also configure a runner (`projectionRunner(...)` or
 `projectionRunnerFactory(...)`) and call `startProjections()` **on the built instance**. `build()`

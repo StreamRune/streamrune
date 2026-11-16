@@ -503,7 +503,8 @@ void process_isIdempotent_forDuplicateEvents() {
 
 `InMemoryProjectionRepository` (in `streamrune-test`) is a `ProjectionRepository`, a fencing-capable
 `AtomicBatchProcessor` and the `OffsetStore` of its own checkpoint in one object, so one instance
-plays the parts a `JdbcProjectionRepository` and a `PostgresOffsetStore` play in production — the
+plays the parts a `PostgresReadModelStore`'s `JdbcProjectionRepository` and its
+`PostgresReadModelCheckpoints` play in production — the
 rollback included. Construct the projection over it, pass the same instance to the runner as its
 offset store and its processor, and run the projection `TRANSACTIONAL_LOCAL`. The assertions use
 AssertJ (`org.assertj:assertj-core`, test scope), which `streamrune-test` does not bring:

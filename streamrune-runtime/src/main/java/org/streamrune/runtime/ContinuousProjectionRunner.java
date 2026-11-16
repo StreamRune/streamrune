@@ -2308,8 +2308,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
      * Sets the batch processor this runner commits through. Required: pass the {@code
      * JdbcProjectionRepository} a {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} projection
      * writes to, or {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for an {@code
-     * AT_LEAST_ONCE_IDEMPOTENT} projection. {@link #run} checks the projection's declared mode
-     * against it before any event is read.
+     * AT_LEAST_ONCE_IDEMPOTENT} projection. The {@link #offsetStore} must read the checkpoint it
+     * advances: for a {@code JdbcProjectionRepository}, {@code PostgresReadModelCheckpoints} on the
+     * same {@code DataSource} ({@code PostgresReadModelStore#checkpointTarget()}), never a {@code
+     * PostgresOffsetStore}. {@link #run} checks the projection's declared mode against it before
+     * any event is read.
      */
     public Builder atomicProcessor(AtomicBatchProcessor processor) {
       this.atomicProcessor = processor;

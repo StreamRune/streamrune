@@ -426,31 +426,53 @@ right depends on where the projection writes, never on which beans exist.
 **Hand-built runner recipe:**
 
 ```java
+// The read-model store: read models in <name>_view tables, their checkpoints in readmodel_checkpoint,
+// and the JdbcProjectionRepository that commits both in one transaction, all on one DataSource.
+// create(...) applies and validates the read-model schema (migrate = true, validate = true).
+PostgresReadModelStore store = PostgresReadModelStore.create(
+    "postgres", dataSource, JdbcProjectionRepository.createObjectMapper(cryptoEngine), true, true);
+ProjectionRepository jdbcRepo = store.repository();
+
 MultiProjectionRunner.builder()
     .eventStore(eventStore)
-    .offsetStore(offsetStore)
-    .atomicProcessor(jdbcRepo)                       // the JdbcProjectionRepository the TRANSACTIONAL_LOCAL projections write to
-    .register(ProjectionName.of("orders"), new OrderProjection(jdbcRepo), ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
-    .register(ProjectionName.of("audit"),  auditProjection,              ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    .register(ProjectionName.of("orders"), new OrderProjection(jdbcRepo),
+        ProjectionErrorStrategy.HALT, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL,
+        store.checkpointTarget())                     // readmodel_checkpoint + the JDBC processor
+    .register(ProjectionName.of("audit"), auditProjection,
+        ProjectionErrorStrategy.HALT, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+        offsetStore.subscriptionCheckpoint())         // offsetStore: a PostgresOffsetStore
     .build();
 ```
 
-The same `jdbcRepo` object in both places is what the startup check verifies; `auditProjection` is
-handed no repository and writes to its own store. (`OrderProjection` extends `BaseProjection` and
-saves under the name it is registered under. `offsetStore` is a `PostgresOffsetStore` over the same
-`DataSource` as `jdbcRepo`: the runner must read the checkpoint the processor advances. Nothing
-checks that at startup; see [a processor and an offset store that disagree](#a-processor-and-an-offset-store-that-disagree).)
+The same repository object as the projection's store and as the processor of
+`store.checkpointTarget()` is what the startup check verifies; `auditProjection` is handed no
+repository and writes to its own store. (`OrderProjection` extends `BaseProjection` and saves under
+the name it is registered under.) Each registration reads its checkpoint from the store its
+processor commits to: `store.checkpointTarget()` pairs the `JdbcProjectionRepository` with
+`PostgresReadModelCheckpoints` over `readmodel_checkpoint`, and `PostgresOffsetStore#subscriptionCheckpoint()`
+pairs a `PostgresOffsetStore` with the fencing `PostgresSubscriptionCheckpointProcessor` over the
+event store's `subscription_checkpoint`. Never pair a `JdbcProjectionRepository` with a
+`PostgresOffsetStore`: the runner would read a table the processor never writes (see
+[a processor and an offset store that disagree](#a-processor-and-an-offset-store-that-disagree)).
+A runner-wide `offsetStore(...)` + `atomicProcessor(...)` pair still serves registrations given no
+target; set both from one pair (`store.checkpoints()` + `store.processor()`) or neither.
 
-**Integration recipe:** declare the `JdbcProjectionRepository` bean by its concrete type (or accept
-the framework default; any bean scope — identity survives proxies); annotate
-`@ProjectionConfig(name = "orders", deliveryMode = TRANSACTIONAL_LOCAL)`; construct the projection
-over that bean. Startup refuses anything else. The bean must use the `DataSource` whose
-`subscription_checkpoint` table the runner's `OffsetStore` bean reads — the integrations build the
-`PostgresOffsetStore` over the primary `DataSource`. Nothing checks that at startup.
+**Integration recipe:** with a `DataSource`, the integrations create the default read-model store
+`postgres` (a `PostgresReadModelStore` on the primary `DataSource`, which applies the read-model
+series under `streamrune.read-model.schema.auto-initialize`), and the injectable
+`ProjectionRepository` bean is its repository. Annotate
+`@ProjectionConfig(name = "orders", deliveryMode = TRANSACTIONAL_LOCAL)` and construct the
+projection over that bean (any bean scope — identity survives proxies): routing sends it to the
+store whose repository it writes to, and its checkpoint lives in that store's `readmodel_checkpoint`.
+An `AT_LEAST_ONCE_IDEMPOTENT` projection that writes elsewhere checkpoints in the event store's
+`subscription_checkpoint`. Startup refuses anything else.
 
 #### A processor and an offset store that disagree
 
-A processor over a separate read-model `DataSource` advances a checkpoint the runner never reads.
+A processor whose checkpoint table the runner's offset store does not read — a
+`JdbcProjectionRepository` (`readmodel_checkpoint`) with a `PostgresOffsetStore`
+(`subscription_checkpoint`), or the two on different `DataSource`s — advances a checkpoint the
+runner never reads.
 The first batch commits there; the runner reads its own `OffsetStore`, still at the old checkpoint,
 reads the same batch again, and the processor rejects it as an overlap before any write. The runner
 tolerates one such rejection — a commit whose acknowledgement was lost is rejected when it is
@@ -460,14 +482,14 @@ projection**: `ContinuousProjectionRunner` ends in `ProjectionState.ERROR`, `Sch
 puts the registration in `ERROR`, the health contributor reports the subscription `DOWN`, and
 `lastError` carries a `ProjectionCheckpointDivergedException` message naming the two likely causes:
 
-- the `AtomicBatchProcessor` and the `OffsetStore` are not over the same `DataSource` (or the same
-  `subscription_checkpoint` table);
+- the `AtomicBatchProcessor` and the `OffsetStore` are not over the same checkpoint table;
 - two runners are registered under one projection name and commit through one processor while
   reading their checkpoint from different offset stores.
 
 The read model is not written twice: every rejected batch rolls back before its first write. Give
-the runner an `OffsetStore` over the processor's `DataSource`, register the name once, and restart
-the projection; it resumes from the checkpoint.
+the runner a matching pair — `PostgresReadModelStore#checkpointTarget()` for a
+`JdbcProjectionRepository`, `PostgresOffsetStore#subscriptionCheckpoint()` for the subscription
+checkpoint — register the name once, and restart the projection; it resumes from the checkpoint.
 
 A rejection by the **epoch fence** is a different signal and never halts: it means a newer leader
 holds the lease, and the superseded runner stands by.

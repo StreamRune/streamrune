@@ -390,8 +390,9 @@ public class OrderRegistry implements Projection {
 > `process(List)` above is all it needs. In a framework integration the same bean declares
 > `@ProjectionConfig(name = "order_registry", deliveryMode = AT_LEAST_ONCE_IDEMPOTENT)`; for a
 > PostgreSQL read model extend `org.streamrune.core.projection.BaseProjection` over the
-> `JdbcProjectionRepository` bean and declare `TRANSACTIONAL_LOCAL` — its `save()`/`findById()`/`delete()`
-> helpers then work in the same transaction as the offset checkpoint. See
+> `ProjectionRepository` bean (the default read-model store's `JdbcProjectionRepository`) and declare
+> `TRANSACTIONAL_LOCAL` — its `save()`/`findById()`/`delete()` helpers then work in the same
+> transaction as its checkpoint in `readmodel_checkpoint`. See
 > [Delivery modes](concepts.md#delivery-modes--what-a-projection-promises).
 
 Registering a projection is not enough on its own: the builder also needs a **projection
