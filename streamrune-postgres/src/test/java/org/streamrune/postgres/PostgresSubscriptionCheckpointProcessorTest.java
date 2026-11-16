@@ -261,6 +261,62 @@ class PostgresSubscriptionCheckpointProcessorTest {
   }
 
   /**
+   * An {@link EventStoreException} the updater throws is the updater's own failure, not a failed
+   * checkpoint save: the same instance propagates, unwrapped, and the checkpoint stays.
+   */
+  @Test
+  void anUpdatersEventStoreExceptionPropagatesUnwrapped() {
+    var name = freshName();
+    processor.executeAtomically(name, batch(1, 2), GlobalOffset.of(2), 0L, repo -> {}, null);
+    var failure = new EventStoreException("the projection's own store failed");
+
+    var thrown =
+        assertThrows(
+            EventStoreException.class,
+            () ->
+                processor.executeAtomically(
+                    name,
+                    batch(3, 4),
+                    GlobalOffset.of(4),
+                    0L,
+                    repo -> {
+                      throw failure;
+                    },
+                    null));
+
+    assertSame(failure, thrown, "never a ProjectionCheckpointSaveException");
+    assertEquals(GlobalOffset.of(2), offset(name));
+  }
+
+  /**
+   * Giving the connection back fails after the commit: the checkpoint did advance, and the failure
+   * is reported as a {@link ProjectionCheckpointSaveException}, which the runners resolve by
+   * re-reading the stored checkpoint (the overlap guard then rejects the re-read range).
+   */
+  @Test
+  void aCloseFailureAfterTheCommitIsACheckpointSaveExceptionAndTheOffsetAdvanced() {
+    var name = freshName();
+    // The injected close never reaches the real connection, which stays open, idle and with
+    // nothing uncommitted, until the container stops.
+    var failing =
+        new PostgresSubscriptionCheckpointProcessor(
+            failingOn((method, args) -> "close".equals(method)));
+    var ran = new AtomicBoolean();
+
+    var saveFailed =
+        assertThrows(
+            ProjectionCheckpointSaveException.class,
+            () ->
+                failing.executeAtomically(
+                    name, batch(1, 2), GlobalOffset.of(2), 0L, repo -> ran.set(true), null));
+
+    assertTrue(ran.get());
+    var cause = assertInstanceOf(EventStoreException.class, saveFailed.getCause());
+    assertEquals("Failed to process projection batch atomically", cause.getMessage());
+    assertEquals(GlobalOffset.of(2), offset(name), "the commit before the close is durable");
+  }
+
+  /**
    * The checkpoint save fails after the updater returned: the batch is applied (its writes are the
    * projection's own) and the checkpoint did not move, which is a {@link
    * ProjectionCheckpointSaveException}, so the runners back off and re-read instead of skipping or
@@ -417,13 +473,21 @@ class PostgresSubscriptionCheckpointProcessorTest {
         updater -> processor.executeReplay(name, batch(1, 1), updater));
   }
 
+  /**
+   * The checkpoint row is committed first, so the batch waits on the replay's {@code FOR UPDATE}
+   * row lock, not on the uncommitted seed {@code INSERT} of a row neither transaction can see yet
+   * (that seed path is {@link #replayWaitsForAnOpenBatchOfTheSameProjection}).
+   */
   @Test
   void batchWaitsForAnOpenReplayOfTheSameProjection() throws InterruptedException {
     var name = freshName();
+    processor.stampFencingEpoch(name, 1L);
+    assertTrue(rowExists(CheckpointTable.SUBSCRIPTION, name), "the row is committed up front");
     assertSecondWaitsForFirst(
         updater -> processor.executeReplay(name, batch(1, 1), updater),
         updater ->
-            processor.executeAtomically(name, batch(1, 1), GlobalOffset.of(1), 0L, updater, null));
+            processor.executeAtomically(name, batch(1, 1), GlobalOffset.of(1), 1L, updater, null));
+    assertEquals(GlobalOffset.of(1), offset(name));
   }
 
   @Test
