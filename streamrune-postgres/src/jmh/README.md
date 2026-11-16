@@ -39,11 +39,11 @@ The load states write their streams once per trial and only read them afterwards
 ## Running
 
 ```bash
-./gradlew :streamrune-eventstore:streamrune-postgres:jmh
-./gradlew :streamrune-eventstore:streamrune-postgres:jmh -PjmhIncludes=loadWithUpcasting
+./gradlew :streamrune-postgres:jmh
+./gradlew :streamrune-postgres:jmh -PjmhIncludes=loadWithUpcasting
 STREAMRUNE_BENCH_JDBC_URL=jdbc:postgresql://localhost:5432/bench \
   STREAMRUNE_BENCH_JDBC_USER=bench STREAMRUNE_BENCH_JDBC_PASSWORD=bench \
-  ./gradlew :streamrune-eventstore:streamrune-postgres:jmh -PbenchCi
+  ./gradlew :streamrune-postgres:jmh -PbenchCi
 ```
 
 `-PbenchCi`, the nightly settings and the results file are described in

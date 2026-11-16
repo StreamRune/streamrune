@@ -143,6 +143,8 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-kafka-outbox` | `:streamrune-outbox:streamrune-kafka-outbox` | `org.streamrune.outbox.kafka` | `KafkaOutboxPublisher`. |
 | `streamrune-rabbitmq-outbox` | `:streamrune-outbox:streamrune-rabbitmq-outbox` | `org.streamrune.outbox.rabbitmq` | `RabbitMqOutboxPublisher` (publisher confirms). |
 
+The PostgreSQL event store module moved from `streamrune-eventstore/streamrune-postgres` to `streamrune-postgres` at the repository root, so its Gradle project is `:streamrune-postgres`; the artifact id `streamrune-postgres` and the package `org.streamrune.postgres` are unchanged.
+
 ### API stability
 
 From `1.0.0` on, StreamRune follows Semantic Versioning: a minor or patch release does not break

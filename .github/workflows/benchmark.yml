@@ -105,7 +105,7 @@ jobs:
         run: >-
           ./gradlew
           :streamrune-runtime:jmhJar
-          :streamrune-eventstore:streamrune-postgres:jmhJar
+          :streamrune-postgres:jmhJar
           :streamrune-crypto:streamrune-filesystem-crypto:jmhJar
           -PbenchCi --no-daemon --console=plain
 
@@ -119,7 +119,7 @@ jobs:
         run: >-
           ./gradlew
           :streamrune-runtime:jmh
-          :streamrune-eventstore:streamrune-postgres:jmh
+          :streamrune-postgres:jmh
           :streamrune-crypto:streamrune-filesystem-crypto:jmh
           -PbenchCi --no-daemon --console=plain
 
@@ -128,7 +128,7 @@ jobs:
         run: |
           jq -s 'add' \
             streamrune-runtime/build/results/jmh/results.json \
-            streamrune-eventstore/streamrune-postgres/build/results/jmh/results.json \
+            streamrune-postgres/build/results/jmh/results.json \
             streamrune-crypto/streamrune-filesystem-crypto/build/results/jmh/results.json \
             > jmh-results.json
           count=$(jq 'length' jmh-results.json)

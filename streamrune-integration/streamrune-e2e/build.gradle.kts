@@ -6,7 +6,7 @@ description =
 // event-store modules end to end. Everything is declared as testImplementation/testRuntimeOnly.
 dependencies {
     testImplementation(project(":streamrune-runtime"))
-    testImplementation(project(":streamrune-eventstore:streamrune-postgres"))
+    testImplementation(project(":streamrune-postgres"))
     testImplementation(project(":streamrune-test"))
 
     // Broker outbox adapters + their broker clients, exercised by the @Tag("broker") OutboxBrokerE2EIT

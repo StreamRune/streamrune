@@ -568,7 +568,7 @@ snapshots.** One of its purgers must be a
 or the application must state `withoutSnapshotPurge()`; otherwise `build()` throws
 `IllegalStateException` with what to add. Both together are refused too. For `PostgresEventStore`
 the snapshot purger is
-[`PostgresSnapshotStorePurger`](../../../streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
+[`PostgresSnapshotStorePurger`](../../../streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
 which purges the snapshots of the subject's streams from `snapshot_store`:
 
 ```java

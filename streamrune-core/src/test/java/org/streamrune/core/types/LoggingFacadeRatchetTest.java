@@ -39,7 +39,7 @@ class LoggingFacadeRatchetTest {
           "streamrune-integration/streamrune-integration-tck/src/main/java/org/streamrune/integration/tck/RecordingDataSource.java",
           "a javax.sql.DataSource declares getParentLogger(), whose type is"
               + " java.util.logging.Logger; the test-support data source logs nothing",
-          "streamrune-eventstore/streamrune-postgres/src/main/java/org/streamrune/postgres/PooledListenDataSource.java",
+          "streamrune-postgres/src/main/java/org/streamrune/postgres/PooledListenDataSource.java",
           "a javax.sql.DataSource declares getParentLogger(), whose type is"
               + " java.util.logging.Logger; the LISTEN data source forwards it to its pool and logs"
               + " nothing",

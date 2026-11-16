@@ -134,7 +134,7 @@ Each row is a published artifact, `org.streamrune:<module>`.
 |---|---|
 | [streamrune-core](streamrune-core/README.md) | Core API: EventStore contracts, aggregate types, upcasting |
 | [streamrune-runtime](streamrune-runtime/README.md) | Runtime: command bus, projections, locker |
-| [streamrune-postgres](streamrune-eventstore/streamrune-postgres/README.md) | PostgreSQL-backed EventStore |
+| [streamrune-postgres](streamrune-postgres/README.md) | PostgreSQL-backed EventStore |
 | [streamrune-test](streamrune-test/README.md) | Test support: in-memory store, fixtures |
 | [streamrune-spring](streamrune-integration/streamrune-spring/README.md) | Spring Boot auto-configuration |
 | [streamrune-spring-boot-starter](streamrune-integration/streamrune-spring-boot-starter/README.md) | Single-dependency setup for Spring Boot: auto-configuration, PostgreSQL store and runtime |

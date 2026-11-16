@@ -428,7 +428,7 @@ class OrderPostgresIntegrationTest {
 ```
 
 See the existing tests in
-`streamrune-eventstore/streamrune-postgres/src/test/java/org/streamrune/postgres/`
+`streamrune-postgres/src/test/java/org/streamrune/postgres/`
 for the full pattern including Flyway migration setup.
 
 ---

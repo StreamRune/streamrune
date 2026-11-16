@@ -14,7 +14,7 @@ description = "StreamRune Quarkus integration: CDI producers, config mapping, re
 dependencies {
     api(project(":streamrune-core"))
     api(project(":streamrune-runtime"))
-    implementation(project(":streamrune-eventstore:streamrune-postgres"))
+    implementation(project(":streamrune-postgres"))
     api(project(":streamrune-integration:streamrune-integration-api"))
 
     // Crypto engine modules
@@ -60,7 +60,7 @@ dependencies {
     testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
     // The boot test of an at-least-once projection beside a TRANSACTIONAL_LOCAL one awaits its write.
     testImplementation(libs.awaitility)
-    testImplementation(project(":streamrune-eventstore:streamrune-postgres"))
+    testImplementation(project(":streamrune-postgres"))
     testImplementation(libs.quarkus.junit5)
     // Real-Arc container boot test (QuarkusBeanWiringTest): QuarkusUnitTest builds a synthetic
     // deployment in-process and boots a genuine Arc container, so @DefaultBean resolution,

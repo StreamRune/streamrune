@@ -5,7 +5,7 @@ Micro-benchmarks for the framework's hot paths. Three modules have them, each in
 | Module | Benchmarks | Needs |
 | --- | --- | --- |
 | `streamrune-runtime` (this directory) | `StreamRuneBenchmark`, `TracingBenchmark`, `OutboxEventMapperBenchmark`, `ProjectionRunnerBenchmark`, `EventSerializationBenchmark`, `PerfCandidatesBenchmark` | nothing |
-| `streamrune-eventstore/streamrune-postgres` | `PostgresEventStoreBenchmark`: append, load, load through an upcaster chain | PostgreSQL: Docker, or a server named in `STREAMRUNE_BENCH_JDBC_URL` |
+| `streamrune-postgres` | `PostgresEventStoreBenchmark`: append, load, load through an upcaster chain | PostgreSQL: Docker, or a server named in `STREAMRUNE_BENCH_JDBC_URL` |
 | `streamrune-crypto/streamrune-filesystem-crypto` | `CryptoShreddingBenchmark`: serialization of `@Encrypted` fields on the AES-GCM engine | nothing |
 
 The README in each `src/jmh` describes its benchmarks.
@@ -15,7 +15,7 @@ The README in each `src/jmh` describes its benchmarks.
 ```bash
 ./gradlew :streamrune-runtime:jmh                                       # every benchmark of a module
 ./gradlew :streamrune-runtime:jmh -PjmhIncludes=ProjectionRunnerBenchmark  # those whose name matches a regex
-./gradlew :streamrune-eventstore:streamrune-postgres:jmh                 # starts a Testcontainers PostgreSQL
+./gradlew :streamrune-postgres:jmh                 # starts a Testcontainers PostgreSQL
 ./gradlew :streamrune-crypto:streamrune-filesystem-crypto:jmh
 ```
 

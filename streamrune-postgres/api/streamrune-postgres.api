@@ -1,4 +1,4 @@
-# The public API of :streamrune-eventstore:streamrune-postgres. verifyApiSurface (part of check) compares the build with this file;
+# The public API of :streamrune-postgres. verifyApiSurface (part of check) compares the build with this file;
 # after a deliberate change to the public API, ./gradlew apiDump rewrites it.
 public final class org.streamrune.postgres.HybridEventSubscription implements org.streamrune.core.subscription.SubscriptionLifecycle, org.streamrune.runtime.ReadPoisonAware, org.streamrune.runtime.PushHealthAware, org.streamrune.runtime.LeaseRoleAware
   public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int)

@@ -15,9 +15,9 @@ public class StreamRuneFailureAnalyzer
     if (beanType.contains("DataSource")) {
       return new FailureAnalysis(
           "StreamRune requires a DataSource bean but none was found. "
-              + "The streamrune-eventstore-postgres module is on the classpath and needs a database connection.",
+              + "The streamrune-postgres module is on the classpath and needs a database connection.",
           "Add spring-boot-starter-jdbc to your dependencies and configure a DataSource, "
-              + "or remove streamrune-eventstore-postgres if you don't need persistence.",
+              + "or remove streamrune-postgres if you don't need persistence.",
           cause);
     }
 

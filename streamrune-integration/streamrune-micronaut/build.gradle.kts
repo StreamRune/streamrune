@@ -17,7 +17,7 @@ dependencies {
     // crashed with NoClassDefFoundError at context startup. `implementation` (matching Quarkus; Spring
     // gets it via the spring-boot-starter's `api`) puts it on the runtime closure. There is no
     // streamrune-micronaut-starter, so this module must carry it directly.
-    implementation(project(":streamrune-eventstore:streamrune-postgres"))
+    implementation(project(":streamrune-postgres"))
     api(project(":streamrune-integration:streamrune-integration-api"))
 
     // Micronaut core
@@ -52,7 +52,7 @@ dependencies {
     testImplementation(libs.awaitility)
     testImplementation(
         "io.micronaut:micronaut-http-client:${libs.versions.micronaut.asProvider().get()}")
-    testImplementation(project(":streamrune-eventstore:streamrune-postgres"))
+    testImplementation(project(":streamrune-postgres"))
     testImplementation(libs.micronaut.management)
     testImplementation(libs.micronaut.test.junit5)
     testImplementation("org.junit.jupiter:junit-jupiter")

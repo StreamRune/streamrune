@@ -695,8 +695,7 @@ class SagaStateWriteRatchetTest {
 
   /**
    * The repository's root build: the nearest directory with both a {@code settings.gradle.kts} and
-   * the Gradle wrapper. {@code streamrune-eventstore} has a {@code settings.gradle.kts} of its own
-   * and no wrapper; stopping there would confine the scan to the event-store modules.
+   * the Gradle wrapper, so the scan covers every module whatever directory the test runs from.
    */
   private static Path repositoryRoot() {
     Path dir = Path.of("").toAbsolutePath();

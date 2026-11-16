@@ -25,10 +25,10 @@ implementation("org.streamrune:streamrune-postgres:1.0.0")
 implementation("org.streamrune:streamrune-postgres:1.0.0")
 ```
 
-> A release resolves from `mavenCentral()`; the [Status](../../README.md#status) of the README says
+> A release resolves from `mavenCentral()`; the [Status](../README.md#status) of the README says
 > whether it is published yet. The unsigned preview of the next release has a version of its
 > own and needs the Maven Central snapshot repository: see
-> [Preview builds](../../README.md#preview-builds). The [CHANGELOG](../../CHANGELOG.md) says what
+> [Preview builds](../README.md#preview-builds). The [CHANGELOG](../CHANGELOG.md) says what
 > each release contains.
 
 Besides HikariCP, Flyway, the PostgreSQL JDBC driver and SLF4J, the module brings, at runtime scope
