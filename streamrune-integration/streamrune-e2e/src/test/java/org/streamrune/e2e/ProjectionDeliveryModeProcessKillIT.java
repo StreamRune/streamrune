@@ -7,9 +7,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
+import javax.sql.DataSource;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -19,6 +21,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.e2e.ProjectionDeliveryModeChildMain.Count;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelCheckpoints;
 import org.streamrune.runtime.PollingProjectionRunner;
 
 /**
@@ -102,7 +105,7 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
     }
 
     var repo = new JdbcProjectionRepository(dataSource);
-    var offsets = new PostgresOffsetStore(dataSource);
+    var offsets = checkpoints(ProjectionDeliveryMode.valueOf(mode), dataSource);
     assertThat(appliedCount(repo, name))
         .as("durable read model right after the crash")
         .isEqualTo(appliedAfterCrash);
@@ -121,6 +124,22 @@ class ProjectionDeliveryModeProcessKillIT extends E2ETestBase {
 
     assertThat(appliedCount(repo, name)).as("after the rerun").isEqualTo(appliedAfterRerun);
     assertThat(offsets.getLastOffset(name)).as("checkpoint after the rerun").isEqualTo(top);
+  }
+
+  /**
+   * Where the mode's checkpoint lives, read through the store its processor advances: {@code
+   * TRANSACTIONAL_LOCAL} commits through the {@link JdbcProjectionRepository}, which checkpoints in
+   * {@code readmodel_checkpoint}; the at-least-once projection writes through its own repository
+   * and checkpoints with the events, in {@code subscription_checkpoint}.
+   *
+   * @param mode the delivery mode the projection runs under
+   * @param dataSource the database both tables live in
+   * @return the checkpoints the runner reads for {@code mode}
+   */
+  static OffsetStore checkpoints(ProjectionDeliveryMode mode, DataSource dataSource) {
+    return mode == ProjectionDeliveryMode.TRANSACTIONAL_LOCAL
+        ? new PostgresReadModelCheckpoints(dataSource)
+        : new PostgresOffsetStore(dataSource);
   }
 
   private static String childOutput(Path childLog) throws IOException {

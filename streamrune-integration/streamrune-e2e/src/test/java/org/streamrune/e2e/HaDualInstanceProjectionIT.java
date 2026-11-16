@@ -15,15 +15,15 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresEventStore;
-import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelCheckpoints;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 import org.streamrune.runtime.ProjectionState;
 
 /**
  * High-availability dual-instance projection. Two {@link ContinuousProjectionRunner} instances run
- * the SAME projection name concurrently, sharing one {@link PostgresOffsetStore}, one event stream,
- * and one transactional read model (via {@link JdbcProjectionRepository}). This models two app
- * instances of the same service both running the projection for failover.
+ * the SAME projection name concurrently, sharing one {@link PostgresReadModelCheckpoints}, one
+ * event stream, and one transactional read model (via {@link JdbcProjectionRepository}). This
+ * models two app instances of the same service both running the projection for failover.
  *
  * <p>What is proven here (the genuine, non-vacuous HA invariant at the runner level):
  *
@@ -60,7 +60,8 @@ class HaDualInstanceProjectionIT extends E2ETestBase {
     int total = 40;
 
     PostgresEventStore store = eventStore(dataSource);
-    PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
+    // The read-model store's pair: the JDBC processor advances readmodel_checkpoint, read here.
+    PostgresReadModelCheckpoints offsetStore = new PostgresReadModelCheckpoints(dataSource);
     JdbcProjectionRepository repo = new JdbcProjectionRepository(dataSource);
 
     List<GlobalOffset> offsets = appendCountEvents(store, stream, 0, 0, total);
@@ -130,7 +131,9 @@ class HaDualInstanceProjectionIT extends E2ETestBase {
   }
 
   private static ContinuousProjectionRunner newRunner(
-      PostgresEventStore store, PostgresOffsetStore offsetStore, JdbcProjectionRepository repo) {
+      PostgresEventStore store,
+      PostgresReadModelCheckpoints offsetStore,
+      JdbcProjectionRepository repo) {
     return ContinuousProjectionRunner.builder()
         .eventStore(store)
         .offsetStore(offsetStore)
