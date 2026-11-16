@@ -613,7 +613,7 @@ class ProjectionStoreRoutingTest {
         .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("\n"));
   }
 
-  // ---------- INLINE (ported) ----------
+  // ---------- INLINE ----------
 
   @Test
   void inlineRequiresAtLeastOnce() {
@@ -640,7 +640,6 @@ class ProjectionStoreRoutingTest {
   @Test
   void inlineInfoIsTheOneSentence() {
     assertThat(ProjectionStoreRouting.INLINE_INFO)
-        .isSameAs(ProjectionProcessorResolution.INLINE_INFO)
         .contains("'{}'")
         .contains("AT_LEAST_ONCE_IDEMPOTENT inline");
   }

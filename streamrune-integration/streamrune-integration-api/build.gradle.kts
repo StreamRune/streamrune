@@ -14,8 +14,7 @@ dependencies {
     // it never reaches the published POM. Version pinned to the catalog's micrometer version so the
     // registry can never drift from micrometer-core.
     testImplementation("io.micrometer:micrometer-registry-prometheus:${libs.versions.micrometer.get()}")
-    // Fluent exception-message assertions (ProjectionProcessorResolutionTest,
-    // ProjectionStoreRoutingTest). Test-only.
+    // Fluent exception-message assertions (ProjectionStoreRoutingTest). Test-only.
     testImplementation(libs.assertj.core)
     // ProjectionStoreRoutingTest builds real stores over InMemoryProjectionRepository (repository,
     // processor and checkpoints in one) and wraps projections in the runtime's CacheAwareProjection,
