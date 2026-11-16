@@ -298,6 +298,20 @@ stopped by the framework — you own its lifecycle. To supply and fully manage y
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
 
+**Where each projection checkpoints.** With a `DataSource`, the integration registers the default
+read-model store, a `PostgresReadModelStore` named `postgres` (bean `postgres`): read models in
+`<name>_view` tables, their checkpoints beside them in `readmodel_checkpoint`. The injectable
+`ProjectionRepository` bean is that store's repository. Each discovered projection is routed on its
+own: a projection that names a store (`@ProjectionConfig(readModelStore = "postgres")`) or writes to
+its repository (a `BaseProjection` over the injected `ProjectionRepository`) goes to that store, so
+a `TRANSACTIONAL_LOCAL` projection's read-model writes and its checkpoint commit in one transaction.
+An `AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in the event store's
+`subscription_checkpoint` table (the `streamRuneSubscriptionCheckpoint` bean). Creating the store
+applies the read-model migration series (`db/readmodel-migration`) when
+`streamrune.read-model.schema.auto-initialize` is on; unset, it follows
+`streamrune.event-store.schema.auto-initialize`. The store is created when the first bean that needs
+it is; a `ReadModelStore` bean you define replaces it.
+
 **A `BaseProjection` must not be a CGLIB proxy.** When an aspect applies to a projection class
 (a class-level `@Transactional`, `@Async` or `@Validated`, a metrics or tracing aspect, a scoped
 proxy), the bean in the context is a generated subclass that forwards each overridable method to

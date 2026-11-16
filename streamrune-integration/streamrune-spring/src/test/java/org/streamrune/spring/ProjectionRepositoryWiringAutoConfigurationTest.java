@@ -2,12 +2,11 @@ package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -16,36 +15,53 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.test.InMemoryCryptoEngine;
+import org.streamrune.testsupport.PostgresTestImage;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
- * Proves the auto-configured {@link JdbcProjectionRepository} bean receives a crypto-aware {@code
- * ObjectMapper} (one with {@code CryptoShreddingModule} registered) whenever a {@link CryptoEngine}
- * bean is present — regression coverage for the GDPR defect where the framework built the
- * projection repository via the crypto-blind constructor, silently persisting {@code @Encrypted}
- * read-model fields as plaintext PII outside GDPR forget scope. Mirrors {@link
- * SagaStoreWiringAutoConfigurationTest}.
+ * Proves the default read-model store's repository — the auto-configured {@code
+ * ProjectionRepository} bean — receives a crypto-aware {@code ObjectMapper} (one with {@code
+ * CryptoShreddingModule} registered) whenever a {@link CryptoEngine} bean is present — regression
+ * coverage for the GDPR defect where the framework built the projection repository via the
+ * crypto-blind constructor, silently persisting {@code @Encrypted} read-model fields as plaintext
+ * PII outside GDPR forget scope. Mirrors {@link SagaStoreWiringAutoConfigurationTest}.
+ *
+ * <p>Creating the default store reads the server version and migrates the read-model schema, so the
+ * contexts run on a real PostgreSQL.
  */
+@Testcontainers
 class ProjectionRepositoryWiringAutoConfigurationTest {
 
   private static final String CRYPTO_SHREDDING_MODULE_ID = "CryptoShreddingModule";
+
+  @Container
+  static final PostgreSQLContainer PG =
+      new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_repo_wiring");
+
+  private static DataSource dataSource() {
+    var dataSource = new PGSimpleDataSource();
+    dataSource.setUrl(PG.getJdbcUrl());
+    dataSource.setUser(PG.getUsername());
+    dataSource.setPassword(PG.getPassword());
+    return dataSource;
+  }
 
   private final ApplicationContextRunner runner =
       new ApplicationContextRunner()
           .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
           .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-          .withBean(DataSource.class, () -> mock(DataSource.class))
+          .withBean(DataSource.class, ProjectionRepositoryWiringAutoConfigurationTest::dataSource)
           .withBean(EventStore.class, () -> mock(EventStore.class));
 
   @Test
   void projectionIndexBeansAreDeclaredOnTheRepository() {
-    List<String> statements = new CopyOnWriteArrayList<>();
-    new ApplicationContextRunner()
-        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
-        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
-        .withBean(DataSource.class, () -> recordingDataSource(statements))
-        .withBean(EventStore.class, () -> mock(EventStore.class))
+    runner
         .withBean(
             org.streamrune.core.projection.ProjectionIndex.class,
             () ->
@@ -57,15 +73,11 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
         .run(
             ctx -> {
               assertThat(ctx).hasNotFailed();
-              assertThat(statements)
+              assertThat(indexDefinitions("orders_view"))
                   .anyMatch(
-                      sql ->
-                          sql.startsWith(
-                                  "CREATE INDEX IF NOT EXISTS orders_customerid_createdat_desc_id_ix_")
-                              && sql.endsWith(
-                                  " ON orders_view ((data->>'customerId') COLLATE \"C\","
-                                      + " (data->>'createdAt') COLLATE \"C\" DESC,"
-                                      + " id COLLATE \"C\")"));
+                      definition ->
+                          definition.contains("orders_customerid_createdat_desc_id_ix_")
+                              && definition.contains("ON public.orders_view"));
             });
   }
 
@@ -139,7 +151,10 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
         .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
         .run(
             ctx -> {
-              var repo = ctx.getBean(JdbcProjectionRepository.class);
+              var repo = ctx.getBean(ProjectionRepository.class);
+              assertThat(repo)
+                  .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+                  .isInstanceOf(JdbcProjectionRepository.class);
               var mapper =
                   (com.fasterxml.jackson.databind.ObjectMapper)
                       ReflectionTestUtils.getField(repo, "objectMapper");
@@ -151,7 +166,10 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
   void noCryptoEngineBeanLeavesProjectionRepositoryMapperCryptoBlind() {
     runner.run(
         ctx -> {
-          var repo = ctx.getBean(JdbcProjectionRepository.class);
+          var repo = ctx.getBean(ProjectionRepository.class);
+          assertThat(repo)
+              .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+              .isInstanceOf(JdbcProjectionRepository.class);
           var mapper =
               (com.fasterxml.jackson.databind.ObjectMapper)
                   ReflectionTestUtils.getField(repo, "objectMapper");
@@ -178,7 +196,10 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
         .withUserConfiguration(PrimaryCryptoEngineConfig.class)
         .run(
             ctx -> {
-              var repo = ctx.getBean(JdbcProjectionRepository.class);
+              var repo = ctx.getBean(ProjectionRepository.class);
+              assertThat(repo)
+                  .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+                  .isInstanceOf(JdbcProjectionRepository.class);
               var mapper =
                   (com.fasterxml.jackson.databind.ObjectMapper)
                       ReflectionTestUtils.getField(repo, "objectMapper");
@@ -213,31 +234,18 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
     }
   }
 
-  /**
-   * A DataSource whose connections record every statement run through {@code createStatement()} and
-   * answer every query with no rows (so a declared index is found missing and created).
-   */
-  private static DataSource recordingDataSource(List<String> statements) {
-    try {
-      var dataSource = mock(DataSource.class);
-      var connection = mock(java.sql.Connection.class);
-      var statement = mock(java.sql.Statement.class);
-      var prepared = mock(java.sql.PreparedStatement.class);
-      when(dataSource.getConnection()).thenReturn(connection);
-      when(connection.getAutoCommit()).thenReturn(true);
-      when(connection.createStatement()).thenReturn(statement);
-      when(statement.execute(org.mockito.ArgumentMatchers.anyString()))
-          .thenAnswer(
-              invocation -> {
-                statements.add(invocation.getArgument(0));
-                return false;
-              });
-      when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
-          .thenReturn(prepared);
-      when(prepared.executeQuery()).thenReturn(mock(java.sql.ResultSet.class));
-      return dataSource;
-    } catch (java.sql.SQLException e) {
-      throw new IllegalStateException(e);
+  /** The definitions of the indexes on {@code table}, from {@code pg_indexes}. */
+  private static List<String> indexDefinitions(String table) throws java.sql.SQLException {
+    try (var conn = dataSource().getConnection();
+        var ps = conn.prepareStatement("SELECT indexdef FROM pg_indexes WHERE tablename = ?")) {
+      ps.setString(1, table);
+      try (var rs = ps.executeQuery()) {
+        var definitions = new java.util.ArrayList<String>();
+        while (rs.next()) {
+          definitions.add(rs.getString(1));
+        }
+        return definitions;
+      }
     }
   }
 }

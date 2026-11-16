@@ -45,6 +45,26 @@ class StreamRunePropertiesTest {
   }
 
   @Test
+  void readModelSchemaAutoInitialize_unset_followsTheEventStoreSwitch() {
+    assertThat(defaults().readModel().schema().autoInitialize()).isNull();
+    assertTrue(defaults().readModel().autoInitialize(defaults().eventStore()));
+    var p = bind(Map.of("streamrune.event-store.schema.auto-initialize", "false"));
+    assertFalse(p.readModel().autoInitialize(p.eventStore()));
+  }
+
+  @Test
+  void readModelSchemaAutoInitialize_set_overridesTheEventStoreSwitch() {
+    var on =
+        bind(
+            Map.of(
+                "streamrune.event-store.schema.auto-initialize", "false",
+                "streamrune.read-model.schema.auto-initialize", "true"));
+    assertTrue(on.readModel().autoInitialize(on.eventStore()));
+    var off = bind(Map.of("streamrune.read-model.schema.auto-initialize", "false"));
+    assertFalse(off.readModel().autoInitialize(off.eventStore()));
+  }
+
+  @Test
   void configuredValuesOverrideDefaults() {
     var p =
         bind(

@@ -39,7 +39,11 @@ class RunnerLifecycleAutoConfigurationTest {
           .withConfiguration(AutoConfigurations.of(ProjectionAutoConfig.class))
           .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
           .withBean(EventStore.class, () -> mock(EventStore.class))
-          .withBean(OffsetStore.class, () -> mock(OffsetStore.class));
+          .withBean(OffsetStore.class, () -> mock(OffsetStore.class))
+          .withBean(
+              StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT,
+              org.streamrune.core.projection.CheckpointTarget.class,
+              SpringTestMocks::subscriptionCheckpoint);
 
   @Test
   void outboxPollerIsStartedOnRefreshAndStoppedOnClose() {

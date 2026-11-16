@@ -2,10 +2,14 @@ package org.streamrune.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.postgresql.ds.PGSimpleDataSource;
@@ -20,9 +24,13 @@ import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
+import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.Projection;
+import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -279,6 +287,136 @@ class SpringPostgresWiringIntegrationTest {
               assertThat(snapshotRows(subjectStream)).isZero();
               assertThat(snapshotRows(otherStream)).isEqualTo(1);
             });
+  }
+
+  /**
+   * The auto-configured routing on the default stores, end to end: a {@code TRANSACTIONAL_LOCAL}
+   * {@link BaseProjection} over the injected {@code ProjectionRepository} (the default {@code
+   * postgres} read-model store's repository) is routed to that store by its {@code writeTarget()},
+   * so its checkpoint lands in {@code readmodel_checkpoint}; an {@code AT_LEAST_ONCE_IDEMPOTENT}
+   * projection with no write target is routed to the event store's subscription checkpoint, so its
+   * checkpoint lands in {@code subscription_checkpoint}. Neither projection has a row in the other
+   * table.
+   */
+  @Test
+  void
+      transactionalProjectionCheckpointsInReadModelTable_atLeastOnceWithoutTargetInSubscriptionTable() {
+    var streamId =
+        StreamId.of(AggregateType.of("customer"), AggregateId.of("routed-" + UUID.randomUUID()));
+    new ApplicationContextRunner()
+        .withPropertyValues(
+            SpringTestMocks.NO_SNAPSHOTS,
+            "streamrune.projections.auto-discovery.enabled=true",
+            "streamrune.polling-interval=50ms",
+            "streamrune.polling-jitter=0s")
+        .withConfiguration(
+            AutoConfigurations.of(StreamRuneAutoConfiguration.class, ProjectionAutoConfig.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withUserConfiguration(RoutedProjectionsConfig.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              EventStore store = ctx.getBean(EventStore.class);
+              long offset =
+                  store
+                      .append(
+                          streamId,
+                          List.of(
+                              envelope(
+                                  streamId, new CustomerRegistered("cust-r", "r@example.com"))),
+                          Version.initial())
+                      .globalOffsets()
+                      .getLast()
+                      .value();
+
+              Awaitility.await()
+                  .atMost(Duration.ofSeconds(20))
+                  .untilAsserted(
+                      () -> {
+                        assertThat(checkpoint("readmodel_checkpoint", RoutedTransactional.NAME))
+                            .as(
+                                "the TRANSACTIONAL_LOCAL projection checkpoints with its read model")
+                            .hasValueSatisfying(o -> assertThat(o).isGreaterThanOrEqualTo(offset));
+                        assertThat(checkpoint("subscription_checkpoint", RoutedAtLeastOnce.NAME))
+                            .as("the at-least-once projection checkpoints in the event store")
+                            .hasValueSatisfying(o -> assertThat(o).isGreaterThanOrEqualTo(offset));
+                      });
+              assertThat(checkpoint("subscription_checkpoint", RoutedTransactional.NAME)).isEmpty();
+              assertThat(checkpoint("readmodel_checkpoint", RoutedAtLeastOnce.NAME)).isEmpty();
+              assertThat(
+                      ctx.getBean(org.streamrune.core.projection.ProjectionRepository.class)
+                          .findById(
+                              org.streamrune.core.types.ProjectionName.of(RoutedTransactional.NAME),
+                              "cust-r",
+                              String.class))
+                  .as("the TRANSACTIONAL_LOCAL read model is in the default store")
+                  .contains("r@example.com");
+              assertThat(ctx.getBean(RoutedAtLeastOnce.class).seen.get()).isPositive();
+            });
+  }
+
+  /** The two projections of the routing test, over the injected default repository. */
+  @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+  static class RoutedProjectionsConfig {
+    @org.springframework.context.annotation.Bean
+    RoutedTransactional routedTransactional(
+        org.streamrune.core.projection.ProjectionRepository repository) {
+      return new RoutedTransactional(repository);
+    }
+
+    @org.springframework.context.annotation.Bean
+    RoutedAtLeastOnce routedAtLeastOnce() {
+      return new RoutedAtLeastOnce();
+    }
+  }
+
+  /** Writes each registration's email through the handed repository. */
+  @ProjectionConfig(
+      name = RoutedTransactional.NAME,
+      deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
+  static class RoutedTransactional extends BaseProjection {
+    static final String NAME = "routed_tl";
+
+    RoutedTransactional(org.streamrune.core.projection.ProjectionRepository repository) {
+      super(repository, NAME);
+    }
+
+    @Override
+    public void process(List<EventEnvelope> batch) {
+      for (EventEnvelope envelope : batch) {
+        if (envelope.event() instanceof CustomerRegistered registered) {
+          save(registered.customerId(), registered.email());
+        }
+      }
+    }
+  }
+
+  /** Counts the events it sees; writes nowhere the framework knows. */
+  @ProjectionConfig(
+      name = RoutedAtLeastOnce.NAME,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  static class RoutedAtLeastOnce implements Projection {
+    static final String NAME = "routed_alo";
+    final AtomicInteger seen = new AtomicInteger();
+
+    @Override
+    public void process(List<EventEnvelope> batch) {
+      seen.addAndGet(batch.size());
+    }
+  }
+
+  private static Optional<Long> checkpoint(String table, String projectionName) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT last_offset FROM " + table + " WHERE projection_name = ?")) {
+      ps.setString(1, projectionName);
+      try (var rs = ps.executeQuery()) {
+        return rs.next() ? Optional.of(rs.getLong(1)) : Optional.empty();
+      }
+    }
   }
 
   private static int snapshotRows(StreamId streamId) throws Exception {
