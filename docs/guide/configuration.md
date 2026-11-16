@@ -73,6 +73,7 @@ names the property and the value:
 | Property | Default | Meaning |
 |---|---|---|
 | `streamrune.event-store.schema.auto-initialize` | `true` | Whether the framework's Flyway migrations run at startup. |
+| `streamrune.read-model.schema.auto-initialize` | the event-store value | Whether the default read-model store (`postgres`) applies the read-model migration series (`db/readmodel-migration`: `readmodel_checkpoint`, where projections committed with their read models keep their checkpoints) at startup; unset, it follows `streamrune.event-store.schema.auto-initialize`. |
 | `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0s` sets none of its own. |
 | `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions; at least `1ms`. |
 | `streamrune.polling-jitter` | `1s` | Random jitter added to that interval; `0s` disables it, a positive value below `1ms` fails the start. |
