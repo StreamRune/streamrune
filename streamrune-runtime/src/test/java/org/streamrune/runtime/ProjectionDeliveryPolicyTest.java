@@ -267,4 +267,20 @@ class ProjectionDeliveryPolicyTest {
                     PLAIN, TRANSACTIONAL_LOCAL, NON_ATOMIC, "TestRunner", "bad\nname"))
         .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("\n"));
   }
+
+  @Test
+  void processorLabelNamesTheCheckpointTarget() {
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, null))
+        .isEqualTo("nonAtomicAtLeastOnce");
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, "search"))
+        .isEqualTo("nonAtomicAtLeastOnce (checkpoint target 'search')");
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, "bad\nname"))
+        .doesNotContain("\n");
+    assertThatThrownBy(
+            () ->
+                ProjectionDeliveryPolicy.require(
+                    PLAIN, TRANSACTIONAL_LOCAL, NON_ATOMIC, "TestRunner", "orders", "search"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("(nonAtomicAtLeastOnce (checkpoint target 'search'))");
+  }
 }

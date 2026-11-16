@@ -48,6 +48,26 @@ final class ProjectionDeliveryPolicy {
   }
 
   /**
+   * The processor's name for logs and messages, followed by the name of the {@link
+   * org.streamrune.core.projection.CheckpointTarget} it came from when the registration has one:
+   * {@code <processor> (checkpoint target '<name>')}. A registration on its runner's default pair
+   * ({@code targetName == null}) gets {@link #processorLabel(AtomicBatchProcessor)} alone.
+   *
+   * @param processor the registration's processor
+   * @param targetName the registration's checkpoint target name, or {@code null} for the runner's
+   *     default pair (sanitized here)
+   * @return the label
+   */
+  static String processorLabel(AtomicBatchProcessor processor, String targetName) {
+    return targetName == null
+        ? processorLabel(processor)
+        : processorLabel(processor)
+            + " (checkpoint target '"
+            + LogSanitizer.sanitizeForLog(targetName)
+            + "')";
+  }
+
+  /**
    * Decides whether {@code projection} may run under {@code mode} on {@code processor}.
    *
    * @param projection the projection about to be registered or run
@@ -64,6 +84,32 @@ final class ProjectionDeliveryPolicy {
       AtomicBatchProcessor processor,
       String runnerName,
       String projectionName) {
+    return require(projection, mode, processor, runnerName, projectionName, null);
+  }
+
+  /**
+   * {@link #require(Projection, ProjectionDeliveryMode, AtomicBatchProcessor, String, String)} for
+   * one registration of a runner that commits each registration through its own pair: {@code
+   * processor} is that registration's processor, and a refusal names the checkpoint target it came
+   * from (see {@link #processorLabel(AtomicBatchProcessor, String)}).
+   *
+   * @param projection the projection about to be registered or run
+   * @param mode the delivery mode the registration declares
+   * @param processor the registration's batch processor
+   * @param runnerName the runner type, for the message
+   * @param projectionName the projection's name, for the message (sanitized here)
+   * @param targetName the registration's checkpoint target name, or {@code null} for the runner's
+   *     default pair
+   * @return the verdict the runner logs once per registration
+   * @throws IllegalArgumentException when the pairing cannot honour the declared mode
+   */
+  static Verdict require(
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      AtomicBatchProcessor processor,
+      String runnerName,
+      String projectionName,
+      String targetName) {
     String name = LogSanitizer.sanitizeForLog(projectionName);
     if (processor == null) {
       throw new IllegalArgumentException(
@@ -103,7 +149,7 @@ final class ProjectionDeliveryPolicy {
               + "' declares "
               + mode
               + " but the runner's AtomicBatchProcessor ("
-              + processorLabel(processor)
+              + processorLabel(processor, targetName)
               + ") needs a transactional processor: it cannot run the read-model write and the"
               + " checkpoint in one transaction. Pass the JdbcProjectionRepository the projection"
               + " writes to as the processor, or declare AT_LEAST_ONCE_IDEMPOTENT and make the"
@@ -117,7 +163,7 @@ final class ProjectionDeliveryPolicy {
               + "' declares "
               + mode
               + " under a transactional AtomicBatchProcessor ("
-              + processorLabel(processor)
+              + processorLabel(processor, targetName)
               + "), but it does not write through the handed repository: its"
               + " writesThroughRepository() answers false, so its process(List, ProjectionRepository) is taken to"
               + " be the INHERITED DEFAULT, which ignores the repository and falls back to"
@@ -145,7 +191,7 @@ final class ProjectionDeliveryPolicy {
               + "), but "
               + runnerName
               + " is configured with "
-              + processorLabel(processor)
+              + processorLabel(processor, targetName)
               + " (identity "
               + identityOf(processor)
               + "): its writes inside process() would go into the processor's transaction and"

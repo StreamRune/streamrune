@@ -285,6 +285,7 @@ public final class org.streamrune.runtime.MultiProjectionRunner implements java.
   public java.util.Map<org.streamrune.core.types.ProjectionName, org.streamrune.runtime.ProjectionStatus> status()
   public static org.streamrune.runtime.MultiProjectionRunner$Builder builder()
   public void close()
+  public void reset(org.streamrune.core.types.ProjectionName)
   public void start()
   public void stop()
 
@@ -304,6 +305,7 @@ public static final class org.streamrune.runtime.MultiProjectionRunner$Builder
   public org.streamrune.runtime.MultiProjectionRunner$Builder offsetStore(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.runtime.MultiProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
   public org.streamrune.runtime.MultiProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionErrorStrategy, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public org.streamrune.runtime.MultiProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionErrorStrategy, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
   public org.streamrune.runtime.MultiProjectionRunner$Builder stopTimeout(java.time.Duration)
   public org.streamrune.runtime.MultiProjectionRunner$Builder subscriptionConfig(org.streamrune.core.subscription.SubscriptionConfig)
   public org.streamrune.runtime.MultiProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
@@ -648,6 +650,7 @@ public final class org.streamrune.runtime.ScheduledProjectionRunner implements j
   public java.util.Map<org.streamrune.core.types.ProjectionName, org.streamrune.runtime.ScheduledProjectionStatus> status()
   public static org.streamrune.runtime.ScheduledProjectionRunner$Builder builder()
   public void close()
+  public void reset(org.streamrune.core.types.ProjectionName)
   public void start()
   public void stop()
 
@@ -667,6 +670,7 @@ public static final class org.streamrune.runtime.ScheduledProjectionRunner$Build
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder offsetStore(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, java.lang.String, org.streamrune.core.projection.ProjectionDeliveryMode)
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, java.lang.String, org.streamrune.core.projection.ProjectionErrorStrategy, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public org.streamrune.runtime.ScheduledProjectionRunner$Builder register(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, java.lang.String, org.streamrune.core.projection.ProjectionErrorStrategy, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
   public org.streamrune.runtime.ScheduledProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
 
 public enum org.streamrune.runtime.ScheduledProjectionState
