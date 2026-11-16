@@ -31,11 +31,13 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.Versioned;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -49,6 +51,7 @@ import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 
 class ProjectionAutoConfigTest {
@@ -394,10 +397,10 @@ class ProjectionAutoConfigTest {
         .run(ctx -> assertThat(ctx).hasFailed());
   }
 
-  // === delivery mode: the processor by declared need, the INLINE rule ===
+  // === routing: each registration to a store or to the subscription checkpoint; INLINE rule ===
 
   @Test
-  void tlProjection_withoutAProcessorBean_failsNamingTheProjection() {
+  void tlProjection_withoutAStore_failsNamingTheProjection() {
     runner
         .withUserConfiguration(TlPlainBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
@@ -405,8 +408,8 @@ class ProjectionAutoConfigTest {
             ctx -> {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
-                  .hasStackTraceContaining("projection 'tl_plain' declares TRANSACTIONAL_LOCAL")
-                  .hasStackTraceContaining("no AtomicBatchProcessor bean is available");
+                  .hasStackTraceContaining("projection 'tl_plain' (TRANSACTIONAL_LOCAL)")
+                  .hasStackTraceContaining("no read-model store is transactional");
             });
   }
 
@@ -514,22 +517,84 @@ class ProjectionAutoConfigTest {
   }
 
   @Test
-  void tlBaseProjection_overTheProcessorBean_boots() {
+  void tlBaseProjection_overTheStoresRepository_isRoutedToTheStore() {
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, TlOverProcessorConfig.class)
+        .withUserConfiguration(MemoryStoreConfig.class, TlOverProcessorConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(MultiProjectionRunner.class);
-              assertThat(processorOf(ctx.getBean(MultiProjectionRunner.class)))
+              var mpr = ctx.getBean(MultiProjectionRunner.class);
+              assertThat(processorOf(mpr, "tl_base"))
                   .isSameAs(ctx.getBean(InMemoryProjectionRepository.class));
+              assertThat(targetNameOf(mpr, "tl_base")).isEqualTo("memory");
             });
   }
 
   @Test
-  void tlPlainProjection_underTheProcessorBean_fails_doesNotWriteThrough() {
+  void aDeclaredStore_routesThere_evenForAnAtLeastOnceProjectionWithNoWriteTarget() {
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, TlPlainBean.class)
+        .withUserConfiguration(MemoryStoreConfig.class, DeclaredStoreBean.class)
+        .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
+        .run(
+            ctx -> {
+              var mpr = ctx.getBean(MultiProjectionRunner.class);
+              assertThat(processorOf(mpr, "declared"))
+                  .isSameAs(ctx.getBean(InMemoryProjectionRepository.class));
+              assertThat(targetNameOf(mpr, "declared")).isEqualTo("memory");
+            });
+  }
+
+  @Test
+  void anUnknownDeclaredStore_failsNamingTheStores() {
+    runner
+        .withUserConfiguration(DeclaredStoreBean.class)
+        .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining(
+                      "projection 'declared' (AT_LEAST_ONCE_IDEMPOTENT) declares readModelStore ="
+                          + " \"memory\", but no read-model store has that name")
+                  .hasStackTraceContaining("no read-model store is defined");
+            });
+  }
+
+  @Test
+  void withoutASubscriptionCheckpointBean_theRunnerFailsNamingTheBean() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(ProjectionAutoConfig.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(ProjectionDeadLetterStore.class, () -> mock(ProjectionDeadLetterStore.class))
+        .withUserConfiguration(ContinuousBean.class)
+        .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("No streamRuneSubscriptionCheckpoint bean");
+            });
+  }
+
+  @Test
+  void twoStoresWithOneName_fail() {
+    runner
+        .withUserConfiguration(TwoStoresConfig.class, ContinuousBean.class)
+        .withPropertyValues(
+            "streamrune.projections.auto-discovery.enabled=true", "test.second-store-name=a")
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("Two read-model stores are named 'a'");
+            });
+  }
+
+  @Test
+  void tlPlainProjection_onTheOnlyTransactionalStore_fails_doesNotWriteThrough() {
+    runner
+        .withUserConfiguration(MemoryStoreConfig.class, TlPlainBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
@@ -541,32 +606,29 @@ class ProjectionAutoConfigTest {
   }
 
   @Test
-  void tlBaseProjection_overAnotherRepository_fails_identity() {
+  void tlBaseProjection_overARepositoryOfNoStore_fails() {
     runner
-        .withUserConfiguration(
-            ProcessorRepoConfig.class, SecondRepoConfig.class, TlOverBConfig.class)
+        .withUserConfiguration(MemoryStoreConfig.class, SecondRepoConfig.class, TlOverBConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
-                  .hasStackTraceContaining(
-                      "'tl_base' declares TRANSACTIONAL_LOCAL and writes to "
-                          + RepositoryOnly.class.getName())
-                  .hasStackTraceContaining(
-                      "is configured with " + InMemoryProjectionRepository.class.getName());
+                  .hasStackTraceContaining("projection 'tl_base' (TRANSACTIONAL_LOCAL)")
+                  .hasStackTraceContaining("its writeTarget() belongs to no read-model store")
+                  .hasStackTraceContaining("'memory' (transactional, fences its checkpoint)");
             });
   }
 
   @Test
-  void tlBaseProjection_overAProxiedProcessorBean_verifiesAndBoots() {
+  void tlBaseProjection_overAProxiedStoreRepository_isMatchedThroughTheProxyAndBoots() {
     runner
         .withUserConfiguration(ProxiedProcessorConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(MultiProjectionRunner.class);
-              Object processor = processorOf(ctx.getBean(MultiProjectionRunner.class));
+              Object processor = processorOf(ctx.getBean(MultiProjectionRunner.class), "tl_base");
               assertThat(processor).isSameAs(ctx.getBean("proxiedProcessor"));
               assertThat(Proxy.isProxyClass(processor.getClass()))
                   .as("the runner holds the proxy, not the repository behind it")
@@ -575,19 +637,20 @@ class ProjectionAutoConfigTest {
   }
 
   @Test
-  void aloBaseProjection_overASecondRepository_bootsBesideTl_andWritesOnlyToIt() {
+  void aloBaseProjection_overASecondRepository_bootsBesideTl_andCheckpointsInTheSubscription() {
     new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(ProjectionAutoConfig.class))
         .withUserConfiguration(
             EventsConfig.class,
-            ProcessorRepoConfig.class,
+            MemoryStoreConfig.class,
             SecondRepoConfig.class,
             TlOverProcessorConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasNotFailed();
-              var processor = ctx.getBean(InMemoryProjectionRepository.class); // the one processor
+              var processor = ctx.getBean(InMemoryProjectionRepository.class); // the store
+              var subscription = ctx.getBean(InMemoryOffsetStore.class);
               var repoB = ctx.getBean(RepositoryOnly.class);
               // Each registration runs on a thread of its own, and a batch's read-model write lands
               // before its checkpoint: wait for all three outcomes, not only the first one.
@@ -607,12 +670,18 @@ class ProjectionAutoConfigTest {
                                 "the TRANSACTIONAL_LOCAL sibling wrote inside the processor's"
                                     + " transaction")
                             .contains("v");
-                        assertThat(processor.committedOffset(ProjectionName.of("alo_base")))
+                        assertThat(processor.committedOffset(ProjectionName.of("tl_base")))
+                            .as("the TRANSACTIONAL_LOCAL projection checkpoints in its store")
+                            .isEqualTo(GlobalOffset.of(1));
+                        assertThat(subscription.getLastOffset(ProjectionName.of("alo_base")))
                             .as(
-                                "the at-least-once projection's checkpoint is in the processor's"
-                                    + " store")
+                                "the at-least-once projection, matching no store, checkpoints in"
+                                    + " the subscription checkpoint")
                             .isEqualTo(GlobalOffset.of(1));
                       });
+              assertThat(processor.committedOffset(ProjectionName.of("alo_base")))
+                  .as("the at-least-once projection's checkpoint is not in the store")
+                  .isEqualTo(GlobalOffset.initial());
               assertThat(processor.hasReadModels(ProjectionName.of("alo_base")))
                   .as("nothing of the at-least-once projection lands in the processor's store")
                   .isFalse();
@@ -623,18 +692,21 @@ class ProjectionAutoConfigTest {
   }
 
   @Test
-  void aloOnly_leadershipOff_selectsTheNonatomicProcessor_andLogsItByName() {
+  void aloWithNoWriteTarget_isRoutedToTheSubscriptionCheckpoint_evenBesideAStore() {
     runner
-        .withUserConfiguration(ContinuousBean.class)
+        .withUserConfiguration(ContinuousBean.class, MemoryStoreConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
-            ctx ->
-                assertThat(processorOf(ctx.getBean(MultiProjectionRunner.class)))
-                    .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce()));
+            ctx -> {
+              var mpr = ctx.getBean(MultiProjectionRunner.class);
+              assertThat(processorOf(mpr, "cont"))
+                  .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
+              assertThat(targetNameOf(mpr, "cont")).isEqualTo("subscription_checkpoint");
+            });
   }
 
   @Test
-  void aloOnly_leadershipOn_requiresTheBeanForFencing() {
+  void aloOnly_leadershipOn_aNonFencingSubscriptionCheckpointFails() {
     runner
         .withUserConfiguration(ContinuousBean.class, RealLeadershipConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
@@ -642,36 +714,37 @@ class ProjectionAutoConfigTest {
             ctx -> {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
-                  .hasStackTraceContaining("single-active-consumer leadership")
-                  .hasStackTraceContaining("to honour its epoch");
+                  .hasStackTraceContaining("is routed to 'subscription_checkpoint'")
+                  .hasStackTraceContaining("does not fence its checkpoint")
+                  .hasStackTraceContaining("single-active-consumer leadership");
             });
   }
 
   @Test
-  void aloOnly_leadershipOn_withTheBean_bootsAndUsesIt() {
+  void aloBase_overAStoresRepository_leadershipOn_isRoutedToTheFencingStore() {
     runner
         .withUserConfiguration(
-            ContinuousBean.class, RealLeadershipConfig.class, ProcessorRepoConfig.class)
+            RealLeadershipConfig.class, MemoryStoreConfig.class, AloOverStoreConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(MultiProjectionRunner.class);
-              assertThat(processorOf(ctx.getBean(MultiProjectionRunner.class)))
-                  .isInstanceOf(InMemoryProjectionRepository.class)
+              assertThat(processorOf(ctx.getBean(MultiProjectionRunner.class), "alo_base"))
                   .isSameAs(ctx.getBean(InMemoryProjectionRepository.class));
             });
   }
 
   @Test
-  void twoProcessorBeans_fail() {
+  void tlPlain_withTwoTransactionalStores_failsAskingForADeclaration() {
     runner
-        .withUserConfiguration(TwoProcessorsConfig.class)
+        .withUserConfiguration(TwoStoresConfig.class, TlPlainBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
-                  .hasStackTraceContaining("2 AtomicBatchProcessor beans");
+                  .hasStackTraceContaining("several read-model stores are transactional ('a', 'b')")
+                  .hasStackTraceContaining("declare readModelStore");
             });
   }
 
@@ -726,7 +799,7 @@ class ProjectionAutoConfigTest {
   @Test
   void theCoarsePropertyIsNoLongerRead() {
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, TlPlainBean.class)
+        .withUserConfiguration(MemoryStoreConfig.class, TlPlainBean.class)
         .withPropertyValues(
             "streamrune.projections.auto-discovery.enabled=true",
             "streamrune.projections.allow-at-least-once=true")
@@ -741,7 +814,7 @@ class ProjectionAutoConfigTest {
   @Test
   void scheduledTlPlain_fails_andScheduledAloBoots() {
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, SchedTlPlainBean.class)
+        .withUserConfiguration(MemoryStoreConfig.class, SchedTlPlainBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
@@ -752,38 +825,64 @@ class ProjectionAutoConfigTest {
                   .hasStackTraceContaining("does not write through the handed repository");
             });
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, ScheduledBean.class)
+        .withUserConfiguration(MemoryStoreConfig.class, ScheduledBean.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(ScheduledProjectionRunner.class);
-              assertThat(processorOf(ctx.getBean(ScheduledProjectionRunner.class)))
-                  .as("an at-least-once-only runner is not handed the bean because it exists")
+              assertThat(processorOf(ctx.getBean(ScheduledProjectionRunner.class), "sched"))
+                  .as("an at-least-once registration matching no store is not routed to it")
                   .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
             });
   }
 
   @Test
-  void scheduledTlBase_overTheProcessorBean_bootsAndUsesIt() {
+  void scheduledTlBase_overTheStoresRepository_isRoutedToTheStore() {
     runner
-        .withUserConfiguration(ProcessorRepoConfig.class, SchedTlOverProcessorConfig.class)
+        .withUserConfiguration(MemoryStoreConfig.class, SchedTlOverProcessorConfig.class)
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .run(
             ctx -> {
               assertThat(ctx).hasSingleBean(ScheduledProjectionRunner.class);
-              assertThat(processorOf(ctx.getBean(ScheduledProjectionRunner.class)))
+              var spr = ctx.getBean(ScheduledProjectionRunner.class);
+              assertThat(processorOf(spr, "sched_tl_base"))
                   .isSameAs(ctx.getBean(InMemoryProjectionRepository.class));
+              assertThat(targetNameOf(spr, "sched_tl_base")).isEqualTo("memory");
             });
   }
 
-  /** A runner's processor: not exposed, so read from its private field. */
-  private static Object processorOf(Object projectionRunner) {
-    return ReflectionTestUtils.getField(projectionRunner, "atomicProcessor");
+  /** The processor a registration commits through: not exposed, so read from the runner. */
+  private static Object processorOf(Object projectionRunner, String projection) {
+    return ReflectionTestUtils.invokeMethod(pairOf(projectionRunner, projection), "processor");
+  }
+
+  /** The name of the target a registration was routed to. */
+  private static String targetNameOf(Object projectionRunner, String projection) {
+    return ReflectionTestUtils.invokeMethod(pairOf(projectionRunner, projection), "targetName");
+  }
+
+  private static Object pairOf(Object projectionRunner, String projection) {
+    var pairs = (Map<?, ?>) ReflectionTestUtils.getField(projectionRunner, "checkpoints");
+    return pairs.get(ProjectionName.of(projection));
   }
 
   // === bean configurations ===
 
+  /**
+   * The event store's subscription checkpoint, as {@code StreamRuneAutoConfiguration} registers it
+   * without a DataSource: the {@code OffsetStore} bean and the nonatomic processor.
+   */
   @Configuration
+  static class SubscriptionCheckpointConfig {
+    @Bean(StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT)
+    CheckpointTarget subscriptionCheckpoint(OffsetStore offsetStore) {
+      return new CheckpointTarget(
+          "subscription_checkpoint", offsetStore, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    }
+  }
+
+  @Configuration
+  @org.springframework.context.annotation.Import(SubscriptionCheckpointConfig.class)
   static class InfraConfig {
     @Bean
     EventStore eventStore() {
@@ -907,6 +1006,7 @@ class ProjectionAutoConfigTest {
   }
 
   @Configuration
+  @org.springframework.context.annotation.Import(SubscriptionCheckpointConfig.class)
   static class NoDlqInfraConfig {
     @Bean
     EventStore eventStore() {
@@ -1047,17 +1147,9 @@ class ProjectionAutoConfigTest {
   record Ping(int n) implements org.streamrune.core.DomainEvent {}
 
   /**
-   * ONE face of an InMemoryProjectionRepository, as a separate object. The rule this encodes: every
-   * bean OBJECT that implements AtomicBatchProcessor is a candidate for {@code
-   * ObjectProvider<AtomicBatchProcessor>.orderedStream()} the moment it is instantiated — Spring's
-   * AbstractBeanFactory.isTypeMatch matches an existing singleton by {@code
-   * typeToMatch.isInstance(beanInstance)}, never by the @Bean method's declared return type — and
-   * discovery ({@code ctx.getBeansOfType(Projection.class)} in ProjectionAutoConfig) instantiates
-   * every projection bean, and so its repository, BEFORE the processor is resolved. A second
-   * InMemoryProjectionRepository declared as ProjectionRepository would therefore be a second
-   * processor candidate and fail the "2 AtomicBatchProcessor beans" check — never the identity
-   * check, never a clean boot. A second store that is not a processor must be an object that is not
-   * one.
+   * ONE face of an InMemoryProjectionRepository, as a separate object: a repository that belongs to
+   * no read-model store and is not itself an offset store, so it is not a second {@code
+   * OffsetStore} bean beside the subscription checkpoint's.
    */
   static final class RepositoryOnly implements ProjectionRepository {
     final InMemoryProjectionRepository delegate = new InMemoryProjectionRepository();
@@ -1115,32 +1207,6 @@ class ProjectionAutoConfigTest {
     // is exactly what the identity check must see.
   }
 
-  /**
-   * The OffsetStore face of the processor, as a separate object — the same rule as RepositoryOnly.
-   */
-  static final class OffsetStoreOnly implements OffsetStore {
-    private final InMemoryProjectionRepository delegate;
-
-    OffsetStoreOnly(InMemoryProjectionRepository delegate) {
-      this.delegate = delegate;
-    }
-
-    @Override
-    public GlobalOffset getLastOffset(ProjectionName n) {
-      return delegate.getLastOffset(n);
-    }
-
-    @Override
-    public void saveOffset(ProjectionName n, GlobalOffset o) {
-      delegate.saveOffset(n, o);
-    }
-
-    @Override
-    public void reset(ProjectionName n) {
-      delegate.reset(n);
-    }
-  }
-
   /** Captures what the INLINE path records; every other entry point keeps the no-op default. */
   static final class RecordingMetrics implements StreamRuneMetrics {
     final Map<String, ProjectionDeliveryMode> modes = new ConcurrentHashMap<>();
@@ -1152,18 +1218,60 @@ class ProjectionAutoConfigTest {
     }
   }
 
-  /** The single AtomicBatchProcessor candidate, declared with its concrete type. */
+  /**
+   * One read-model store, {@code memory}: an in-memory repository that is its own checkpoints and
+   * its own transactional, fencing processor.
+   */
   @Configuration
-  static class ProcessorRepoConfig {
+  static class MemoryStoreConfig {
     @Bean
     InMemoryProjectionRepository projectionRepository() {
       return new InMemoryProjectionRepository();
     }
+
+    @Bean
+    ReadModelStore memoryStore(InMemoryProjectionRepository projectionRepository) {
+      return ReadModelStore.of(
+          "memory", projectionRepository, projectionRepository, projectionRepository);
+    }
   }
 
-  /**
-   * A second repository that is NOT an AtomicBatchProcessor, and an at-least-once projection on it.
-   */
+  /** Two transactional stores, {@code a} and the one {@code test.second-store-name} names. */
+  @Configuration
+  static class TwoStoresConfig {
+    @Bean
+    ReadModelStore storeA() {
+      var repository = new InMemoryProjectionRepository();
+      return ReadModelStore.of("a", repository, repository, repository);
+    }
+
+    @Bean
+    ReadModelStore storeB(org.springframework.core.env.Environment env) {
+      var repository = new InMemoryProjectionRepository();
+      return ReadModelStore.of(
+          env.getProperty("test.second-store-name", "b"), repository, repository, repository);
+    }
+  }
+
+  /** An at-least-once projection that names the {@code memory} store and writes nowhere. */
+  @ProjectionConfig(
+      name = "declared",
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+      readModelStore = "memory")
+  static class DeclaredStoreBean implements Projection {
+    @Override
+    public void process(List<EventEnvelope> b) {}
+  }
+
+  @Configuration
+  static class AloOverStoreConfig {
+    @Bean
+    AloBaseBean aloBase(InMemoryProjectionRepository projectionRepository) {
+      return new AloBaseBean(projectionRepository);
+    }
+  }
+
+  /** A second repository that belongs to no store, and an at-least-once projection on it. */
   @Configuration
   static class SecondRepoConfig {
     @Bean
@@ -1203,11 +1311,10 @@ class ProjectionAutoConfigTest {
 
   /**
    * Real stores for a runner that must actually deliver: one event in an in-memory event store, and
-   * the processor's own checkpoint as the runner's OffsetStore — through an object that is not a
-   * processor (returning the processor itself under a second bean name would make it a second
-   * candidate, by the RepositoryOnly rule).
+   * an in-memory offset store of its own as the subscription checkpoint.
    */
   @Configuration
+  @org.springframework.context.annotation.Import(SubscriptionCheckpointConfig.class)
   static class EventsConfig {
     @Bean
     EventStore eventStore() {
@@ -1225,8 +1332,8 @@ class ProjectionAutoConfigTest {
     }
 
     @Bean
-    OffsetStore offsetStore(InMemoryProjectionRepository projectionRepository) {
-      return new OffsetStoreOnly(projectionRepository);
+    InMemoryOffsetStore offsetStore() {
+      return new InMemoryOffsetStore();
     }
 
     @Bean
@@ -1235,7 +1342,11 @@ class ProjectionAutoConfigTest {
     }
   }
 
-  /** One bean object, one candidate: a JDK proxy over a repository that is not itself a bean. */
+  /**
+   * A store whose repository and processor are one JDK proxy over a repository that is not itself a
+   * bean: routing matches the projection's write target to the store by {@code
+   * writeTargetIdentity()}, which the proxy forwards.
+   */
   @Configuration
   static class ProxiedProcessorConfig {
     private final InMemoryProjectionRepository real = new InMemoryProjectionRepository();
@@ -1245,6 +1356,12 @@ class ProjectionAutoConfigTest {
       var factory = new ProxyFactory(real);
       factory.setInterfaces(ProjectionRepository.class, AtomicBatchProcessor.class);
       return (AtomicBatchProcessor) factory.getProxy();
+    }
+
+    @Bean
+    ReadModelStore proxiedStore(AtomicBatchProcessor proxiedProcessor) {
+      return ReadModelStore.of(
+          "proxied", (ProjectionRepository) proxiedProcessor, real, proxiedProcessor);
     }
 
     @Bean
@@ -1258,25 +1375,6 @@ class ProjectionAutoConfigTest {
     @Bean
     SubscriptionLeadership leadership() {
       return mock(SubscriptionLeadership.class);
-    }
-  }
-
-  /** Two processor candidates, by the RepositoryOnly rule, and a projection that needs one. */
-  @Configuration
-  static class TwoProcessorsConfig {
-    @Bean
-    InMemoryProjectionRepository processorA() {
-      return new InMemoryProjectionRepository();
-    }
-
-    @Bean
-    InMemoryProjectionRepository processorB() {
-      return new InMemoryProjectionRepository();
-    }
-
-    @Bean
-    TlBaseBean tlBase() {
-      return new TlBaseBean(processorA());
     }
   }
 

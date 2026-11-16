@@ -20,22 +20,28 @@ import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresEventStoreFactory;
+import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelStore;
+import org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.test.InMemoryCryptoEngine;
 
 /**
  * Proves that the auto-configured {@link PostgresEventStoreFactory} receives the {@link
- * CryptoEngine} and {@link EventUpcaster} beans, and that a {@link JdbcProjectionRepository} bean
- * is wired into the projection runner as its atomic batch processor when a registration declares
- * TRANSACTIONAL_LOCAL — and only then.
+ * CryptoEngine} and {@link EventUpcaster} beans, that a {@code DataSource} brings the default
+ * read-model store and the Postgres subscription checkpoint, and that the projection runner routes
+ * a TRANSACTIONAL_LOCAL registration to the store and an at-least-once one with no write target to
+ * the subscription checkpoint.
  */
 class EventStoreWiringAutoConfigurationTest {
 
@@ -129,9 +135,81 @@ class EventStoreWiringAutoConfigurationTest {
             });
   }
 
+  /**
+   * The default store is declared, lazily — creating it reads the server version, which the mock
+   * DataSource cannot answer — and the subscription checkpoint pairs the auto-configured {@code
+   * PostgresOffsetStore} with the fencing Postgres processor over the same table.
+   */
   @Test
-  void jdbcProjectionRepositoryIsAutoConfiguredWithDataSource() {
-    runner.run(ctx -> assertThat(ctx).hasSingleBean(JdbcProjectionRepository.class));
+  void aDataSourceBringsTheLazyDefaultStoreAndThePostgresSubscriptionCheckpoint() {
+    runner.run(
+        ctx -> {
+          assertThat(ctx).hasNotFailed();
+          var store = ctx.getBeanFactory().getBeanDefinition("postgres");
+          assertThat(store.isLazyInit()).as("the default store is created on first use").isTrue();
+          assertThat(ctx.getBeanFactory().getType("postgres"))
+              .isEqualTo(PostgresReadModelStore.class);
+          var checkpoint =
+              ctx.getBean(
+                  StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT, CheckpointTarget.class);
+          assertThat(checkpoint.name()).isEqualTo("subscription_checkpoint");
+          assertThat(checkpoint.checkpoints()).isSameAs(ctx.getBean(PostgresOffsetStore.class));
+          assertThat(checkpoint.processor())
+              .isInstanceOf(PostgresSubscriptionCheckpointProcessor.class);
+          assertThat(checkpoint.processor().fencesCheckpoint()).isTrue();
+        });
+  }
+
+  /**
+   * An offset store the application defines is never paired with the Postgres processor, which
+   * saves into its own table: the subscription checkpoint saves into that offset store instead.
+   */
+  @Test
+  void anApplicationOffsetStore_isPairedWithTheNonatomicProcessor() {
+    var offsetStore = mock(OffsetStore.class);
+    runner
+        .withBean(OffsetStore.class, () -> offsetStore)
+        .run(
+            ctx -> {
+              var checkpoint =
+                  ctx.getBean(
+                      StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT, CheckpointTarget.class);
+              assertThat(checkpoint.checkpoints()).isSameAs(offsetStore);
+              assertThat(checkpoint.processor())
+                  .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
+            });
+  }
+
+  @Test
+  void withoutADataSource_theSubscriptionCheckpointIsTheOffsetStoreBeanAndTheNonatomicProcessor() {
+    var offsetStore = mock(OffsetStore.class);
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .withBean(OffsetStore.class, () -> offsetStore)
+        .run(
+            ctx -> {
+              assertThat(ctx).doesNotHaveBean(ReadModelStore.class);
+              assertThat(ctx).doesNotHaveBean(ProjectionRepository.class);
+              var checkpoint =
+                  ctx.getBean(
+                      StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT, CheckpointTarget.class);
+              assertThat(checkpoint.checkpoints()).isSameAs(offsetStore);
+              assertThat(checkpoint.processor())
+                  .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
+            });
+  }
+
+  @Test
+  void withNeitherADataSourceNorAnOffsetStore_thereIsNoSubscriptionCheckpoint() {
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
+        .run(
+            ctx ->
+                assertThat(ctx.getBeanProvider(CheckpointTarget.class).getIfAvailable()).isNull());
   }
 
   // ── the advertised CommandInbox override must not become a runtime trap ─────────────
@@ -190,13 +268,55 @@ class EventStoreWiringAutoConfigurationTest {
 
   @Test
   void userDefinedProjectionRepositoryBacksOffAutoConfiguredOne() {
+    var repository = mock(ProjectionRepository.class);
     runner
-        .withBean(ProjectionRepository.class, () -> mock(ProjectionRepository.class))
-        .run(ctx -> assertThat(ctx).doesNotHaveBean(JdbcProjectionRepository.class));
+        .withBean(ProjectionRepository.class, () -> repository)
+        .run(
+            ctx -> {
+              assertThat(ctx).doesNotHaveBean("streamRuneProjectionRepository");
+              assertThat(ctx.getBean(ProjectionRepository.class)).isSameAs(repository);
+            });
   }
 
+  /**
+   * Any store the application defines replaces the default one. Without a store named {@code
+   * postgres} there is no default repository to inject, and asking for one says so.
+   */
   @Test
-  void jdbcProjectionRepositoryIsWiredAsAtomicBatchProcessorOnProjectionRunner() {
+  void userDefinedReadModelStoreBacksOffTheDefaultStore() {
+    var repository = new JdbcProjectionRepository(mock(DataSource.class));
+    runner
+        .withBean(
+            ReadModelStore.class,
+            () -> ReadModelStore.of("search", repository, mock(OffsetStore.class), repository))
+        .run(
+            ctx -> {
+              assertThat(ctx).doesNotHaveBean("postgres");
+              assertThat(ctx.getBean(ReadModelStore.class).name()).isEqualTo("search");
+              org.assertj.core.api.Assertions.assertThatThrownBy(
+                      () -> ctx.getBean(ProjectionRepository.class))
+                  .hasStackTraceContaining("No read-model store is named 'postgres'")
+                  .hasStackTraceContaining("'search'");
+            });
+  }
+
+  /** The default store's repository is the injectable ProjectionRepository. */
+  @Test
+  void theProjectionRepositoryBeanIsTheDefaultStoresRepository() {
+    var repository = new JdbcProjectionRepository(mock(DataSource.class));
+    runner
+        .withBean(
+            "postgres",
+            ReadModelStore.class,
+            () -> ReadModelStore.of("postgres", repository, mock(OffsetStore.class), repository))
+        .run(ctx -> assertThat(ctx.getBean(ProjectionRepository.class)).isSameAs(repository));
+  }
+
+  /**
+   * A TRANSACTIONAL_LOCAL registration with no write target goes to the one transactional store.
+   */
+  @Test
+  void aTransactionalRegistrationIsRoutedToTheTransactionalStore() {
     var repository = new JdbcProjectionRepository(mock(DataSource.class));
     projectionRunnerOver(repository)
         .withBean(
@@ -204,18 +324,17 @@ class EventStoreWiringAutoConfigurationTest {
         .run(
             ctx -> {
               var projectionRunner = ctx.getBean(MultiProjectionRunner.class);
-              assertThat(ReflectionTestUtils.getField(projectionRunner, "atomicProcessor"))
+              assertThat(processorOf(projectionRunner, "wiring_transactional"))
                   .isSameAs(repository);
             });
   }
 
   /**
-   * The bean's presence selects nothing on its own: a runner whose registrations are all
-   * AT_LEAST_ONCE_IDEMPOTENT, without leadership, runs on the nonatomic processor even when a
-   * JdbcProjectionRepository bean exists.
+   * The store's presence routes nothing on its own: an AT_LEAST_ONCE_IDEMPOTENT registration with
+   * no write target goes to the subscription checkpoint even when a store exists.
    */
   @Test
-  void jdbcProjectionRepositoryIsNotWiredIntoAnAtLeastOnceOnlyRunner() {
+  void anAtLeastOnceRegistrationWithNoWriteTargetIsNotRoutedToTheStore() {
     var repository = new JdbcProjectionRepository(mock(DataSource.class));
     projectionRunnerOver(repository)
         .withBean(
@@ -225,9 +344,15 @@ class EventStoreWiringAutoConfigurationTest {
         .run(
             ctx -> {
               var projectionRunner = ctx.getBean(MultiProjectionRunner.class);
-              assertThat(ReflectionTestUtils.getField(projectionRunner, "atomicProcessor"))
+              assertThat(processorOf(projectionRunner, "lifecycle_continuous"))
                   .isSameAs(AtomicBatchProcessor.nonAtomicAtLeastOnce());
             });
+  }
+
+  private static Object processorOf(MultiProjectionRunner projectionRunner, String projection) {
+    var pairs = (java.util.Map<?, ?>) ReflectionTestUtils.getField(projectionRunner, "checkpoints");
+    return ReflectionTestUtils.invokeMethod(
+        pairs.get(org.streamrune.core.types.ProjectionName.of(projection)), "processor");
   }
 
   private static ApplicationContextRunner projectionRunnerOver(
@@ -237,8 +362,13 @@ class EventStoreWiringAutoConfigurationTest {
         .withConfiguration(AutoConfigurations.of(ProjectionAutoConfig.class))
         .withPropertyValues("streamrune.projections.auto-discovery.enabled=true")
         .withBean(EventStore.class, () -> mock(EventStore.class))
-        .withBean(OffsetStore.class, () -> mock(OffsetStore.class))
-        .withBean(JdbcProjectionRepository.class, () -> repository);
+        .withBean(
+            StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT,
+            CheckpointTarget.class,
+            SpringTestMocks::subscriptionCheckpoint)
+        .withBean(
+            ReadModelStore.class,
+            () -> ReadModelStore.of("postgres", repository, mock(OffsetStore.class), repository));
   }
 
   /** Writes through the handed repository (a no-op here), so TRANSACTIONAL_LOCAL is accepted. */

@@ -38,6 +38,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param validationEnabled whether command validation interceptor is enabled
  * @param startupLog whether to log StreamRune banner at startup
  * @param eventStore event-store configuration
+ * @param readModel configuration of the default read-model store
  * @param metadata event-metadata configuration (baggage allowlisting)
  * @param security security configuration (authorization-identity source)
  * @param sse Server-Sent Events endpoint configuration
@@ -70,6 +71,7 @@ public record StreamRuneProperties(
     @DefaultValue("true") boolean validationEnabled,
     @DefaultValue("true") boolean startupLog,
     @DefaultValue EventStore eventStore,
+    @DefaultValue ReadModel readModel,
     @DefaultValue Metadata metadata,
     @DefaultValue Security security,
     @DefaultValue Sse sse,
@@ -246,6 +248,35 @@ public record StreamRuneProperties(
    *     (Flyway)
    */
   public record Schema(@DefaultValue("true") boolean autoInitialize) {}
+
+  /**
+   * The default read-model store, {@code postgres}: the {@code PostgresReadModelStore} the
+   * integration registers on the application's {@code DataSource}.
+   *
+   * @param schema its schema management configuration
+   */
+  public record ReadModel(@DefaultValue ReadModelSchema schema) {
+
+    /**
+     * Whether the default read-model store applies the read-model migration series ({@code
+     * db/readmodel-migration}) at startup: {@code streamrune.read-model.schema.auto-initialize}
+     * when it is set, otherwise {@code streamrune.event-store.schema.auto-initialize}.
+     *
+     * @param eventStore the event-store configuration whose switch is the default
+     * @return whether the read-model series is applied
+     */
+    public boolean autoInitialize(EventStore eventStore) {
+      return schema.autoInitialize() != null
+          ? schema.autoInitialize()
+          : eventStore.schema().autoInitialize();
+    }
+  }
+
+  /**
+   * @param autoInitialize whether the default read-model store creates / migrates its schema on
+   *     startup (Flyway); unset, it follows {@code streamrune.event-store.schema.auto-initialize}
+   */
+  public record ReadModelSchema(Boolean autoInitialize) {}
 
   /**
    * @param baggageAllowlist the OpenTelemetry baggage keys (the framework allows none by default)
