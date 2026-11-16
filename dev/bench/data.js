@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794730985430,
+  "lastUpdate": 1794817802843,
   "repoUrl": "https://github.com/StreamRune/streamrune",
   "entries": {
     "StreamRune JMH": [
@@ -1092,6 +1092,214 @@ window.BENCHMARK_DATA = {
           {
             "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
             "value": 66.11093099836407,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Martin Bednář",
+            "username": "xxBedy",
+            "email": "martin.bednar@streamrune.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "264a65c96bf9dd95b62820592b4a67a21ce7d101",
+          "message": "fix(saga): a hold keeps the poison's dead-letter cause; a crash or a stale row cannot misplace a fault (#128)\n\n## What this fixes\n\nThree defects in how a saga records events in the saga dead-letter store.\n\n**A redelivery replaced the poison's cause.** When a correlated event's `evolve` (or another orchestrator method) throws, the runner records the event with the exception's class name and message and marks the saga `FAULTED`. The subscription delivers a page again whenever it retries it (a retry-later failure later in the page, a crash before the checkpoint, a handover). The poison event then met the `FAULTED` row it had faulted and was held, and the hold re-published over the poison's own entry: the store's upsert replaced the error type and message with `SagaSkippedWhileFaultedException` and a message saying the event was delivered while the saga was faulted. A held event delivered again refreshed its entry the same way.\n\n**A crash inside the poison handler did not converge.** The handler wrote the row's shield on its own, then the entry with the shield, then the fault write. A process that stopped after the first shield write or after the entry left the row shielded but `RUNNING`; the redelivery held the poison event behind the shield, so the saga stayed `RUNNING` until someone drained it, where a run without the crash ends `FAULTED`.\n\n**A hold decided on a stale row recorded an applied event.** A hold is decided on the row the delivery read. A drain running in another process could feed and discard the event, and clear the shield, between that read and the hold's write; the hold then recorded an event the row had applied, and the next drain evolved it a second time.\n\n## The change\n\n- `SagaDeadLetterStore.publishShieldedIfAbsent(entry)` returns a `HoldResult`. In one write against the owner row as the store sees it:\n  - when the row's `last_applied_offset` is at or above the event's offset, nothing is written and the result is `AlreadyApplied`;\n  - when an entry of the same saga type is stored at `(sagaId, eventOffset)`, it is kept exactly as stored, and the result is `Kept` with that entry;\n  - otherwise the entry and the shield are written and the result is `Written`.\n\n  PostgreSQL does it in one transaction: the upsert's conflict arm (`DO UPDATE … WHERE saga_type <> EXCLUDED.saga_type`), then the shield `UPDATE … RETURNING last_applied_offset`, rolled back when the event is applied. The in-memory store does it under its entries monitor. `SagaDeadLetterStoreContract` pins the rules for every store.\n- `SagaStore.loadRowFacts(sagaId, sagaType)` reads a row's status, shield and `last_applied_offset` without its state. The test kit's `InMemorySagaDeadLetterStore` reads only these facts, so it works over any saga store, `PostgresSagaStore` included: its hold, shield clear, retention and backlog count never bind the state to a class.\n- `SagaRunner`'s holds use it. They write no shield on their own; the entry and the shield are one write. A redelivery of an event already recorded, or of one the saga has applied, changes nothing, counts in no metric and logs at `DEBUG`. The poison path keeps `publishShielded` and its refresh, so a replay that still fails records the newest failure.\n- The poison handler writes no shield before its entry, so a crash before the entry write leaves nothing and the redelivery runs the event again.\n- A redelivery over a shielded live row whose kept entry was written by the poison handler (its error type is not one of the two hold types, which are one constant set) makes the fault write the crashed run did not make. It does so with one compare-and-swap at the version it read; if the CAS is lost, the event is routed again on the row that won. That way a drain in another process that applied the event first is never followed by a fault.\n\nCrash points of a correlated poison, each ending where the uninterrupted run ends (row `FAULTED`, entry with the poison's own class name and message):\n\n| The process stops | What is left | What the redelivery does |\n|---|---|---|\n| before the entry write | nothing | runs the event again, meets the poison, records it and faults the row |\n| after the entry write, before the fault write | entry, row shielded and `RUNNING` | holds the event, keeps the entry, makes the fault write |\n| after the fault write | entry, row `FAULTED` | keeps the entry, changes nothing |\n| after the next event's hold | entry, row `FAULTED`, the next event's entry | keeps both, changes nothing |\n\n## Tests\n\n- `SagaCorrelatedPoisonCrashPointTest` runs each crash point and compares the full end state with a run that does not crash. The page is delivered again until it completes, then twice more. It also checks that no shield is written on its own.\n- `SagaRunnerHoldTest` (both routes):\n  - a redelivered poison keeps its cause;\n  - a start-event poison is unchanged;\n  - a held event redelivered counts nothing;\n  - a drain's clear before the hold's write cannot strand the entry, with or without a crash after it;\n  - a kept entry of another saga type is not taken for this saga's poison;\n  - a redelivery after two lost fault writes faults the saga;\n  - the hold error types are exactly the two documented class names, and any other hold cause is refused.\n- `SagaDeadLetterReplayerTest`, two processes (two runners over one set of stores):\n  - an interrupted fault completed beside another process's drain never faults an applied event;\n  - a hold decided on a stale row beside another process's drain records nothing, and each event evolves once.\n- `SagaStoreContract` (in-memory and PostgreSQL) covers `loadRowFacts`. `SagaDeadLetterStoreContract` also runs against the in-memory dead-letter store over a `PostgresSagaStore`.\n- A runner test: a fault completion that loses its compare-and-swap to a writer that leaves the row live is routed again and faults the saga.\n- `SagaDeadLetterStoreContract` (in-memory and PostgreSQL) covers writing, keeping, refreshing by the poison path, replacing another type's entry, an absent owner row, and an applied event.\n- PostgreSQL-specific tests:\n  - the hold's entry and shield are one transaction;\n  - the hold fails at the saga-row write bound behind a held row;\n  - the hold's shield write is among the bounded statements;\n  - two-connection interleavings: a hold queued behind an uncommitted poison keeps the poison, and a hold queued behind an uncommitted apply records nothing.\n\nRemoving each change turns its tests red: the hold refreshing, the stand-alone shield, the fault completion off or reloading, the applied check off, the entry without its shield, the saga-type filter off, and the hold and shield split into two transactions on PostgreSQL.\n\n## API\n\n`SagaDeadLetterStore` gains the abstract method `publishShieldedIfAbsent` and the sealed `HoldResult`; `SagaStore` gains the abstract method `loadRowFacts` and the record `RowFacts`. They are implemented by `PostgresSagaDeadLetterStore`, `InMemorySagaDeadLetterStore` and the test kit's `ForwardingSagaDeadLetterStore`, and the `.api` baselines are updated. The saga guide, the metric javadoc and table, and the release notes describe the behaviour.\n\n\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-15T20:32:52Z",
+          "url": "https://github.com/StreamRune/streamrune/commit/264a65c96bf9dd95b62820592b4a67a21ce7d101"
+        },
+        "date": 1794817802380,
+        "tool": "jmh",
+        "benches": [
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"0\"} )",
+            "value": 128.761238261364,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 192.60616142763573,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 201.29921154423263,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapPublishedEvent",
+            "value": 0.22239835498705704,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"10\"} )",
+            "value": 21.514863744525574,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"100\"} )",
+            "value": 206.286939242788,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.commandBusThroughput",
+            "value": 17.8491200376947,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"1\"} )",
+            "value": 16.49193315868712,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"10\"} )",
+            "value": 58.069881472452195,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"100\"} )",
+            "value": 376.68008427821394,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"1\"} )",
+            "value": 1.2255604688940807,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"10\"} )",
+            "value": 10.423335387098975,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"100\"} )",
+            "value": 102.88360672071906,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"1\"} )",
+            "value": 6.001582091396301,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"10\"} )",
+            "value": 6.37999809369295,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"100\"} )",
+            "value": 6.102215135394614,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"NOOP\"} )",
+            "value": 17.75197139926926,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_OFF\"} )",
+            "value": 20.364860039561187,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_ON\"} )",
+            "value": 21.00535299501546,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"1\"} )",
+            "value": 1027.460066696763,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"10\"} )",
+            "value": 1276.1728483642105,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"1\"} )",
+            "value": 1033.8812826905726,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"10\"} )",
+            "value": 1278.088342213206,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"10\"} )",
+            "value": 411.091308405236,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"100\"} )",
+            "value": 779.4870381204212,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 840.1474382705621,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 839.981895976556,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 7.20640997956149,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 31.884079228260724,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 11.057433170635807,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 54.28300693339405,
             "unit": "us/op",
             "extra": "iterations: 5\nforks: 2\nthreads: 1"
           }
