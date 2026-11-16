@@ -644,4 +644,36 @@ class ProjectionStoreRoutingTest {
         .contains("'{}'")
         .contains("AT_LEAST_ONCE_IDEMPOTENT inline");
   }
+
+  // ── the default store's repository ──────────────────────────────────────────────
+
+  @Test
+  void defaultRepository_isTheRepositoryOfTheStoreWithThatName() {
+    ReadModelStore search = fullStore("search");
+    ReadModelStore postgres = fullStore("postgres");
+
+    assertThat(ProjectionStoreRouting.defaultRepository(List.of(search, postgres), "postgres"))
+        .isSameAs(postgres.repository());
+  }
+
+  @Test
+  void defaultRepository_withoutAStoreOfThatName_failsNamingTheStoresAndTheFix() {
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.defaultRepository(
+                    List.of(fullStore("search"), fullStore("memory")), "postgres"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(
+            "No read-model store is named 'postgres' (stores: 'search', 'memory')")
+        .hasMessageContaining("Define a ProjectionRepository bean, or name one store 'postgres'");
+  }
+
+  @Test
+  void defaultRepository_withNoStore_failsSayingNoneIsDefined() {
+    assertThatThrownBy(() -> ProjectionStoreRouting.defaultRepository(List.of(), "postgres"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(
+            "No read-model store is named 'postgres' (no read-model store is defined)")
+        .hasMessageContaining("Define a ProjectionRepository bean, or name one store 'postgres'");
+  }
 }
