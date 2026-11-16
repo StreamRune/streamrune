@@ -45,9 +45,10 @@ import org.streamrune.test.InMemoryProjectionRepository;
  * <p>The wiring under test is the one that produces the repeat: the processor (an {@link
  * InMemoryProjectionRepository}, which keeps its own checkpoint) and the runner's {@link
  * OffsetStore} (a separate {@link InMemoryOffsetStore}) are two stores, as a {@code
- * JdbcProjectionRepository} and a {@code PostgresOffsetStore} over two {@code DataSource}s are. The
- * first batch commits in the processor's store; the runner reads its own store, still at the start,
- * reads the same batch again, and the processor rejects it as an overlap.
+ * JdbcProjectionRepository} (which checkpoints in {@code readmodel_checkpoint}) and a {@code
+ * PostgresOffsetStore} (which reads {@code subscription_checkpoint}) are. The first batch commits
+ * in the processor's store; the runner reads its own store, still at the start, reads the same
+ * batch again, and the processor rejects it as an overlap.
  */
 class ProjectionCommitRejectionEscalationTest {
 
@@ -136,7 +137,7 @@ class ProjectionCommitRejectionEscalationTest {
     assertThat(runner.lastError())
         .contains("rejected two commits in a row")
         .contains("stayed at 0")
-        .contains("not over the same DataSource")
+        .contains("not over the same checkpoint table")
         .contains("two runners are registered under this projection name");
     assertThat(health.overallStatus()).isEqualTo(SubscriptionHealth.Status.DOWN);
     assertThat(projection.batches).as("the batch was applied once, never twice").hasValue(1);
@@ -255,7 +256,7 @@ class ProjectionCommitRejectionEscalationTest {
       assertThat(runner.status().get(ProjectionName.of("orders")).lastError())
           .contains("rejected two commits in a row")
           .contains("stayed at 0")
-          .contains("not over the same DataSource")
+          .contains("not over the same checkpoint table")
           .contains("two runners are registered under this projection name");
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
@@ -266,6 +267,29 @@ class ProjectionCommitRejectionEscalationTest {
     } finally {
       runner.stop();
     }
+  }
+
+  /**
+   * The halt names the remedy: the matching checkpoint pairs, one checkpoint table, never the
+   * {@code JdbcProjectionRepository} + {@code PostgresOffsetStore} pairing that causes the halt.
+   */
+  @Test
+  void theHaltMessageNamesTheMatchingCheckpointPairs() {
+    var halt =
+        new ProjectionCheckpointDivergedException(
+            "orders", 7L, new ProjectionCommitFencedException(Guard.OVERLAP, "overlap at 7"));
+
+    assertThat(halt.getMessage())
+        .contains("not over the same checkpoint table")
+        .contains(
+            "JdbcProjectionRepository with PostgresReadModelCheckpoints"
+                + " (PostgresReadModelStore#checkpointTarget())")
+        .contains(
+            "PostgresSubscriptionCheckpointProcessor with PostgresOffsetStore"
+                + " (PostgresOffsetStore#subscriptionCheckpoint())")
+        .contains("Last rejection: overlap at 7")
+        .doesNotContain("subscription_checkpoint table")
+        .doesNotContain("OffsetStore over the processor's DataSource");
   }
 
   @Test
