@@ -557,7 +557,7 @@ database's server version.
   borrows from your Agroal pool; Quarkus ships no HikariCP metadata; without
   it `new HikariDataSource(config)` copies an empty configuration and startup fails with *Failed to
   initialize pool: null*), and with the Flyway migration scripts schema auto-initialization reads by
-  name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`, Flyway's `version.txt`) as
+  name (`db/streamrune-migration/*.sql`, `db/readmodel-migration/*.sql`, `db/crypto-migration/*.sql`, Flyway's `version.txt`) as
   resources. A second directory, `META-INF/native-image/org.streamrune/streamrune-quarkus-flyway`,
   holds what Flyway reaches by name when it initializes the schema; a Quarkus build registers no
   `ServiceLoader` provider on its own and does not apply the GraalVM reachability-metadata

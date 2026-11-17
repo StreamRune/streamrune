@@ -382,7 +382,7 @@ license.
 
 - **Every projection registration declares a `ProjectionDeliveryMode`; there is no default.**
   - `TRANSACTIONAL_LOCAL` — the read-model write and the checkpoint commit in one transaction. Needs
-    a processor with `supportsFencing()` and a projection that writes through the repository handed
+    a processor with `transactional()` and `fencesCheckpoint()` and a projection that writes through the repository handed
     to `process(batch, repository)`.
   - `AT_LEAST_ONCE_IDEMPOTENT` — the write and the checkpoint commit separately; the projection is
     handed `null` as its repository under every processor and must dedup, version-guard or upsert.
@@ -413,7 +413,7 @@ license.
 - `BaseProjection` provides `save()`, `findById()` and `delete()` helpers that use the batch's handed
   repository and the captured one otherwise; inside `process` a projection writes only through them.
 - `ProjectionFencingPolicy`: a leadership-aware runner refuses to build real (multi-replica)
-  `SubscriptionLeadership` over a processor whose `supportsFencing()` is `false`.
+  `SubscriptionLeadership` over a processor whose `fencesCheckpoint()` is `false`.
 - Runners: `ContinuousProjectionRunner` / `MultiProjectionRunner` (polling the global stream, one
   virtual thread per registration), `ScheduledProjectionRunner` (cron-triggered drain,
   `CronExpression`), `PollingProjectionRunner`; `ProjectionRunner.reset(name)` rewinds the offset

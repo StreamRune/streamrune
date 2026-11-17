@@ -423,7 +423,7 @@ a framework enum held there failed the build (*An object of type
 it that way.
 
 It also ships `resource-config.json`, which registers the Flyway migration scripts schema
-auto-initialization reads by name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`)
+auto-initialization reads by name (`db/streamrune-migration/*.sql`, `db/readmodel-migration/*.sql`, `db/crypto-migration/*.sql`)
 and Flyway's own `version.txt` as resources; without them the image cannot initialize the schema.
 `META-INF/native-image/org.streamrune/streamrune-micronaut-flyway/reachability-metadata.json`
 registers what Flyway reaches reflectively while it does: the no-argument constructor and declared
