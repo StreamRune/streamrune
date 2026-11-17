@@ -88,6 +88,34 @@ record RegistrationCheckpoints(
     return new RegistrationCheckpoints(defaultCheckpoints, defaultProcessor, null);
   }
 
+  /**
+   * The pair of a {@link CheckpointTarget} handed to a single-registration runner's {@code run} or
+   * {@code reset}.
+   *
+   * @param target the target, or {@code null}
+   * @param runnerName the runner type, for the message
+   * @param projectionName the projection, for the message
+   * @param ownPairCall the call that uses the runner's own pair instead, for the message
+   * @return the target's pair, named after it
+   * @throws IllegalArgumentException if {@code target} is {@code null}
+   */
+  static RegistrationCheckpoints ofTarget(
+      CheckpointTarget target,
+      String runnerName,
+      ProjectionName projectionName,
+      String ownPairCall) {
+    if (target == null) {
+      throw new IllegalArgumentException(
+          runnerName
+              + " projection '"
+              + LogSanitizer.sanitizeForLog(projectionName.value())
+              + "': target is required; call "
+              + ownPairCall
+              + " to use the runner's own pair");
+    }
+    return new RegistrationCheckpoints(target.checkpoints(), target.processor(), target.name());
+  }
+
   /** The processor's label for logs and messages, naming the target when there is one. */
   String processorLabel() {
     return ProjectionDeliveryPolicy.processorLabel(processor, targetName);

@@ -42,8 +42,8 @@ import org.streamrune.core.types.ProjectionName;
  * CheckpointTarget)} runs a projection on a {@link CheckpointTarget} instead of the runner's own
  * pair: its position is read from the target's checkpoints and every batch commits through the
  * target's processor, which is also the processor its mode is checked against. The runner's own
- * offset store is not read for it. {@link #reset(ProjectionName)} rewinds a projection where its
- * last run read it: the target's checkpoints after a routed run, otherwise the runner's own.
+ * offset store is not read for it. {@link #reset(ProjectionName, CheckpointTarget)} rewinds a
+ * projection's checkpoint in a target, whether or not it has run here.
  *
  * <p>Under the nonatomic processor a checkpoint save that fails after the batch was applied ({@link
  * ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner backs off (100 ms
@@ -158,19 +158,12 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       Projection projection,
       ProjectionDeliveryMode mode,
       CheckpointTarget target) {
-    if (target == null) {
-      throw new IllegalArgumentException(
-          RUNNER_NAME
-              + " projection '"
-              + LogSanitizer.sanitizeForLog(projectionName.value())
-              + "': target is required; call run(name, projection, mode) to use the runner's own"
-              + " pair");
-    }
     run(
         projectionName,
         projection,
         mode,
-        new RegistrationCheckpoints(target.checkpoints(), target.processor(), target.name()));
+        RegistrationCheckpoints.ofTarget(
+            target, RUNNER_NAME, projectionName, "run(name, projection, mode)"));
   }
 
   private void run(
@@ -327,11 +320,15 @@ public final class PollingProjectionRunner implements ProjectionRunner {
   }
 
   /**
-   * Rewinds the projection's checkpoint where its last run read it: the target's checkpoints after
-   * a {@link #run(ProjectionName, Projection, ProjectionDeliveryMode, CheckpointTarget) routed
-   * run}, otherwise the runner's own offset store. The rewind uses the unguarded {@link
-   * OffsetStore#reset} ({@code saveOffset(initial())} would be no-op'd by the monotonic guard) and
-   * is read back, so a reset that returns without rewinding fails loudly.
+   * Rewinds the projection's checkpoint where its last run on this instance read it: the target's
+   * checkpoints after a {@link #run(ProjectionName, Projection, ProjectionDeliveryMode,
+   * CheckpointTarget) routed run}, otherwise the runner's own offset store. It knows only the
+   * projections that have run on this instance: a routed projection that has not run here yet (a
+   * fresh process rebuilding before its first run) would be rewound in the runner's own offset
+   * store, where it has no checkpoint — reset it with {@link #reset(ProjectionName,
+   * CheckpointTarget)}. The rewind uses the unguarded {@link OffsetStore#reset} ({@code
+   * saveOffset(initial())} would be no-op'd by the monotonic guard) and is read back, so a reset
+   * that returns without rewinding fails loudly.
    *
    * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
    *     the reset
@@ -339,5 +336,20 @@ public final class PollingProjectionRunner implements ProjectionRunner {
   @Override
   public void reset(ProjectionName projectionName) {
     lastRunPairs.getOrDefault(projectionName, ownPair).reset(projectionName);
+  }
+
+  /**
+   * Rewinds the projection's checkpoint in {@code target}'s checkpoints, whether or not it has run
+   * on this instance; the runner's own offset store is not touched. Unguarded and read back like
+   * {@link #reset(ProjectionName)}.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}
+   * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
+   *     the reset
+   */
+  @Override
+  public void reset(ProjectionName projectionName, CheckpointTarget target) {
+    RegistrationCheckpoints.ofTarget(target, RUNNER_NAME, projectionName, "reset(name)")
+        .reset(projectionName);
   }
 }

@@ -66,4 +66,26 @@ class ProjectionRunnerTest {
         refused.getMessage());
     assertEquals(List.of(), runner.calls, "a refused run must not fall back to the runner's pair");
   }
+
+  @Test
+  void resetOnATargetRefusesByDefault_namingTheRunnerAndTheWayOut() {
+    var runner = new FixedPairRunner();
+    var target =
+        new CheckpointTarget("search", CHECKPOINTS, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+
+    var refused =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> runner.reset(ProjectionName.of("orders"), target));
+
+    assertEquals(
+        FixedPairRunner.class.getName()
+            + " cannot reset projection 'orders' on checkpoint target 'search': it rewinds only the"
+            + " checkpoints it was built with. Use a runner that routes a registration to its"
+            + " target (ContinuousProjectionRunner, PollingProjectionRunner), or rewind the"
+            + " target's checkpoints with OffsetStore.reset(name).",
+        refused.getMessage());
+    assertEquals(
+        List.of(), runner.calls, "a refused reset must not rewind the runner's own checkpoints");
+  }
 }

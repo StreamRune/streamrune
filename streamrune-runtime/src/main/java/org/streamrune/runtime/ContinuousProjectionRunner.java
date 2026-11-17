@@ -255,16 +255,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       Projection projection,
       ProjectionDeliveryMode mode,
       CheckpointTarget target) {
-    if (target == null) {
-      throw new IllegalArgumentException(
-          RUNNER_NAME
-              + " projection '"
-              + LogSanitizer.sanitizeForLog(projectionName.value())
-              + "': target is required; call run(name, projection, mode) to use the runner's own"
-              + " pair");
-    }
     var routed =
-        new RegistrationCheckpoints(target.checkpoints(), target.processor(), target.name());
+        RegistrationCheckpoints.ofTarget(
+            target, RUNNER_NAME, projectionName, "run(name, projection, mode)");
     // The build-time fencing check covered only the runner's own processor.
     ProjectionFencingPolicy.requireFencingCapable(
         leadership, routed.processor(), RUNNER_NAME, projectionName.value(), routed.targetName());
@@ -320,6 +313,9 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // Only now, with the runner claimed: a run refused as already running must not repoint the
       // pair the running one reads and commits through.
       pair = runPair;
+      // A rejection the previous run recorded was against its own pair's checkpoint; counting it
+      // here could take this run's first rejection for a repeat and halt it.
+      commitRejections.reset();
       logDeliveryMode(projectionName, mode, verdict);
       if (claimed == Phase.STOPPING) {
         // The held stop's run processes nothing, so it keeps the previous run's failure: state()
@@ -2107,11 +2103,14 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
   /**
    * Rewinds the projection's checkpoint where the runner reads it: the checkpoints of the last
-   * run's pair — its {@link CheckpointTarget} when it ran on one — or, before any run, the runner's
-   * own offset store. The rewind uses the unguarded {@link OffsetStore#reset} ({@code
-   * saveOffset(initial())} would be no-op'd by the monotonic guard) and is read back, so a reset
-   * that returns without rewinding fails loudly instead of letting a rebuild quietly resume from
-   * the old offset.
+   * run's pair on this instance — its {@link CheckpointTarget} when it ran on one — or, before any
+   * run, the runner's own offset store. It knows only what has run on this instance: a routed
+   * projection that has not run here yet (a fresh process rebuilding before its first run) would be
+   * rewound in the runner's own offset store, where it has no checkpoint — reset it with {@link
+   * #reset(ProjectionName, CheckpointTarget)}. The rewind uses the unguarded {@link
+   * OffsetStore#reset} ({@code saveOffset(initial())} would be no-op'd by the monotonic guard) and
+   * is read back, so a reset that returns without rewinding fails loudly instead of letting a
+   * rebuild quietly resume from the old offset.
    *
    * @throws IllegalStateException if the runner has no pair yet (built without one and never run),
    *     or the checkpoint is not at {@link GlobalOffset#initial()} after the reset
@@ -2125,10 +2124,26 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
               + " cannot reset projection '"
               + LogSanitizer.sanitizeForLog(projectionName.value())
               + "': it was built without offsetStore and atomicProcessor and has not run on a"
-              + " CheckpointTarget yet, so it does not know where the checkpoint lives. Reset the"
-              + " target's checkpoints directly.");
+              + " CheckpointTarget yet, so it does not know where the checkpoint lives. Call"
+              + " reset(name, target).");
     }
     current.reset(projectionName);
+  }
+
+  /**
+   * Rewinds the projection's checkpoint in {@code target}'s checkpoints, whether or not it has run
+   * on this instance; the runner's own offset store and the pair of its last run are not touched.
+   * Unguarded and read back like {@link #reset(ProjectionName)}, and like it meant for a projection
+   * that is not running.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}
+   * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
+   *     the reset
+   */
+  @Override
+  public void reset(ProjectionName projectionName, CheckpointTarget target) {
+    RegistrationCheckpoints.ofTarget(target, RUNNER_NAME, projectionName, "reset(name)")
+        .reset(projectionName);
   }
 
   /**

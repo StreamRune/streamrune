@@ -144,6 +144,7 @@ public final class org.streamrune.runtime.ContinuousProjectionRunner implements 
   public void close()
   public void requestStop()
   public void reset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
@@ -410,6 +411,7 @@ public final class org.streamrune.runtime.PollingProjectionRunner implements org
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, int, int, org.streamrune.core.projection.AtomicBatchProcessor)
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, int, int, org.streamrune.core.projection.AtomicBatchProcessor, org.streamrune.core.StreamRuneMetrics)
   public void reset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 

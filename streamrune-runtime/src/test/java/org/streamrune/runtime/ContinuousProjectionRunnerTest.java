@@ -455,6 +455,35 @@ class ContinuousProjectionRunnerTest {
   }
 
   @Test
+  void resetWithATarget_beforeAnyRun_rewindsTheTargetsCheckpoints_notTheOwnStore() {
+    // The rebuild a fresh process does: reset, then run on the target. The reset must rewind the
+    // target, which this instance has never run on, and leave the runner's own store alone.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(own)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .build();
+    var targetCheckpoints = new InMemoryOffsetStore();
+    var name = ProjectionName.of("feed");
+    targetCheckpoints.saveOffset(name, GlobalOffset.of(5));
+
+    runner.reset(name, targetCheckpoints.subscriptionCheckpoint());
+
+    assertEquals(GlobalOffset.initial(), targetCheckpoints.getLastOffset(name));
+    assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> runner.reset(name, (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "ContinuousProjectionRunner projection 'feed': target is required; call reset(name) to use"
+            + " the runner's own pair",
+        refused.getMessage());
+  }
+
+  @Test
   void resetBeforeAnyRun_onARunnerBuiltWithoutAPair_refuses() {
     var runner = runnerWithoutAPair();
 

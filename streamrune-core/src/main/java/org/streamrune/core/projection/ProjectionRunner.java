@@ -75,7 +75,39 @@ public interface ProjectionRunner {
    * results: the running cycle may save a higher offset after the reset, undoing it. Reset while
    * the projection is not running.
    *
+   * <p>This rewinds the checkpoints the runner knows for the projection. A projection that runs on
+   * a {@link CheckpointTarget} keeps its checkpoint there: reset it with {@link
+   * #reset(ProjectionName, CheckpointTarget)}, which never depends on what this runner instance has
+   * run.
+   *
    * @param projectionName unique name of the projection to reset
    */
   void reset(ProjectionName projectionName);
+
+  /**
+   * Resets the projection's checkpoint in {@code target} to zero, so a {@link #run(ProjectionName,
+   * Projection, ProjectionDeliveryMode, CheckpointTarget) run on that target} replays from the
+   * beginning. Everything {@link #reset(ProjectionName)} says about what is left untouched and
+   * about resetting while running applies here too.
+   *
+   * <p>The default refuses with {@link UnsupportedOperationException}: a runner that only knows its
+   * own pair must not rewind that pair instead, leaving the target's checkpoint where it was.
+   *
+   * @param projectionName unique name of the projection to reset
+   * @param target the checkpoints the projection's position lives in; required
+   * @throws UnsupportedOperationException if this runner cannot route a projection to a target
+   */
+  default void reset(ProjectionName projectionName, CheckpointTarget target) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
+    Objects.requireNonNull(target, "target is required");
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " cannot reset projection '"
+            + LogSanitizer.sanitizeForLog(projectionName.value())
+            + "' on checkpoint target '"
+            + LogSanitizer.sanitizeForLog(target.name())
+            + "': it rewinds only the checkpoints it was built with. Use a runner that routes a"
+            + " registration to its target (ContinuousProjectionRunner, PollingProjectionRunner), or"
+            + " rewind the target's checkpoints with OffsetStore.reset(name).");
+  }
 }

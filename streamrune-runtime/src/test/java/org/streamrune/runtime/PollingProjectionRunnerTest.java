@@ -128,13 +128,42 @@ class PollingProjectionRunnerTest {
   }
 
   @Test
-  void resetOfAProjectionThatNeverRanOnATarget_rewindsTheOwnOffsetStore() {
+  void resetWithoutATarget_knowsOnlyWhatRanHere_soAProjectionNotRunHereRewindsTheOwnOffsetStore() {
+    // reset(name) knows a projection's target only once it has run on this instance; before that
+    // it rewinds the runner's own offset store. A routed projection is reset with
+    // reset(name, target) instead (next test).
     var name = ProjectionName.of("own");
     offsetStore.saveOffset(name, GlobalOffset.of(7));
 
     runner.reset(name);
 
     assertEquals(GlobalOffset.initial(), offsetStore.getLastOffset(name));
+  }
+
+  @Test
+  void resetWithATarget_beforeAnyRun_rewindsTheTargetsCheckpoints_notTheOwnStore() {
+    // The rebuild a fresh process does: reset, then run on the target. The reset must rewind the
+    // target, which this instance has never run on, and leave the runner's own store alone.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var fresh =
+        new PollingProjectionRunner(
+            eventStore, own, 100, 3, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    var targetCheckpoints = new InMemoryOffsetStore();
+    var name = ProjectionName.of("seen");
+    targetCheckpoints.saveOffset(name, GlobalOffset.of(5));
+
+    fresh.reset(name, targetCheckpoints.subscriptionCheckpoint());
+
+    assertEquals(GlobalOffset.initial(), targetCheckpoints.getLastOffset(name));
+    assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> fresh.reset(name, (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "PollingProjectionRunner projection 'seen': target is required; call reset(name) to use"
+            + " the runner's own pair",
+        refused.getMessage());
   }
 
   @Test
