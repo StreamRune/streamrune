@@ -179,8 +179,9 @@ write anything. They apply the event-store series only. Read models kept in Post
 series of their own (`db/readmodel-migration`, with `readmodel_checkpoint`, where those projections
 keep their checkpoints): `PostgresReadModelStore.create("postgres", dataSource,
 JdbcProjectionRepository.createObjectMapper(null), true, true)` applies and validates it and returns
-the read-model store (`new PostgresEventStoreFactory(...).createReadModelStore()` does the same under
-the factory's settings).
+the read-model store. `new PostgresEventStoreFactory(...).createReadModelStore()` builds the same
+store with the factory's crypto engine; it applies the series when the factory's
+`autoInitializeSchema` is on and always validates it, whatever `validateSchema` says.
 
 For testing, use the in-memory store. It needs no database, but it stores events the way
 PostgreSQL does — as JSON, read back through the same registry — so an event type you forgot to

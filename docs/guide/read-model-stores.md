@@ -189,10 +189,14 @@ class SearchStoreConfig {
   @ConfigurationProperties("spring.datasource")
   DataSourceProperties primaryDataSourceProperties() { return new DataSourceProperties(); }
 
+  // .type(HikariDataSource.class) + @ConfigurationProperties binds spring.datasource.hikari.*
+  // (pool size, timeouts, connection-init-sql) onto the pool, as Boot's own auto-configuration does.
   @Bean
   @Primary
-  DataSource dataSource(@Qualifier("primaryDataSourceProperties") DataSourceProperties props) {
-    return props.initializeDataSourceBuilder().build();
+  @ConfigurationProperties("spring.datasource.hikari")
+  HikariDataSource dataSource(
+      @Qualifier("primaryDataSourceProperties") DataSourceProperties props) {
+    return props.initializeDataSourceBuilder().type(HikariDataSource.class).build();
   }
 
   @Bean
@@ -200,8 +204,10 @@ class SearchStoreConfig {
   DataSourceProperties searchDataSourceProperties() { return new DataSourceProperties(); }
 
   @Bean
-  DataSource searchDataSource(@Qualifier("searchDataSourceProperties") DataSourceProperties props) {
-    return props.initializeDataSourceBuilder().build();
+  @ConfigurationProperties("search.datasource.hikari")
+  HikariDataSource searchDataSource(
+      @Qualifier("searchDataSourceProperties") DataSourceProperties props) {
+    return props.initializeDataSourceBuilder().type(HikariDataSource.class).build();
   }
 
   @Bean
@@ -224,7 +230,12 @@ class ProductSearchProjection extends BaseProjection {
 
 Without the `@Primary` pair, Boot would create no primary `DataSource`, and the event store, the
 leases and the default store would bind to the search database without any error. Set
-`spring.datasource.*` for the primary database and `search.datasource.*` for the second.
+`spring.datasource.*` for the primary database and `search.datasource.*` for the second; the pool
+settings stay where Boot reads them, `spring.datasource.hikari.*` and `search.datasource.hikari.*`.
+Without `.type(HikariDataSource.class)` and the `@ConfigurationProperties` on the pool bean, the
+rebuilt primary pool would silently drop `spring.datasource.hikari.*` — its size, its timeouts and
+any `connection-init-sql`, such as a session `statement_timeout` (see the
+[production guide](production.md)).
 
 **Quarkus**
 
