@@ -535,7 +535,7 @@ val dockerFreeModules =
 val jmhModules =
     listOf(
         ":streamrune-runtime",
-        ":streamrune-eventstore:streamrune-postgres",
+        ":streamrune-postgres",
         ":streamrune-crypto:streamrune-filesystem-crypto")
 
 // ── Doc-lint tests ───────────────────────────────────────────────────────────────────────────
@@ -620,7 +620,7 @@ val virtualThreadReadSeconds = findProperty("virtualThreadReadSeconds") as Strin
 // outside it starts a PostgreSQL container, or when any test names an image of its own.
 val postgresBackedModules =
     listOf(
-        ":streamrune-eventstore:streamrune-postgres",
+        ":streamrune-postgres",
         ":streamrune-crypto:streamrune-postgres-crypto",
         ":streamrune-integration:streamrune-spring",
         ":streamrune-integration:streamrune-quarkus",
@@ -1102,13 +1102,9 @@ subprojects {
         tasks.named("check") { dependsOn(verifyModularApiScopes) }
     }
     // Maven publishing — all modules except umbrella parents and test-only modules.
-    // :streamrune-integration and :streamrune-eventstore are umbrella
-    // subprojects that group their children (integration-api + framework
-    // modules; streamrune-postgres). Neither declares Java sources of its
+    // :streamrune-integration, :streamrune-crypto and :streamrune-outbox are umbrella
+    // subprojects that group their children. None declares Java sources of its
     // own, so excluding them keeps the publish set at exactly the leaf artifacts.
-    // (:streamrune-eventstore is auto-created by Gradle as the parent of
-    // :streamrune-eventstore:streamrune-postgres even though it isn't
-    // explicitly listed in settings.gradle.kts.)
     //
     // :streamrune-integration:streamrune-e2e is a test-only module with NO main
     // sources (end-to-end crash-recovery tests). Publishing it would upload an
@@ -1121,7 +1117,6 @@ subprojects {
     val umbrellaPaths =
         setOf(
             ":streamrune-integration",
-            ":streamrune-eventstore",
             ":streamrune-crypto",
             ":streamrune-outbox",
             ":streamrune-integration:streamrune-e2e",
@@ -1159,7 +1154,7 @@ subprojects {
         // task cannot quietly drop the attribute.
         val automaticModuleNames = mapOf(
             ":streamrune-runtime" to "org.streamrune.runtime",
-            ":streamrune-eventstore:streamrune-postgres" to "org.streamrune.postgres",
+            ":streamrune-postgres" to "org.streamrune.postgres",
             ":streamrune-integration:streamrune-integration-api" to "org.streamrune.integration",
             ":streamrune-integration:streamrune-spring" to "org.streamrune.spring",
             ":streamrune-integration:streamrune-quarkus" to "org.streamrune.quarkus",
@@ -2062,8 +2057,8 @@ tasks.named("build") {
 // jacoco-report-aggregation plugin: configuration-cache safe, no external tooling,
 // output under build/reports/ so `clean` removes it. Leaf subprojects are picked up
 // automatically, so a newly added module joins the aggregate without editing this file.
-// Umbrella parents (:streamrune-crypto, :streamrune-integration, :streamrune-outbox,
-// :streamrune-eventstore) carry no sources and are skipped.
+// Umbrella parents (:streamrune-crypto, :streamrune-integration, :streamrune-outbox)
+// carry no sources and are skipped.
 repositories {
     // The aggregation plugin applies `jacoco` to the root project, whose agent
     // dependency must be resolvable here (subprojects declare their own repositories).

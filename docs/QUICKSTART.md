@@ -837,7 +837,7 @@ do not take this path.
 |---|---|
 | Architecture & concepts | [streamrune-core/README.md](../streamrune-core/README.md) |
 | Command bus & projections | [streamrune-runtime/README.md](../streamrune-runtime/README.md) |
-| PostgreSQL event store | [streamrune-eventstore/streamrune-postgres/README.md](../streamrune-eventstore/streamrune-postgres/README.md) |
+| PostgreSQL event store | [streamrune-postgres/README.md](../streamrune-postgres/README.md) |
 | Encryption (GDPR) | [streamrune-crypto/README.md](../streamrune-crypto/README.md) |
 | Spring / Quarkus / Micronaut | [streamrune-integration/README.md](../streamrune-integration/README.md) |
 | Full CQRS/ES demo | [streamrune-ecommerce-demo](https://github.com/StreamRune/streamrune-ecommerce-demo) (separate repository) |

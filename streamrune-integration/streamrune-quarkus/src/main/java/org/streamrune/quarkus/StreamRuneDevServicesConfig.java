@@ -10,8 +10,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Logs StreamRune dev services integration status at startup in Quarkus dev mode.
  *
- * <p>When both {@code streamrune-eventstore-postgres} and {@code quarkus-jdbc-postgresql} are on
- * the classpath, Quarkus Dev Services auto-starts a PostgreSQL container. StreamRune's own Flyway
+ * <p>When both {@code streamrune-postgres} and {@code quarkus-jdbc-postgresql} are on the
+ * classpath, Quarkus Dev Services auto-starts a PostgreSQL container. StreamRune's own Flyway
  * migrations (bundled in {@code streamrune-postgres} at {@code db/streamrune-migration/}, on the
  * {@code flyway_schema_history_streamrune} history table) are applied by {@code
  * PostgresEventStoreFactory.initializeSchema()} — NOT by {@code quarkus-flyway}, which scans the

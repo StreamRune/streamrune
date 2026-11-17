@@ -2,6 +2,6 @@ description = "StreamRune Spring Boot Starter — one-dependency setup for Sprin
 
 dependencies {
     api(project(":streamrune-integration:streamrune-spring"))
-    api(project(":streamrune-eventstore:streamrune-postgres"))
+    api(project(":streamrune-postgres"))
     api(project(":streamrune-runtime"))
 }

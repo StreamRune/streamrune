@@ -10,7 +10,7 @@ dependencies {
     // dropped from the POM, so that documented install crashed at startup with NoClassDefFoundError:
     // org/streamrune/postgres/PostgresEventStoreFactory. Quarkus and Micronaut already carry it as
     // implementation — this restores parity.
-    implementation(project(":streamrune-eventstore:streamrune-postgres"))
+    implementation(project(":streamrune-postgres"))
     api(project(":streamrune-integration:streamrune-integration-api"))
     api(project(":streamrune-crypto:streamrune-filesystem-crypto"))
     api(project(":streamrune-crypto:streamrune-postgres-crypto"))

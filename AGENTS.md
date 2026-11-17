@@ -17,7 +17,7 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-core` | The API: event store contracts, aggregate types, envelopes, upcasting | no |
 | `streamrune-runtime` | Command bus, projections and their runners, sagas, the outbox poller, dead-letter retry, subscriptions | no |
 | `streamrune-test` | The test kit: in-memory stores and buses, fixtures, contract suites | no |
-| `streamrune-eventstore/streamrune-postgres` | The PostgreSQL event store and stores, the schema migrations | yes |
+| `streamrune-postgres` | The PostgreSQL event store and stores, the schema migrations | yes |
 | `streamrune-crypto/streamrune-crypto-api` | Encryption at rest for event payloads: the crypto-shredding Jackson module and the caching engine | no |
 | `streamrune-crypto/streamrune-filesystem-crypto` | The crypto engine with keys in a directory | no |
 | `streamrune-crypto/streamrune-postgres-crypto`, `streamrune-vault-crypto`, `streamrune-aws-kms-crypto` | Crypto engines with keys in PostgreSQL, HashiCorp Vault and AWS KMS | yes |
