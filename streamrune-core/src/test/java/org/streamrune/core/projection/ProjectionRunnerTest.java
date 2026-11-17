@@ -83,7 +83,7 @@ class ProjectionRunnerTest {
             + " cannot reset projection 'orders' on checkpoint target 'search': it rewinds only the"
             + " checkpoints it was built with. Use a runner that routes a registration to its"
             + " target (ContinuousProjectionRunner, PollingProjectionRunner), or rewind the"
-            + " target's checkpoints with OffsetStore.reset(name).",
+            + " target's checkpoints with target.checkpoints().reset(name).",
         refused.getMessage());
     assertEquals(
         List.of(), runner.calls, "a refused reset must not rewind the runner's own checkpoints");

@@ -482,8 +482,11 @@ license.
   `ScheduledProjectionState.ERROR`, health `DOWN`), whose message names the likely causes: the
   processor and the offset store are not over the same `DataSource`, or two runners share the
   projection name.
-- `PostgresOffsetStore` ignores a backward or sideways `saveOffset` (a monotonic no-op);
-  `OffsetStore.reset(name)` is the deliberate rewind for a rebuild.
+- `PostgresOffsetStore` and `PostgresReadModelCheckpoints` ignore a backward or sideways
+  `saveOffset` (a monotonic no-op); `OffsetStore.reset(name)` is the deliberate rewind for a
+  rebuild, called on the offset store the projection reads — its checkpoint target's checkpoints
+  (a read-model store's `readmodel_checkpoint`, or the event store's `subscription_checkpoint`), or
+  through the runner that holds the registration.
 - `WindowedProjection` — time-windowed aggregation over `Window(start, end)`, `WindowSink`,
   `LateDataPolicy` (`DROP`, `REOPEN`), self-fencing on the highest offset it has accumulated.
 - `Projection.writesThroughRepository()` is a declaration, `false` by default and `true` in

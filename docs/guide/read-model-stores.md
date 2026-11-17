@@ -352,7 +352,12 @@ runner.reset(ProjectionName.of("orders"), store.checkpointTarget());
 
 `reset(name)` without a target rewinds the checkpoint the runner itself holds; `reset(name,
 target)` rewinds the one in that target, whether or not this runner instance has run the
-projection. See [Offset reset / rebuild path](production.md#offset-reset--rebuild-path).
+projection. `store.checkpoints().reset(name)` does the same without a runner. In a Spring, Quarkus or
+Micronaut application the `OffsetStore` bean is the event store's `subscription_checkpoint`: reset
+through it only a projection whose `checkpoint target` (startup INFO line) or `store` health detail
+is `subscription_checkpoint`; the framework's `MultiProjectionRunner` / `ScheduledProjectionRunner`
+beans reset each registration on its own target, once stopped. See
+[Offset reset / rebuild path](production.md#offset-reset--rebuild-path).
 
 ## Dead-letter replay per store
 

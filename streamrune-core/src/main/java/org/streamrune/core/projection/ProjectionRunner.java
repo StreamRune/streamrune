@@ -108,6 +108,6 @@ public interface ProjectionRunner {
             + LogSanitizer.sanitizeForLog(target.name())
             + "': it rewinds only the checkpoints it was built with. Use a runner that routes a"
             + " registration to its target (ContinuousProjectionRunner, PollingProjectionRunner), or"
-            + " rewind the target's checkpoints with OffsetStore.reset(name).");
+            + " rewind the target's checkpoints with target.checkpoints().reset(name).");
   }
 }

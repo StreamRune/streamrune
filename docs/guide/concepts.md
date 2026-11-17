@@ -587,11 +587,21 @@ Because the source of truth is the event log, a projection can always be reconst
 Drop the projection table, reset the checkpoint offset to zero, and let the runner replay
 all events. This makes schema migrations for read models a non-event: just rebuild.
 
-Use `OffsetStore.reset(projectionName)` to rewind the checkpoint — not `saveOffset`. The
-PostgreSQL/JDBC offset stores reject any `saveOffset` that would move a checkpoint backward
-(a defense-in-depth guard against a stale replica regressing another instance's progress; see
+Rewind the checkpoint with a reset — not `saveOffset`. The PostgreSQL/JDBC offset stores reject
+any `saveOffset` that would move a checkpoint backward (a defense-in-depth guard against a stale
+replica regressing another instance's progress; see
 [Multi-replica deployment](production.md#multi-replica-deployment)), so an intentional rewind
 needs `reset`'s distinct, unguarded code path instead.
+
+Reset it where the projection keeps it. A projection committed with its read models checkpoints in
+its [read-model store](read-model-stores.md)'s `readmodel_checkpoint`, in that store's database;
+only an at-least-once projection that writes outside every store checkpoints in the event store's
+`subscription_checkpoint`, the table the integrations' `OffsetStore` bean resets. So reset through
+the runner that holds the registration (`runner.reset(name)`), on its target
+(`runner.reset(name, store.checkpointTarget())`), or through the store's checkpoints
+(`store.checkpoints().reset(name)`); the runner's startup line names each projection's
+`checkpoint target`, and its health entry the same `store`. See
+[Offset reset / rebuild path](production.md#offset-reset--rebuild-path).
 
 Running more than one instance of the same projection is safe: single-active-consumer
 leadership (also covered in the production guide) ensures only one instance processes and
