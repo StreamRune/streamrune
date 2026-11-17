@@ -332,9 +332,38 @@ class EventStoreWiringAutoConfigurationTest {
                           .containsBeanDefinition(
                               StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN))
                   .isTrue();
-              assertThat(ctx.getBean("searchStore", ReadModelStore.class).name())
-                  .isEqualTo("search");
+              assertThat(ctx.getBean(ReadModelStore.class).name()).isEqualTo("search");
             });
+  }
+
+  /**
+   * An unqualified {@code ReadModelStore} injection point of the application resolves to its own
+   * store, not to the default one beside it — which stays uncreated (its creation would read the
+   * mock DataSource's server version).
+   */
+  @Test
+  void anUnqualifiedReadModelStoreInjection_resolvesToTheApplicationsStore() {
+    var repository = new JdbcProjectionRepository(mock(DataSource.class));
+    var search = ReadModelStore.of("search", repository, mock(OffsetStore.class), repository);
+    runner
+        .withBean("searchStore", ReadModelStore.class, () -> search)
+        .withUserConfiguration(InjectsAReadModelStore.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(InjectsAReadModelStore.Holder.class).store()).isSameAs(search);
+            });
+  }
+
+  /** An application bean that injects a {@code ReadModelStore} without a qualifier. */
+  @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+  static class InjectsAReadModelStore {
+    record Holder(ReadModelStore store) {}
+
+    @org.springframework.context.annotation.Bean
+    Holder holder(ReadModelStore store) {
+      return new Holder(store);
+    }
   }
 
   /**

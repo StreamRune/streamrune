@@ -2005,13 +2005,17 @@ public class StreamRuneAutoConfiguration {
    * is then never created; a store of any other name is added beside it. The bean stays defined
    * either way — a store's name is known only once the store exists, so no bean condition can
    * decide — and the stores are selected by {@code ReadModelStoresConfiguration}, which leaves it
-   * out by its bean name, {@value #DEFAULT_READ_MODEL_STORE_BEAN}, until it is needed.
+   * out by its bean name, {@value #DEFAULT_READ_MODEL_STORE_BEAN}, until it is needed. It is a
+   * fallback bean ({@link org.springframework.context.annotation.Fallback}): an unqualified {@code
+   * ReadModelStore} injection point of the application resolves to the application's store, as on
+   * Quarkus (a default bean) and Micronaut (a secondary bean).
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist with none marked
    *     {@code @Primary} — silently skipping encryption would persist PII as plaintext
    */
   @Bean(DEFAULT_READ_MODEL_STORE_BEAN)
   @org.springframework.context.annotation.Lazy
+  @org.springframework.context.annotation.Fallback
   @ConditionalOnBean(DataSource.class)
   public org.streamrune.postgres.PostgresReadModelStore postgresReadModelStore(
       DataSource dataSource,
