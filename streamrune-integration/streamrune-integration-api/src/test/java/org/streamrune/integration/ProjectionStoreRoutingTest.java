@@ -30,6 +30,10 @@ import org.streamrune.test.InMemoryProjectionRepository;
 
 class ProjectionStoreRoutingTest {
 
+  /** The remedy offered to a projection that exposes writeTarget(): it moves by what it writes. */
+  private static final String WRITE_TARGET_FIX =
+      "return that store's repository from writeTarget(), which decides where it writes";
+
   /**
    * A processor with chosen capabilities and no behaviour: routing reads capabilities only, never
    * commits.
@@ -389,8 +393,10 @@ class ProjectionStoreRoutingTest {
         .hasMessageContaining("belongs to no read-model store")
         .hasMessageContaining("'postgres'")
         .hasMessageContaining("'search'")
-        .hasMessageContaining("readModelStore = \"<name>\"")
-        .hasMessageContaining("writeTarget()");
+        .hasMessageContaining("Define a ReadModelStore over that repository")
+        .hasMessageContaining(WRITE_TARGET_FIX)
+        // rule 1 refuses a declaration that disagrees with writeTarget(): never offer it alone
+        .hasMessageNotContaining("declare readModelStore");
   }
 
   // ---------- Rule 4: at-least-once, no match ----------
@@ -444,8 +450,19 @@ class ProjectionStoreRoutingTest {
           .hasMessageContaining("routed to 'search'")
           .hasMessageContaining("transactional()")
           .hasMessageContaining("'postgres'")
-          .hasMessageContaining("readModelStore = \"<name>\"")
-          .hasMessageContaining("writeTarget()");
+          .satisfies(
+              refused -> {
+                if (projection.writeTarget().isPresent()) {
+                  // routed by writeTarget(): a declaration naming another store is refused
+                  assertThat(refused.getMessage())
+                      .contains(WRITE_TARGET_FIX)
+                      .doesNotContain("declare readModelStore");
+                } else {
+                  assertThat(refused.getMessage())
+                      .contains("readModelStore = \"<name>\"")
+                      .contains("writeTarget()");
+                }
+              });
     }
   }
 
@@ -484,6 +501,22 @@ class ProjectionStoreRoutingTest {
         .hasMessageContaining("routed to 'sqlite'")
         .hasMessageContaining("fencesCheckpoint()")
         .hasMessageContaining("'postgres'");
+    // an at-least-once registration over a foreign repository: it moves by its writeTarget()
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.route(
+                    registration(
+                        "audit",
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        "",
+                        writingTo(new InMemoryProjectionRepository())),
+                    List.of(fullStore("postgres")),
+                    UNFENCED_SUBSCRIPTION,
+                    REAL))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("routed to 'subscription_checkpoint'")
+        .hasMessageContaining(WRITE_TARGET_FIX)
+        .hasMessageNotContaining("declare readModelStore");
   }
 
   @Test

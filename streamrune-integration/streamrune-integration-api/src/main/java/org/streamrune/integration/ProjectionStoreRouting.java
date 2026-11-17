@@ -115,6 +115,15 @@ public final class ProjectionStoreRouting {
           + " or expose writeTarget() returning that store's repository";
 
   /**
+   * {@link #FIX} for a projection that exposes {@code writeTarget()}: rule 1 refuses a declaration
+   * naming another store than the one its {@code writeTarget()} writes to, so declaring alone
+   * cannot move it.
+   */
+  private static final String WRITE_TARGET_FIX =
+      "return that store's repository from writeTarget(), which decides where it writes (a"
+          + " readModelStore declaration naming any other store is refused)";
+
+  /**
    * Refuses a store set routing could not decide over: two stores with the same {@link
    * ReadModelStore#name()} (explicit routing would be ambiguous), or two whose repositories have
    * equal {@link ProjectionRepository#writeTargetIdentity()} (rule 2 would match both). Replacing a
@@ -321,7 +330,7 @@ public final class ProjectionStoreRouting {
               + " checkpoint would not commit together; "
               + storesClause(stores)
               + ". Route it to a transactional store — "
-              + FIX
+              + fixFor(registration)
               + " — or declare the projection AT_LEAST_ONCE_IDEMPOTENT.");
     }
     if (leadership != SubscriptionLeadership.NOOP && !processor.fencesCheckpoint()) {
@@ -338,7 +347,7 @@ public final class ProjectionStoreRouting {
               + " batch or move the checkpoint with nothing to reject it; "
               + storesClause(stores)
               + ". Route it to a store whose processor fences its checkpoint — "
-              + FIX
+              + fixFor(registration)
               + " — or, if exactly one instance runs this projection, disable leadership"
               + " (streamrune.subscription.single-active-consumer.enabled=false).");
     }
@@ -429,9 +438,10 @@ public final class ProjectionStoreRouting {
                 + ": its writeTarget() belongs to no read-model store, so its read-model writes"
                 + " cannot commit with its checkpoint; "
                 + storesClause(stores)
-                + ". Define a ReadModelStore over that repository, or "
-                + FIX
-                + ".");
+                + ". Define a ReadModelStore over that repository, route it to a transactional"
+                + " store — "
+                + WRITE_TARGET_FIX
+                + " — or declare the projection AT_LEAST_ONCE_IDEMPOTENT.");
       }
       List<ReadModelStore> transactional =
           stores.stream().filter(s -> s.processor().transactional()).toList();
@@ -479,6 +489,11 @@ public final class ProjectionStoreRouting {
 
   private static boolean sameStore(ProjectionRepository a, ProjectionRepository b) {
     return a.writeTargetIdentity().equals(b.writeTargetIdentity());
+  }
+
+  /** How to move {@code registration} to another store: by its writeTarget() when it has one. */
+  private static String fixFor(Registration registration) {
+    return registration.projection().writeTarget().isPresent() ? WRITE_TARGET_FIX : FIX;
   }
 
   private static String head(Registration registration) {
