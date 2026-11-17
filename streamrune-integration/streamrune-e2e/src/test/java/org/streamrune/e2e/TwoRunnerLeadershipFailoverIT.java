@@ -30,7 +30,7 @@ import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.LeaseBasedLeadership;
-import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelCheckpoints;
 
 /**
  * The definitive two-runner failover proof for the epoch-fenced lease (Part B): a zombie old leader
@@ -39,13 +39,13 @@ import org.streamrune.postgres.PostgresOffsetStore;
  *
  * <p>This composes the two real primitives against one shared PostgreSQL: a DB-clocked,
  * epoch-issuing {@link LeaseBasedLeadership} lease over {@code subscription_leases}, and the epoch
- * write-fence in {@link JdbcProjectionRepository#executeAtomically} over {@code projection_offset}.
- * Rather than drive a full {@link org.streamrune.runtime.ContinuousProjectionRunner} (whose
- * failover liveness is proven under load by {@code ProjectionCrashRecoveryIT} / {@code
- * HaDualInstanceProjectionIT}), each leader's commit is issued directly through {@code
- * executeAtomically} carrying its held fencing epoch — exactly what the runner threads into every
- * commit — so the fence seam is exercised deterministically, with no timing dependence on batch
- * draining.
+ * write-fence in {@link JdbcProjectionRepository#executeAtomically} over {@code
+ * readmodel_checkpoint}, read back through {@link PostgresReadModelCheckpoints}. Rather than drive
+ * a full {@link org.streamrune.runtime.ContinuousProjectionRunner} (whose failover liveness is
+ * proven under load by {@code ProjectionCrashRecoveryIT} / {@code HaDualInstanceProjectionIT}),
+ * each leader's commit is issued directly through {@code executeAtomically} carrying its held
+ * fencing epoch — exactly what the runner threads into every commit — so the fence seam is
+ * exercised deterministically, with no timing dependence on batch draining.
  *
  * <p><b>What is proven (non-vacuous):</b>
  *
@@ -106,7 +106,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
   @Test
   void leaderDies_standbyTakesOverAtNextEpoch_oldLeaderInFlightCommitRejected() throws Exception {
     JdbcProjectionRepository repo = new JdbcProjectionRepository(dataSource);
-    PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
+    PostgresReadModelCheckpoints offsetStore = new PostgresReadModelCheckpoints(dataSource);
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
@@ -192,7 +192,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     // against the real lease + real fence: A leads and commits; A dies; B takes over and STAMPS
     // (no commit); the zombie A is fenced by the DB before B has processed a single event.
     JdbcProjectionRepository repo = new JdbcProjectionRepository(dataSource);
-    PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
+    PostgresReadModelCheckpoints offsetStore = new PostgresReadModelCheckpoints(dataSource);
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
@@ -251,7 +251,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
   void staleLeaderCommitRacesNewLeader_exactlyOneLegalInterleaving_finalStateConsistent()
       throws Exception {
     JdbcProjectionRepository repo = new JdbcProjectionRepository(dataSource);
-    PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
+    PostgresReadModelCheckpoints offsetStore = new PostgresReadModelCheckpoints(dataSource);
     OffsetCountingProjection projection = new OffsetCountingProjection(PROJECTION);
 
     LeaseBasedLeadership leadershipA = new LeaseBasedLeadership(dataSource, SHORT_TTL);
@@ -365,7 +365,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
   private static void commit(
       JdbcProjectionRepository repo,
       OffsetCountingProjection projection,
-      PostgresOffsetStore offsetStore,
+      PostgresReadModelCheckpoints offsetStore,
       long offset,
       int n,
       long epoch) {
@@ -402,7 +402,7 @@ class TwoRunnerLeadershipFailoverIT extends E2ETestBase {
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, PROJECTION.value());
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;

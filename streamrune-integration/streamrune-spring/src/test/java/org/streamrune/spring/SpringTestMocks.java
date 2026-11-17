@@ -8,6 +8,9 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStore;
+import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 
 /** Shared Mockito fixtures for the Spring auto-configuration tests. */
@@ -57,5 +60,18 @@ final class SpringTestMocks {
     when(store.orderingMode()).thenReturn(OutboxOrderingMode.AVAILABILITY_FIRST);
     when(store.claimLease()).thenReturn(Duration.ofMinutes(4));
     return store;
+  }
+
+  /**
+   * The event store's subscription checkpoint as {@code StreamRuneAutoConfiguration} registers it
+   * without a {@code DataSource} — an offset store and the nonatomic processor — over a mocked
+   * offset store. Register it under {@link StreamRuneAutoConfiguration#SUBSCRIPTION_CHECKPOINT} in
+   * a context that loads {@code ProjectionAutoConfig} without {@code StreamRuneAutoConfiguration}.
+   */
+  static CheckpointTarget subscriptionCheckpoint() {
+    return new CheckpointTarget(
+        "subscription_checkpoint",
+        mock(OffsetStore.class),
+        AtomicBatchProcessor.nonAtomicAtLeastOnce());
   }
 }

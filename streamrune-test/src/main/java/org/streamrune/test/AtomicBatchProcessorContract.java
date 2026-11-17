@@ -40,17 +40,19 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 
 /**
- * What {@link AtomicBatchProcessor#supportsFencing()} {@code == true} promises: (i) the repository
+ * What a processor that is both {@link AtomicBatchProcessor#transactional()} and {@link
+ * AtomicBatchProcessor#fencesCheckpoint()} promises. {@code transactional()}: (i) the repository
  * handed to the updater is non-null; (ii) an updater exception commits nothing; (iii) a write
  * through the handed repository and the checkpoint become visible together, never one without the
- * other; (iv) a stale epoch is rejected before the updater runs; (v) {@code writesTo(this)} is
- * true, and stays true through a {@link Proxy} that forwards to the real object. And what {@link
- * AtomicBatchProcessor#serializesReplay()} {@code == true} promises: a replay and a batch of one
- * projection never run at the same time, a replay applies its writes all-or-nothing, and it moves
- * neither the offset nor the epoch. Run by {@code InMemoryProjectionRepositoryContractTest}
- * (streamrune-test) and {@code JdbcProjectionRepositoryContractTest} (streamrune-postgres): the
- * test-time half of "startup verifies the shared transaction" — the static {@code
- * ProjectionDeliveryPolicy} trusts the flag, this suite is what makes the flag honest.
+ * other. {@code fencesCheckpoint()}: (iv) a stale epoch is rejected before the updater runs, and
+ * the checkpoint does not move. (v) {@code writesTo(this)} is true, and stays true through a {@link
+ * Proxy} that forwards to the real object. And what {@link AtomicBatchProcessor#serializesReplay()}
+ * {@code == true} promises: a replay and a batch of one projection never run at the same time, a
+ * replay applies its writes all-or-nothing, and it moves neither the offset nor the epoch. Run by
+ * {@code InMemoryProjectionRepositoryContractTest} (streamrune-test) and {@code
+ * JdbcProjectionRepositoryContractTest} (streamrune-postgres): the test-time half of "startup
+ * verifies the shared transaction" — the static {@code ProjectionDeliveryPolicy} and {@code
+ * ProjectionFencingPolicy} trust the two flags, this suite is what makes them honest.
  */
 public abstract class AtomicBatchProcessorContract {
 
@@ -172,6 +174,13 @@ public abstract class AtomicBatchProcessorContract {
                   Instant.now())));
     }
     return events;
+  }
+
+  /** The processor declares both capabilities this suite proves. */
+  @Test
+  public void declaresTransactionalAndFencesCheckpoint() {
+    assertTrue(processor().transactional(), "the suite proves transactional()");
+    assertTrue(processor().fencesCheckpoint(), "the suite proves fencesCheckpoint()");
   }
 
   /** (i) The updater always receives a repository. */

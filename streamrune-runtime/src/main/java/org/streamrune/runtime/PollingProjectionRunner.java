@@ -2,13 +2,16 @@ package org.streamrune.runtime;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionCheckpointSaveException;
@@ -30,13 +33,23 @@ import org.streamrune.core.types.ProjectionName;
  *
  * <p>The processor is required: {@code JdbcProjectionRepository} for {@code TRANSACTIONAL_LOCAL} /
  * {@code EXTERNAL_EFFECT} projections, {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for a
- * runner of {@code AT_LEAST_ONCE_IDEMPOTENT} ones. The commit is unfenced (epoch 0) — this runner
- * has no leadership.
+ * runner of {@code AT_LEAST_ONCE_IDEMPOTENT} ones. The offset store must read the checkpoint that
+ * processor advances: for a {@code JdbcProjectionRepository}, {@code PostgresReadModelCheckpoints}
+ * on the same {@code DataSource} (a {@code PostgresReadModelStore} hands out the pair), never a
+ * {@code PostgresOffsetStore}. The commit is unfenced (epoch 0) — this runner has no leadership.
  *
- * <p>Under the nonatomic processor a checkpoint save that fails after the batch was applied ({@link
- * ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner backs off (100 ms
- * doubling to 60 s) and re-reads from the un-advanced checkpoint, so the idempotent projection
- * applies the batch again. It is never skipped and never dead-lettered.
+ * <p><b>Routing.</b> {@link #run(ProjectionName, Projection, ProjectionDeliveryMode,
+ * CheckpointTarget)} runs a projection on a {@link CheckpointTarget} instead of the runner's own
+ * pair: its position is read from the target's checkpoints and every batch commits through the
+ * target's processor, which is also the processor its mode is checked against. The runner's own
+ * offset store is not read for it. {@link #reset(ProjectionName, CheckpointTarget)} rewinds a
+ * projection's checkpoint in a target, whether or not it has run here.
+ *
+ * <p>Under a non-transactional processor ({@code nonAtomicAtLeastOnce()} or {@code
+ * PostgresSubscriptionCheckpointProcessor}) a checkpoint save that fails after the batch was
+ * applied ({@link ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner
+ * backs off (100 ms doubling to 60 s) and re-reads from the un-advanced checkpoint, so the
+ * idempotent projection applies the batch again. It is never skipped and never dead-lettered.
  */
 public final class PollingProjectionRunner implements ProjectionRunner {
 
@@ -50,12 +63,17 @@ public final class PollingProjectionRunner implements ProjectionRunner {
 
   private static final Duration SAVE_RETRY_MAX_BACKOFF = Duration.ofSeconds(60);
 
+  private static final String RUNNER_NAME = "PollingProjectionRunner";
+
   private final EventStore eventStore;
-  private final OffsetStore offsetStore;
+  // The runner's own pair: the offset store and processor it was built with.
+  private final RegistrationCheckpoints ownPair;
   private final int fetchSize;
   private final int batchSize;
-  private final AtomicBatchProcessor atomicProcessor;
   private final StreamRuneMetrics metrics;
+  // The pair each projection last ran on, so reset() rewinds it where its run reads it.
+  private final Map<ProjectionName, RegistrationCheckpoints> lastRunPairs =
+      new ConcurrentHashMap<>();
 
   /**
    * Creates a new runner with no metrics collector.
@@ -115,31 +133,67 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       throw new IllegalArgumentException("atomicProcessor is required");
     }
     this.eventStore = eventStore;
-    this.offsetStore = offsetStore;
+    this.ownPair = new RegistrationCheckpoints(offsetStore, atomicProcessor, null);
     this.fetchSize = fetchSize;
     this.batchSize = batchSize;
-    this.atomicProcessor = atomicProcessor;
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
   }
 
   @Override
   public void run(
       ProjectionName projectionName, Projection projection, ProjectionDeliveryMode mode) {
+    run(projectionName, projection, mode, ownPair);
+  }
+
+  /**
+   * Catches the projection up like {@link #run(ProjectionName, Projection,
+   * ProjectionDeliveryMode)}, reading its position from {@code target}'s checkpoints and committing
+   * every batch through {@code target}'s processor; the runner's own pair is not used.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}, or its processor refuses
+   *     the projection's name or mode
+   */
+  @Override
+  public void run(
+      ProjectionName projectionName,
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      CheckpointTarget target) {
+    run(
+        projectionName,
+        projection,
+        mode,
+        RegistrationCheckpoints.ofTarget(
+            target, RUNNER_NAME, projectionName, "run(name, projection, mode)"));
+  }
+
+  private void run(
+      ProjectionName projectionName,
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      RegistrationCheckpoints pair) {
+    AtomicBatchProcessor atomicProcessor = pair.processor();
     // A name the processor cannot store read models under fails before any event is read.
     atomicProcessor.checkProjectionName(projectionName);
     var verdict =
         ProjectionDeliveryPolicy.require(
-            projection, mode, atomicProcessor, "PollingProjectionRunner", projectionName.value());
+            projection,
+            mode,
+            atomicProcessor,
+            RUNNER_NAME,
+            projectionName.value(),
+            pair.targetName());
+    lastRunPairs.put(projectionName, pair);
     logger.info(
         "Projection '{}' delivery mode {} on {} — {}",
         LogSanitizer.sanitizeForLog(projectionName.value()),
         mode,
-        ProjectionDeliveryPolicy.processorLabel(atomicProcessor),
+        pair.processorLabel(),
         verdict.describe());
     recordDeliveryMode(projectionName, mode);
     int consecutiveSaveFailures = 0;
     while (true) {
-      GlobalOffset lastOffset = offsetStore.getLastOffset(projectionName);
+      GlobalOffset lastOffset = pair.checkpoints().getLastOffset(projectionName);
       var events = eventStore.readGlobalStream(lastOffset, fetchSize);
       if (events.isEmpty()) {
         return;
@@ -149,7 +203,7 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       for (int i = 0; i < events.size() && !reReadFromCheckpoint; i += batchSize) {
         var batch = events.subList(i, Math.min(i + batchSize, events.size()));
         try {
-          processBatch(projectionName, projection, mode, batch);
+          processBatch(pair, projectionName, projection, mode, batch);
           consecutiveSaveFailures = 0;
         } catch (ProjectionCheckpointSaveException saveFailed) {
           // Applied, not checkpointed, store unavailable — back off and re-read from the
@@ -184,6 +238,7 @@ public final class PollingProjectionRunner implements ProjectionRunner {
   }
 
   private void processBatch(
+      RegistrationCheckpoints pair,
       ProjectionName projectionName,
       Projection projection,
       ProjectionDeliveryMode mode,
@@ -194,19 +249,22 @@ public final class PollingProjectionRunner implements ProjectionRunner {
       // Only a registration that writes through the handed repository has a read model in the
       // processor's store to prepare.
       if (mode.writesInCheckpointTransaction()) {
-        atomicProcessor.prepareReadModel(projectionName);
+        pair.processor().prepareReadModel(projectionName);
       }
-      atomicProcessor.executeAtomically(
-          projectionName,
-          batch,
-          newOffset,
-          // Single-runner mode: no leadership on this runner, so the commit is unfenced by design.
-          0L,
-          // Only a TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT registration may write inside the
-          // processor's transaction; an AT_LEAST_ONCE_IDEMPOTENT one is handed null.
-          txRepository ->
-              projection.process(batch, mode.writesInCheckpointTransaction() ? txRepository : null),
-          offsetStore);
+      pair.processor()
+          .executeAtomically(
+              projectionName,
+              batch,
+              newOffset,
+              // Single-runner mode: no leadership on this runner, so the commit is unfenced by
+              // design.
+              0L,
+              // Only a TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT registration may write inside the
+              // processor's transaction; an AT_LEAST_ONCE_IDEMPOTENT one is handed null.
+              txRepository ->
+                  projection.process(
+                      batch, mode.writesInCheckpointTransaction() ? txRepository : null),
+              pair.checkpoints());
       recordProcessed(projectionName, batch.size());
     } catch (RuntimeException e) {
       recordFailed(projectionName);
@@ -262,25 +320,37 @@ public final class PollingProjectionRunner implements ProjectionRunner {
     }
   }
 
+  /**
+   * Rewinds the projection's checkpoint where its last run on this instance read it: the target's
+   * checkpoints after a {@link #run(ProjectionName, Projection, ProjectionDeliveryMode,
+   * CheckpointTarget) routed run}, otherwise the runner's own offset store. It knows only the
+   * projections that have run on this instance: a routed projection that has not run here yet (a
+   * fresh process rebuilding before its first run) would be rewound in the runner's own offset
+   * store, where it has no checkpoint — reset it with {@link #reset(ProjectionName,
+   * CheckpointTarget)}. The rewind uses the unguarded {@link OffsetStore#reset} ({@code
+   * saveOffset(initial())} would be no-op'd by the monotonic guard) and is read back, so a reset
+   * that returns without rewinding fails loudly.
+   *
+   * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
+   *     the reset
+   */
   @Override
   public void reset(ProjectionName projectionName) {
-    // Unguarded rewind: saveOffset(initial()) would be no-op'd by the monotonic offset guard, so a
-    // reset must use the dedicated OffsetStore.reset() path (see OffsetStore contract).
-    offsetStore.reset(projectionName);
-    // Defense-in-depth: even a correctly-overridden reset() could have a latent bug (e.g. an
-    // unguarded write that targets the wrong row/key) that leaves the checkpoint un-rewound.
-    // Verify the rewind actually took before declaring the reset successful, converting a silent
-    // partial rewind into a loud failure instead of a rebuild that quietly resumes from the old
-    // offset.
-    GlobalOffset after = offsetStore.getLastOffset(projectionName);
-    if (!GlobalOffset.initial().equals(after)) {
-      throw new IllegalStateException(
-          "OffsetStore.reset(\""
-              + projectionName.value()
-              + "\") returned but the checkpoint did not rewind to initial (still at "
-              + after.value()
-              + "); this OffsetStore's reset() is not performing an unguarded rewind as required by"
-              + " the OffsetStore contract.");
-    }
+    lastRunPairs.getOrDefault(projectionName, ownPair).reset(projectionName);
+  }
+
+  /**
+   * Rewinds the projection's checkpoint in {@code target}'s checkpoints, whether or not it has run
+   * on this instance; the runner's own offset store is not touched. Unguarded and read back like
+   * {@link #reset(ProjectionName)}.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}
+   * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
+   *     the reset
+   */
+  @Override
+  public void reset(ProjectionName projectionName, CheckpointTarget target) {
+    RegistrationCheckpoints.ofTarget(target, RUNNER_NAME, projectionName, "reset(name)")
+        .reset(projectionName);
   }
 }

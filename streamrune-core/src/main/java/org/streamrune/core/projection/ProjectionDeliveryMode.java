@@ -12,12 +12,13 @@ package org.streamrune.core.projection;
 public enum ProjectionDeliveryMode {
   /**
    * Read-model write and checkpoint commit in ONE transaction. Needs a transactional {@link
-   * AtomicBatchProcessor} ({@link AtomicBatchProcessor#supportsFencing()} {@code true}) and a
+   * AtomicBatchProcessor} ({@link AtomicBatchProcessor#transactional()} {@code true}) and a
    * projection that writes through the repository handed to {@link
    * Projection#process(java.util.List, ProjectionRepository)}; when the projection exposes its
    * {@link Projection#writeTarget()}, the processor must be that store ({@link
-   * AtomicBatchProcessor#writesTo}). A redelivered or split-brain batch is rejected before any
-   * write.
+   * AtomicBatchProcessor#writesTo}). A redelivered batch is rejected before any write, and so is a
+   * split-brain one: under real leadership the processor must also fence its checkpoint ({@link
+   * AtomicBatchProcessor#fencesCheckpoint()}), as for every registration.
    */
   TRANSACTIONAL_LOCAL,
   /**

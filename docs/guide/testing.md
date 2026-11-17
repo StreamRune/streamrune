@@ -503,7 +503,8 @@ void process_isIdempotent_forDuplicateEvents() {
 
 `InMemoryProjectionRepository` (in `streamrune-test`) is a `ProjectionRepository`, a fencing-capable
 `AtomicBatchProcessor` and the `OffsetStore` of its own checkpoint in one object, so one instance
-plays the parts a `JdbcProjectionRepository` and a `PostgresOffsetStore` play in production — the
+plays the parts a `PostgresReadModelStore`'s `JdbcProjectionRepository` and its
+`PostgresReadModelCheckpoints` play in production — the
 rollback included. Construct the projection over it, pass the same instance to the runner as its
 offset store and its processor, and run the projection `TRANSACTIONAL_LOCAL`. The assertions use
 AssertJ (`org.assertj:assertj-core`, test scope), which `streamrune-test` does not bring:
@@ -600,8 +601,8 @@ is an `assertThatThrownBy(...).isInstanceOf(IllegalArgumentException.class)` on 
 repository itself as the offset store, because its checkpoint is the one it advances.
 
 `AtomicBatchProcessorContract` (also in `streamrune-test`) is what a custom transactional processor
-extends to prove it honours `supportsFencing()`: a JUnit suite that checks the handed repository is
-never `null`, an updater exception commits nothing, the write and the checkpoint become visible
+extends to prove it honours `transactional()` and `fencesCheckpoint()`: a JUnit suite that checks
+the handed repository is never `null`, an updater exception commits nothing, the write and the checkpoint become visible
 together, a stale epoch and an overlapping batch are rejected before the updater writes, after-commit
 actions run only after a commit, and `writesTo` holds through a forwarding proxy.
 `InMemoryProjectionRepository` and `JdbcProjectionRepository` both pass it.
@@ -1091,7 +1092,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `EventStreamFixtures` | Writes the events of an `InMemoryEventStore` to a JSON file, reads it back, and appends it to a fresh store. |
 | `SagaEnvelopes` | The metadata and envelopes of the events a saga's commands, and the commands of a continuation, produce. |
 | `EventPayloadAssertions` | `assertRoundTrips(event)` and `assertUpcastBinds(...)`: an event that writes what it cannot read, or an upcaster that writes a misspelled key, fails the test instead of a read in production. |
-| `AtomicBatchProcessorContract` | The contract suite of `AtomicBatchProcessor.supportsFencing()`; extend it to prove a custom processor. |
+| `AtomicBatchProcessorContract` | The contract suite of a transactional, fencing `AtomicBatchProcessor` (`transactional()`, `fencesCheckpoint()`); extend it to prove a custom processor. |
 | `ProjectionRepositoryQueryContract` | The contract suite of a `ProjectionRepository`'s paged reads and index declaration: filter, numbers, code-point order with the id tiebreak, paging, totals, the field rule, `@Encrypted` components. |
 | `CommandBusProvenanceContract` | The contract suite of where a `CommandBus` takes an event's saga origin and causation id from; extend it for a custom bus. |
 | `OutboxStoreContract` | The contract suite of every `OutboxStore`: status transitions, both ordering modes, retention and replay. |

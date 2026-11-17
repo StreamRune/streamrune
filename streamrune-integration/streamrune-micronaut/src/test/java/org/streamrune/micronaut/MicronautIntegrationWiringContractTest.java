@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ContractBeans;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
@@ -48,6 +49,7 @@ import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.integration.tck.ContractHttp;
 import org.streamrune.integration.tck.HttpResponse;
 import org.streamrune.integration.tck.IntegrationWiringContract;
+import org.streamrune.integration.tck.MultiReadModelStoreScenario.DefaultStoreProjection;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryEventStore;
@@ -65,7 +67,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * Micronaut does not reliably collect a runtime singleton into an injected {@code List}, and the
  * {@code DataSource}, because the context closes a bean through its {@code preDestroy} method. A
  * contract bean of another type that Micronaut collects into an injected {@code List} needs a
- * method there too.
+ * method there too, and so does a constructor-injected one ({@link ContractBeans#injected}): a
+ * runtime singleton is built before the context exists.
  *
  * <p>{@link ApplicationBeans} hands the context the current start's {@code DataSource} through a
  * static field: the tests run one start at a time, in one thread.
@@ -95,6 +98,13 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   static final String DISPATCHING_ROUTE = "contract.dispatching-route";
 
   /**
+   * The property that declares the {@link ApplicationBeans#defaultStoreProjection} of a start: a
+   * constructor-injected contract bean ({@link ContractBeans#injected}), which a runtime singleton
+   * cannot be.
+   */
+  static final String DEFAULT_STORE_PROJECTION = "contract.default-store-projection";
+
+  /**
    * The application's beans that Micronaut must know at compile time, each declared only for a
    * start that sets its property.
    */
@@ -122,6 +132,12 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     DeciderRegistration<ContractCommand, ContractCommandState, ContractCommandExecuted>
         contractCommandRegistration() {
       return new ContractCommandRegistration().get();
+    }
+
+    @Singleton
+    @Requires(property = DEFAULT_STORE_PROJECTION, value = "true")
+    DefaultStoreProjection defaultStoreProjection(ProjectionRepository repository) {
+      return new DefaultStoreProjection(repository);
     }
   }
 
@@ -212,7 +228,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     }
   }
 
-  /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
+  /**
+   * Started by the first behaviour that needs PostgreSQL, stopped after the class; the multi-store
+   * scenario's test class shares it.
+   */
   private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
@@ -220,9 +239,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   @AfterAll
-  static void stopPostgres() {
+  static synchronized void stopPostgres() {
     if (postgres != null) {
       postgres.stop();
+      postgres = null;
     }
   }
 
@@ -248,6 +268,12 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
         configuration.put(COMMAND_REGISTRATION, "true");
       } else if (beanClass == DispatchingRoute.class) {
         configuration.put(DISPATCHING_ROUTE, "true");
+      } else if (beanClass == DefaultStoreProjection.class) {
+        configuration.put(DEFAULT_STORE_PROJECTION, "true");
+      } else if (ContractBeans.injected(beanClass)) {
+        throw new IllegalArgumentException(
+            beanClass.getName()
+                + " is constructor-injected: declare it in ApplicationBeans, gated by a property");
       } else {
         singletons.add(ContractBeans.create(beanClass));
       }

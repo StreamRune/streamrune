@@ -1,5 +1,7 @@
 package org.streamrune.core.projection;
 
+import java.util.Objects;
+import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /** Drives a projection by feeding it events from the event store. */
@@ -21,6 +23,44 @@ public interface ProjectionRunner {
   void run(ProjectionName projectionName, Projection projection, ProjectionDeliveryMode mode);
 
   /**
+   * Runs the projection like {@link #run(ProjectionName, Projection, ProjectionDeliveryMode)}, but
+   * reads its checkpoint from and commits it through {@code target} instead of the pair the runner
+   * was built with. The target is the registration's explicit declaration: a {@link
+   * ReadModelStore#checkpointTarget()} for a projection whose read models live in that store, or
+   * the event store's {@link OffsetStore#subscriptionCheckpoint()} for an at-least-once projection
+   * routed to no store. The runner checks {@code mode} against the target's processor, never
+   * against its own.
+   *
+   * <p>The default refuses with {@link UnsupportedOperationException}: a runner that only knows its
+   * own pair must not run the projection there instead, where its checkpoint is not.
+   *
+   * @param projectionName unique name for offset tracking
+   * @param projection the projection to drive
+   * @param mode the delivery guarantee this projection declares; required
+   * @param target the checkpoints this projection's position is read from and the processor that
+   *     commits it; required
+   * @throws UnsupportedOperationException if this runner cannot route a projection to a target
+   */
+  default void run(
+      ProjectionName projectionName,
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      CheckpointTarget target) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
+    Objects.requireNonNull(target, "target is required");
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " cannot run projection '"
+            + LogSanitizer.sanitizeForLog(projectionName.value())
+            + "' on checkpoint target '"
+            + LogSanitizer.sanitizeForLog(target.name())
+            + "': it reads and commits every projection through the checkpoints and processor it"
+            + " was built with. Use a runner that routes a registration to its target"
+            + " (ContinuousProjectionRunner, PollingProjectionRunner), or build this runner with the"
+            + " target's checkpoints and processor and call run(name, projection, mode).");
+  }
+
+  /**
    * Resets the projection offset to zero so the projection replays from the beginning on the next
    * run.
    *
@@ -35,7 +75,39 @@ public interface ProjectionRunner {
    * results: the running cycle may save a higher offset after the reset, undoing it. Reset while
    * the projection is not running.
    *
+   * <p>This rewinds the checkpoints the runner knows for the projection. A projection that runs on
+   * a {@link CheckpointTarget} keeps its checkpoint there: reset it with {@link
+   * #reset(ProjectionName, CheckpointTarget)}, which never depends on what this runner instance has
+   * run.
+   *
    * @param projectionName unique name of the projection to reset
    */
   void reset(ProjectionName projectionName);
+
+  /**
+   * Resets the projection's checkpoint in {@code target} to zero, so a {@link #run(ProjectionName,
+   * Projection, ProjectionDeliveryMode, CheckpointTarget) run on that target} replays from the
+   * beginning. Everything {@link #reset(ProjectionName)} says about what is left untouched and
+   * about resetting while running applies here too.
+   *
+   * <p>The default refuses with {@link UnsupportedOperationException}: a runner that only knows its
+   * own pair must not rewind that pair instead, leaving the target's checkpoint where it was.
+   *
+   * @param projectionName unique name of the projection to reset
+   * @param target the checkpoints the projection's position lives in; required
+   * @throws UnsupportedOperationException if this runner cannot route a projection to a target
+   */
+  default void reset(ProjectionName projectionName, CheckpointTarget target) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
+    Objects.requireNonNull(target, "target is required");
+    throw new UnsupportedOperationException(
+        getClass().getName()
+            + " cannot reset projection '"
+            + LogSanitizer.sanitizeForLog(projectionName.value())
+            + "' on checkpoint target '"
+            + LogSanitizer.sanitizeForLog(target.name())
+            + "': it rewinds only the checkpoints it was built with. Use a runner that routes a"
+            + " registration to its target (ContinuousProjectionRunner, PollingProjectionRunner), or"
+            + " rewind the target's checkpoints with target.checkpoints().reset(name).");
+  }
 }

@@ -81,6 +81,121 @@ class PollingProjectionRunnerTest {
     assertEquals(GlobalOffset.of(5), offsetStore.getLastOffset(ProjectionName.of("test-proj")));
   }
 
+  // ==================== Runs on a CheckpointTarget ====================
+
+  @Test
+  void runOnATarget_commitsThroughTheTarget_leavesTheOwnPairAlone_andResetRewindsTheTarget() {
+    // The TRANSACTIONAL_LOCAL projection would be refused by the runner's own nonatomic processor;
+    // on the target it is checked against, and commits through, the target's transactional one.
+    StreamId s1 = StreamId.of(TYPE, AggregateId.of("s1"));
+    eventStore.addEvents(
+        envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")),
+        envelope(GlobalOffset.of(2), s1, 2, new TestEvent("B")));
+    var memory = new org.streamrune.test.InMemoryProjectionRepository();
+    var target =
+        org.streamrune.core.projection.ReadModelStore.of("memory", memory, memory, memory)
+            .checkpointTarget();
+    var name = ProjectionName.of("seen");
+    Projection projection =
+        new Projection() {
+          @Override
+          public void process(List<EventEnvelope> batch) {
+            fail("a transactional registration must be handed the processor's repository");
+          }
+
+          @Override
+          public void process(List<EventEnvelope> batch, ProjectionRepository repository) {
+            for (var event : batch) {
+              repository.save(
+                  name, String.valueOf(event.globalOffset().value()), new TestEvent("seen"));
+            }
+          }
+
+          @Override
+          public boolean writesThroughRepository() {
+            return true;
+          }
+        };
+
+    runner.run(name, projection, TRANSACTIONAL_LOCAL, target);
+
+    assertEquals(GlobalOffset.of(2), memory.committedOffset(name));
+    assertEquals(2, memory.rowCount(name));
+    assertEquals(GlobalOffset.initial(), offsetStore.getLastOffset(name));
+
+    runner.reset(name);
+    assertEquals(GlobalOffset.initial(), memory.getLastOffset(name));
+  }
+
+  @Test
+  void resetWithoutATarget_knowsOnlyWhatRanHere_soAProjectionNotRunHereRewindsTheOwnOffsetStore() {
+    // reset(name) knows a projection's target only once it has run on this instance; before that
+    // it rewinds the runner's own offset store. A routed projection is reset with
+    // reset(name, target) instead (next test).
+    var name = ProjectionName.of("own");
+    offsetStore.saveOffset(name, GlobalOffset.of(7));
+
+    runner.reset(name);
+
+    assertEquals(GlobalOffset.initial(), offsetStore.getLastOffset(name));
+  }
+
+  @Test
+  void resetWithATarget_beforeAnyRun_rewindsTheTargetsCheckpoints_notTheOwnStore() {
+    // The rebuild a fresh process does: reset, then run on the target. The reset must rewind the
+    // target, which this instance has never run on, and leave the runner's own store alone.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var fresh =
+        new PollingProjectionRunner(
+            eventStore, own, 100, 3, AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    var targetCheckpoints = new InMemoryOffsetStore();
+    var name = ProjectionName.of("seen");
+    targetCheckpoints.saveOffset(name, GlobalOffset.of(5));
+
+    fresh.reset(name, targetCheckpoints.subscriptionCheckpoint());
+
+    assertEquals(GlobalOffset.initial(), targetCheckpoints.getLastOffset(name));
+    assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> fresh.reset(name, (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "PollingProjectionRunner projection 'seen': target is required; call reset(name) to use"
+            + " the runner's own pair",
+        refused.getMessage());
+  }
+
+  @Test
+  void runOnATarget_refusesAModeTheTargetsProcessorCannotHonour_namingTheTarget() {
+    var target = new InMemoryOffsetStore().subscriptionCheckpoint();
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> runner.run(ProjectionName.of("seen"), batch -> {}, TRANSACTIONAL_LOCAL, target));
+    assertTrue(
+        refused.getMessage().contains("(checkpoint target 'subscription_checkpoint')"),
+        refused.getMessage());
+  }
+
+  @Test
+  void runOnANullTarget_refuses() {
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                runner.run(
+                    ProjectionName.of("seen"),
+                    batch -> {},
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "PollingProjectionRunner projection 'seen': target is required; call run(name,"
+            + " projection, mode) to use the runner's own pair",
+        refused.getMessage());
+  }
+
   @Test
   void singleRunDrainsBacklogLargerThanFetchSize() {
     StreamId s1 = StreamId.of(TYPE, AggregateId.of("s1"));
@@ -264,11 +379,11 @@ class PollingProjectionRunnerTest {
     eventStore.addEvents(envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")));
 
     // Stands in for the transaction-scoped repository a JDBC-backed processor would supply. Only a
-    // transactional registration is handed it, so the processor must claim fencing and the
-    // projection must declare TRANSACTIONAL_LOCAL.
+    // transactional registration is handed it, so the processor must claim transactional() and
+    // the projection must declare TRANSACTIONAL_LOCAL.
     ProjectionRepository txRepository = mock(ProjectionRepository.class);
     AtomicBatchProcessor processor =
-        TestFencingProcessor.fencing(
+        TestTransactionalProcessor.transactional(
             (name, batch, newOffset, fencingEpoch, projectionUpdater, offsets) -> {
               projectionUpdater.update(txRepository);
               offsets.saveOffset(name, newOffset);
@@ -329,13 +444,14 @@ class PollingProjectionRunnerTest {
         GlobalOffset.of(1), offsetStore.getLastOffset(ProjectionName.of("nonatomic-proj")));
   }
 
-  // A fencing-claiming processor that hands null to the updater: a plain projection declared
+  // A transactional()-claiming processor that hands null to the updater: a plain projection
+  // declared
   // AT_LEAST_ONCE_IDEMPOTENT runs under it; one declared TRANSACTIONAL_LOCAL is refused, since its
   // read-model writes would silently NOT be part of the checkpoint's transaction.
   private static final AtomicBatchProcessor TRANSACTIONAL =
       new AtomicBatchProcessor() {
         @Override
-        public boolean supportsFencing() {
+        public boolean transactional() {
           return true;
         }
 
@@ -424,7 +540,7 @@ class PollingProjectionRunnerTest {
   }
 
   @Test
-  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() {
+  void run_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor() {
     StreamId s1 = StreamId.of(TYPE, AggregateId.of("s1"));
     eventStore.addEvents(envelope(GlobalOffset.of(1), s1, 1, new TestEvent("A")));
     runner =

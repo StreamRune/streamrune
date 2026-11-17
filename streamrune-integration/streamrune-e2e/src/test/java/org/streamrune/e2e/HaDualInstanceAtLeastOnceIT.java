@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.types.AggregateId;
@@ -23,20 +24,24 @@ import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.LeaseBasedLeadership;
 import org.streamrune.postgres.PostgresEventStore;
 import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor;
 import org.streamrune.runtime.ContinuousProjectionRunner;
 import org.streamrune.runtime.ProjectionState;
 
 /**
  * The {@code AT_LEAST_ONCE_IDEMPOTENT} contrast to {@link HaDualInstanceProjectionIT}, which keeps
  * asserting exactly one row per offset for {@code TRANSACTIONAL_LOCAL}. Two FENCED replicas (a
- * {@link LeaseBasedLeadership} each, as {@code TwoRunnerLeadershipFailoverIT} builds them; the JDBC
- * processor honours the epoch) run ONE at-least-once plain projection. The runner hands it no
- * transaction-scoped repository; it writes a {@link Count} row autocommit through its OWN {@link
- * JdbcProjectionRepository} — another object over the same {@code DataSource}.
+ * {@link LeaseBasedLeadership} each, as {@code TwoRunnerLeadershipFailoverIT} builds them) run ONE
+ * at-least-once plain projection on the event store's subscription checkpoint — the pair an
+ * at-least-once registration routed to no read-model store gets ({@link
+ * PostgresOffsetStore#subscriptionCheckpoint()}: the offset store and a {@link
+ * PostgresSubscriptionCheckpointProcessor}, which honours the epoch). The runner hands the
+ * projection no transaction-scoped repository; it writes a {@link Count} row autocommit through its
+ * OWN {@link JdbcProjectionRepository} — another object over the same {@code DataSource}.
  *
  * <p>The fence protects the checkpoint, not the read model. The epoch fence and the overlap guard
- * run under the {@code projection_offset} row lock BEFORE the projection's updater, so the two
- * replicas' updaters are serialised and a stale or overlapping batch is rejected before it is
+ * run under the {@code subscription_checkpoint} row lock BEFORE the projection's updater, so the
+ * two replicas' updaters are serialised and a stale or overlapping batch is rejected before it is
  * applied; a range is re-applied only when a checkpoint transaction dies after the projection's
  * autocommit write, which this test does not induce. The checkpoint converges exactly, the row's
  * applied count is at least the number of events (here it equals it; the assertion stays at the
@@ -79,8 +84,11 @@ class HaDualInstanceAtLeastOnceIT extends E2ETestBase {
 
     PostgresEventStore store = eventStore(dataSource);
     PostgresOffsetStore offsetStore = new PostgresOffsetStore(dataSource);
-    // Fences the checkpoint.
-    JdbcProjectionRepository processor = new JdbcProjectionRepository(dataSource);
+    // The subscription checkpoint pair: the processor fences the checkpoint the offset store reads.
+    CheckpointTarget subscription = offsetStore.subscriptionCheckpoint();
+    assertThat(subscription.processor())
+        .isInstanceOf(PostgresSubscriptionCheckpointProcessor.class);
+    assertThat(subscription.processor().fencesCheckpoint()).isTrue();
     // The projection's store: another object over the same DataSource.
     JdbcProjectionRepository own = new JdbcProjectionRepository(dataSource);
 
@@ -91,8 +99,8 @@ class HaDualInstanceAtLeastOnceIT extends E2ETestBase {
     var projB = new AtLeastOnceCount(own, projection);
     var leadershipA = new LeaseBasedLeadership(dataSource, Duration.ofMillis(400));
     var leadershipB = new LeaseBasedLeadership(dataSource, Duration.ofSeconds(30));
-    var runnerA = newRunner(store, offsetStore, processor, leadershipA);
-    var runnerB = newRunner(store, offsetStore, processor, leadershipB);
+    var runnerA = newRunner(store, subscription, leadershipA);
+    var runnerB = newRunner(store, subscription, leadershipB);
 
     Thread tA =
         Thread.ofVirtual()
@@ -143,14 +151,11 @@ class HaDualInstanceAtLeastOnceIT extends E2ETestBase {
   }
 
   private static ContinuousProjectionRunner newRunner(
-      PostgresEventStore store,
-      PostgresOffsetStore offsetStore,
-      JdbcProjectionRepository processor,
-      LeaseBasedLeadership leadership) {
+      PostgresEventStore store, CheckpointTarget subscription, LeaseBasedLeadership leadership) {
     return ContinuousProjectionRunner.builder()
         .eventStore(store)
-        .offsetStore(offsetStore)
-        .atomicProcessor(processor)
+        .offsetStore(subscription.checkpoints())
+        .atomicProcessor(subscription.processor())
         .leadership(leadership)
         .fetchSize(4)
         .batchSize(4)

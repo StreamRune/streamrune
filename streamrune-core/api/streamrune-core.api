@@ -375,6 +375,7 @@ public final record org.streamrune.core.PageRequest
   public abstract int fetchSize() default -1
   public abstract java.lang.String cron() default ""
   public abstract java.lang.String name()
+  public abstract java.lang.String readModelStore() default ""
   public abstract org.streamrune.core.ProjectionConfig$Mode mode() default org.streamrune.core.ProjectionConfig$Mode.CONTINUOUS
   public abstract org.streamrune.core.projection.ProjectionDeliveryMode deliveryMode()
   public abstract org.streamrune.core.projection.ProjectionErrorStrategy errorStrategy() default org.streamrune.core.projection.ProjectionErrorStrategy.HALT
@@ -1016,8 +1017,9 @@ public static final record org.streamrune.core.outbox.OutboxStore$BlockageSample
 
 public interface org.streamrune.core.projection.AtomicBatchProcessor
   public abstract void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public default boolean fencesCheckpoint()
   public default boolean serializesReplay()
-  public default boolean supportsFencing()
+  public default boolean transactional()
   public default boolean writesTo(org.streamrune.core.projection.ProjectionRepository)
   public default void checkProjectionName(org.streamrune.core.types.ProjectionName)
   public default void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
@@ -1040,6 +1042,15 @@ public abstract class org.streamrune.core.projection.BaseProjection implements o
   public final void process(java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.ProjectionRepository)
   public java.util.Optional<org.streamrune.core.projection.ProjectionRepository> writeTarget()
 
+public final record org.streamrune.core.projection.CheckpointTarget
+  public <init>(java.lang.String, org.streamrune.core.projection.OffsetStore, org.streamrune.core.projection.AtomicBatchProcessor)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String name()
+  public org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public org.streamrune.core.projection.OffsetStore checkpoints()
+
 public final record org.streamrune.core.projection.FieldEquals
   public <init>(java.lang.String, java.lang.String)
   public final boolean equals(java.lang.Object)
@@ -1059,7 +1070,9 @@ public enum org.streamrune.core.projection.LateDataPolicy
 public interface org.streamrune.core.projection.OffsetStore
   public abstract org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
   public abstract void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public default org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
   public default void reset(org.streamrune.core.types.ProjectionName)
+  public static final java.lang.String SUBSCRIPTION_CHECKPOINT = "subscription_checkpoint"
 
 public interface org.streamrune.core.projection.Projection
   public abstract void process(java.util.List<org.streamrune.core.EventEnvelope>)
@@ -1166,6 +1179,16 @@ public interface org.streamrune.core.projection.ProjectionRepository
 public interface org.streamrune.core.projection.ProjectionRunner
   public abstract void reset(org.streamrune.core.types.ProjectionName)
   public abstract void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public default void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
+  public default void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
+
+public interface org.streamrune.core.projection.ReadModelStore
+  public abstract java.lang.String name()
+  public abstract org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public abstract org.streamrune.core.projection.OffsetStore checkpoints()
+  public abstract org.streamrune.core.projection.ProjectionRepository repository()
+  public default org.streamrune.core.projection.CheckpointTarget checkpointTarget()
+  public static org.streamrune.core.projection.ReadModelStore of(java.lang.String, org.streamrune.core.projection.ProjectionRepository, org.streamrune.core.projection.OffsetStore, org.streamrune.core.projection.AtomicBatchProcessor)
 
 public final record org.streamrune.core.projection.Window
   public <init>(java.time.Instant, java.time.Instant)
@@ -1441,10 +1464,12 @@ public final record org.streamrune.core.subscription.SubscriptionConfig
 
 public final record org.streamrune.core.subscription.SubscriptionHealth
   public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole)
+  public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole, java.lang.String)
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
   public int errorCount()
+  public java.lang.String store()
   public long lag()
   public org.streamrune.core.subscription.LeaseRole role()
   public org.streamrune.core.subscription.SubscriptionHealth$Status status()

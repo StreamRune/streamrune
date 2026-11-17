@@ -6,12 +6,13 @@ import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * Thrown by {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} when {@link OffsetStore#saveOffset}
- * fails AFTER the updater returned: the batch is applied, the checkpoint did not move. It names the
- * one state only the nonatomic processor can produce, so the runners treat it as what it is — the
- * store is unavailable, the range is not poison: WARN, back off, re-read from the checkpoint,
- * re-apply (at-least-once), never SKIP and never dead-letter. A transactional processor never
- * throws it: its save runs inside the transaction and a failure rolls everything back.
+ * Thrown by a non-transactional processor ({@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} or
+ * the PostgreSQL subscription-checkpoint processor) when {@link OffsetStore#saveOffset} fails AFTER
+ * the updater returned: the batch is applied, the checkpoint did not move. It names the one state
+ * only a non-transactional processor can produce, so the runners treat it as what it is — the store
+ * is unavailable, the range is not poison: WARN, back off, re-read from the checkpoint, re-apply
+ * (at-least-once), never SKIP and never dead-letter. A transactional processor never throws it: its
+ * save runs inside the transaction and a failure rolls everything back.
  */
 public class ProjectionCheckpointSaveException extends RuntimeException {
 

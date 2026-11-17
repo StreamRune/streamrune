@@ -302,6 +302,7 @@ Key builder methods:
 | `.eventStore(EventStore)` | Sets the persistence backend |
 | `.register(aggregateType, commandType, idExtractor, decider)` | Maps a command class to its decider under an aggregate type; `idExtractor` is `Function<C, AggregateId>` and locates the aggregate stream. Build the id with `AggregateId.of(...)`: it refuses a blank value, one longer than 255 characters, or one containing a control character (see below) |
 | `.registerProjection(name, projection, mode)` | Registers a read-model projection under its `ProjectionDeliveryMode` — required, no default (see [Delivery modes](concepts.md#delivery-modes--what-a-projection-promises)) |
+| `.registerProjection(name, projection, mode, store \| target)` | The same, naming where its checkpoint lives: a `ReadModelStore` (read models and checkpoint in that store) or a `CheckpointTarget` such as `offsetStore.subscriptionCheckpoint()` |
 | `.projectionRunner(...)` / `.projectionRunnerFactory(...)` | Supplies the runner that drives registered projections (see below) |
 | `.build()` | Constructs and validates the facade |
 
@@ -390,8 +391,9 @@ public class OrderRegistry implements Projection {
 > `process(List)` above is all it needs. In a framework integration the same bean declares
 > `@ProjectionConfig(name = "order_registry", deliveryMode = AT_LEAST_ONCE_IDEMPOTENT)`; for a
 > PostgreSQL read model extend `org.streamrune.core.projection.BaseProjection` over the
-> `JdbcProjectionRepository` bean and declare `TRANSACTIONAL_LOCAL` — its `save()`/`findById()`/`delete()`
-> helpers then work in the same transaction as the offset checkpoint. See
+> `ProjectionRepository` bean (the default read-model store's `JdbcProjectionRepository`) and declare
+> `TRANSACTIONAL_LOCAL` — its `save()`/`findById()`/`delete()` helpers then work in the same
+> transaction as its checkpoint in `readmodel_checkpoint`. See
 > [Delivery modes](concepts.md#delivery-modes--what-a-projection-promises).
 
 Registering a projection is not enough on its own: the builder also needs a **projection
@@ -402,18 +404,19 @@ and the subscription config and returns a runner such as `ContinuousProjectionRu
 is called once per registered projection, so each projection gets its own runner instance, and
 `startProjections()` runs each one on its own virtual thread.
 
-A runner needs an `OffsetStore` to remember how far it has read, and an `AtomicBatchProcessor` —
-required, no default — that says whether a batch's read-model writes and its checkpoint commit
-together. The framework ships a PostgreSQL-backed `PostgresOffsetStore`; for a database-free example
-use `org.streamrune.test.InMemoryOffsetStore` from `streamrune-test` (test scope, or write the
-twelve lines yourself — `OffsetStore` is a small interface). `OrderRegistry` writes to its own map,
-so the runner gets `AtomicBatchProcessor.nonAtomicAtLeastOnce()`: `process`, then the checkpoint
-save, two commits.
+Each registration names where its checkpoint lives — a `CheckpointTarget`: an `OffsetStore` that
+remembers how far it has read, paired with the `AtomicBatchProcessor` that says whether a batch's
+read-model writes and its checkpoint commit together. A `ReadModelStore` (such as
+`PostgresReadModelStore`) is one, for projections whose read models live in it. The framework ships
+a PostgreSQL-backed `PostgresOffsetStore`; for a database-free example use
+`org.streamrune.test.InMemoryOffsetStore` from `streamrune-test` (test scope, or write the twelve
+lines yourself — `OffsetStore` is a small interface). `OrderRegistry` writes to its own map, so it
+is registered on `offsetStore.subscriptionCheckpoint()`, which pairs the store with
+`AtomicBatchProcessor.nonAtomicAtLeastOnce()`: `process`, then the checkpoint save, two commits.
 
 Register the projection, wire the runner, then start projections after `build()`:
 
 ```java
-import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.runtime.ContinuousProjectionRunner;
@@ -425,13 +428,12 @@ var offsetStore = new InMemoryOffsetStore();
 var streamRune = StreamRune.builder()
     .eventStore(eventStore)
     .register(ORDER, OrderCommand.class, orderId, new OrderDecider())
-    .registerProjection(ProjectionName.of("order_registry"), registry, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    .registerProjection(ProjectionName.of("order_registry"), registry,
+        ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT, offsetStore.subscriptionCheckpoint())
     // Required: build() refuses a registered projection that has no runner.
     .projectionRunnerFactory((store, config) ->
         ContinuousProjectionRunner.builder()
             .eventStore(store)
-            .offsetStore(offsetStore)
-            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce()) // required; the named non-transactional choice
             .subscriptionConfig(config)
             .build())
     .build();
@@ -505,6 +507,7 @@ and projections and shuts them down with the application context.
 |---|---|
 | [concepts.md](concepts.md) | Deep-dive on CQRS/ES theory |
 | [testing.md](testing.md) | Unit, integration, and fixture-based tests |
+| [read-model-stores.md](read-model-stores.md) | Where read models and their checkpoints live, routing, several stores in one application |
 | [advanced/idempotency.md](advanced/idempotency.md) | Effectively-once command execution with `IdempotencyKey` |
 | [advanced/gdpr-erasure.md](advanced/gdpr-erasure.md) | Crypto-shredding and GDPR right-to-erasure |
 | [../QUICKSTART.md](../QUICKSTART.md) | Five-minute copy-paste bootstrap |

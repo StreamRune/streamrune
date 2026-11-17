@@ -13,9 +13,9 @@ public record SubscriptionName(@JsonValue String value) {
 
   /**
    * The longest subscription name, in code points: the width of the {@code
-   * projection_offset.projection_name} (a subscription keeps its offset under its name) columns. A
-   * longer one is refused on construction, so a subscription name that is accepted here is stored
-   * by every store.
+   * subscription_checkpoint.projection_name} (a subscription keeps its offset under its name)
+   * columns. A longer one is refused on construction, so a subscription name that is accepted here
+   * is stored by every store.
    */
   public static final int MAX_LENGTH = 255;
 

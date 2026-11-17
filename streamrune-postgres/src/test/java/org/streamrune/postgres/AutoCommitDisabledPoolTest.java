@@ -136,6 +136,7 @@ class AutoCommitDisabledPoolTest {
           }
         };
     new PostgresEventStoreFactory(plain, typeRegistry).create();
+    ReadModelTestSchema.apply(plain);
 
     var config = new HikariConfig();
     config.setJdbcUrl(PG.getJdbcUrl());
@@ -159,7 +160,8 @@ class AutoCommitDisabledPoolTest {
     try (var conn = plain.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute(
-          "DELETE FROM outbox_events; DELETE FROM projection_offset; DELETE FROM dead_letter_queue;"
+          "DELETE FROM outbox_events; DELETE FROM subscription_checkpoint; DELETE FROM dead_letter_queue;"
+              + " DELETE FROM readmodel_checkpoint;"
               + " DELETE FROM command_inbox; DELETE FROM audit_log; DELETE FROM event_audit_log;"
               + " DELETE FROM snapshot_store; DELETE FROM saga_state; DELETE FROM saga_dead_letters;"
               + " DELETE FROM subscription_leases; DELETE FROM projection_dead_letters");
@@ -563,20 +565,22 @@ class AutoCommitDisabledPoolTest {
         GlobalOffset.of(7),
         0L,
         txRepository -> txRepository.save(name, "b", Map.of("value", "batched")),
-        new PostgresOffsetStore(pool));
+        new PostgresReadModelCheckpoints(pool));
 
     assertEquals(1, count("SELECT COUNT(*) FROM autocommit_off_batch_view WHERE id = ?", "b"));
     assertEquals(
         7,
-        count("SELECT last_offset FROM projection_offset WHERE projection_name = ?", name.value()));
+        count(
+            "SELECT last_offset FROM readmodel_checkpoint WHERE projection_name = ?",
+            name.value()));
   }
 
   @Test
   void projectionRepository_fencingStampAndOffsetResetAreDurable() {
     var repository = new JdbcProjectionRepository(pool);
     var name = ProjectionName.of("autocommit_off_fenced");
-    String epoch = "SELECT epoch FROM projection_offset WHERE projection_name = ?";
-    String offset = "SELECT last_offset FROM projection_offset WHERE projection_name = ?";
+    String epoch = "SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?";
+    String offset = "SELECT last_offset FROM readmodel_checkpoint WHERE projection_name = ?";
 
     repository.stampFencingEpoch(name, 3L);
     assertEquals(3, count(epoch, name.value()));
@@ -587,7 +591,7 @@ class AutoCommitDisabledPoolTest {
         GlobalOffset.of(11),
         3L,
         txRepository -> {},
-        new PostgresOffsetStore(pool));
+        new PostgresReadModelCheckpoints(pool));
     assertEquals(11, count(offset, name.value()));
 
     repository.resetOffset(name);

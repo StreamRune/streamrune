@@ -79,7 +79,19 @@ class ProjectionDeliveryPolicyTest {
 
   @ParameterizedTest
   @EnumSource(names = {"TRANSACTIONAL_LOCAL", "EXTERNAL_EFFECT"})
-  void transactionalMode_underANonFencingProcessor_isRefused(ProjectionDeliveryMode mode) {
+  void transactionalMode_underAProcessorThatOnlyFencesItsCheckpoint_isRefused(
+      ProjectionDeliveryMode mode) {
+    // fencesCheckpoint() alone is not transactional(): the capabilities are independent.
+    AtomicBatchProcessor fencingOnly = TestFencingProcessor.fencingClaimOnly();
+    assertThatThrownBy(() -> require(new WriteThroughNoTarget(), mode, fencingOnly))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining(mode.name())
+        .hasMessageContaining("needs a transactional processor");
+  }
+
+  @ParameterizedTest
+  @EnumSource(names = {"TRANSACTIONAL_LOCAL", "EXTERNAL_EFFECT"})
+  void transactionalMode_underANonTransactionalProcessor_isRefused(ProjectionDeliveryMode mode) {
     var repo = new InMemoryProjectionRepository();
     assertThatThrownBy(() -> require(over(repo), mode, NON_ATOMIC))
         .isInstanceOf(IllegalArgumentException.class)
@@ -210,19 +222,21 @@ class ProjectionDeliveryPolicyTest {
   }
 
   /**
-   * A fencing processor that is not itself a repository (a test double, or a wrapper) has only its
-   * own identity: a BaseProjection over any store is refused, and the message prints the processor.
+   * A transactional processor that is not itself a repository (a test double, or a wrapper) has
+   * only its own identity: a BaseProjection over any store is refused, and the message prints the
+   * processor.
    */
   @Test
-  void aFencingProcessorThatIsNoRepository_refusesEveryExposedWriteTarget_namingItself() {
-    AtomicBatchProcessor fencingOnly = TestFencingProcessor.fencingClaimOnly();
+  void aTransactionalProcessorThatIsNoRepository_refusesEveryExposedWriteTarget_namingItself() {
+    AtomicBatchProcessor transactionalOnly =
+        TestTransactionalProcessor.transactional(AtomicBatchProcessor.nonAtomicAtLeastOnce());
     var other = new InMemoryProjectionRepository();
-    assertThatThrownBy(() -> require(over(other), TRANSACTIONAL_LOCAL, fencingOnly))
+    assertThatThrownBy(() -> require(over(other), TRANSACTIONAL_LOCAL, transactionalOnly))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("declares TRANSACTIONAL_LOCAL and writes to")
-        .hasMessageContaining(fencingOnly.getClass().getName())
-        .hasMessageContaining("(identity " + fencingOnly + ")");
-    assertThat(require(new WriteThroughNoTarget(), TRANSACTIONAL_LOCAL, fencingOnly))
+        .hasMessageContaining(transactionalOnly.getClass().getName())
+        .hasMessageContaining("(identity " + transactionalOnly + ")");
+    assertThat(require(new WriteThroughNoTarget(), TRANSACTIONAL_LOCAL, transactionalOnly))
         .isEqualTo(Verdict.DECLARED);
   }
 
@@ -252,5 +266,21 @@ class ProjectionDeliveryPolicyTest {
                 ProjectionDeliveryPolicy.require(
                     PLAIN, TRANSACTIONAL_LOCAL, NON_ATOMIC, "TestRunner", "bad\nname"))
         .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("\n"));
+  }
+
+  @Test
+  void processorLabelNamesTheCheckpointTarget() {
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, null))
+        .isEqualTo("nonAtomicAtLeastOnce");
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, "search"))
+        .isEqualTo("nonAtomicAtLeastOnce (checkpoint target 'search')");
+    assertThat(ProjectionDeliveryPolicy.processorLabel(NON_ATOMIC, "bad\nname"))
+        .doesNotContain("\n");
+    assertThatThrownBy(
+            () ->
+                ProjectionDeliveryPolicy.require(
+                    PLAIN, TRANSACTIONAL_LOCAL, NON_ATOMIC, "TestRunner", "orders", "search"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("(nonAtomicAtLeastOnce (checkpoint target 'search'))");
   }
 }

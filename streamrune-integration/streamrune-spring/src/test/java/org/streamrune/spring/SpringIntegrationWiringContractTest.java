@@ -73,9 +73,10 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * The integration wiring contract on Spring Boot. Each start is a {@code SpringApplication} with an
  * embedded Tomcat on a free port: the servlet web stack, the actuator health endpoint, and every
  * StreamRune auto-configuration the module registers. A contract bean is registered the way an
- * application declares a bean, under its bean type; without a database the application declares the
- * test kit's in-memory event store factory and offset store, with one the {@code DataSource}, which
- * the context closes as it closes a connection pool.
+ * application declares a bean, under its bean type (a constructor-injected one, {@link
+ * ContractBeans#injected}, with its constructor autowired); without a database the application
+ * declares the test kit's in-memory event store factory and offset store, with one the {@code
+ * DataSource}, which the context closes as it closes a connection pool.
  *
  * <p>spring-security-core is on this module's test classpath and the application imports no
  * security filter chain, so its request identity runs in the {@code AUTHENTICATED_PRINCIPAL} mode:
@@ -89,7 +90,10 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
           .registerState("ContractCommandState", ContractBeans.ContractCommandState.class)
           .build();
 
-  /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
+  /**
+   * Started by the first behaviour that needs PostgreSQL, stopped after the class; the multi-store
+   * scenario's test class shares it.
+   */
   private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
@@ -136,9 +140,10 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
           AwsKmsCryptoEngineConfiguration.class.getName());
 
   @AfterAll
-  static void stopPostgres() {
+  static synchronized void stopPostgres() {
     if (postgres != null) {
       postgres.stop();
+      postgres = null;
     }
   }
 
@@ -190,6 +195,13 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
       if (beanClass == ContractBeans.DispatchingRoute.class) {
         // The route an application declares: a controller, built and mapped by Spring MVC.
         context.registerBean(DispatchingController.class);
+        continue;
+      }
+      if (ContractBeans.injected(beanClass)) {
+        // A constructor-injected bean: Spring autowires its constructor, as for a @Component.
+        @SuppressWarnings("unchecked")
+        Class<Object> injected = (Class<Object>) beanClass;
+        context.registerBean(beanClass.getName(), injected);
         continue;
       }
       @SuppressWarnings("unchecked")

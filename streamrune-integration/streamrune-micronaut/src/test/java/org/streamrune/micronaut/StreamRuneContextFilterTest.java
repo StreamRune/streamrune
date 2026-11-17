@@ -794,7 +794,8 @@ class StreamRuneContextFilterTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   @Test

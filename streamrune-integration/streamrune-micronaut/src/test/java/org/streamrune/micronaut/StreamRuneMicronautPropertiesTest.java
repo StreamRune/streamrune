@@ -35,6 +35,36 @@ class StreamRuneMicronautPropertiesTest {
   }
 
   @Test
+  void readModelAutoInitializeIsUnsetByDefault_andFollowsTheEventStoreKey() {
+    var defaults = StreamRuneMicronautProperties.withDefaults();
+    assertEquals(null, defaults.readModelAutoInitializeSchema());
+    assertTrue(defaults.readModelAutoInitialize());
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.event-store.schema.auto-initialize", "false"))) {
+      var bound = ctx.getBean(StreamRuneMicronautProperties.class);
+      assertEquals(null, bound.readModelAutoInitializeSchema());
+      assertFalse(bound.readModelAutoInitialize(), "unset follows the event-store key");
+    }
+  }
+
+  @Test
+  void readModelAutoInitialize_whenSet_winsOverTheEventStoreKey() {
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of(
+                "streamrune.event-store.schema.auto-initialize", "false",
+                "streamrune.read-model.schema.auto-initialize", "true"))) {
+      assertTrue(ctx.getBean(StreamRuneMicronautProperties.class).readModelAutoInitialize());
+    }
+    try (var ctx =
+        io.micronaut.context.ApplicationContext.run(
+            java.util.Map.of("streamrune.read-model.schema.auto-initialize", "false"))) {
+      assertFalse(ctx.getBean(StreamRuneMicronautProperties.class).readModelAutoInitialize());
+    }
+  }
+
+  @Test
   void sagaForwardFenceDefaultsToAuto() {
     assertEquals("auto", StreamRuneMicronautProperties.withDefaults().sagaForwardFence());
     try (var ctx = io.micronaut.context.ApplicationContext.run()) {
@@ -147,7 +177,8 @@ class StreamRuneMicronautPropertiesTest {
             true,
             true,
             true,
-            true);
+            true,
+            null);
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(Duration.ofMillis(1), p.retryInitialDelay());

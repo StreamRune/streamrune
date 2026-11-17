@@ -26,18 +26,20 @@ class ShippedMigrationScriptsTest {
   @TempDir Path temp;
 
   @Test
-  void listsTheScriptsOfBothSeriesFromDirectories() throws Exception {
+  void listsTheScriptsOfEverySeriesFromDirectories() throws Exception {
     Path root = temp.resolve("classes");
     write(root, "db/streamrune-migration/V001__baseline.sql");
     write(root, "db/streamrune-migration/V002__more.sql");
     write(root, "db/streamrune-migration/README.txt");
     write(root, "db/streamrune-migration/nested/V9__ignored.sql");
     write(root, "db/crypto-migration/V001__crypto.sql");
+    write(root, "db/readmodel-migration/V001__readmodel.sql");
 
     try (var loader = new URLClassLoader(new URL[] {root.toUri().toURL()}, null)) {
       assertEquals(
           List.of(
               "db/crypto-migration/V001__crypto.sql",
+              "db/readmodel-migration/V001__readmodel.sql",
               "db/streamrune-migration/V001__baseline.sql",
               "db/streamrune-migration/V002__more.sql"),
           ShippedMigrationScripts.onClassPath(loader));
@@ -45,7 +47,7 @@ class ShippedMigrationScriptsTest {
   }
 
   @Test
-  void listsTheScriptsOfBothSeriesFromJars() throws Exception {
+  void listsTheScriptsOfEverySeriesFromJars() throws Exception {
     Path jar = temp.resolve("series.jar");
     try (var out = new JarOutputStream(Files.newOutputStream(jar))) {
       for (String name :
@@ -56,7 +58,9 @@ class ShippedMigrationScriptsTest {
               "db/streamrune-migration/nested/V9__ignored.sql",
               "db/crypto-migration/",
               "db/crypto-migration/V001__crypto.sql",
-              "db/crypto-migration/notes.md")) {
+              "db/crypto-migration/notes.md",
+              "db/readmodel-migration/",
+              "db/readmodel-migration/V001__readmodel.sql")) {
         out.putNextEntry(new JarEntry(name));
         out.closeEntry();
       }
@@ -65,7 +69,9 @@ class ShippedMigrationScriptsTest {
     try (var loader = new URLClassLoader(new URL[] {jar.toUri().toURL()}, null)) {
       assertEquals(
           List.of(
-              "db/crypto-migration/V001__crypto.sql", "db/streamrune-migration/V001__baseline.sql"),
+              "db/crypto-migration/V001__crypto.sql",
+              "db/readmodel-migration/V001__readmodel.sql",
+              "db/streamrune-migration/V001__baseline.sql"),
           ShippedMigrationScripts.onClassPath(loader));
     }
   }

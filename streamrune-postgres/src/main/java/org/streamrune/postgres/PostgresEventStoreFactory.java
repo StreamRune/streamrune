@@ -4,8 +4,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import javax.sql.DataSource;
-import org.flywaydb.core.Flyway;
-import org.flywaydb.core.api.FlywayException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStore;
@@ -15,10 +13,8 @@ import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEventMapper;
-import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
-import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.runtime.GuardedTracing;
 
@@ -70,11 +66,8 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    */
   static final String EVENT_STORE_HISTORY_TABLE = "flyway_schema_history_streamrune";
 
-  /**
-   * How Flyway starts the message with which it refuses to baseline a history table it finds
-   * already there. {@link #migrateConverging} reads it as the sign of the first-start race.
-   */
-  static final String BASELINE_REFUSAL = "Unable to baseline schema history table";
+  /** Flyway history table for the crypto series, namespaced like the event-store one. */
+  static final String CRYPTO_HISTORY_TABLE = "flyway_schema_history_crypto";
 
   private final DataSource dataSource;
   private final EventTypeRegistry typeRegistry;
@@ -146,24 +139,17 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
    * script up by name, so this also works in a GraalVM native image): a script missing from the
    * class path is refused with nothing written, instead of leaving the event-store series applied
    * and the crypto series not.
+   *
+   * <p>The read-model series is not among them: {@link PostgresReadModelStore#create} applies it to
+   * the database that holds the read models, which need not be this one.
    */
   private void migrateSchema() {
-    Flyway flyway =
-        ShippedMigrationSeries.EVENT_STORE
-            .configure(dataSource)
-            .table(EVENT_STORE_HISTORY_TABLE)
-            // Baseline 0 — apply the WHOLE series, but tolerate a schema that is already non-empty
-            // because it holds the APPLICATION's own tables. With the default history
-            // table "no history + non-empty schema" could only mean StreamRune's own tables were
-            // there; with a namespaced history it also means "the application migrated first", and
-            // Flyway refuses that outright unless baselining is allowed. Baselining at 0 skips
-            // nothing: every framework migration is greater than 0, so the series still applies in
-            // full. It is inert once the history table exists, so it changes nothing on any later
-            // run.
-            .baselineOnMigrate(true)
-            .baselineVersion("0")
-            .load();
-    Flyway cryptoFlyway = null;
+    // Baselined at 0 like every framework series (see SeriesMigration): the schema may already
+    // hold the application's own tables.
+    SeriesMigration eventStore =
+        SeriesMigration.prepare(
+            ShippedMigrationSeries.EVENT_STORE, dataSource, EVENT_STORE_HISTORY_TABLE);
+    SeriesMigration crypto = null;
     // When the configured crypto engine needs the shared crypto schema
     // (a Postgres-backed key store, or a durable JDBC tombstone store for KMS/Vault), auto-apply
     // the opt-in crypto migration too — on its OWN Flyway history table so that series (which
@@ -185,62 +171,12 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
       // Every crypto migration after the baseline must likewise be idempotent and
       // presence-tolerant (IF EXISTS / IF NOT EXISTS): it runs against pre-provisioned schemas that
       // may already be fully current.
-      cryptoFlyway =
-          ShippedMigrationSeries.CRYPTO
-              .configure(dataSource)
-              .table("flyway_schema_history_crypto")
-              .baselineOnMigrate(true)
-              .baselineVersion("0")
-              .load();
+      crypto =
+          SeriesMigration.prepare(ShippedMigrationSeries.CRYPTO, dataSource, CRYPTO_HISTORY_TABLE);
     }
-    migrateConverging(flyway::migrate);
-    if (cryptoFlyway != null) {
-      migrateConverging(cryptoFlyway::migrate);
-    }
-  }
-
-  /**
-   * Runs {@code migrate}, and runs it once more when Flyway refused to baseline a history table
-   * that another instance created while this one was starting.
-   *
-   * <p><b>Why a second run.</b> Flyway decides how to treat a database without its history table
-   * before it takes its lock: it reads that the table is absent, then whether the schema is empty,
-   * and baselines a non-empty schema (both series allow it, see above). Replicas that start
-   * together on a new database race through that decision. One of them creates the history table,
-   * its first step under the lock; another, which had already read the table as absent, now finds
-   * the schema non-empty because of that very table, tries to baseline it and is refused: {@code
-   * Unable to baseline schema history table ... as it already exists, and is empty}, or {@code ...
-   * as it already contains migrations} when the first replica got further. The refused run applied
-   * nothing. Flyway only reaches that refusal after reading the table as absent and then finding it
-   * there, so it always means another instance created the table meanwhile. The second run starts
-   * with the table present, where Flyway takes its lock before it reads the history, so it applies
-   * whatever is still pending — usually nothing — and every migration is applied once, however many
-   * replicas started together.
-   *
-   * <p>Every other failure is rethrown as it is, including one that leaves the history table behind
-   * (a pooler without a second server connection fails that way); so is a failure of the second
-   * run, with the refusal attached as suppressed.
-   *
-   * @param migrate one Flyway run of the series
-   */
-  static void migrateConverging(Runnable migrate) {
-    try {
-      migrate.run();
-    } catch (FlywayException first) {
-      String message = first.getMessage();
-      if (message == null || !message.startsWith(BASELINE_REFUSAL)) {
-        throw first;
-      }
-      log.info(
-          "Another instance created the schema history table while this one was starting ({});"
-              + " running the migration again",
-          LogSanitizer.sanitizeForLog(message.lines().findFirst().orElse(message)));
-      try {
-        migrate.run();
-      } catch (FlywayException second) {
-        second.addSuppressed(first);
-        throw second;
-      }
+    eventStore.migrate();
+    if (crypto != null) {
+      crypto.migrate();
     }
   }
 
@@ -462,25 +398,39 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
   }
 
   /**
-   * Creates a new {@link JdbcProjectionRepository} on the DataSource as given. Tables are
-   * automatically created on first access.
+   * Creates the default read-model store on this factory's DataSource: a {@link
+   * PostgresReadModelStore} named {@code postgres}, whose {@link JdbcProjectionRepository} is the
+   * repository and the processor and whose checkpoints live in {@code readmodel_checkpoint}, read
+   * through {@link PostgresReadModelCheckpoints}. {@link PostgresReadModelStore#checkpointTarget()}
+   * is the pair a runner of its {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} projections
+   * reads and commits through.
+   *
+   * <p><b>Its own schema series.</b> The store applies the read-model series ({@code
+   * db/readmodel-migration}, on its own history table) when this factory's {@link
+   * #autoInitializeSchema(boolean) autoInitializeSchema} is on — the same switch as the event-store
+   * series — and always validates it, so with the switch off the series must have been applied
+   * out-of-band. The read-model tables ({@code <name>_view}) are created on first use.
    *
    * <p><b>Crypto-aware, mirroring the auto-configs.</b> The repository's {@link
    * com.fasterxml.jackson.databind.ObjectMapper} is built from THIS factory's own {@link
    * #cryptoEngine(CryptoEngine) cryptoEngine} and {@link #metrics(StreamRuneMetrics) metrics} via
    * {@link JdbcProjectionRepository#createObjectMapper(CryptoEngine, StreamRuneMetrics)} — the same
-   * way the factory-equivalent Spring/Quarkus/Micronaut projection-repository beans and the
-   * saga/DLQ stores build theirs. So when a {@link CryptoEngine} is configured, an
-   * {@code @Encrypted} read-model field is ciphertext at rest and within {@code forget(subjectId)}
-   * scope. The crypto-BLIND 1-arg repository would write an {@code @Encrypted} read model built
-   * through a factory that holds a configured engine to the {@code data} column as plaintext PII,
-   * out of the reach of a GDPR forget. With no {@code cryptoEngine} the mapper is crypto-blind.
+   * way the Spring/Quarkus/Micronaut default stores and the saga/DLQ stores build theirs. So when a
+   * {@link CryptoEngine} is configured, an {@code @Encrypted} read-model field is ciphertext at
+   * rest and within {@code forget(subjectId)} scope. With no {@code cryptoEngine} the mapper is
+   * crypto-blind.
    *
-   * @return configured JdbcProjectionRepository, crypto-aware iff this factory has a {@link
-   *     CryptoEngine}
+   * @return the store, crypto-aware iff this factory has a {@link CryptoEngine}
+   * @throws UnsupportedServerVersionException if the server is older than {@link
+   *     PostgresServerVersion#MINIMUM_MAJOR_VERSION}
+   * @throws SchemaValidationException if the read-model schema is missing or invalid
    */
-  public ProjectionRepository createProjectionRepository() {
-    return new JdbcProjectionRepository(
-        dataSource, JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+  public PostgresReadModelStore createReadModelStore() {
+    return PostgresReadModelStore.create(
+        "postgres",
+        dataSource,
+        JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics),
+        autoInitializeSchema,
+        true);
   }
 }

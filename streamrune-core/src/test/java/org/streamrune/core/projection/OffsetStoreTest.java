@@ -80,4 +80,22 @@ class OffsetStoreTest {
     // of silently calling the no-op saveOffset path above.
     assertThrows(UnsupportedOperationException.class, () -> store.reset(name));
   }
+
+  /**
+   * The default subscription checkpoint is this store with the nonatomic processor, named {@code
+   * subscription_checkpoint}: it saves into this store and fences nothing.
+   */
+  @Test
+  void theDefaultSubscriptionCheckpointIsThisStoreWithTheNonatomicProcessor() {
+    var store = new MinimalOffsetStore();
+
+    CheckpointTarget target = store.subscriptionCheckpoint();
+
+    assertEquals("subscription_checkpoint", target.name());
+    assertEquals(OffsetStore.SUBSCRIPTION_CHECKPOINT, target.name());
+    org.junit.jupiter.api.Assertions.assertSame(store, target.checkpoints());
+    org.junit.jupiter.api.Assertions.assertSame(
+        AtomicBatchProcessor.nonAtomicAtLeastOnce(), target.processor());
+    org.junit.jupiter.api.Assertions.assertFalse(target.processor().fencesCheckpoint());
+  }
 }

@@ -90,13 +90,26 @@ class QuarkusInterceptedProjectionWiringTest {
     }
   }
 
-  /** MicroProfile Config for the producer, which raw Arc does not wire. */
+  /**
+   * MicroProfile Config for the producer, which raw Arc does not wire, and the one transactional
+   * read-model store a {@code TRANSACTIONAL_LOCAL} projection with no write target is routed to —
+   * an in-memory one named {@code postgres}, which replaces the default store: the {@code
+   * DataSource} here is a mock the default store cannot be created on.
+   */
   @ApplicationScoped
   public static class ConfigBeans {
     @Produces
     @Singleton
     public org.eclipse.microprofile.config.Config config() {
       return new io.smallrye.config.SmallRyeConfigBuilder().addDefaultSources().build();
+    }
+
+    @Produces
+    @Singleton
+    public org.streamrune.core.projection.ReadModelStore memoryStore() {
+      var repository = new org.streamrune.test.InMemoryProjectionRepository();
+      return org.streamrune.core.projection.ReadModelStore.of(
+          "postgres", repository, repository, repository);
     }
   }
 

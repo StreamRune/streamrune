@@ -7,11 +7,18 @@ import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONC
 import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 import static org.streamrune.runtime.WindowedProjectionTestSupport.evt;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -20,15 +27,18 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
@@ -153,14 +163,15 @@ class ScheduledProjectionRunnerTest {
         .hasMessageContaining("at least one");
   }
 
-  // A fencing-claiming processor that hands null to the updater: a plain projection declared
+  // A transactional()-claiming processor that hands null to the updater: a plain projection
+  // declared
   // AT_LEAST_ONCE_IDEMPOTENT runs under it; a write-through projection declared TRANSACTIONAL_LOCAL
   // is accepted as declared (it exposes no write target). Every registration shares this runner's
   // single atomicProcessor, so build() checks each one against its own declared mode.
   private static AtomicBatchProcessor transactionalProcessor() {
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
+      public boolean transactional() {
         return true;
       }
 
@@ -235,7 +246,9 @@ class ScheduledProjectionRunnerTest {
         .hasMessage(
             "atomicProcessor is required: pass the JdbcProjectionRepository your TRANSACTIONAL_LOCAL"
                 + " projections write to, or AtomicBatchProcessor.nonAtomicAtLeastOnce() for a"
-                + " runner of AT_LEAST_ONCE_IDEMPOTENT projections");
+                + " runner of AT_LEAST_ONCE_IDEMPOTENT projections. The runner-wide offsetStore"
+                + " and atomicProcessor are a pair: set both, or neither and register every"
+                + " projection with a CheckpointTarget.");
   }
 
   @Test
@@ -249,7 +262,7 @@ class ScheduledProjectionRunnerTest {
   }
 
   @Test
-  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underAFencingProcessor() {
+  void build_acceptsAPlainProjectionDeclaredAtLeastOnce_underATransactionalProcessor() {
     var store = listStore(List.of(evt(Instant.parse("2026-01-01T00:00:00Z"))));
     var offsets = memOffsetStore();
     var processed = new ConcurrentLinkedQueue<EventEnvelope>();
@@ -557,7 +570,7 @@ class ScheduledProjectionRunnerTest {
     var stampingProcessor =
         new AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 
@@ -636,7 +649,7 @@ class ScheduledProjectionRunnerTest {
     var failingThenStampingProcessor =
         new AtomicBatchProcessor() {
           @Override
-          public boolean supportsFencing() {
+          public boolean fencesCheckpoint() {
             return true;
           }
 
@@ -1584,6 +1597,504 @@ class ScheduledProjectionRunnerTest {
     } finally {
       release.countDown();
       runner.stop(); // thread can now exit; this stop completes and releases the started flag
+    }
+  }
+
+  // ── per-registration checkpoint targets ──────────────────────────────────────────────────────
+
+  private static final String EVERY_SECOND = "* * * * * *";
+
+  /** An offset store that remembers every projection name it was asked about. */
+  private static final class RecordingOffsetStore implements OffsetStore {
+    final InMemoryOffsetStore delegate = new InMemoryOffsetStore();
+    final Set<ProjectionName> touched = ConcurrentHashMap.newKeySet();
+
+    @Override
+    public GlobalOffset getLastOffset(ProjectionName projectionName) {
+      touched.add(projectionName);
+      return delegate.getLastOffset(projectionName);
+    }
+
+    @Override
+    public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
+      touched.add(projectionName);
+      delegate.saveOffset(projectionName, offset);
+    }
+
+    @Override
+    public void reset(ProjectionName projectionName) {
+      touched.add(projectionName);
+      delegate.reset(projectionName);
+    }
+  }
+
+  /** A leadership that issues real, non-zero fencing epochs — a multi-replica deployment. */
+  private static final class EpochLeadership implements SubscriptionLeadership {
+    @Override
+    public Optional<Lease> tryAcquire(SubscriptionName consumerName) {
+      return Optional.of(new Lease(5L));
+    }
+
+    @Override
+    public Optional<Lease> current(SubscriptionName consumerName) {
+      return Optional.of(new Lease(5L));
+    }
+
+    @Override
+    public void resign(SubscriptionName consumerName) {}
+
+    @Override
+    public void close() {}
+  }
+
+  @Test
+  void registrationsCommitThroughTheirOwnTargets() {
+    var storeA = new InMemoryProjectionRepository();
+    var storeB = new InMemoryProjectionRepository();
+    var runnerWide = new RecordingOffsetStore();
+    var runnerWideProcessor = new InMemoryProjectionRepository();
+    var orders = ProjectionName.of("orders");
+    var search = ProjectionName.of("search");
+
+    runner =
+        ScheduledProjectionRunner.builder()
+            .eventStore(listStore(List.of(offsetEvt(1, Instant.now()))))
+            .offsetStore(runnerWide)
+            .atomicProcessor(runnerWideProcessor)
+            // Real leadership: each registration's takeover epoch is stamped on its own target.
+            .leadership(new EpochLeadership())
+            .register(
+                orders,
+                b -> {},
+                EVERY_SECOND,
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("a", storeA, storeA))
+            .register(
+                search,
+                b -> {},
+                EVERY_SECOND,
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("b", storeB, storeB))
+            .build();
+    runner.start();
+
+    Awaitility.await()
+        .atMost(Duration.ofSeconds(10))
+        .until(
+            () ->
+                storeA.committedOffset(orders).equals(GlobalOffset.of(1))
+                    && storeB.committedOffset(search).equals(GlobalOffset.of(1)));
+    runner.stop();
+
+    assertThat(storeA.committedOffset(search)).isEqualTo(GlobalOffset.initial());
+    assertThat(storeB.committedOffset(orders)).isEqualTo(GlobalOffset.initial());
+    assertThat(storeA.stampedEpoch(orders)).isEqualTo(5L);
+    assertThat(storeB.stampedEpoch(search)).isEqualTo(5L);
+    assertThat(storeA.stampedEpoch(search)).isZero();
+    assertThat(storeB.stampedEpoch(orders)).isZero();
+    // Nothing was committed or stamped through the runner-wide processor.
+    for (var n : List.of(orders, search)) {
+      assertThat(runnerWideProcessor.committedOffset(n)).isEqualTo(GlobalOffset.initial());
+      assertThat(runnerWideProcessor.stampedEpoch(n)).isZero();
+    }
+    // Neither registration ever read or wrote the runner-wide default.
+    assertThat(runnerWide.touched).isEmpty();
+    // status() reads each registration's checkpoint from its own target.
+    assertThat(runner.status().get(orders).lastOffset()).isEqualTo(GlobalOffset.of(1));
+    assertThat(runner.status().get(search).lastOffset()).isEqualTo(GlobalOffset.of(1));
+  }
+
+  @Test
+  void routedSkipAdvanceCommitsThroughItsTarget() {
+    var store = new InMemoryProjectionRepository();
+    // A target whose processor commits to whatever store it is handed: committing it with the
+    // runner-wide store shows up in the recording store.
+    var storeC = new InMemoryOffsetStore();
+    var runnerWide = new RecordingOffsetStore();
+    // A processor of its own as the runner-wide default: a routed advance through the wrong
+    // processor lands here, since it ignores the store it is handed.
+    var runnerWideProcessor = new InMemoryProjectionRepository();
+    var name = ProjectionName.of("poisoned");
+    var audit = ProjectionName.of("audit");
+    Projection poison =
+        b -> {
+          throw new IllegalStateException("poison");
+        };
+
+    runner =
+        ScheduledProjectionRunner.builder()
+            .eventStore(listStore(List.of(offsetEvt(1, Instant.now()))))
+            .offsetStore(runnerWide)
+            .atomicProcessor(runnerWideProcessor)
+            .register(
+                name,
+                poison,
+                EVERY_SECOND,
+                ProjectionErrorStrategy.SKIP,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", store, store))
+            .register(
+                audit,
+                poison,
+                EVERY_SECOND,
+                ProjectionErrorStrategy.SKIP,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("c", storeC, AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+            .build();
+    runner.start();
+
+    Awaitility.await()
+        .atMost(Duration.ofSeconds(10))
+        .until(
+            () ->
+                store.committedOffset(name).equals(GlobalOffset.of(1))
+                    && storeC.getLastOffset(audit).equals(GlobalOffset.of(1)));
+    runner.stop();
+    assertThat(runnerWide.touched).isEmpty();
+    assertThat(runnerWideProcessor.committedOffset(name)).isEqualTo(GlobalOffset.initial());
+    assertThat(runnerWideProcessor.committedOffset(audit)).isEqualTo(GlobalOffset.initial());
+    assertThat(store.committedOffset(audit)).isEqualTo(GlobalOffset.initial());
+  }
+
+  @Test
+  void resetHitsTheRoutedStoresCheckpoint() {
+    var store = new InMemoryProjectionRepository();
+    var runnerWide = new InMemoryOffsetStore();
+    var routed = ProjectionName.of("routed");
+    var plain = ProjectionName.of("plain");
+    // The runner-wide store holds a row under the routed name too: a reset that went to the
+    // runner-wide default would rewind this row instead of the routed store's.
+    runnerWide.saveOffset(routed, GlobalOffset.of(7));
+
+    runner =
+        ScheduledProjectionRunner.builder()
+            .eventStore(listStore(List.of(offsetEvt(1, Instant.now()))))
+            .offsetStore(runnerWide)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .register(
+                routed,
+                b -> {},
+                EVERY_SECOND,
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", store, store))
+            .register(plain, b -> {}, EVERY_SECOND, AT_LEAST_ONCE_IDEMPOTENT)
+            .build();
+    runner.start();
+    Awaitility.await()
+        .atMost(Duration.ofSeconds(10))
+        .until(
+            () ->
+                store.committedOffset(routed).equals(GlobalOffset.of(1))
+                    && runnerWide.getLastOffset(plain).equals(GlobalOffset.of(1)));
+    assertThatThrownBy(() -> runner.reset(routed)).isInstanceOf(IllegalStateException.class);
+    runner.stop();
+
+    runner.reset(routed);
+
+    assertThat(store.committedOffset(routed)).isEqualTo(GlobalOffset.initial());
+    assertThat(runnerWide.getLastOffset(routed)).isEqualTo(GlobalOffset.of(7));
+    assertThat(runnerWide.getLastOffset(plain)).isEqualTo(GlobalOffset.of(1));
+
+    // An unrouted registration resets the runner-wide default.
+    runner.reset(plain);
+    assertThat(runnerWide.getLastOffset(plain)).isEqualTo(GlobalOffset.initial());
+
+    assertThatThrownBy(() -> runner.reset(ProjectionName.of("unknown")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("unknown");
+  }
+
+  @Test
+  void buildFailsWithoutAnyCheckpointSource() {
+    var store = new InMemoryProjectionRepository();
+    assertThatThrownBy(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .register(
+                        ProjectionName.of("routed"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .register(
+                        ProjectionName.of("orphan"),
+                        b -> {},
+                        EVERY_SECOND,
+                        AT_LEAST_ONCE_IDEMPOTENT)
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("'orphan'")
+        .hasMessageNotContaining("'routed'");
+
+    // Every registration routed: no runner-wide pair is needed.
+    assertThatCode(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .register(
+                        ProjectionName.of("routed"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .build())
+        .doesNotThrowAnyException();
+
+    // Half a runner-wide pair is refused even when every registration is routed.
+    assertThatThrownBy(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .offsetStore(memOffsetStore())
+                    .register(
+                        ProjectionName.of("routed"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageStartingWith("atomicProcessor is required")
+        .hasMessageContaining("neither and register every projection with a CheckpointTarget");
+    assertThatThrownBy(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+                    .register(
+                        ProjectionName.of("routed"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("search", store, store))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageStartingWith("offsetStore is required")
+        .hasMessageContaining("neither and register every projection with a CheckpointTarget");
+  }
+
+  @Test
+  void fencingCheckIsPerRegistration() {
+    var fencing = new InMemoryProjectionRepository();
+    assertThatThrownBy(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .leadership(new EpochLeadership())
+                    .register(
+                        ProjectionName.of("orders"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("postgres", fencing, fencing))
+                    .register(
+                        ProjectionName.of("audit"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget(
+                            "unfenced-store",
+                            new InMemoryOffsetStore(),
+                            AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("'audit'")
+        .hasMessageContaining("'unfenced-store'")
+        .hasMessageNotContaining("orders");
+
+    assertThatCode(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    .leadership(new EpochLeadership())
+                    .register(
+                        ProjectionName.of("orders"),
+                        b -> {},
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("postgres", fencing, fencing))
+                    .build())
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void deliveryCheckIsPerRegistration() {
+    var transactional = new InMemoryProjectionRepository();
+    assertThatThrownBy(
+            () ->
+                ScheduledProjectionRunner.builder()
+                    .eventStore(emptyStore())
+                    // The runner-wide default is transactional; the routed target is not.
+                    .offsetStore(transactional)
+                    .atomicProcessor(transactional)
+                    .register(
+                        ProjectionName.of("orders"),
+                        new WriteThroughProjection(),
+                        EVERY_SECOND,
+                        TRANSACTIONAL_LOCAL)
+                    .register(
+                        ProjectionName.of("audit"),
+                        new WriteThroughProjection(),
+                        EVERY_SECOND,
+                        ProjectionErrorStrategy.HALT,
+                        TRANSACTIONAL_LOCAL,
+                        new CheckpointTarget(
+                            "at-least-once-store",
+                            new InMemoryOffsetStore(),
+                            AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("'audit'")
+        .hasMessageContaining("'at-least-once-store'")
+        .hasMessageNotContaining("orders");
+  }
+
+  @Test
+  void deliveryModeLineNamesTheCheckpointTarget() {
+    var log = (Logger) LoggerFactory.getLogger(ScheduledProjectionRunner.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    var levelBefore = log.getLevel();
+    log.setLevel(Level.INFO);
+    appender.start();
+    log.addAppender(appender);
+    var store = new InMemoryProjectionRepository();
+    try {
+      runner =
+          ScheduledProjectionRunner.builder()
+              .eventStore(emptyStore())
+              .offsetStore(memOffsetStore())
+              .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+              .register(
+                  ProjectionName.of("routed"),
+                  b -> {},
+                  EVERY_SECOND,
+                  ProjectionErrorStrategy.HALT,
+                  AT_LEAST_ONCE_IDEMPOTENT,
+                  new CheckpointTarget("search", store, store))
+              .register(ProjectionName.of("plain"), b -> {}, EVERY_SECOND, AT_LEAST_ONCE_IDEMPOTENT)
+              .build();
+      runner.start();
+    } finally {
+      log.detachAppender(appender);
+      log.setLevel(levelBefore);
+    }
+    assertThat(appender.list)
+        .extracting(ILoggingEvent::getFormattedMessage)
+        .anySatisfy(
+            m ->
+                assertThat(m)
+                    .startsWith("Projection 'routed' delivery mode")
+                    .contains(
+                        InMemoryProjectionRepository.class.getName()
+                            + " (checkpoint target 'search')"))
+        .anySatisfy(
+            m ->
+                assertThat(m)
+                    .startsWith("Projection 'plain' delivery mode")
+                    .contains("on nonAtomicAtLeastOnce —"));
+  }
+
+  /** An offset store whose reset() announces itself and then waits to be released. */
+  private static final class BlockingResetStore implements OffsetStore {
+    final InMemoryOffsetStore delegate = new InMemoryOffsetStore();
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+
+    @Override
+    public GlobalOffset getLastOffset(ProjectionName projectionName) {
+      return delegate.getLastOffset(projectionName);
+    }
+
+    @Override
+    public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
+      delegate.saveOffset(projectionName, offset);
+    }
+
+    @Override
+    public void reset(ProjectionName projectionName) {
+      entered.countDown();
+      try {
+        release.await();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      delegate.reset(projectionName);
+    }
+  }
+
+  /** Waits until {@code thread} is parked on a monitor (here: the runner's reset claim). */
+  private static Thread.State awaitBlocked(Thread thread) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (thread.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+      Thread.sleep(5);
+    }
+    return thread.getState();
+  }
+
+  @Test
+  void startWaitsForAResetInProgress() throws Exception {
+    var store = new BlockingResetStore();
+    var routed = ProjectionName.of("routed");
+    runner =
+        ScheduledProjectionRunner.builder()
+            .eventStore(emptyStore())
+            .register(
+                routed,
+                b -> {},
+                EVERY_SECOND,
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", store, AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+            .build();
+    var scheduled = runner;
+    var resetError = new AtomicReference<Throwable>();
+    var startError = new AtomicReference<Throwable>();
+    Thread resetter =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    scheduled.reset(routed);
+                  } catch (Throwable t) {
+                    resetError.set(t);
+                  }
+                });
+    try {
+      assertThat(store.entered.await(5, TimeUnit.SECONDS)).as("reset reached the store").isTrue();
+      Thread starter =
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      scheduled.start();
+                    } catch (Throwable t) {
+                      startError.set(t);
+                    }
+                  });
+      // start() waits on the reset's claim: nothing has started while the rewind is in flight.
+      assertThat(awaitBlocked(starter)).isEqualTo(Thread.State.BLOCKED);
+      assertThat(scheduled.status().get(routed).state())
+          .isEqualTo(ScheduledProjectionState.PENDING);
+
+      store.release.countDown();
+      resetter.join(5_000);
+      starter.join(5_000);
+      assertThat(resetError.get()).isNull();
+      assertThat(startError.get()).isNull();
+      assertThatThrownBy(() -> scheduled.reset(routed)).isInstanceOf(IllegalStateException.class);
+    } finally {
+      store.release.countDown();
     }
   }
 

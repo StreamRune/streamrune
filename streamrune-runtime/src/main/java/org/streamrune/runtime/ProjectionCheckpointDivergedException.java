@@ -15,10 +15,12 @@ import org.streamrune.core.types.LogSanitizer;
  * after the moved checkpoint. A rejection by the epoch fence is not this error either: it names a
  * newer leader, and the runner stands by.
  *
- * <p>Recovery is operational: make the runner's {@code OffsetStore} read the checkpoint its {@code
- * AtomicBatchProcessor} advances — for {@code JdbcProjectionRepository}, a {@code
- * PostgresOffsetStore} over the same {@code DataSource} — and restart the projection, which resumes
- * from the last committed checkpoint.
+ * <p>Recovery is operational: give the runner the {@code OffsetStore} that reads the checkpoint
+ * table its {@code AtomicBatchProcessor} advances — {@code JdbcProjectionRepository} with {@code
+ * PostgresReadModelCheckpoints} on the same {@code DataSource} ({@code
+ * PostgresReadModelStore#checkpointTarget()}), {@code PostgresSubscriptionCheckpointProcessor} with
+ * {@code PostgresOffsetStore} ({@code PostgresOffsetStore#subscriptionCheckpoint()}) — and restart
+ * the projection, which resumes from the last committed checkpoint.
  */
 public final class ProjectionCheckpointDivergedException extends RuntimeException {
 
@@ -42,12 +44,15 @@ public final class ProjectionCheckpointDivergedException extends RuntimeExceptio
             + " read from "
             + checkpoint
             + " is rejected and no retry can succeed. Likely causes: (1) the AtomicBatchProcessor"
-            + " and the OffsetStore are not over the same DataSource (or the same projection_offset"
-            + " table) — for example a JdbcProjectionRepository over a read-model DataSource with a"
-            + " PostgresOffsetStore over the primary one; (2) two runners are registered under this"
-            + " projection name and commit through this processor while reading their checkpoint"
-            + " from different OffsetStores. Give the runner an OffsetStore over the processor's"
-            + " DataSource, register the projection name once, and restart the projection. Last"
+            + " and the OffsetStore are not over the same checkpoint table — for example a"
+            + " JdbcProjectionRepository (readmodel_checkpoint) with a PostgresOffsetStore"
+            + " (subscription_checkpoint), or the two on different DataSources; (2) two runners are"
+            + " registered under this projection name and commit through this processor while"
+            + " reading their checkpoint from different OffsetStores. Give the runner a matching"
+            + " pair — JdbcProjectionRepository with PostgresReadModelCheckpoints"
+            + " (PostgresReadModelStore#checkpointTarget()), PostgresSubscriptionCheckpointProcessor"
+            + " with PostgresOffsetStore (PostgresOffsetStore#subscriptionCheckpoint()), both on one"
+            + " DataSource — register the projection name once, and restart the projection. Last"
             + " rejection: "
             + rejection.getMessage(),
         rejection);

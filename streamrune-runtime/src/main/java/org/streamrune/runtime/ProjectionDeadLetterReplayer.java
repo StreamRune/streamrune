@@ -3,12 +3,14 @@ package org.streamrune.runtime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -30,6 +32,16 @@ import org.streamrune.core.types.ProjectionName;
  * <p>Replay is explicit and operator-driven by design — there is no background loop. A
  * dead-lettered batch failed deterministically; retrying it on a schedule before the cause is fixed
  * would only burn cycles and spam logs.
+ *
+ * <p><b>Each projection on its own processor.</b> A replayer resolves the processor per projection:
+ * {@link #ProjectionDeadLetterReplayer(EventStore, ProjectionDeadLetterStore, Function)} takes the
+ * same {@link CheckpointTarget} each projection's runner registration reads and commits through —
+ * {@link org.streamrune.core.projection.ReadModelStore#checkpointTarget()} for a projection routed
+ * to a read-model store, {@link
+ * org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()} for one routed to the event
+ * store's subscription checkpoint — so one replayer serves projections of several stores, and a
+ * replay of a projection never runs on another store's processor. The replay uses only the target's
+ * processor; it reads no checkpoint and writes none.
  *
  * <p><b>Serialized with the live runner.</b> {@link #replay} feeds each range through {@link
  * AtomicBatchProcessor#executeReplay} on the processor the projection's runner commits through, so
@@ -101,35 +113,101 @@ public final class ProjectionDeadLetterReplayer {
 
   private final EventStore eventStore;
   private final ProjectionDeadLetterStore deadLetterStore;
-  private final AtomicBatchProcessor processor;
+
+  /** Each projection's processor; {@code null} for a projection with no target. */
+  private final ProcessorLookup processors;
 
   /**
-   * Creates a replayer.
+   * Creates a replayer whose projections all commit through one processor — a runner with one
+   * default pair and no per-registration targets. Its refusals name the processor alone.
    *
    * @param eventStore the event store to re-read dead-lettered ranges from
    * @param deadLetterStore the store holding the entries to replay
    * @param processor the processor the runner of the replayed projections commits through; its
    *     per-projection lock is what serializes a replay with a live batch, so a different processor
    *     here serializes nothing
+   * @throws IllegalArgumentException if an argument is {@code null}
    */
   public ProjectionDeadLetterReplayer(
       EventStore eventStore,
       ProjectionDeadLetterStore deadLetterStore,
       AtomicBatchProcessor processor) {
+    this(eventStore, deadLetterStore, singleProcessor(processor));
+  }
+
+  /**
+   * Creates a replayer that replays each projection on the processor of its own checkpoint target:
+   * the {@link CheckpointTarget} the projection's runner registration reads its position from and
+   * commits through. The function is asked at every {@link #replay} and {@link
+   * #replayWithRunnerStopped}, before any entry is read.
+   *
+   * @param eventStore the event store to re-read dead-lettered ranges from
+   * @param deadLetterStore the store holding the entries to replay
+   * @param targets the checkpoint target of each projection — the one its runner registration uses;
+   *     returns {@code null} for a projection it does not know, which is then refused. A different
+   *     target's processor serializes nothing with the live runner
+   * @throws IllegalArgumentException if an argument is {@code null}
+   */
+  public ProjectionDeadLetterReplayer(
+      EventStore eventStore,
+      ProjectionDeadLetterStore deadLetterStore,
+      Function<ProjectionName, CheckpointTarget> targets) {
+    this(eventStore, deadLetterStore, perTarget(targets));
+  }
+
+  private ProjectionDeadLetterReplayer(
+      EventStore eventStore,
+      ProjectionDeadLetterStore deadLetterStore,
+      ProcessorLookup processors) {
     if (eventStore == null) {
       throw new IllegalArgumentException("eventStore is required");
     }
     if (deadLetterStore == null) {
       throw new IllegalArgumentException("deadLetterStore is required");
     }
+    this.eventStore = eventStore;
+    this.deadLetterStore = deadLetterStore;
+    this.processors = processors;
+  }
+
+  private static ProcessorLookup singleProcessor(AtomicBatchProcessor processor) {
     if (processor == null) {
       throw new IllegalArgumentException(
           "processor is required: pass the AtomicBatchProcessor the projection's runner commits"
               + " through");
     }
-    this.eventStore = eventStore;
-    this.deadLetterStore = deadLetterStore;
-    this.processor = processor;
+    var only = new ReplayProcessor(processor, null);
+    return name -> only;
+  }
+
+  private static ProcessorLookup perTarget(Function<ProjectionName, CheckpointTarget> targets) {
+    if (targets == null) {
+      throw new IllegalArgumentException(
+          "targets is required: pass each projection's CheckpointTarget — the pair its runner"
+              + " registration reads and commits through");
+    }
+    return name -> {
+      CheckpointTarget target = targets.apply(name);
+      return target == null ? null : new ReplayProcessor(target.processor(), target.name());
+    };
+  }
+
+  /**
+   * The processor {@code projectionName} replays on.
+   *
+   * @throws IllegalArgumentException if the projection has no target
+   */
+  private ReplayProcessor processorOf(ProjectionName projectionName) {
+    ReplayProcessor resolved = processors.of(projectionName);
+    if (resolved == null) {
+      throw new IllegalArgumentException(
+          "Projection '"
+              + LogSanitizer.sanitizeForLog(projectionName.value())
+              + "' has no checkpoint target: the replayer's targets function returned null for"
+              + " it. Return the CheckpointTarget its runner registration reads and commits"
+              + " through, so the replay takes the lock a live batch of it takes.");
+    }
+    return resolved;
   }
 
   /**
@@ -150,8 +228,9 @@ public final class ProjectionDeadLetterReplayer {
    * @param maxEntries maximum number of entries to replay in this pass; must be > 0
    * @return how many entries were replayed and discarded, how many failed and were kept, and how
    *     many the projection fenced out wholesale and were kept
-   * @throws IllegalArgumentException if the projection cannot run under {@code deliveryMode} on
-   *     this replayer's processor (the check a runner makes at registration)
+   * @throws IllegalArgumentException if the projection has no checkpoint target, or cannot run
+   *     under {@code deliveryMode} on its target's processor (the check a runner makes at
+   *     registration)
    * @throws IllegalStateException if the processor cannot serialize a replay with a live batch
    *     ({@link AtomicBatchProcessor#serializesReplay()} is {@code false})
    */
@@ -161,18 +240,21 @@ public final class ProjectionDeadLetterReplayer {
       ProjectionDeliveryMode deliveryMode,
       int maxEntries) {
     requireArguments(projectionName, projection, maxEntries);
+    ReplayProcessor resolved = processorOf(projectionName);
+    AtomicBatchProcessor processor = resolved.processor();
     ProjectionDeliveryPolicy.require(
         projection,
         deliveryMode,
         processor,
         "ProjectionDeadLetterReplayer",
-        projectionName.value());
+        projectionName.value(),
+        resolved.targetName());
     if (!processor.serializesReplay()) {
       throw new IllegalStateException(
           "Dead letters of projection '"
               + LogSanitizer.sanitizeForLog(projectionName.value())
               + "' cannot be replayed beside a live runner on "
-              + ProjectionDeliveryPolicy.processorLabel(processor)
+              + resolved.label()
               + ": that processor holds no per-projection lock, so the replay and a live batch"
               + " could both read a row before either saves it and one of the two writes would be"
               + " lost — idempotency does not prevent that. Stop the projection's runner and call"
@@ -218,15 +300,17 @@ public final class ProjectionDeadLetterReplayer {
    * @param maxEntries maximum number of entries to replay in this pass; must be > 0
    * @return how many entries were replayed and discarded, how many failed and were kept, and how
    *     many the projection fenced out wholesale and were kept
-   * @throws IllegalStateException if the processor serializes replays
+   * @throws IllegalArgumentException if the projection has no checkpoint target
+   * @throws IllegalStateException if the projection's processor serializes replays
    */
   public ReplayResult replayWithRunnerStopped(
       ProjectionName projectionName, Projection projection, int maxEntries) {
     requireArguments(projectionName, projection, maxEntries);
-    if (processor.serializesReplay()) {
+    ReplayProcessor resolved = processorOf(projectionName);
+    if (resolved.processor().serializesReplay()) {
       throw new IllegalStateException(
           "replayWithRunnerStopped is for a processor without a per-projection lock; "
-              + ProjectionDeliveryPolicy.processorLabel(processor)
+              + resolved.label()
               + " serializes a replay with a live batch, so call replay(...) for projection '"
               + LogSanitizer.sanitizeForLog(projectionName.value())
               + "' — with the runner live or stopped.");
@@ -336,6 +420,22 @@ public final class ProjectionDeadLetterReplayer {
       cursor = page.getLast().globalOffset();
     }
     return batch;
+  }
+
+  /** Resolves the processor a projection replays on; {@code null} when it has no target. */
+  @FunctionalInterface
+  private interface ProcessorLookup {
+    ReplayProcessor of(ProjectionName projectionName);
+  }
+
+  /**
+   * The processor one projection replays on, and the name of the checkpoint target it came from
+   * ({@code null} for the single-processor constructor).
+   */
+  private record ReplayProcessor(AtomicBatchProcessor processor, String targetName) {
+    String label() {
+      return ProjectionDeliveryPolicy.processorLabel(processor, targetName);
+    }
   }
 
   /**

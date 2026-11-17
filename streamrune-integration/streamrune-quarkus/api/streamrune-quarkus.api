@@ -7,13 +7,10 @@ public class org.streamrune.quarkus.CryptoForgetListenHealthRegistrar
 
 public class org.streamrune.quarkus.ProjectionIndexDeclarer
   public <init>()
-  public void declare(io.quarkus.runtime.StartupEvent, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionRepository>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionIndex>)
 
 public class org.streamrune.quarkus.ProjectionProducer
   public <init>()
   public org.streamrune.runtime.InlineProjectionInterceptor inlineProjectionInterceptor(jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>, org.eclipse.microprofile.config.Config, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, org.streamrune.core.tracing.StreamRuneTracing)
-  public org.streamrune.runtime.MultiProjectionRunner multiProjectionRunner(jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionDeadLetterStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.AtomicBatchProcessor>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, jakarta.enterprise.inject.Instance<org.streamrune.core.subscription.SubscriptionLeadership>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionErrorClassifier>, jakarta.enterprise.inject.Instance<org.streamrune.runtime.SubscriptionHealthContributor>, org.streamrune.quarkus.StreamRuneQuarkusProperties, org.eclipse.microprofile.config.Config, org.streamrune.core.tracing.StreamRuneTracing)
-  public org.streamrune.runtime.ScheduledProjectionRunner scheduledProjectionRunner(jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionDeadLetterStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.AtomicBatchProcessor>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, jakarta.enterprise.inject.Instance<org.streamrune.core.subscription.SubscriptionLeadership>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.ProjectionErrorClassifier>, jakarta.enterprise.inject.Instance<org.streamrune.runtime.SubscriptionHealthContributor>, org.eclipse.microprofile.config.Config, org.streamrune.core.tracing.StreamRuneTracing)
 
 public class org.streamrune.quarkus.QuarkusAuthenticatedUserResolver implements org.streamrune.integration.AuthenticatedUserResolver
   public <init>(io.quarkus.security.identity.SecurityIdentity)
@@ -151,14 +148,15 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.audit.AuditStore auditStore(javax.sql.DataSource)
   public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(javax.sql.DataSource)
   public org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery(javax.sql.DataSource)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
+  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(jakarta.enterprise.inject.Instance<javax.sql.DataSource>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.core.tracing.StreamRuneTracing streamRuneTracing(jakarta.enterprise.inject.Instance<io.opentelemetry.api.OpenTelemetry>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.integration.AuthenticatedUserResolver quarkusAuthenticatedUserResolver(jakarta.enterprise.inject.Instance<io.quarkus.security.identity.SecurityIdentity>)
   public org.streamrune.integration.RequestIdentityPolicy requestIdentityPolicy(org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.integration.AuthenticatedUserResolver>)
   public org.streamrune.integration.SseAuthorizer sseDenyAllAuthorizer()
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(javax.sql.DataSource, jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.postgres.PostgresCommandInbox commandInbox(javax.sql.DataSource)
   public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusProperties)
@@ -250,6 +248,7 @@ public interface org.streamrune.quarkus.StreamRuneQuarkusProperties
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$MetricsConfig metrics()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$OutboxConfig outbox()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$QueryCacheConfig queryCache()
+  public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$ReadModelConfig readModel()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$SagaConfig saga()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$SecurityConfig security()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$SseConfig sse()
@@ -298,6 +297,12 @@ public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$Outbo
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$QueryCacheConfig
   public abstract boolean enabled()
+
+public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$ReadModelConfig
+  public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$ReadModelConfig$SchemaConfig schema()
+
+public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$ReadModelConfig$SchemaConfig
+  public abstract java.util.Optional<java.lang.Boolean> autoInitialize()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$SagaConfig
   public abstract boolean compensationRetryEnabled()

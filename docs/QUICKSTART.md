@@ -175,7 +175,13 @@ through the factory, so they provision the schema at startup unless
 `streamrune.event-store.schema.auto-initialize=false` (see the production guide's Flyway section).
 All three — `PostgresEventStore.create(...)`, `initializeSchema()` and the factory's `create()` —
 refuse a server older than PostgreSQL 17 with `UnsupportedServerVersionException` before they
-write anything.
+write anything. They apply the event-store series only. Read models kept in PostgreSQL have a
+series of their own (`db/readmodel-migration`, with `readmodel_checkpoint`, where those projections
+keep their checkpoints): `PostgresReadModelStore.create("postgres", dataSource,
+JdbcProjectionRepository.createObjectMapper(null), true, true)` applies and validates it and returns
+the read-model store. `new PostgresEventStoreFactory(...).createReadModelStore()` builds the same
+store with the factory's crypto engine; it applies the series when the factory's
+`autoInitializeSchema` is on and always validates it, whatever `validateSchema` says.
 
 For testing, use the in-memory store. It needs no database, but it stores events the way
 PostgreSQL does — as JSON, read back through the same registry — so an event type you forgot to
@@ -238,12 +244,14 @@ streamRune.close();
 A `Projection` is an interface with a single abstract method — `void process(List<EventEnvelope> batch)` —
 that a **projection runner** drives. Every registration declares a `ProjectionDeliveryMode`, with no
 default. The projection below writes to its own store with upsert semantics, so it is
-`AT_LEAST_ONCE_IDEMPOTENT`: a redelivered batch is applied again and must leave the same rows, and its
-runner takes `AtomicBatchProcessor.nonAtomicAtLeastOnce()` — process, then save the checkpoint, two
-commits. For a read model whose writes must commit in one transaction with the checkpoint, extend
-`BaseProjection` over a `JdbcProjectionRepository`, declare `TRANSACTIONAL_LOCAL` and pass the same
-repository as the runner's `atomicProcessor(...)` — see
-[Delivery modes](guide/concepts.md#delivery-modes--what-a-projection-promises). Registering a
+`AT_LEAST_ONCE_IDEMPOTENT`: a redelivered batch is applied again and must leave the same rows, and it
+is registered on the event store's subscription checkpoint (`offsetStore.subscriptionCheckpoint()`) —
+process, then commit the checkpoint, two commits. For a read model whose writes must commit in one
+transaction with the checkpoint, build a `PostgresReadModelStore` (above), extend `BaseProjection`
+over `store.repository()`, declare `TRANSACTIONAL_LOCAL`, and register it on the store —
+`registerProjection(name, projection, ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, store)`: that
+projection checkpoints in the store's `readmodel_checkpoint`, never in the `PostgresOffsetStore`
+below — see [Delivery modes](guide/concepts.md#delivery-modes--what-a-projection-promises). Registering a
 projection alone is not enough: you must also configure a runner (`projectionRunner(...)` or
 `projectionRunnerFactory(...)`) and call `startProjections()` **on the built instance**. `build()`
 throws `IllegalStateException` when a projection is registered and no runner is configured.
@@ -251,7 +259,6 @@ throws `IllegalStateException` when a projection is registered and no runner is 
 ```java
 import java.util.List;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.types.ProjectionName;
@@ -267,17 +274,18 @@ Projection orderSummary = batch -> {
     }
 };
 
-var offsetStore = new PostgresOffsetStore(dataSource);   // tracks each projection's progress
+var offsetStore = new PostgresOffsetStore(dataSource);   // the event store's subscription checkpoint
 
 StreamRune streamRune = StreamRune.builder()
     .eventStore(eventStore)
     .register(ORDER, OrderCommand.class, cmd -> AggregateId.of(cmd.orderId()), new OrderDecider())
-    .registerProjection(ProjectionName.of("order_summary"), orderSummary, ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+    // The registration names where its checkpoint lives: an at-least-once projection that writes
+    // to its own store keeps its position in the event store's subscription checkpoint.
+    .registerProjection(ProjectionName.of("order_summary"), orderSummary,
+        ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT, offsetStore.subscriptionCheckpoint())
     .projectionRunnerFactory((store, subscriptionConfig) ->
         ContinuousProjectionRunner.builder()
             .eventStore(store)
-            .offsetStore(offsetStore)
-            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce()) // required; the named non-transactional choice
             .subscriptionConfig(subscriptionConfig)
             .build())
     .build();

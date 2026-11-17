@@ -37,10 +37,12 @@ import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.GlobalOffset;
@@ -249,33 +251,47 @@ class MicronautBeanWiringTest {
   }
 
   @Test
-  void atomicBatchProcessorBean_exists_whenDataSourcePresent() {
-    // The module auto-wires LeaseBasedLeadership the moment a DataSource
-    // exists, and the runners thread that leadership's monotonic epoch into every projection
-    // commit — but the epoch is only honoured by a TRANSACTIONAL AtomicBatchProcessor. Micronaut
-    // produced a PostgresOffsetStore and a leadership bean, and no processor at all, so every
-    // projection ran on the nonatomic processor: the takeover stamp was a no-op, the epoch fence
-    // and overlap guard never ran, and a superseded leader's batch re-applied to the read model
-    // silently. Spring (@ConditionalOnBean(DataSource) jdbcProjectionRepository) and Quarkus
-    // (@DefaultBean jdbcProjectionRepository) have always produced one.
+  void defaultStoreAndFencingSubscriptionCheckpoint_exist_whenDataSourcePresent() {
+    // The module auto-wires LeaseBasedLeadership the moment a DataSource exists, and the runners
+    // thread that leadership's monotonic epoch into every projection commit — but the epoch is
+    // only honoured by a processor that fences its checkpoint. Micronaut once produced a
+    // PostgresOffsetStore and a leadership bean and no fencing processor at all, so every
+    // projection ran unfenced and a superseded leader's batch re-applied to the read model
+    // silently. On the same condition the module now defines the default read-model store (a
+    // transactional, fencing PostgresReadModelStore named postgres) and the event store's
+    // subscription checkpoint, whose processor fences. The store is only looked up by definition:
+    // creating it reads the server version, which this mock DataSource cannot answer.
     try (var ctx = ApplicationContext.run(Map.of("spec.name", "with-datasource"))) {
       assertTrue(
-          ctx.containsBean(org.streamrune.core.projection.AtomicBatchProcessor.class),
-          "an AtomicBatchProcessor bean must exist when a DataSource is present — leadership is "
-              + "auto-wired on the same condition and its epoch fence is inert without one");
+          ctx.findBeanDefinition(
+                  ReadModelStore.class,
+                  io.micronaut.inject.qualifiers.Qualifiers.byName(
+                      StreamRuneMicronautModule.DEFAULT_READ_MODEL_STORE_BEAN))
+              .isPresent(),
+          "the default read-model store must be defined when a DataSource is present — leadership"
+              + " is auto-wired on the same condition and its epoch fence is inert without one");
+      CheckpointTarget subscription =
+          ctx.getBean(
+              CheckpointTarget.class,
+              io.micronaut.inject.qualifiers.Qualifiers.byName(
+                  StreamRuneMicronautModule.SUBSCRIPTION_CHECKPOINT));
       assertInstanceOf(
-          org.streamrune.postgres.JdbcProjectionRepository.class,
-          ctx.getBean(org.streamrune.core.projection.AtomicBatchProcessor.class),
-          "the processor must be the transactional JDBC repository, matching Spring and Quarkus");
+          org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor.class,
+          subscription.processor(),
+          "the subscription checkpoint's processor fences, matching Spring and Quarkus");
+      assertTrue(subscription.processor().fencesCheckpoint());
+      assertSame(ctx.getBean(OffsetStore.class), subscription.checkpoints());
     }
   }
 
   @Test
-  void frameworkProjectionRunner_getsAFencingProcessor_whenDataSourcePresent() throws Exception {
-    // The bean existing is not the same as the runner USING it: ProjectionFactory gives a runner
-    // the processor bean only when a registration declares a transactional mode or the leadership
-    // must fence. The fixture's projection is AT_LEAST_ONCE_IDEMPOTENT, so it is the real
-    // (lease-based) leadership that selects the bean here. Assert on the assembled runner.
+  void frameworkProjectionRunner_refusesAnUnfencedCheckpoint_underRealLeadership() {
+    // A runner never falls back to the nonatomic processor while a real (lease-based) leadership
+    // is threaded into it. The fixture's at-least-once projection has no write target, so it is
+    // routed to the subscription checkpoint — here the application's own offset store, paired
+    // with the nonatomic processor, which does not fence: the runner is refused, naming the
+    // projection. (On the module's PostgresOffsetStore the same projection is fenced by
+    // PostgresSubscriptionCheckpointProcessor — MicronautReadModelStoreWiringTest.)
     try (var ctx =
         ApplicationContext.run(
             Map.of(
@@ -283,24 +299,25 @@ class MicronautBeanWiringTest {
                 "fenced-projection",
                 "streamrune.runner-lifecycle-enabled",
                 "false"))) {
-      var runner =
-          ctx.getBean(
-              MultiProjectionRunner.class,
-              io.micronaut.inject.qualifiers.Qualifiers.byName(
-                  ProjectionFactory.FRAMEWORK_MULTI_RUNNER));
-      Field field = MultiProjectionRunner.class.getDeclaredField("atomicProcessor");
-      field.setAccessible(true);
-      Object processor = field.get(runner);
-      assertFalse(
-          processor instanceof AtomicBatchProcessor.NonAtomicAtLeastOnce,
-          "the framework-assembled runner must not fall back to the nonatomic processor while a "
-              + "real (lease-based) leadership is threaded into it");
-      assertInstanceOf(org.streamrune.postgres.JdbcProjectionRepository.class, processor);
+      var ex =
+          assertThrows(
+              io.micronaut.context.exceptions.BeanInstantiationException.class,
+              () ->
+                  ctx.getBean(
+                      MultiProjectionRunner.class,
+                      io.micronaut.inject.qualifiers.Qualifiers.byName(
+                          ProjectionFactory.FRAMEWORK_MULTI_RUNNER)));
+      String message = rootCause(ex).getMessage();
+      assertTrue(
+          message.contains("projection 'fenced_test_projection' (AT_LEAST_ONCE_IDEMPOTENT)"),
+          message);
+      assertTrue(message.contains("does not fence its checkpoint"), message);
     }
   }
 
   @Test
-  void transactionalProjection_overAProxiedProcessorBean_verifiesAndBoots() throws Exception {
+  void transactionalProjection_overAProxiedStoreRepository_isMatchedThroughTheProxyAndBoots()
+      throws Exception {
     try (var ctx =
         ApplicationContext.run(
             Map.of(
@@ -313,18 +330,32 @@ class MicronautBeanWiringTest {
               MultiProjectionRunner.class,
               io.micronaut.inject.qualifiers.Qualifiers.byName(
                   ProjectionFactory.FRAMEWORK_MULTI_RUNNER));
-      Field field = MultiProjectionRunner.class.getDeclaredField("atomicProcessor");
+      Field field = MultiProjectionRunner.class.getDeclaredField("checkpoints");
       field.setAccessible(true);
-      Object processor = field.get(runner);
+      Object pair = ((Map<?, ?>) field.get(runner)).get(ProjectionName.of("proxied_orders"));
+      Method processorAccessor = pair.getClass().getDeclaredMethod("processor");
+      processorAccessor.setAccessible(true);
+      Object processor = processorAccessor.invoke(pair);
       assertTrue(
           Proxy.isProxyClass(processor.getClass()),
-          "the runner holds the proxy, not an unwrapped object");
+          "the registration holds the proxy, not an unwrapped object");
       assertSame(
-          ctx.getBean(AtomicBatchProcessor.class),
+          ctx.getBean(ReadModelStore.class).processor(),
           processor,
-          "the identity check verified the TRANSACTIONAL_LOCAL projection through the JDK proxy on"
-              + " both sides");
+          "routing matched the TRANSACTIONAL_LOCAL projection's write target through the JDK proxy"
+              + " on both sides");
+      Method nameAccessor = pair.getClass().getDeclaredMethod("targetName");
+      nameAccessor.setAccessible(true);
+      assertEquals("app", nameAccessor.invoke(pair));
     }
+  }
+
+  private static Throwable rootCause(Throwable t) {
+    Throwable cause = t;
+    while (cause.getCause() != null && cause.getCause() != cause) {
+      cause = cause.getCause();
+    }
+    return cause;
   }
 
   @Test
@@ -2077,7 +2108,7 @@ class MicronautBeanWiringTest {
         identityValidator < sagaSweeperLifecycleStart,
         "StreamRuneRequestIdentityValidator must run before SagaCompensationRetryLifecycle");
     // The projection indexes are declared before any runner reads or writes a read model.
-    int indexDeclarer = new ProjectionIndexDeclarer(null, List.of()).getOrder();
+    int indexDeclarer = new ProjectionIndexDeclarer(null, List.of(), null).getOrder();
     assertTrue(
         indexDeclarer < lifecycleStart,
         "ProjectionIndexDeclarer must run before StreamRuneLifecycle");
@@ -2243,10 +2274,11 @@ class MicronautBeanWiringTest {
   }
 
   /**
-   * A DataSource (so the module's lease leadership AND its JDBC projection defaults are both
-   * eligible), an application-supplied EventStore/OffsetStore so the runner assembles without a
-   * live database, and one CONTINUOUS projection so {@code ProjectionFactory.multiProjectionRunner}
-   * actually produces a runner.
+   * A DataSource (so the module's lease leadership is wired), an application-supplied
+   * EventStore/OffsetStore/ReadModelStore so the runner assembles without a live database — the
+   * application's offset store is not a {@code PostgresOffsetStore}, so the subscription checkpoint
+   * pairs it with the nonatomic processor — and one CONTINUOUS at-least-once projection with no
+   * write target so {@code ProjectionFactory.multiProjectionRunner} routes it there.
    */
   @Factory
   @Requires(property = "spec.name", value = "fenced-projection")
@@ -2255,6 +2287,15 @@ class MicronautBeanWiringTest {
     @Singleton
     DataSource dataSource() {
       return mock(DataSource.class);
+    }
+
+    // The application's store, named postgres, replaces the default one, which would be created
+    // on the mock DataSource (and fail reading its server version) when the runner collects the
+    // stores. The projection has no write target, so the store does not take it.
+    @Singleton
+    ReadModelStore memoryStore() {
+      var repository = new InMemoryProjectionRepository();
+      return ReadModelStore.of("postgres", repository, repository, repository);
     }
 
     @Singleton
@@ -2280,17 +2321,16 @@ class MicronautBeanWiringTest {
   }
 
   /**
-   * A forwarding JDK proxy over one {@link InMemoryProjectionRepository}, produced as the only
-   * {@link AtomicBatchProcessor} bean and, separately, as a {@link ProjectionRepository} bean, plus
-   * one {@code TRANSACTIONAL_LOCAL} projection over that repository bean: the write-target identity
-   * check must see through the proxy on both sides.
+   * A forwarding JDK proxy over one {@link InMemoryProjectionRepository}, the repository and the
+   * processor of the application's only {@link ReadModelStore} ({@code app}) and, separately, a
+   * {@link ProjectionRepository} bean, plus one {@code TRANSACTIONAL_LOCAL} projection over that
+   * repository bean: routing must match the write target through the proxy on both sides.
    */
   @Factory
   @Requires(property = "spec.name", value = "proxied-processor")
   static class ProxiedProcessorFixtures {
     // A field, not a bean: a bean of this class would be exposed under every type it implements,
-    // AtomicBatchProcessor included — a second candidate for the factory's
-    // List<AtomicBatchProcessor>.
+    // OffsetStore and ProjectionRepository included.
     private final InMemoryProjectionRepository real = new InMemoryProjectionRepository();
     private final Object proxy =
         Proxy.newProxyInstance(
@@ -2299,7 +2339,7 @@ class MicronautBeanWiringTest {
             (p, m, a) -> m.invoke(real, a));
 
     // No DataSource bean on purpose: the module then produces neither a LeaseBasedLeadership (NOOP)
-    // nor its default JdbcProjectionRepository, so the proxy below is the ONLY processor candidate.
+    // nor its default read-model store, so the store below is the only store.
     @Singleton
     EventStore eventStore() {
       return new InMemoryEventStore(TYPES);
@@ -2311,12 +2351,13 @@ class MicronautBeanWiringTest {
     }
 
     @Singleton
-    AtomicBatchProcessor proxiedProcessor() {
-      return (AtomicBatchProcessor) proxy;
+    ReadModelStore appStore() {
+      return ReadModelStore.of(
+          "app", (ProjectionRepository) proxy, real, (AtomicBatchProcessor) proxy);
     }
 
-    // Declared as ProjectionRepository: Micronaut exposes a @Factory bean only under its declared
-    // return type, so this is NOT a second AtomicBatchProcessor bean.
+    // The application's ProjectionRepository bean, so the module's default one (the default
+    // store's repository, which does not exist here) backs off.
     @Singleton
     ProjectionRepository proxiedRepository() {
       return (ProjectionRepository) proxy;

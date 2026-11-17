@@ -109,22 +109,31 @@ implementation("org.streamrune:streamrune-runtime:1.0.0")
 - **Declare what each projection promises** — every runner builder takes an explicit `atomicProcessor(...)` and every registration a `ProjectionDeliveryMode`. A projection that extends `BaseProjection` over the `JdbcProjectionRepository` you pass as the processor is `TRANSACTIONAL_LOCAL` (its writes and the checkpoint commit in one transaction); one that writes anywhere else is `AT_LEAST_ONCE_IDEMPOTENT` and must be idempotent. `AtomicBatchProcessor.nonAtomicAtLeastOnce()` is the processor for a runner of `AT_LEAST_ONCE_IDEMPOTENT` projections without leadership. The runners check the pairing before they read an event — see [Delivery modes](../docs/guide/concepts.md#delivery-modes--what-a-projection-promises).
 
   ```java
+  // Read models, their checkpoints (readmodel_checkpoint) and the processor, on one DataSource;
+  // create(...) applies and validates the read-model schema.
+  var store = PostgresReadModelStore.create(
+      "postgres", dataSource, JdbcProjectionRepository.createObjectMapper(cryptoEngine), true, true);
   var runner = ContinuousProjectionRunner.builder()
       .eventStore(eventStore)
-      .offsetStore(offsetStore)                 // PostgresOffsetStore over the repository's DataSource
-      .atomicProcessor(jdbcProjectionRepository)
+      .offsetStore(store.checkpoints())         // PostgresReadModelCheckpoints: what the processor advances
+      .atomicProcessor(store.processor())       // the store's JdbcProjectionRepository
       .build();
   // run(...) blocks until the runner is stopped; give it a thread of its own.
   // OrderProjection extends BaseProjection and saves under the name it is registered under.
-  runner.run(ProjectionName.of("orders"), new OrderProjection(jdbcProjectionRepository),
+  runner.run(ProjectionName.of("orders"), new OrderProjection(store.repository()),
       ProjectionDeliveryMode.TRANSACTIONAL_LOCAL);
   ```
+
+  A `JdbcProjectionRepository` checkpoints in `readmodel_checkpoint`, so never give its runner a
+  `PostgresOffsetStore` (the event store's `subscription_checkpoint`): the runner would re-read
+  batches the processor already committed and halt. An `AT_LEAST_ONCE_IDEMPOTENT` projection that
+  writes elsewhere runs on `PostgresOffsetStore#subscriptionCheckpoint()` instead.
 - **Close on shutdown** — call `streamRune.close()` to stop projections, close the command bus and close an `AutoCloseable` factory passed via `eventStoreFactory(EventStoreFactory)` or produced by `eventStoreFactoryProvider(...)`. A store passed via `eventStore(EventStore)` is not closed. `PostgresEventStoreFactory` owns nothing to close: the event store borrows from your `DataSource`, which you close yourself.
 
 ## Known Limitations
 
 - `LocalStripedLocker` is **single-JVM only** — does not coordinate across nodes. Use `PgAdvisoryLocker` from `streamrune-postgres` for distributed deployments.
 - The module is built with a Java 25 toolchain and requires a Java 25 runtime.
-- Projection runners run on every instance by default (`SubscriptionLeadership.NOOP`, always leader). For multiple replicas, pass `LeaseBasedLeadership` from `streamrune-postgres` — a database-clocked lease with a fencing epoch — to the runner builders' `leadership(...)`, together with a processor that fences (`JdbcProjectionRepository`; a runner refuses real leadership over one that does not), so at most one replica consumes each projection and a superseded leader's writes are rejected. The Spring, Quarkus and Micronaut integrations wire it automatically when a `DataSource` is present (`streamrune.subscription.single-active-consumer.enabled`, default on).
+- Projection runners run on every instance by default (`SubscriptionLeadership.NOOP`, always leader). For multiple replicas, pass `LeaseBasedLeadership` from `streamrune-postgres` — a database-clocked lease with a fencing epoch — to the runner builders' `leadership(...)`, together with a processor that fences (`JdbcProjectionRepository`, or `PostgresSubscriptionCheckpointProcessor` from `PostgresOffsetStore#subscriptionCheckpoint()`; a runner refuses real leadership over one that does not), so at most one replica consumes each projection and a superseded leader's writes are rejected. The Spring, Quarkus and Micronaut integrations wire it automatically when a `DataSource` is present (`streamrune.subscription.single-active-consumer.enabled`, default on).
 - The plain facade has no health surface: a projection thread started by `startProjections()` that dies is reported only as an ERROR log.
 - `SseEventPublisher` and `SseEventFeed` require a web framework integration (Spring, Quarkus, or Micronaut) to expose the SSE endpoint; the integration creates, starts and closes both when `streamrune.sse.enabled=true`. The feed is not durable: it keeps no stored offset and delivers only to clients connected at that moment.

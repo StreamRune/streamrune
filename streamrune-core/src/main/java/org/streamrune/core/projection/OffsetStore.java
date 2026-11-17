@@ -22,9 +22,15 @@ import org.streamrune.core.types.ProjectionName;
  *
  * <p><b>Reset caveat.</b> Because the guard blocks regressions, an intentional offset
  * <em>reset</em> or rebuild (e.g. replaying a projection from 0 after a read-model schema change)
- * must <b>not</b> go through {@link #saveOffset} — use the rebuild path (a direct {@code UPDATE
- * projection_offset SET last_offset = ?} / delete-and-reinsert invoked by an operator/rebuild
- * tool), never the runner.
+ * must <b>not</b> go through {@link #saveOffset} — use {@link #reset} (or the equivalent direct
+ * {@code UPDATE ... SET last_offset = 0} by an operator), never a save. Reset the offset store the
+ * projection actually reads: its checkpoint target's ({@link CheckpointTarget#checkpoints()}). A
+ * projection routed to a read-model store keeps its checkpoint in that store ({@link
+ * ReadModelStore#checkpoints()}, e.g. {@code readmodel_checkpoint} in the store's database); only
+ * one on the event store's subscription checkpoint keeps it in the event store's offset store
+ * ({@code subscription_checkpoint}). Resetting another store's row rewinds nothing the projection
+ * reads. A runner that holds the registration resets the right one itself ({@code
+ * ProjectionRunner#reset}, {@code MultiProjectionRunner#reset}).
  *
  * <p><b>Shared namespace.</b> The offset table is keyed by a plain string. Subscriptions that
  * checkpoint their delivery position in the same table pass a {@link ProjectionName} wrapping their
@@ -86,5 +92,32 @@ public interface OffsetStore {
             + " while never rewinding. Override reset() with a direct unguarded write (see"
             + " PostgresOffsetStore), or — if this store has no guard — override it to explicitly"
             + " delegate to saveOffset(projectionName, GlobalOffset.initial()).");
+  }
+
+  /**
+   * The name of the event store's subscription checkpoint, {@value}: the {@link
+   * CheckpointTarget#name()} of {@link #subscriptionCheckpoint()}.
+   */
+  String SUBSCRIPTION_CHECKPOINT = "subscription_checkpoint";
+
+  /**
+   * This store as the event store's subscription checkpoint: the pair an event-store backend uses
+   * for event listeners and for at-least-once projections that are routed to no read-model store.
+   *
+   * <p>The default pairs this store with {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which
+   * saves each batch's checkpoint into this store after the batch; it does not fence the
+   * checkpoint, so routing refuses it under real leadership. A store that can fence its checkpoint
+   * overrides this with a processor that commits where this store reads.
+   *
+   * <p>Meaningful only on the offset store that holds the event store's subscription checkpoint (or
+   * a test double standing in for it). A read-model store's checkpoints are never it, and should
+   * override this to refuse, as {@code PostgresReadModelCheckpoints} does: that store's pair is
+   * {@link ReadModelStore#checkpointTarget()}.
+   *
+   * @return the pair, named {@value #SUBSCRIPTION_CHECKPOINT}
+   */
+  default CheckpointTarget subscriptionCheckpoint() {
+    return new CheckpointTarget(
+        SUBSCRIPTION_CHECKPOINT, this, AtomicBatchProcessor.nonAtomicAtLeastOnce());
   }
 }

@@ -56,10 +56,10 @@ class ProjectionFencingGuardTest {
     public void close() {}
   }
 
-  /** Stands in for a transactional processor: it declares that it honours the fencing epoch. */
+  /** Stands in for a processor that declares it fences its checkpoint against the epoch. */
   private static final class FencingProcessor implements AtomicBatchProcessor {
     @Override
-    public boolean supportsFencing() {
+    public boolean fencesCheckpoint() {
       return true;
     }
 
@@ -91,8 +91,11 @@ class ProjectionFencingGuardTest {
 
   @Test
   void sequentialProcessor_doesNotClaimFencingSupport() {
-    assertThat(AtomicBatchProcessor.nonAtomicAtLeastOnce().supportsFencing())
-        .as("the sequential processor is non-transactional and cannot fence")
+    assertThat(AtomicBatchProcessor.nonAtomicAtLeastOnce().fencesCheckpoint())
+        .as("the sequential processor cannot fence its checkpoint")
+        .isFalse();
+    assertThat(AtomicBatchProcessor.nonAtomicAtLeastOnce().transactional())
+        .as("the sequential processor is non-transactional")
         .isFalse();
   }
 
@@ -172,6 +175,24 @@ class ProjectionFencingGuardTest {
   // ── no runner may boot an unfenceable multi-replica projection ──────────────────────────────
 
   @Test
+  void realLeadershipWithATransactionalProcessorThatDoesNotFence_isRejected() {
+    // transactional() alone is not fencesCheckpoint(): the capabilities are independent.
+    AtomicBatchProcessor transactionalOnly =
+        TestTransactionalProcessor.transactional(AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    assertThatThrownBy(
+            () ->
+                ContinuousProjectionRunner.builder()
+                    .atomicProcessor(transactionalOnly)
+                    .eventStore(eventStore())
+                    .offsetStore(new InMemoryOffsetStore())
+                    .leadership(new EpochLeadership(5L))
+                    .build())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot honour the leadership fencing epoch")
+        .hasMessageContaining(transactionalOnly.getClass().getName());
+  }
+
+  @Test
   void continuousRunnerBuilder_rejectsRealLeadershipWithANonFencingProcessor() {
     assertThatThrownBy(
             () ->
@@ -183,7 +204,10 @@ class ProjectionFencingGuardTest {
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("cannot honour the leadership fencing epoch")
-        .hasMessageContaining("Define an AtomicBatchProcessor bean")
+        .hasMessageContaining(
+            "Route the projection to a store whose processor fences its checkpoint")
+        .hasMessageContaining("streamrune.subscription.single-active-consumer.enabled=false")
+        .hasMessageNotContaining("AtomicBatchProcessor bean")
         .hasMessageNotContaining("whenever a DataSource is present");
   }
 
@@ -200,7 +224,10 @@ class ProjectionFencingGuardTest {
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("cannot honour the leadership fencing epoch")
-        .hasMessageContaining("Define an AtomicBatchProcessor bean")
+        .hasMessageContaining(
+            "Route the projection to a store whose processor fences its checkpoint")
+        .hasMessageContaining("streamrune.subscription.single-active-consumer.enabled=false")
+        .hasMessageNotContaining("AtomicBatchProcessor bean")
         .hasMessageNotContaining("whenever a DataSource is present");
   }
 
@@ -221,7 +248,10 @@ class ProjectionFencingGuardTest {
                     .build())
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("cannot honour the leadership fencing epoch")
-        .hasMessageContaining("Define an AtomicBatchProcessor bean")
+        .hasMessageContaining(
+            "Route the projection to a store whose processor fences its checkpoint")
+        .hasMessageContaining("streamrune.subscription.single-active-consumer.enabled=false")
+        .hasMessageNotContaining("AtomicBatchProcessor bean")
         .hasMessageNotContaining("whenever a DataSource is present");
   }
 

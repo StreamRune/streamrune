@@ -56,6 +56,6 @@ class ProjectionRegistrationTest {
   void theBooleanComponentIsGone() {
     assertThat(ProjectionRegistration.class.getRecordComponents())
         .extracting(java.lang.reflect.RecordComponent::getName)
-        .containsExactly("name", "projection", "errorStrategy", "deliveryMode");
+        .containsExactly("name", "projection", "errorStrategy", "deliveryMode", "target");
   }
 }

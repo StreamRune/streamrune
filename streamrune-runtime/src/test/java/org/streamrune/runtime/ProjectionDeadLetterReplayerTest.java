@@ -10,6 +10,7 @@ import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONA
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
@@ -20,6 +21,8 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -405,7 +408,14 @@ class ProjectionDeadLetterReplayerTest {
         () -> new ProjectionDeadLetterReplayer(eventStore, null, processor));
     assertThrows(
         IllegalArgumentException.class,
-        () -> new ProjectionDeadLetterReplayer(eventStore, dlqStore, null));
+        () -> new ProjectionDeadLetterReplayer(eventStore, dlqStore, (AtomicBatchProcessor) null));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new ProjectionDeadLetterReplayer(
+                eventStore,
+                dlqStore,
+                (java.util.function.Function<ProjectionName, CheckpointTarget>) null));
   }
 
   @Test
@@ -682,6 +692,145 @@ class ProjectionDeadLetterReplayerTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> replayer.replay(PROJ, ignoresTheRepository, TRANSACTIONAL_LOCAL, 10));
+  }
+
+  // --- Each projection replays on the processor of the store it is routed to ---
+
+  /**
+   * Two stores: replaying a projection routed to store B runs on B's processor, in B's transaction,
+   * and never touches store A's processor or checkpoints. B's checkpoint does not move.
+   */
+  @Test
+  void replayUsesTheRegistrationsProcessor() {
+    var touchedA = new ArrayList<String>();
+    AtomicBatchProcessor processorA = untouchable(AtomicBatchProcessor.class, touchedA);
+    OffsetStore checkpointsA = untouchable(OffsetStore.class, touchedA);
+    var storeB = new InMemoryProjectionRepository();
+    var projectionB = new TallyProjection(storeB);
+    Map<ProjectionName, CheckpointTarget> targets =
+        Map.of(
+            ProjectionName.of("projection-of-a"),
+            new CheckpointTarget("a", checkpointsA, processorA),
+            PROJ,
+            new CheckpointTarget("b", storeB, storeB));
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    storeB.saveOffset(PROJ, GlobalOffset.of(5));
+
+    var result =
+        new ProjectionDeadLetterReplayer(eventStore, dlqStore, targets::get)
+            .replay(PROJ, projectionB, TRANSACTIONAL_LOCAL, 10);
+
+    assertEquals(new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0), result);
+    assertEquals(
+        new Tally(1, 0),
+        storeB.findById(PROJ, "row", Tally.class).orElseThrow(),
+        "the range is applied through store B's processor");
+    assertEquals(GlobalOffset.of(5), storeB.getLastOffset(PROJ), "replay does not move it");
+    assertTrue(dlqStore.all().isEmpty());
+    assertTrue(touchedA.isEmpty(), "store A was touched: " + touchedA);
+  }
+
+  /** A projection the target function knows nothing of is refused before any entry is read. */
+  @Test
+  void replay_refusesAProjectionWithNoTarget() {
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var processed = new ArrayList<List<EventEnvelope>>();
+    var replayer =
+        new ProjectionDeadLetterReplayer(new FixedOffsetEventStore(), dlqStore, name -> null);
+
+    var refusal =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> replayer.replayWithRunnerStopped(PROJ, processed::add, 10));
+
+    assertTrue(refusal.getMessage().contains(PROJ.value()), refusal.getMessage());
+    assertTrue(processed.isEmpty());
+    assertEquals(1, dlqStore.all().size(), "the entry is untouched");
+  }
+
+  /**
+   * A projection routed to a target without a replay lock is refused by {@code replay} and the
+   * refusal names the target; {@code replayWithRunnerStopped} feeds it, while another projection of
+   * the same replayer, routed to a locking store, still replays live.
+   */
+  @Test
+  void eachProjectionIsCheckedAgainstItsOwnTarget() {
+    var eventStore = new FixedOffsetEventStore();
+    eventStore.addEvents(envelope(1));
+    var dlqStore = new InMemoryProjectionDeadLetterStore();
+    dlqStore.save(entry(1, 1, 1, Instant.now()));
+    var unrouted = ProjectionName.of("unrouted");
+    dlqStore.save(
+        new ProjectionDeadLetterEntry(
+            unrouted,
+            GlobalOffset.of(1),
+            GlobalOffset.of(1),
+            1,
+            "java.lang.RuntimeException",
+            "boom",
+            1,
+            Instant.now()));
+    var store = new InMemoryProjectionRepository();
+    var subscription = new InMemoryProjectionRepository().subscriptionCheckpoint();
+    Map<ProjectionName, CheckpointTarget> targets =
+        Map.of(PROJ, new CheckpointTarget("postgres", store, store), unrouted, subscription);
+    var replayer = new ProjectionDeadLetterReplayer(eventStore, dlqStore, targets::get);
+    var processed = new ArrayList<List<EventEnvelope>>();
+
+    var refusal =
+        assertThrows(
+            IllegalStateException.class,
+            () -> replayer.replay(unrouted, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10));
+    assertTrue(
+        refusal.getMessage().contains("checkpoint target 'subscription_checkpoint'"),
+        refusal.getMessage());
+    assertEquals(
+        new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0),
+        replayer.replayWithRunnerStopped(unrouted, processed::add, 10));
+    var stoppedRefusal =
+        assertThrows(
+            IllegalStateException.class,
+            () -> replayer.replayWithRunnerStopped(PROJ, processed::add, 10));
+    assertTrue(
+        stoppedRefusal.getMessage().contains("checkpoint target 'postgres'"),
+        stoppedRefusal.getMessage());
+    assertEquals(
+        new ProjectionDeadLetterReplayer.ReplayResult(1, 0, 0),
+        replayer.replay(PROJ, processed::add, AT_LEAST_ONCE_IDEMPOTENT, 10));
+    assertEquals(2, processed.size());
+    assertTrue(dlqStore.all().isEmpty());
+  }
+
+  /** A proxy of {@code type} that records, and fails, every call other than Object's own. */
+  private static <T> T untouchable(Class<T> type, List<String> calls) {
+    return type.cast(
+        java.lang.reflect.Proxy.newProxyInstance(
+            type.getClassLoader(),
+            new Class<?>[] {type},
+            (proxy, method, args) -> {
+              switch (method.getName()) {
+                case "hashCode" -> {
+                  return System.identityHashCode(proxy);
+                }
+                case "equals" -> {
+                  return proxy == args[0];
+                }
+                case "toString" -> {
+                  return "untouchable " + type.getSimpleName();
+                }
+                default -> {
+                  calls.add(type.getSimpleName() + "." + method.getName());
+                  throw new AssertionError("must not be called: " + method);
+                }
+              }
+            }));
   }
 
   /** A replayer over an in-memory processor, which serializes replays. */

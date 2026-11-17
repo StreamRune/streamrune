@@ -50,14 +50,9 @@ class JdbcProjectionRepositoryTest {
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
 
-    // The shipped event-store baseline, applied the way the factory applies it: executeAtomically
-    // locks and advances the projection_offset row.
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    // The shipped read-model series, applied the way PostgresReadModelStore applies it:
+    // executeAtomically locks and advances the readmodel_checkpoint row.
+    ReadModelTestSchema.apply(dataSource);
 
     // Create repository directly without factory (for testing purposes)
     repo = new JdbcProjectionRepository(dataSource);
@@ -676,7 +671,7 @@ class JdbcProjectionRepositoryTest {
   @Test
   void checkpointOnlyCommit_createsNoTable_prepareReadModelDoes() throws Exception {
     var name = ProjectionName.of("lazy_table");
-    var offsets = new PostgresOffsetStore(dataSource);
+    var offsets = new PostgresReadModelCheckpoints(dataSource);
 
     repo.executeAtomically(
         name, List.of(), org.streamrune.core.types.GlobalOffset.of(7), 0L, tx -> {}, offsets);

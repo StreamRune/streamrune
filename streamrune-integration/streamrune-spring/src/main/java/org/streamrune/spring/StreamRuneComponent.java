@@ -38,7 +38,8 @@ import org.springframework.stereotype.Component;
  * implements Projection} bean like the one above declares {@code AT_LEAST_ONCE_IDEMPOTENT} and is
  * handed no transaction-scoped repository, so its writes must be idempotent; for a read model that
  * must be atomic with its checkpoint, extend {@code org.streamrune.core.projection.BaseProjection}
- * over the {@code JdbcProjectionRepository} bean and declare {@code TRANSACTIONAL_LOCAL}.
+ * over the injected {@code ProjectionRepository} (the default read-model store's) and declare
+ * {@code TRANSACTIONAL_LOCAL}.
  */
 @Component
 @Retention(RetentionPolicy.RUNTIME)

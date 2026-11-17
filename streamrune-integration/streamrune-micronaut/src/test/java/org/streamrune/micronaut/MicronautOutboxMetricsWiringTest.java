@@ -146,7 +146,8 @@ class MicronautOutboxMetricsWiringTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   @Test
@@ -234,7 +235,8 @@ class MicronautOutboxMetricsWiringTest {
         true,
         true,
         true,
-        true);
+        true,
+        null);
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

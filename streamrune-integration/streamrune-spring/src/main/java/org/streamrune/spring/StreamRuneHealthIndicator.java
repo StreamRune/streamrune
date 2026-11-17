@@ -19,7 +19,10 @@ import org.streamrune.runtime.SubscriptionHealthContributor;
  * subscription that is behind (lag) or failing (consecutive errors) is DEGRADED in its own detail
  * and does not change the status, so the check can sit in the readiness group without a catch-up or
  * rebuild taking every replica out of service. The head of the event stream ({@code
- * eventStore.lastGlobalOffset} and {@code eventStore.lastEventTimestamp}) is included as details.
+ * eventStore.lastGlobalOffset} and {@code eventStore.lastEventTimestamp}) is included as details. A
+ * projection's entry also names the checkpoint target its checkpoint lives in ({@code store}: the
+ * read-model store it is routed to, or {@code subscription_checkpoint}); its lag is measured
+ * against that checkpoint.
  *
  * <p>Auto-registered by {@link StreamRuneAutoConfiguration} when {@code DataSource} and {@code
  * HealthIndicator} are on the classpath.
@@ -98,6 +101,9 @@ public class StreamRuneHealthIndicator implements HealthIndicator {
         details.put("errorCount", sub.errorCount());
         details.put("status", sub.status().name());
         details.put("role", sub.role().name());
+        if (sub.store() != null) {
+          details.put("store", sub.store());
+        }
         builder.withDetail("subscription." + sub.name().value(), details);
       }
     }

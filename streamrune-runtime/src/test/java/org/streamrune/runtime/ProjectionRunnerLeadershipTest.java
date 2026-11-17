@@ -1019,12 +1019,12 @@ class ProjectionRunnerLeadershipTest {
   /**
    * A fencing processor whose takeover stamp reports that the checkpoint row already carries a
    * HIGHER epoch than the one leadership handed out — the shape produced by {@code DELETE FROM
-   * subscription_leases} against a live {@code projection_offset.epoch}.
+   * subscription_leases} against a live {@code subscription_checkpoint.epoch}.
    */
   private static AtomicBatchProcessor regressingStampProcessor(long storedEpoch) {
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
+      public boolean fencesCheckpoint() {
         return true;
       }
 
@@ -1161,8 +1161,8 @@ class ProjectionRunnerLeadershipTest {
     AtomicBatchProcessor delegate = regressingStampProcessor(storedEpoch);
     return new AtomicBatchProcessor() {
       @Override
-      public boolean supportsFencing() {
-        return delegate.supportsFencing();
+      public boolean fencesCheckpoint() {
+        return delegate.fencesCheckpoint();
       }
 
       @Override
@@ -1418,7 +1418,7 @@ class ProjectionRunnerLeadershipTest {
         new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     @Override
-    public boolean supportsFencing() {
+    public boolean fencesCheckpoint() {
       return true;
     }
 

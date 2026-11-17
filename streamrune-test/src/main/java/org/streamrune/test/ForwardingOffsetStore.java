@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import java.util.Objects;
 import java.util.Set;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
@@ -13,9 +14,10 @@ import org.streamrune.core.types.ProjectionName;
  * crashAfter("saveOffset")}), and prove that the next start delivers each event at least once.
  *
  * <p>Every method of the interface is overridden and forwarded to the same method of the delegate,
- * {@code reset} included, so a rebuild reaches the delegate's own rewind, never the throwing
- * default. A subclass may override a method to observe, block or fail it; {@code super} applies the
- * schedule, {@link #delegate} does not.
+ * {@code reset} and {@code subscriptionCheckpoint} included, so a rebuild reaches the delegate's
+ * own rewind, never the throwing default, and the subscription checkpoint keeps the delegate's
+ * processor. A subclass may override a method to observe, block or fail it; {@code super} applies
+ * the schedule, {@link #delegate} does not.
  */
 public class ForwardingOffsetStore implements OffsetStore {
 
@@ -62,5 +64,26 @@ public class ForwardingOffsetStore implements OffsetStore {
   @Override
   public void reset(ProjectionName projectionName) {
     schedule.run("reset", () -> delegate.reset(projectionName));
+  }
+
+  /**
+   * The delegate's subscription checkpoint with this store as its checkpoints: the delegate's name
+   * and processor, read through the schedule. A runner given the pair reads its position through
+   * this decorator, and a processor that saves through the store it is handed (the non-atomic one)
+   * saves through it too, so a fault scheduled on {@code getLastOffset} or {@code saveOffset} fires
+   * on the subscription's checkpoint. A processor that saves on its own (the PostgreSQL
+   * subscription checkpoint processor) still commits to the delegate's table, which this store
+   * reads.
+   *
+   * <p>The one method that does not return the delegate's answer as it is: the pair is rebuilt
+   * around this store, or the fault schedule would never see the subscription's checkpoint.
+   *
+   * @return the delegate's pair, with this store as its checkpoints
+   */
+  @Override
+  public CheckpointTarget subscriptionCheckpoint() {
+    CheckpointTarget pair =
+        schedule.call("subscriptionCheckpoint", delegate::subscriptionCheckpoint);
+    return new CheckpointTarget(pair.name(), this, pair.processor());
   }
 }

@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Stream;
 import org.awaitility.Awaitility;
 import org.eclipse.microprofile.config.Config;
 import org.junit.jupiter.api.Test;
@@ -32,12 +31,14 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.projection.ProjectionRepository;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
@@ -47,12 +48,15 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
-import org.streamrune.integration.ProjectionProcessorResolution;
+import org.streamrune.integration.ProjectionRoutes;
+import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
 import org.streamrune.test.EventStoreFixture;
 import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 
 /** Tests for {@link ProjectionProducer}. */
@@ -125,7 +129,8 @@ class ProjectionProducerTest {
 
   private static Instance<Projection> instanceOf(Projection... projections) {
     Instance<Projection> instance = mock(Instance.class);
-    when(instance.spliterator()).thenReturn(List.of(projections).spliterator());
+    // A fresh spliterator per call: the routes and each runner discover the projections.
+    when(instance.spliterator()).thenAnswer(inv -> List.of(projections).spliterator());
     return instance;
   }
 
@@ -135,10 +140,37 @@ class ProjectionProducerTest {
     return dlq;
   }
 
-  private static Instance<AtomicBatchProcessor> noAtomicProcessor() {
-    Instance<AtomicBatchProcessor> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(true);
+  private static ReadModelStores noStores() {
+    return storesOf();
+  }
+
+  /**
+   * The routes bean over these inputs, computed when the runner asks for it — as Arc creates the
+   * {@code @Singleton} on the runner producer's {@code get()}.
+   */
+  private static Instance<ProjectionRoutes> routes(
+      Instance<Projection> projections,
+      ReadModelStores stores,
+      CheckpointTarget subscriptionCheckpoint,
+      Instance<SubscriptionLeadership> leadership,
+      Config config) {
+    Instance<ProjectionRoutes> instance = mock(Instance.class);
+    when(instance.get())
+        .thenAnswer(
+            inv ->
+                new ProjectionProducer()
+                    .projectionRoutes(
+                        projections, config, stores, subscriptionCheckpoint, leadership));
     return instance;
+  }
+
+  /**
+   * The event store's subscription checkpoint as the integration produces it over an offset store
+   * that is not a {@code PostgresOffsetStore}: that store and the nonatomic processor.
+   */
+  private static CheckpointTarget subscriptionCheckpoint(OffsetStore offsetStore) {
+    return new CheckpointTarget(
+        "subscription_checkpoint", offsetStore, AtomicBatchProcessor.nonAtomicAtLeastOnce());
   }
 
   private static Instance<org.streamrune.core.StreamRuneMetrics> noMetrics() {
@@ -188,9 +220,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -207,7 +243,7 @@ class ProjectionProducerTest {
    * A duplicate @ProjectionConfig.name across DIFFERENT modes (CONTINUOUS + SCHEDULED) must fail
    * loudly at boot. Before the fix the duplicate check ran after the per-mode filter, so
    * discover(CONTINUOUS) never saw the SCHEDULED duplicate and both booted silently, sharing one
-   * projection_offset checkpoint row.
+   * checkpoint row.
    */
   @Test
   void crossModeDuplicateNameThrows() {
@@ -220,9 +256,13 @@ class ProjectionProducerTest {
                 producer.multiProjectionRunner(
                     projections,
                     mock(EventStore.class),
-                    mock(OffsetStore.class),
+                    routes(
+                        projections,
+                        noStores(),
+                        subscriptionCheckpoint(mock(OffsetStore.class)),
+                        noLeadership(),
+                        defaultConfig()),
                     unsatisfiedDlq(),
-                    noAtomicProcessor(),
                     noMetrics(),
                     noLeadership(),
                     noClassifier(),
@@ -243,9 +283,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            mock(OffsetStore.class),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", "false")),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -270,9 +314,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            mock(OffsetStore.class),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", value)),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -292,9 +340,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            mock(OffsetStore.class),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", value)),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -312,9 +364,13 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             instanceOf(new SchedProjection()),
             mock(EventStore.class),
-            mock(OffsetStore.class),
+            routes(
+                instanceOf(new SchedProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", "false")),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -338,9 +394,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -364,9 +424,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -391,9 +455,13 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -417,9 +485,13 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -454,9 +526,13 @@ class ProjectionProducerTest {
             producer.scheduledProjectionRunner(
                 projections,
                 eventStore,
-                offsetStore,
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
-                noAtomicProcessor(),
                 noMetrics(),
                 noLeadership(),
                 noClassifier(),
@@ -598,9 +674,13 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                offsetStore,
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
-                noAtomicProcessor(),
                 noMetrics(),
                 noLeadership(),
                 noClassifier(),
@@ -628,9 +708,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -665,9 +749,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -697,9 +785,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -730,9 +822,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -770,9 +866,13 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                offsetStore,
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
-                noAtomicProcessor(),
                 noMetrics(),
                 noLeadership(),
                 noClassifier(),
@@ -798,9 +898,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -840,9 +944,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             dlqInstance,
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -871,9 +979,13 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             dlqInstance,
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -885,7 +997,7 @@ class ProjectionProducerTest {
     runner.close();
   }
 
-  // --- Tests: the processor is resolved by declared need, never by bean presence ---
+  // --- Tests: each registration is routed to its store or the subscription checkpoint ---
 
   // --- Fixtures: one per delivery-policy row the integration can reach ---
 
@@ -969,25 +1081,14 @@ class ProjectionProducerTest {
     }
   }
 
-  /** An Instance over explicit candidates: the producer reads isUnsatisfied() and stream(). */
-  private static Instance<AtomicBatchProcessor> processorsOf(AtomicBatchProcessor... processors) {
-    Instance<AtomicBatchProcessor> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(processors.length == 0);
-    when(instance.isAmbiguous()).thenReturn(processors.length > 1);
-    when(instance.stream()).thenAnswer(inv -> java.util.Arrays.stream(processors));
-    return instance;
+  /** The application's stores, with no default store (no DataSource here). */
+  private static ReadModelStores storesOf(ReadModelStore... stores) {
+    return new ReadModelStores(java.util.Optional::empty, () -> List.of(stores));
   }
 
-  /**
-   * A dependent-scoped producer that yielded a null product: the bean exists, its instance is
-   * {@code null}.
-   */
-  private static Instance<AtomicBatchProcessor> nullProcessorProduct() {
-    Instance<AtomicBatchProcessor> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(false);
-    when(instance.get()).thenReturn(null);
-    when(instance.stream()).thenAnswer(inv -> Stream.of((AtomicBatchProcessor) null));
-    return instance;
+  /** A store whose repository, checkpoints and processor are one in-memory repository. */
+  private static ReadModelStore memoryStore(String name, InMemoryProjectionRepository repo) {
+    return ReadModelStore.of(name, repo, repo, repo);
   }
 
   /** Anything but NOOP: resolveOrNull reads isUnsatisfied() then get(). */
@@ -1016,16 +1117,15 @@ class ProjectionProducerTest {
   private static MultiProjectionRunner multi(
       Instance<Projection> projections,
       EventStore eventStore,
-      OffsetStore offsetStore,
-      Instance<AtomicBatchProcessor> processors,
+      ReadModelStores stores,
+      CheckpointTarget subscriptionCheckpoint,
       Instance<SubscriptionLeadership> leadership) {
     return new ProjectionProducer()
         .multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(projections, stores, subscriptionCheckpoint, leadership, defaultConfig()),
             unsatisfiedDlq(),
-            processors,
             noMetrics(),
             leadership,
             noClassifier(),
@@ -1035,15 +1135,31 @@ class ProjectionProducerTest {
             org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
+  private static MultiProjectionRunner multi(
+      Instance<Projection> projections,
+      ReadModelStores stores,
+      Instance<SubscriptionLeadership> leadership) {
+    return multi(
+        projections,
+        mock(EventStore.class),
+        stores,
+        subscriptionCheckpoint(mock(OffsetStore.class)),
+        leadership);
+  }
+
   private static ScheduledProjectionRunner scheduled(
-      Instance<Projection> projections, Instance<AtomicBatchProcessor> processors) {
+      Instance<Projection> projections, ReadModelStores stores) {
     return new ProjectionProducer()
         .scheduledProjectionRunner(
             projections,
             mock(EventStore.class),
-            mock(OffsetStore.class),
+            routes(
+                projections,
+                stores,
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            processors,
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -1052,55 +1168,60 @@ class ProjectionProducerTest {
             org.streamrune.core.tracing.StreamRuneTracing.NOOP);
   }
 
-  /** The runner's private processor, read as QuarkusEpochFenceWiringTest reads it. */
-  private static Object atomicProcessorOf(MultiProjectionRunner runner) throws Exception {
-    Field field = MultiProjectionRunner.class.getDeclaredField("atomicProcessor");
-    field.setAccessible(true);
-    return field.get(runner);
+  /** The processor of the pair a registration was routed to. */
+  private static Object processorOf(Object runner, String projection) throws Exception {
+    return pairPart(runner, projection, "processor");
   }
 
-  private static Object atomicProcessorOf(ScheduledProjectionRunner runner) throws Exception {
-    Field field = ScheduledProjectionRunner.class.getDeclaredField("atomicProcessor");
+  /** The checkpoints of the pair a registration was routed to. */
+  private static Object checkpointsOf(Object runner, String projection) throws Exception {
+    return pairPart(runner, projection, "checkpoints");
+  }
+
+  /** The name of the target a registration was routed to. */
+  private static String targetNameOf(Object runner, String projection) throws Exception {
+    return (String) pairPart(runner, projection, "targetName");
+  }
+
+  /** Reads the runner's private per-registration pairs, as QuarkusEpochFenceWiringTest does. */
+  private static Object pairPart(Object runner, String projection, String part) throws Exception {
+    Field field = runner.getClass().getDeclaredField("checkpoints");
     field.setAccessible(true);
-    return field.get(runner);
+    Object pair = ((Map<?, ?>) field.get(runner)).get(ProjectionName.of(projection));
+    assertNotNull(pair, "the routed pair of " + projection);
+    java.lang.reflect.Method accessor = pair.getClass().getDeclaredMethod(part);
+    accessor.setAccessible(true);
+    return accessor.invoke(pair);
   }
 
   @Test
-  void tlProjection_withoutAProcessorBean_throwsNamingTheProjection() {
+  void tlProjection_withoutAStore_throwsNamingTheProjection() {
     var ex =
         assertThrows(
             IllegalStateException.class,
-            () ->
-                multi(
-                    instanceOf(new TlPlainProjection()),
-                    mock(EventStore.class),
-                    mock(OffsetStore.class),
-                    processorsOf(),
-                    noLeadership()));
+            () -> multi(instanceOf(new TlPlainProjection()), storesOf(), noLeadership()));
     assertTrue(
-        ex.getMessage().contains("projection 'tl_plain' declares TRANSACTIONAL_LOCAL"),
-        ex.getMessage());
-    assertTrue(
-        ex.getMessage().contains("no AtomicBatchProcessor bean is available"), ex.getMessage());
+        ex.getMessage().contains("projection 'tl_plain' (TRANSACTIONAL_LOCAL)"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("no read-model store is transactional"), ex.getMessage());
   }
 
   @Test
-  void tlBaseProjection_overTheProcessorBean_boots() throws Exception {
+  void tlBaseProjection_overTheStoresRepository_isRoutedToTheStore() throws Exception {
     var repo = new InMemoryProjectionRepository();
     try (var runner =
         multi(
             instanceOf(new TlBaseProjection(repo)),
-            mock(EventStore.class),
-            repo,
-            processorsOf(repo),
+            storesOf(memoryStore("memory", repo)),
             noLeadership())) {
       assertNotNull(runner);
-      assertSame(repo, atomicProcessorOf(runner));
+      assertSame(repo, processorOf(runner, "tl_base"));
+      assertSame(repo, checkpointsOf(runner, "tl_base"));
+      assertEquals("memory", targetNameOf(runner, "tl_base"));
     }
   }
 
   @Test
-  void tlPlainProjection_underTheProcessorBean_throws_doesNotWriteThrough() {
+  void tlPlainProjection_onTheOnlyTransactionalStore_throws_doesNotWriteThrough() {
     var repo = new InMemoryProjectionRepository();
     var ex =
         assertThrows(
@@ -1108,39 +1229,34 @@ class ProjectionProducerTest {
             () ->
                 multi(
                     instanceOf(new TlPlainProjection()),
-                    mock(EventStore.class),
-                    repo,
-                    processorsOf(repo),
+                    storesOf(memoryStore("memory", repo)),
                     noLeadership()));
     assertTrue(
         ex.getMessage().contains("does not write through the handed repository"), ex.getMessage());
   }
 
   @Test
-  void tlBaseProjection_overAnotherRepository_throws_identity() {
+  void tlBaseProjection_overARepositoryOfNoStore_throws() {
     var repoA = new InMemoryProjectionRepository();
     var repoB = new InMemoryProjectionRepository();
     var ex =
         assertThrows(
-            IllegalArgumentException.class,
+            IllegalStateException.class,
             () ->
                 multi(
                     instanceOf(new TlBaseProjection(repoB)),
-                    mock(EventStore.class),
-                    repoA,
-                    processorsOf(repoA),
+                    storesOf(memoryStore("memory", repoA)),
                     noLeadership()));
     assertTrue(
-        ex.getMessage().contains("'tl_base' declares TRANSACTIONAL_LOCAL and writes to"),
-        ex.getMessage());
+        ex.getMessage().contains("projection 'tl_base' (TRANSACTIONAL_LOCAL)"), ex.getMessage());
     assertTrue(
-        ex.getMessage()
-            .contains("is configured with " + InMemoryProjectionRepository.class.getName()),
+        ex.getMessage().contains("its writeTarget() belongs to no read-model store"),
         ex.getMessage());
   }
 
   @Test
-  void tlBaseProjection_overAJdkProxyOfTheProcessor_verifiesAndBoots() throws Exception {
+  void tlBaseProjection_overAJdkProxyOfTheStoresRepository_isMatchedThroughTheProxyAndBoots()
+      throws Exception {
     var repo = new InMemoryProjectionRepository();
     Object proxy =
         Proxy.newProxyInstance(
@@ -1150,31 +1266,34 @@ class ProjectionProducerTest {
     try (var runner =
         multi(
             instanceOf(new TlBaseProjection((ProjectionRepository) proxy)),
-            mock(EventStore.class),
-            repo,
-            processorsOf((AtomicBatchProcessor) proxy),
+            storesOf(
+                ReadModelStore.of(
+                    "memory", (ProjectionRepository) proxy, repo, (AtomicBatchProcessor) proxy)),
             noLeadership())) {
       assertNotNull(runner);
       assertSame(
-          proxy, atomicProcessorOf(runner), "the forwarding proxy is the runner's processor");
+          proxy,
+          processorOf(runner, "tl_base"),
+          "the forwarding proxy is the registration's processor");
     }
   }
 
   @Test
-  void aloBaseProjection_overASecondRepository_bootsBesideTl_andWritesOnlyToIt() {
-    var repoA = new InMemoryProjectionRepository(); // the processor AND the runner's offset store
-    var repoB = new InMemoryProjectionRepository(); // the at-least-once projection's own store
+  void aloBaseProjection_overASecondRepository_bootsBesideTl_andCheckpointsInTheSubscription() {
+    var repoA = new InMemoryProjectionRepository(); // the store
+    var repoB = new InMemoryProjectionRepository(); // the at-least-once projection's own repository
+    var subscription = new InMemoryOffsetStore();
     var runner =
         multi(
             instanceOf(new TlBaseProjection(repoA), new AloBaseProjection(repoB)),
             oneEvent(),
-            repoA,
-            processorsOf(repoA),
+            storesOf(memoryStore("memory", repoA)),
+            subscriptionCheckpoint(subscription),
             noLeadership());
     runner.start();
     try (runner) {
       // Each registration runs on a thread of its own, and a batch's read-model write lands before
-      // its checkpoint: wait for all three outcomes, not only the first one.
+      // its checkpoint: wait for every outcome, not only the first one.
       Awaitility.await()
           .atMost(Duration.ofSeconds(10))
           .untilAsserted(
@@ -1186,118 +1305,167 @@ class ProjectionProducerTest {
                 assertEquals(
                     Optional.of("v"),
                     repoA.findById(ProjectionName.of("tl_base"), "row", String.class),
-                    "the TRANSACTIONAL_LOCAL sibling wrote inside the processor's transaction");
+                    "the TRANSACTIONAL_LOCAL sibling wrote inside its store's transaction");
                 assertEquals(
                     GlobalOffset.of(1),
-                    repoA.committedOffset(ProjectionName.of("alo_base")),
-                    "the at-least-once projection's checkpoint is in the processor's store");
+                    repoA.committedOffset(ProjectionName.of("tl_base")),
+                    "the TRANSACTIONAL_LOCAL checkpoint is in its store");
+                assertEquals(
+                    GlobalOffset.of(1),
+                    subscription.getLastOffset(ProjectionName.of("alo_base")),
+                    "the at-least-once checkpoint is in the subscription checkpoint");
               });
     }
+    assertEquals(
+        GlobalOffset.initial(),
+        repoA.committedOffset(ProjectionName.of("alo_base")),
+        "the at-least-once projection has no checkpoint in the store");
+    assertEquals(
+        GlobalOffset.initial(),
+        subscription.getLastOffset(ProjectionName.of("tl_base")),
+        "the TRANSACTIONAL_LOCAL projection has no checkpoint in the subscription checkpoint");
     assertFalse(
         repoA.hasReadModels(ProjectionName.of("alo_base")),
-        "nothing of the at-least-once projection lands in the processor's store");
+        "nothing of the at-least-once projection lands in the store");
     assertFalse(
         repoB.hasReadModels(ProjectionName.of("tl_base")),
-        "nothing of the TRANSACTIONAL_LOCAL projection lands in the second store");
+        "nothing of the TRANSACTIONAL_LOCAL projection lands in the second repository");
   }
 
   @Test
-  void aloOnly_noLeadership_selectsTheNonatomicProcessor_evenWhenABeanExists() throws Exception {
+  void aloWithNoWriteTarget_isRoutedToTheSubscriptionCheckpoint_evenBesideAStore()
+      throws Exception {
+    var offsets = mock(OffsetStore.class);
     try (var runner =
         multi(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            mock(OffsetStore.class),
-            processorsOf(new InMemoryProjectionRepository()),
+            storesOf(memoryStore("memory", new InMemoryProjectionRepository())),
+            subscriptionCheckpoint(offsets),
             noLeadership())) {
       assertSame(
           AtomicBatchProcessor.nonAtomicAtLeastOnce(),
-          atomicProcessorOf(runner),
-          "the rule selects it; the bean's presence selects nothing");
+          processorOf(runner, "qcont"),
+          "routing selects the subscription checkpoint; the store's presence selects nothing");
+      assertSame(offsets, checkpointsOf(runner, "qcont"));
+      assertEquals("subscription_checkpoint", targetNameOf(runner, "qcont"));
     }
   }
 
   @Test
-  void aloOnly_realLeadership_withoutABean_throws_toHonourItsEpoch() {
+  void aloOnly_realLeadership_aNonFencingSubscriptionCheckpointThrows() {
     var ex =
         assertThrows(
             IllegalStateException.class,
-            () ->
-                multi(
-                    instanceOf(new ContProjection()),
-                    mock(EventStore.class),
-                    mock(OffsetStore.class),
-                    processorsOf(),
-                    realLeadership()));
-    assertTrue(ex.getMessage().contains("to honour its epoch"), ex.getMessage());
+            () -> multi(instanceOf(new ContProjection()), storesOf(), realLeadership()));
+    assertTrue(
+        ex.getMessage().contains("projection 'qcont' (AT_LEAST_ONCE_IDEMPOTENT)"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("is routed to 'subscription_checkpoint'"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("does not fence its checkpoint"), ex.getMessage());
     assertTrue(
         ex.getMessage().contains("streamrune.subscription.single-active-consumer.enabled=false"),
         ex.getMessage());
-    assertFalse(
-        ex.getMessage().contains("'qcont'"),
-        "an at-least-once registration is not what needs the bean");
   }
 
   @Test
-  void aloOnly_realLeadership_withTheBean_bootsAndUsesIt() throws Exception {
+  void aloOnly_realLeadership_aFencingSubscriptionCheckpointIsUsed() throws Exception {
+    var fencing = new InMemoryProjectionRepository();
+    try (var runner =
+        multi(
+            instanceOf(new ContProjection()),
+            mock(EventStore.class),
+            storesOf(),
+            new CheckpointTarget("subscription_checkpoint", fencing, fencing),
+            realLeadership())) {
+      assertSame(fencing, processorOf(runner, "qcont"));
+      assertEquals("subscription_checkpoint", targetNameOf(runner, "qcont"));
+    }
+  }
+
+  @Test
+  void aloBase_overAStoresRepository_realLeadership_isRoutedToTheFencingStore() throws Exception {
     var repo = new InMemoryProjectionRepository();
     try (var runner =
         multi(
-            instanceOf(new ContProjection()),
-            mock(EventStore.class),
-            mock(OffsetStore.class),
-            processorsOf(repo),
+            instanceOf(new AloBaseProjection(repo)),
+            storesOf(memoryStore("memory", repo)),
             realLeadership())) {
-      // Fencing selects the bean although every registration is at-least-once.
-      assertSame(repo, atomicProcessorOf(runner));
+      assertSame(repo, processorOf(runner, "alo_base"));
+      assertEquals("memory", targetNameOf(runner, "alo_base"));
     }
   }
 
   @Test
-  void twoProcessorBeans_throw() {
-    var repoA = new InMemoryProjectionRepository();
-    var repoB = new InMemoryProjectionRepository();
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                multi(
-                    instanceOf(new TlBaseProjection(repoA)),
-                    mock(EventStore.class),
-                    repoA,
-                    processorsOf(repoA, repoB),
-                    noLeadership()));
-    assertTrue(ex.getMessage().contains("2 AtomicBatchProcessor beans"), ex.getMessage());
-  }
-
-  /**
-   * A dependent-scoped processor producer may yield a null product; it counts as no bean. An
-   * at-least-once runner without leadership needs none and boots on the nonatomic processor; a
-   * TRANSACTIONAL_LOCAL registration needs one and is refused with the no-bean message.
-   */
-  @Test
-  void aNullProcessorProduct_countsAsNoBean() throws Exception {
-    try (var runner =
-        multi(
-            instanceOf(new ContProjection()),
-            mock(EventStore.class),
-            mock(OffsetStore.class),
-            nullProcessorProduct(),
-            noLeadership())) {
-      assertSame(AtomicBatchProcessor.nonAtomicAtLeastOnce(), atomicProcessorOf(runner));
-    }
+  void tlPlain_withTwoTransactionalStores_throwsAskingForADeclaration() {
     var ex =
         assertThrows(
             IllegalStateException.class,
             () ->
                 multi(
                     instanceOf(new TlPlainProjection()),
-                    mock(EventStore.class),
-                    mock(OffsetStore.class),
-                    nullProcessorProduct(),
+                    storesOf(
+                        memoryStore("a", new InMemoryProjectionRepository()),
+                        memoryStore("b", new InMemoryProjectionRepository())),
                     noLeadership()));
     assertTrue(
-        ex.getMessage().contains("no AtomicBatchProcessor bean is available"), ex.getMessage());
+        ex.getMessage().contains("several read-model stores are transactional ('a', 'b')"),
+        ex.getMessage());
+    assertTrue(ex.getMessage().contains("readModelStore = \"<name>\""), ex.getMessage());
+  }
+
+  @Test
+  void twoStoresWithOneName_throw() {
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                multi(
+                    instanceOf(new ContProjection()),
+                    storesOf(
+                        memoryStore("memory", new InMemoryProjectionRepository()),
+                        memoryStore("memory", new InMemoryProjectionRepository())),
+                    noLeadership()));
+    assertTrue(
+        ex.getMessage().contains("Two read-model stores are named 'memory'"), ex.getMessage());
+  }
+
+  @ProjectionConfig(
+      name = "declared",
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+      readModelStore = "memory")
+  static class DeclaredStoreProjection implements Projection {
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
+  @Test
+  void aDeclaredStore_routesThere_evenForAnAtLeastOnceProjectionWithNoWriteTarget()
+      throws Exception {
+    var repo = new InMemoryProjectionRepository();
+    try (var runner =
+        multi(
+            instanceOf(new DeclaredStoreProjection()),
+            storesOf(memoryStore("memory", repo)),
+            noLeadership())) {
+      assertSame(repo, processorOf(runner, "declared"));
+      assertEquals("memory", targetNameOf(runner, "declared"));
+    }
+  }
+
+  @Test
+  void anUnknownDeclaredStore_throwsNamingTheStores() {
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                multi(
+                    instanceOf(new DeclaredStoreProjection()),
+                    storesOf(memoryStore("postgres", new InMemoryProjectionRepository())),
+                    noLeadership()));
+    assertTrue(
+        ex.getMessage().contains("declares readModelStore = \"memory\", but no read-model store"),
+        ex.getMessage());
+    assertTrue(ex.getMessage().contains("'postgres'"), ex.getMessage());
   }
 
   @Test
@@ -1352,7 +1520,7 @@ class ProjectionProducerTest {
       julLogger.removeHandler(handler);
     }
     assertEquals(Map.of("qinline", ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT), metrics.modes);
-    String info = ProjectionProcessorResolution.INLINE_INFO.replace("{}", "qinline");
+    String info = ProjectionStoreRouting.INLINE_INFO.replace("{}", "qinline");
     assertEquals(
         1,
         captured.stream().filter(info::equals).count(),
@@ -1370,9 +1538,13 @@ class ProjectionProducerTest {
                     .multiProjectionRunner(
                         instanceOf(new TlPlainProjection()),
                         mock(EventStore.class),
-                        repo,
+                        routes(
+                            instanceOf(new TlPlainProjection()),
+                            storesOf(memoryStore("memory", repo)),
+                            subscriptionCheckpoint(repo),
+                            noLeadership(),
+                            configWith("streamrune.projections.allow-at-least-once", "true")),
                         unsatisfiedDlq(),
-                        processorsOf(repo),
                         noMetrics(),
                         noLeadership(),
                         noClassifier(),
@@ -1389,26 +1561,32 @@ class ProjectionProducerTest {
     var ex =
         assertThrows(
             IllegalArgumentException.class,
-            () -> scheduled(instanceOf(new SchedTlPlainProjection()), processorsOf(repo)));
+            () ->
+                scheduled(
+                    instanceOf(new SchedTlPlainProjection()),
+                    storesOf(memoryStore("memory", repo))));
     assertTrue(ex.getMessage().contains("'qsched_tl'"), ex.getMessage());
     assertTrue(ex.getMessage().contains("does not write through"), ex.getMessage());
 
     try (ScheduledProjectionRunner runner =
-        scheduled(instanceOf(new SchedProjection()), processorsOf(repo))) {
+        scheduled(instanceOf(new SchedProjection()), storesOf(memoryStore("memory", repo)))) {
       assertNotNull(runner);
       assertSame(
           AtomicBatchProcessor.nonAtomicAtLeastOnce(),
-          atomicProcessorOf(runner),
-          "an at-least-once scheduled runner without leadership is not given the bean");
+          processorOf(runner, "qsched"),
+          "an at-least-once scheduled projection with no write target is not given the store");
+      assertEquals("subscription_checkpoint", targetNameOf(runner, "qsched"));
     }
   }
 
   @Test
-  void scheduledTlBase_overTheProcessorBean_bootsAndUsesIt() throws Exception {
+  void scheduledTlBase_overTheStoresRepository_isRoutedToTheStore() throws Exception {
     var repo = new InMemoryProjectionRepository();
     try (ScheduledProjectionRunner runner =
-        scheduled(instanceOf(new SchedTlBaseProjection(repo)), processorsOf(repo))) {
-      assertSame(repo, atomicProcessorOf(runner));
+        scheduled(
+            instanceOf(new SchedTlBaseProjection(repo)), storesOf(memoryStore("memory", repo)))) {
+      assertSame(repo, processorOf(runner, "qsched_tl_base"));
+      assertEquals("memory", targetNameOf(runner, "qsched_tl_base"));
     }
   }
 
@@ -1425,9 +1603,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -1467,9 +1649,13 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                offsetStore,
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    config),
                 unsatisfiedDlq(),
-                noAtomicProcessor(),
                 noMetrics(),
                 noLeadership(),
                 noClassifier(),
@@ -1494,9 +1680,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             metricsInstanceOf(metrics),
             noLeadership(),
             noClassifier(),
@@ -1522,9 +1712,13 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             noMetrics(),
             noLeadership(),
             noClassifier(),
@@ -1552,9 +1746,13 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            offsetStore,
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
-            noAtomicProcessor(),
             metricsInstanceOf(metrics),
             noLeadership(),
             noClassifier(),

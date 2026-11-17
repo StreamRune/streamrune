@@ -462,7 +462,10 @@ through the projection. There is no background loop — replay is explicit and o
 because a batch that failed deterministically would only re-fail on a schedule.
 
 Construct it directly (no builder) with the event store, the dead-letter store and **the
-`AtomicBatchProcessor` the projection's runner commits through**, and call
+checkpoint target of each projection's runner registration**: a
+`Function<ProjectionName, CheckpointTarget>`, so each projection replays on the processor of its
+own read-model store (see [per-store replay](#per-store-replay) below; a runner whose projections
+all commit through one pair can pass that one `AtomicBatchProcessor` instead). Call
 `replay(ProjectionName, Projection, ProjectionDeliveryMode, int maxEntries)` with the delivery mode
 the projection is registered with. It replays up to `maxEntries` entries oldest-range-first and
 returns a `ReplayResult(int replayed, int failed, int fenced)`. A range none of whose events is left
@@ -472,7 +475,8 @@ never moved — replay fills the hole behind it.
 
 **Replay is serialized with the live runner.** Each range runs through
 `AtomicBatchProcessor.executeReplay`, which takes the lock a live batch takes: on
-`JdbcProjectionRepository`, the projection's `projection_offset` row, `FOR UPDATE`. A replay and a
+`JdbcProjectionRepository`, the projection's `readmodel_checkpoint` row, `FOR UPDATE` (on the
+subscription checkpoint processor of an at-least-once projection, its `subscription_checkpoint` row). A replay and a
 live batch of one projection therefore never run at the same time, in one process or across
 replicas, and a replay is safe while the runner is live. The lock is what protects a
 read-modify-write projection (`findById` → change a field → `save`): without it both sides can read
@@ -535,10 +539,19 @@ projection wrapper or decorator must override it and forward to its delegate's
 reaches only the delegate's `process`, reports "applied" for a wholly fenced range, and the replayer
 discards the range's only record.
 
+<a id="per-store-replay"></a>Each projection replays on the processor of its own checkpoint target — the same
+`CheckpointTarget` its runner registration reads and commits through — so one replayer serves
+projections of several read-model stores and a replay never runs on another store's processor:
+
 ```java
+// The read-model store a projection is routed to, or the event store's subscription checkpoint
+// for an at-least-once projection routed to no store.
+Map<ProjectionName, CheckpointTarget> targets =
+    Map.of(
+        ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint()); // writes elsewhere
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(
-        eventStore, projectionDeadLetterStore, jdbcRepo); // the runner's atomicProcessor
+    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
 ProjectionDeadLetterReplayer.ReplayResult result =
     replayer.replay(
@@ -548,6 +561,25 @@ ProjectionDeadLetterReplayer.ReplayResult result =
         100);
 // result.replayed(), result.failed(), result.fenced()
 ```
+
+A projection the function returns `null` for is refused before any entry is read. For a runner
+whose projections all commit through one default pair, `new ProjectionDeadLetterReplayer(eventStore,
+projectionDeadLetterStore, atomicProcessor)` takes that one processor.
+
+**Build the map from the routes, not from the mode — a wrong map fails silently.** Nothing checks
+the function against the runner's routing (an integration keeps the routed targets to itself), so
+read each projection's target from the runner's startup INFO line (`… (checkpoint target
+'<target>') …`) or its `store` health detail. The trap is an `AT_LEAST_ONCE_IDEMPOTENT`
+`BaseProjection` over the injected `ProjectionRepository`: that repository is the `postgres`
+store's, so routing sends the projection to the `postgres` store by its `writeTarget()` (rule 2 of
+[How a projection finds its store](../read-model-stores.md#how-a-projection-finds-its-store)), and it checkpoints in
+`readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
+`offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches do not
+exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
+exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
+subscription checkpoint. A transactional projection mapped to the wrong store has its range written
+into that store's database instead of its own.
 
 ### Saga dead-letter replay
 

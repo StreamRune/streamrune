@@ -238,7 +238,16 @@ public record StreamRuneMicronautProperties(
         boolean tracingOutboxEnabled,
     @Bindable(defaultValue = "true")
         @io.micronaut.context.annotation.Property(name = "streamrune.tracing.saga.enabled")
-        boolean tracingSagaEnabled) {
+        boolean tracingSagaEnabled,
+    // read-model.schema.auto-initialize: matches Spring/Quarkus. Whether the default read-model
+    // store (the PostgresReadModelStore named postgres) applies the read-model migration series at
+    // startup. @Nullable with no default: unset binds null and follows
+    // event-store.schema.auto-initialize (see readModelAutoInitialize()). Appended at the end so
+    // the positional withDefaults() stays aligned.
+    @io.micronaut.core.annotation.Nullable
+        @io.micronaut.context.annotation.Property(
+            name = "streamrune.read-model.schema.auto-initialize")
+        Boolean readModelAutoInitializeSchema) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
@@ -321,6 +330,22 @@ public record StreamRuneMicronautProperties(
         true,
         true,
         true,
-        true);
+        true,
+        // read-model.schema.auto-initialize: unset, follows event-store.schema.auto-initialize
+        null);
+  }
+
+  /**
+   * Whether the default read-model store applies the read-model migration series ({@code
+   * db/readmodel-migration}) at startup: {@code streamrune.read-model.schema.auto-initialize} when
+   * set, otherwise {@code streamrune.event-store.schema.auto-initialize}. The read-model schema is
+   * validated either way.
+   *
+   * @return whether the default read-model store migrates its schema
+   */
+  public boolean readModelAutoInitialize() {
+    return readModelAutoInitializeSchema != null
+        ? readModelAutoInitializeSchema
+        : autoInitializeSchema;
   }
 }

@@ -103,6 +103,7 @@ import org.streamrune.runtime.gdpr.ForgetSubjectService;
 @EnableConfigurationProperties(StreamRuneProperties.class)
 @ConditionalOnClass(VirtualThreadCommandBus.class)
 @ImportRuntimeHints(StreamRuneRuntimeHints.class)
+@org.springframework.context.annotation.Import(ReadModelStoresConfiguration.class)
 public class StreamRuneAutoConfiguration {
 
   private static final Logger LOG = LoggerFactory.getLogger(StreamRuneAutoConfiguration.class);
@@ -1954,30 +1955,71 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
-   * Registers a JDBC-backed {@link org.streamrune.core.projection.ProjectionRepository} when a
-   * DataSource is available. {@link org.streamrune.postgres.JdbcProjectionRepository} also
-   * implements {@link org.streamrune.core.projection.AtomicBatchProcessor}: an auto-configured
-   * projection runner takes it as its processor when one of its registrations declares {@code
-   * TRANSACTIONAL_LOCAL} or {@code EXTERNAL_EFFECT}, or when single-active-consumer leadership
-   * needs its epoch honoured — the {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
-   * registrations' writes and the offset checkpoint then commit in one transaction. A runner of
-   * {@code AT_LEAST_ONCE_IDEMPOTENT} registrations without leadership does not use it, whether or
-   * not the bean exists.
+   * The {@link org.streamrune.core.projection.ReadModelStore#name()} of the default read-model
+   * store, {@value}. A projection declares {@code readModelStore = "postgres"} to route to it
+   * explicitly; an application store of this name replaces it.
+   */
+  static final String DEFAULT_READ_MODEL_STORE =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE;
+
+  /**
+   * The bean name of the default read-model store, {@value}: a framework name, so an application
+   * bean named {@code postgres} never collides with it.
+   */
+  static final String DEFAULT_READ_MODEL_STORE_BEAN =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE_BEAN;
+
+  /**
+   * The bean name of the event store's subscription checkpoint, {@value}: the {@link
+   * org.streamrune.core.projection.CheckpointTarget} an auto-configured projection runner routes an
+   * {@code AT_LEAST_ONCE_IDEMPOTENT} registration to when the registration matches no read-model
+   * store. Define a bean of that name to replace it.
+   */
+  static final String SUBSCRIPTION_CHECKPOINT = "streamRuneSubscriptionCheckpoint";
+
+  /**
+   * Registers the default read-model store, {@code postgres}, on the application's {@code
+   * DataSource}: a {@link org.streamrune.postgres.PostgresReadModelStore} whose read models live in
+   * {@code <name>_view} tables and whose checkpoints live beside them in {@code
+   * readmodel_checkpoint}, so a routed {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
+   * registration's read-model writes and its checkpoint commit in one transaction. The
+   * auto-configured projection runners route to it every registration that names it, writes to its
+   * repository, or (transactional, with no write target of its own) has no other transactional
+   * store to go to.
    *
-   * <p>Wires the {@link CryptoEngine} bean (if present) into the repository's ObjectMapper via
+   * <p>Creating the store checks the server version, applies the read-model migration series
+   * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
+   * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
+   * read-model schema, as the event-store factory does for its own series. The bean is lazy: it is
+   * created, and the database touched, when the stores are first selected ({@code
+   * ReadModelStoresConfiguration}) — for a projection runner with a registration to route, the
+   * {@code ProjectionRepository} bean, or the index declarer.
+   *
+   * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if present) through
    * {@code CryptoShreddingModule}, the same way {@link #sagaStore} wires the saga store — so
    * {@code @Encrypted} read-model fields are persisted as ciphertext instead of plaintext PII, and
-   * fall within GDPR forget scope. Without this the auto-configured read model was a silent
-   * plaintext no-op even when a CryptoEngine was configured for events and saga state.
+   * fall within GDPR forget scope.
+   *
+   * <p>Replaced only by name: an application {@link org.streamrune.core.projection.ReadModelStore}
+   * bean whose {@code name()} is {@value #DEFAULT_READ_MODEL_STORE} takes its place, and this bean
+   * is then never created; a store of any other name is added beside it. The bean stays defined
+   * either way — a store's name is known only once the store exists, so no bean condition can
+   * decide — and the stores are selected by {@code ReadModelStoresConfiguration}, which leaves it
+   * out by its bean name, {@value #DEFAULT_READ_MODEL_STORE_BEAN}, until it is needed. It is a
+   * fallback bean ({@link org.springframework.context.annotation.Fallback}): an unqualified {@code
+   * ReadModelStore} injection point of the application resolves to the application's store, as on
+   * Quarkus (a default bean) and Micronaut (a secondary bean).
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist with none marked
    *     {@code @Primary} — silently skipping encryption would persist PII as plaintext
    */
-  @Bean
+  @Bean(DEFAULT_READ_MODEL_STORE_BEAN)
+  @org.springframework.context.annotation.Lazy
+  @org.springframework.context.annotation.Fallback
   @ConditionalOnBean(DataSource.class)
-  @ConditionalOnMissingBean(org.streamrune.core.projection.ProjectionRepository.class)
-  public org.streamrune.postgres.JdbcProjectionRepository jdbcProjectionRepository(
+  public org.streamrune.postgres.PostgresReadModelStore postgresReadModelStore(
       DataSource dataSource,
+      StreamRuneProperties properties,
       ObjectProvider<CryptoEngine> cryptoEngineProvider,
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider) {
     CryptoEngine cryptoEngine =
@@ -1986,40 +2028,130 @@ public class StreamRuneAutoConfiguration {
     // on the read-model decrypt path emits subject_redacted; NOOP when no metrics bean exists.
     org.streamrune.core.StreamRuneMetrics metrics =
         metricsProvider.getIfAvailable(() -> org.streamrune.core.StreamRuneMetrics.NOOP);
-    return new org.streamrune.postgres.JdbcProjectionRepository(
+    return org.streamrune.postgres.PostgresReadModelStore.create(
+        DEFAULT_READ_MODEL_STORE,
         dataSource,
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics));
+        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(cryptoEngine, metrics),
+        properties.readModel().autoInitialize(properties.eventStore()),
+        true);
+  }
+
+  /**
+   * Registers the repository of the store named {@value #DEFAULT_READ_MODEL_STORE} — the default
+   * store's, or the application store's that replaced it — as the injectable {@link
+   * org.streamrune.core.projection.ProjectionRepository}, so query handlers and {@code
+   * BaseProjection} constructors that take a {@code ProjectionRepository} read and write it; other
+   * stores' repositories are reached through their {@code ReadModelStore} beans. Lazy, like the
+   * store. Backs off when the application defines a {@code ProjectionRepository} bean, and is
+   * absent when no read-model store bean exists.
+   *
+   * <p>Finding the store named {@value #DEFAULT_READ_MODEL_STORE} creates the application's store
+   * beans (a store's name is known only once it exists) and the default store only when none of
+   * them replaced it.
+   *
+   * @throws IllegalStateException when the stores are invalid, or the application's read-model
+   *     stores name none {@value #DEFAULT_READ_MODEL_STORE} and there is no default store (no
+   *     {@code DataSource})
+   * @hidden
+   */
+  @Bean
+  @org.springframework.context.annotation.Lazy
+  @ConditionalOnBean(org.streamrune.core.projection.ReadModelStore.class)
+  @ConditionalOnMissingBean(org.streamrune.core.projection.ProjectionRepository.class)
+  @org.streamrune.core.Internal
+  public org.streamrune.core.projection.ProjectionRepository streamRuneProjectionRepository(
+      org.streamrune.integration.ReadModelStores stores) {
+    return stores.defaultRepository();
+  }
+
+  /**
+   * Registers the event store's subscription checkpoint, {@value #SUBSCRIPTION_CHECKPOINT}: the
+   * pair an auto-configured projection runner reads and commits an {@code AT_LEAST_ONCE_IDEMPOTENT}
+   * registration through when the registration matches no read-model store: the {@code OffsetStore}
+   * bean's {@link org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()}.
+   *
+   * <ul>
+   *   <li>A {@link org.streamrune.postgres.PostgresOffsetStore} (the one auto-configured on the
+   *       {@code DataSource}, or one the application defines on any DataSource) pairs itself with a
+   *       {@link org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on its own
+   *       DataSource, over the same {@code subscription_checkpoint} table — it fences the
+   *       checkpoint under its row lock and hands the projection no repository, so the projection
+   *       writes where it writes (at least once).
+   *   <li>Any other offset store keeps the default: itself and {@link
+   *       org.streamrune.core.projection.AtomicBatchProcessor#nonAtomicAtLeastOnce()}, which saves
+   *       each checkpoint into it. It does not fence, so routing refuses an at-least-once
+   *       registration onto it under real leadership.
+   * </ul>
+   *
+   * <p>The {@code OffsetStore} is resolved at instantiation, for the reason {@link
+   * #subscriptionHealthContributor} gives. Without one there is no subscription checkpoint, and no
+   * bean.
+   */
+  @Bean(SUBSCRIPTION_CHECKPOINT)
+  @ConditionalOnMissingBean(name = SUBSCRIPTION_CHECKPOINT)
+  public org.streamrune.core.projection.CheckpointTarget streamRuneSubscriptionCheckpoint(
+      ObjectProvider<org.streamrune.core.projection.OffsetStore> offsetStoreProvider) {
+    org.streamrune.core.projection.OffsetStore offsetStore = offsetStoreProvider.getIfAvailable();
+    if (offsetStore == null) {
+      // Spring skips a null @Bean product.
+      return null;
+    }
+    // A PostgresOffsetStore overrides it with the fencing processor built on the DataSource it
+    // reads; any other offset store keeps the nonatomic default.
+    return offsetStore.subscriptionCheckpoint();
   }
 
   /**
    * Declares every {@link org.streamrune.core.projection.ProjectionIndex} bean, in bean order, on
-   * the application's {@link org.streamrune.core.projection.ProjectionRepository} bean — the
-   * auto-configured {@code JdbcProjectionRepository} or one the application defines — once every
-   * singleton exists and before any lifecycle bean (the projection runners) starts. A refused key,
-   * an index that cannot be created, or index beans without a repository bean fail the start.
+   * the store its projection is routed to — the routes the projection runners use ({@link
+   * org.streamrune.integration.ProjectionRoutes}, computed once by {@link ProjectionAutoConfig}) —
+   * once every singleton exists and before any lifecycle bean (the projection runners) starts. An
+   * index whose projection is routed to no store (the subscription checkpoint, an INLINE
+   * projection, no registration, or projection discovery off) goes to the application's {@link
+   * org.streamrune.core.projection.ProjectionRepository} bean — the repository of the store named
+   * {@value #DEFAULT_READ_MODEL_STORE} ({@link #streamRuneProjectionRepository}) or one the
+   * application defines. A refused key, an index that cannot be created, or such an index without a
+   * repository bean fail the start.
    *
-   * @param repositories the projection repository bean, resolved only when index beans exist
+   * @param repositories the projection repository bean, resolved only for an index routed to no
+   *     store
    * @param projectionIndexes the index beans
+   * @param routes the routes of the projection runners' registrations, resolved only when index
+   *     beans exist; absent when projection discovery is off
    * @return the declaring callback
+   * @hidden
    */
   @Bean
+  @org.streamrune.core.Internal
   public org.springframework.beans.factory.SmartInitializingSingleton
       streamRuneProjectionIndexDeclarer(
           ObjectProvider<org.streamrune.core.projection.ProjectionRepository> repositories,
-          ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes) {
+          ObjectProvider<org.streamrune.core.projection.ProjectionIndex> projectionIndexes,
+          ObjectProvider<org.streamrune.integration.ProjectionRoutes> routes) {
     return () -> {
       var indexes = projectionIndexes.orderedStream().toList();
       if (indexes.isEmpty()) {
         return;
       }
-      var repository = repositories.getIfAvailable();
-      if (repository == null) {
-        throw new IllegalStateException(
-            indexes.size()
-                + " ProjectionIndex bean(s) but no ProjectionRepository bean to declare them on:"
-                + " define one, or a DataSource for the auto-configured JdbcProjectionRepository");
+      var routed = routes.getIfAvailable(org.streamrune.integration.ProjectionRoutes::none);
+      for (var index : indexes) {
+        routed
+            .indexRepository(
+                index,
+                () -> {
+                  var repository = repositories.getIfAvailable();
+                  if (repository == null) {
+                    throw new IllegalStateException(
+                        "ProjectionIndex bean for projection '"
+                            + LogSanitizer.sanitizeForLog(index.projection().value())
+                            + "', routed to no read-model store, but no ProjectionRepository bean"
+                            + " to declare it on: define one, or a DataSource for the default"
+                            + " read-model store");
+                  }
+                  return repository;
+                })
+            .declareIndex(index);
       }
-      indexes.forEach(repository::declareIndex);
     };
   }
 

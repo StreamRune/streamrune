@@ -120,7 +120,7 @@ class PostgresNotificationSubscriptionTest {
     try (var conn = eventDataSource.getConnection();
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
       // Deterministic 1-based offsets per test: a plain DELETE on event_stream does not reset
       // global_offset_sequence, and readGlobalStream's contiguous-prefix guard requires an
       // accurate checkpoint — tests here read from GlobalOffset.initial() (0) expecting freshly

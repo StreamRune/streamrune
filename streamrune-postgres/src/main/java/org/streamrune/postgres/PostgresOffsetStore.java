@@ -1,39 +1,23 @@
 package org.streamrune.postgres;
 
-import java.sql.SQLException;
 import javax.sql.DataSource;
-import org.streamrune.core.EventStoreException;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
  * PostgreSQL-backed {@link OffsetStore} using upsert semantics. Stores the last processed global
- * offset for each named projection in the {@code projection_offset} table.
+ * offset for each named projection in the {@code subscription_checkpoint} table.
  */
 public final class PostgresOffsetStore implements OffsetStore {
 
-  private static final String SELECT_OFFSET =
-      "SELECT last_offset FROM projection_offset WHERE projection_name = ?";
-
-  // Monotonic guard: a backward/sideways save updates 0 rows and is a silent no-op (no throw).
-  // Regressions must not be possible even in a brief split-brain window; an intentional rewind
-  // uses the rebuild/reset path, never saveOffset (see OffsetStore javadoc).
-  private static final String UPSERT_OFFSET =
-      "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
-          + "VALUES (?, ?, NOW()) "
-          + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = EXCLUDED.last_offset, "
-          + "updated_at = NOW() "
-          + "WHERE EXCLUDED.last_offset > projection_offset.last_offset";
-
-  // Unguarded rewind for the reset/rebuild path. Deliberately omits the monotonic guard so an
-  // intentional rewind to 0 is not rejected as a regression. Upserts so a not-yet-seen projection
-  // name resets cleanly to 0 as well (a no-op semantically, but keeps the contract uniform).
-  private static final String RESET_OFFSET =
-      "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
-          + "VALUES (?, 0, NOW()) "
-          + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0, updated_at = NOW()";
+  /**
+   * The fence over {@code subscription_checkpoint}: the same statements {@link
+   * PostgresSubscriptionCheckpointProcessor} locks and advances the checkpoint with.
+   */
+  private final PostgresCheckpointFence checkpointFence =
+      new PostgresCheckpointFence(CheckpointTable.SUBSCRIPTION);
 
   private final DataSource dataSource;
 
@@ -44,53 +28,44 @@ public final class PostgresOffsetStore implements OffsetStore {
     this.dataSource = dataSource;
   }
 
+  /**
+   * The event store's subscription checkpoint over this offset store: this store as the checkpoints
+   * and a {@link PostgresSubscriptionCheckpointProcessor} on the same {@link DataSource} as the
+   * processor, under the name {@value OffsetStore#SUBSCRIPTION_CHECKPOINT}, overriding the
+   * nonatomic default: the processor fences the checkpoint. The processor saves the checkpoint in
+   * its own transaction and ignores the offset store it is handed, so it must reach the database
+   * this store reads; building both from one DataSource is what guarantees that.
+   *
+   * @return the pair a runner reads and commits an at-least-once registration's position through
+   */
+  @Override
+  public CheckpointTarget subscriptionCheckpoint() {
+    return new CheckpointTarget(
+        SUBSCRIPTION_CHECKPOINT, this, new PostgresSubscriptionCheckpointProcessor(dataSource));
+  }
+
   @Override
   public GlobalOffset getLastOffset(ProjectionName projectionName) {
-    try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(SELECT_OFFSET)) {
-      ps.setString(1, projectionName.value());
-      try (var rs = ps.executeQuery()) {
-        if (rs.next()) {
-          return GlobalOffset.of(rs.getLong("last_offset"));
-        }
-        return GlobalOffset.initial();
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to read offset for projection: "
-              + LogSanitizer.sanitizeForLog(projectionName.value()),
-          e);
-    }
+    return checkpointFence.lastOffset(dataSource, projectionName);
   }
 
+  /**
+   * Saves {@code offset} under the monotonic guard: a save at or below the stored offset is a
+   * silent no-op, so a regression is impossible even in a brief split-brain window. An intentional
+   * rewind is {@link #reset}, never a save (see the {@link OffsetStore} javadoc).
+   */
   @Override
   public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
-    try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(UPSERT_OFFSET)) {
-      ps.setString(1, projectionName.value());
-      ps.setLong(2, offset.value());
-      PostgresTransactions.commitIfManual(conn, "projection offset save", c -> ps.executeUpdate());
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to save offset for projection: "
-              + LogSanitizer.sanitizeForLog(projectionName.value()),
-          e);
-    }
+    checkpointFence.saveUnlocked(dataSource, projectionName, offset);
   }
 
+  /**
+   * Rewinds the checkpoint to offset {@code 0}, bypassing the monotonic guard: {@link #saveOffset}
+   * would no-op the regression to {@code 0}, silently defeating a projection reset. Seeds the row
+   * at {@code 0} for a projection never seen; the epoch is left as it is.
+   */
   @Override
   public void reset(ProjectionName projectionName) {
-    // Unguarded rewind (see RESET_OFFSET): saveOffset's monotonic guard would no-op the regression
-    // to 0, silently defeating a projection reset — the bug this method exists to fix.
-    try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(RESET_OFFSET)) {
-      ps.setString(1, projectionName.value());
-      PostgresTransactions.commitIfManual(conn, "projection offset reset", c -> ps.executeUpdate());
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to reset offset for projection: "
-              + LogSanitizer.sanitizeForLog(projectionName.value()),
-          e);
-    }
+    checkpointFence.reset(dataSource, projectionName);
   }
 }

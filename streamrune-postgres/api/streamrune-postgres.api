@@ -44,8 +44,9 @@ public final class org.streamrune.postgres.JdbcProjectionRepository implements o
   public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
   public <init>(javax.sql.DataSource)
   public <init>(javax.sql.DataSource, com.fasterxml.jackson.databind.ObjectMapper)
+  public boolean fencesCheckpoint()
   public boolean serializesReplay()
-  public boolean supportsFencing()
+  public boolean transactional()
   public java.lang.Object writeTargetIdentity()
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine)
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
@@ -190,7 +191,6 @@ public static final class org.streamrune.postgres.PostgresEventStore$Builder
 public final class org.streamrune.postgres.PostgresEventStoreFactory implements org.streamrune.core.EventStoreFactory
   public <init>(javax.sql.DataSource, org.streamrune.core.EventTypeRegistry)
   public org.streamrune.core.EventStore create()
-  public org.streamrune.core.projection.ProjectionRepository createProjectionRepository()
   public org.streamrune.postgres.PostgresEventStoreFactory autoInitializeSchema(boolean)
   public org.streamrune.postgres.PostgresEventStoreFactory commandInbox(org.streamrune.postgres.PostgresCommandInbox)
   public org.streamrune.postgres.PostgresEventStoreFactory cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
@@ -204,6 +204,7 @@ public final class org.streamrune.postgres.PostgresEventStoreFactory implements 
   public org.streamrune.postgres.PostgresEventStoreFactory tracing(org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.postgres.PostgresEventStoreFactory upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
   public org.streamrune.postgres.PostgresEventStoreFactory validateSchema(boolean)
+  public org.streamrune.postgres.PostgresReadModelStore createReadModelStore()
 
 public final class org.streamrune.postgres.PostgresNotificationSubscription implements org.streamrune.core.subscription.EventSubscription, org.streamrune.runtime.ReadPoisonAware
   public boolean isRunning()
@@ -230,6 +231,7 @@ public static final class org.streamrune.postgres.PostgresNotificationSubscripti
 
 public final class org.streamrune.postgres.PostgresOffsetStore implements org.streamrune.core.projection.OffsetStore
   public <init>(javax.sql.DataSource)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
   public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
   public void reset(org.streamrune.core.types.ProjectionName)
   public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
@@ -265,6 +267,20 @@ public final class org.streamrune.postgres.PostgresProjectionDeadLetterStore imp
   public long countPending()
   public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
   public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
+
+public final class org.streamrune.postgres.PostgresReadModelCheckpoints implements org.streamrune.core.projection.OffsetStore
+  public <init>(javax.sql.DataSource)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public final class org.streamrune.postgres.PostgresReadModelStore implements org.streamrune.core.projection.ReadModelStore
+  public java.lang.String name()
+  public org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public org.streamrune.core.projection.OffsetStore checkpoints()
+  public org.streamrune.core.projection.ProjectionRepository repository()
+  public static org.streamrune.postgres.PostgresReadModelStore create(java.lang.String, javax.sql.DataSource, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
 
 public final class org.streamrune.postgres.PostgresSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(javax.sql.DataSource)
@@ -312,6 +328,15 @@ public final class org.streamrune.postgres.PostgresSnapshotStorePurger implement
   public java.lang.String name()
   public void purge(org.streamrune.core.types.SubjectId)
 
+public final class org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor implements org.streamrune.core.projection.AtomicBatchProcessor
+  public <init>(javax.sql.DataSource)
+  public boolean fencesCheckpoint()
+  public boolean serializesReplay()
+  public boolean transactional()
+  public void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+
 public final record org.streamrune.postgres.SchemaIssue
   public <init>(org.streamrune.postgres.SchemaIssue$Severity, java.lang.String, java.lang.String)
   public final boolean equals(java.lang.Object)
@@ -343,6 +368,7 @@ public final record org.streamrune.postgres.SchemaValidationResult
 public final class org.streamrune.postgres.SchemaValidator
   public static org.streamrune.postgres.SchemaValidationResult validate(javax.sql.DataSource)
   public static org.streamrune.postgres.SchemaValidationResult validateCryptoTables(javax.sql.DataSource, java.util.Set<java.lang.String>)
+  public static org.streamrune.postgres.SchemaValidationResult validateReadModel(javax.sql.DataSource)
 
 public final class org.streamrune.postgres.UnsupportedServerVersionException extends java.lang.RuntimeException
   public int minimumMajorVersion()

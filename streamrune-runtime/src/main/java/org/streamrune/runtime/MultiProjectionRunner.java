@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -23,25 +24,32 @@ import org.streamrune.core.projection.ProjectionErrorStrategy;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.tracing.StreamRuneTracing;
+import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
  * Manages multiple projections, each running on its own virtual thread via an internal {@link
  * ContinuousProjectionRunner}. Provides coordinated lifecycle ({@link #start()}, {@link #stop()})
  * and status reporting ({@link #status()}).
+ *
+ * <p>Each registration reads its checkpoint from and commits through one pair: its own {@link
+ * CheckpointTarget} when it was registered with one, otherwise the runner-wide {@link
+ * Builder#offsetStore} and {@link Builder#atomicProcessor} (the default pair). The two halves never
+ * mix. Dead-letter store, leadership, metrics, classifier, health and tracing stay runner-wide.
  */
 public final class MultiProjectionRunner implements AutoCloseable {
 
   private static final Logger logger = LoggerFactory.getLogger(MultiProjectionRunner.class);
   static final Duration DEFAULT_STOP_TIMEOUT = Duration.ofSeconds(30);
+  private static final String RUNNER_NAME = "MultiProjectionRunner";
 
   private final List<ProjectionRegistration> registrations;
+  // Each registration's pair, resolved once at build(): its target's, or the runner's default.
+  private final Map<ProjectionName, RegistrationCheckpoints> checkpoints;
   private final EventStore eventStore;
-  private final OffsetStore offsetStore;
   private final int fetchSize;
   private final int batchSize;
   private final SubscriptionConfig subscriptionConfig;
-  private final AtomicBatchProcessor atomicProcessor;
   private final ProjectionDeadLetterStore deadLetterStore;
   private final long stopTimeoutMs;
   private final StreamRuneMetrics metrics;
@@ -57,15 +65,20 @@ public final class MultiProjectionRunner implements AutoCloseable {
       new ConcurrentHashMap<>();
   private final ConcurrentHashMap<ProjectionName, Thread> threads = new ConcurrentHashMap<>();
   private final AtomicBoolean started = new AtomicBoolean(false);
+  // Makes reset() and start()'s claim mutually exclusive: reset() holds it for its whole rewind
+  // (checking that the runner is not started inside it), start() claims `started` inside it. The
+  // `started` flag alone cannot serve as reset's claim, because stop() clears it unconditionally
+  // once every thread has exited: a stop() landing during a reset would release the claim, let a
+  // start() through, and the reset's own release would then clear a running runner's flag.
+  private final Object resetLock = new Object();
 
   MultiProjectionRunner(
       List<ProjectionRegistration> registrations,
+      Map<ProjectionName, RegistrationCheckpoints> checkpoints,
       EventStore eventStore,
-      OffsetStore offsetStore,
       int fetchSize,
       int batchSize,
       SubscriptionConfig subscriptionConfig,
-      AtomicBatchProcessor atomicProcessor,
       ProjectionDeadLetterStore deadLetterStore,
       Duration stopTimeout,
       StreamRuneMetrics metrics,
@@ -75,12 +88,11 @@ public final class MultiProjectionRunner implements AutoCloseable {
       Clock clock,
       StreamRuneTracing tracing) {
     this.registrations = List.copyOf(registrations);
+    this.checkpoints = Map.copyOf(checkpoints);
     this.eventStore = eventStore;
-    this.offsetStore = offsetStore;
     this.fetchSize = fetchSize;
     this.batchSize = batchSize;
     this.subscriptionConfig = subscriptionConfig;
-    this.atomicProcessor = atomicProcessor;
     this.deadLetterStore = deadLetterStore;
     this.stopTimeoutMs = stopTimeout.toMillis();
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
@@ -103,19 +115,26 @@ public final class MultiProjectionRunner implements AutoCloseable {
    * @throws IllegalStateException if already started
    */
   public void start() {
-    if (!started.compareAndSet(false, true)) {
-      throw new IllegalStateException("MultiProjectionRunner already started");
+    // A reset in progress finishes before the claim: start() waits for it rather than racing it.
+    synchronized (resetLock) {
+      if (!started.compareAndSet(false, true)) {
+        throw new IllegalStateException("MultiProjectionRunner already started");
+      }
     }
 
     for (var reg : registrations) {
+      // The registration's own pair: the offset store it reads and the processor that commits it
+      // always come from the same target (or both from the runner's default).
+      RegistrationCheckpoints pair = checkpoints.get(reg.name());
       var builder =
           ContinuousProjectionRunner.builder()
               .eventStore(eventStore)
-              .offsetStore(offsetStore)
+              .offsetStore(pair.checkpoints())
               .fetchSize(fetchSize)
               .batchSize(batchSize)
               .subscriptionConfig(subscriptionConfig)
-              .atomicProcessor(atomicProcessor)
+              .atomicProcessor(pair.processor())
+              .checkpointTargetName(pair.targetName())
               .errorStrategy(reg.errorStrategy())
               .deadLetterStore(deadLetterStore)
               .metrics(metrics)
@@ -222,10 +241,43 @@ public final class MultiProjectionRunner implements AutoCloseable {
       var runner = runners.get(reg.name());
       ProjectionState state = runner != null ? runner.state() : ProjectionState.PENDING;
       String lastError = runner != null ? runner.lastError() : null;
-      var lastOffset = offsetStore.getLastOffset(reg.name());
+      var lastOffset = checkpoints.get(reg.name()).checkpoints().getLastOffset(reg.name());
       result.put(reg.name(), new ProjectionStatus(reg.name(), state, lastOffset, lastError));
     }
     return result;
+  }
+
+  /**
+   * Rewinds one registration's checkpoint to the start so it replays from the beginning on the next
+   * {@link #start()}. The checkpoint rewound is the one the registration reads: in its {@link
+   * CheckpointTarget}'s store when it was registered with one, otherwise in the runner-wide offset
+   * store. As with {@link org.streamrune.core.projection.ProjectionRunner#reset}, the checkpoint is
+   * all this resets: read models and dead-letter entries are left untouched.
+   *
+   * <p>A {@link #start()} called while the reset runs waits for it to finish.
+   *
+   * @param name the registered projection to rewind
+   * @throws IllegalArgumentException if no projection of that name is registered
+   * @throws IllegalStateException if the runner is started (a running batch could save a higher
+   *     offset after the reset, undoing it), or if the offset store's reset returned without
+   *     rewinding the checkpoint
+   */
+  public void reset(ProjectionName name) {
+    RegistrationCheckpoints pair = checkpoints.get(name);
+    if (pair == null) {
+      throw new IllegalArgumentException(
+          "No projection registered as '" + LogSanitizer.sanitizeForLog(name.value()) + "'");
+    }
+    // Held for the whole rewind, so a concurrent start() waits until it is done.
+    synchronized (resetLock) {
+      if (started.get()) {
+        throw new IllegalStateException(
+            "MultiProjectionRunner is started: stop it before resetting '"
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "'");
+      }
+      pair.reset(name);
+    }
   }
 
   @Override
@@ -261,6 +313,11 @@ public final class MultiProjectionRunner implements AutoCloseable {
       return this;
     }
 
+    /**
+     * Sets the offset store of the runner's default pair: the checkpoints of every registration
+     * registered without a {@link CheckpointTarget} are read from it, and committed by {@link
+     * #atomicProcessor}. Set both or neither; neither requires a target on every registration.
+     */
     public Builder offsetStore(OffsetStore store) {
       this.offsetStore = store;
       return this;
@@ -282,11 +339,17 @@ public final class MultiProjectionRunner implements AutoCloseable {
     }
 
     /**
-     * Sets the batch processor every registration on this runner commits through. Required: pass
-     * the {@code JdbcProjectionRepository} your {@code TRANSACTIONAL_LOCAL} / {@code
-     * EXTERNAL_EFFECT} projections write to, or {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}
-     * for a runner of {@code AT_LEAST_ONCE_IDEMPOTENT} projections. {@link #build()} checks each
-     * registration's declared mode against it.
+     * Sets the processor of the runner's default pair: every registration registered without a
+     * {@link CheckpointTarget} commits through it, advancing its checkpoint in {@link
+     * #offsetStore}. Pass the {@code JdbcProjectionRepository} your {@code TRANSACTIONAL_LOCAL} /
+     * {@code EXTERNAL_EFFECT} projections write to, or {@link
+     * AtomicBatchProcessor#nonAtomicAtLeastOnce()} for {@code AT_LEAST_ONCE_IDEMPOTENT}
+     * projections. A {@code JdbcProjectionRepository} checkpoints in {@code readmodel_checkpoint},
+     * so its {@link #offsetStore} is {@code PostgresReadModelCheckpoints} on the same {@code
+     * DataSource}, never a {@code PostgresOffsetStore}; or register its projections with {@code
+     * PostgresReadModelStore#checkpointTarget()}. Set both or neither; neither requires a target on
+     * every registration. {@link #build()} checks each registration's declared mode against the
+     * processor it commits through.
      */
     public Builder atomicProcessor(AtomicBatchProcessor processor) {
       this.atomicProcessor = processor;
@@ -410,20 +473,34 @@ public final class MultiProjectionRunner implements AutoCloseable {
       return this;
     }
 
+    /**
+     * Registers a projection that reads its checkpoint from and commits through {@code target}
+     * instead of the runner's default pair. {@link #build()} checks its delivery mode, its name and
+     * (under real leadership) its fencing against {@code target}'s processor.
+     *
+     * @param name unique projection name
+     * @param projection the projection
+     * @param strategy how failures are handled
+     * @param mode the delivery guarantee this projection declares
+     * @param target the pair this registration reads and commits through; {@code null} uses the
+     *     runner's default pair
+     * @return this builder
+     */
+    public Builder register(
+        ProjectionName name,
+        Projection projection,
+        ProjectionErrorStrategy strategy,
+        ProjectionDeliveryMode mode,
+        CheckpointTarget target) {
+      registrations.add(new ProjectionRegistration(name, projection, strategy, mode, target));
+      return this;
+    }
+
     public MultiProjectionRunner build() {
       if (eventStore == null) {
         throw new IllegalArgumentException("eventStore is required");
       }
-      if (offsetStore == null) {
-        throw new IllegalArgumentException("offsetStore is required");
-      }
-      if (atomicProcessor == null) {
-        throw new IllegalArgumentException(
-            "atomicProcessor is required: pass the JdbcProjectionRepository your"
-                + " TRANSACTIONAL_LOCAL projections write to, or"
-                + " AtomicBatchProcessor.nonAtomicAtLeastOnce() for a runner of"
-                + " AT_LEAST_ONCE_IDEMPOTENT projections");
-      }
+      RegistrationCheckpoints.requireWholeDefaultPair(offsetStore, atomicProcessor);
       // toMillis() < 1 also rejects a positive sub-millisecond value, which the
       // old null/negative/zero check let through — it truncated to stopTimeoutMs == 0, and
       // Thread.join(0) waits FOREVER, turning the tightest configurable stop bound into an
@@ -441,14 +518,21 @@ public final class MultiProjectionRunner implements AutoCloseable {
       }
 
       var names = new HashSet<ProjectionName>();
+      var pairs = new LinkedHashMap<ProjectionName, RegistrationCheckpoints>();
       for (var reg : registrations) {
+        // Each registration's pair — its target's, or the runner's default — resolved once; a
+        // registration with neither fails here, by name.
+        RegistrationCheckpoints pair =
+            RegistrationCheckpoints.resolve(
+                reg.target(), offsetStore, atomicProcessor, RUNNER_NAME, reg.name());
         // A name the processor cannot store read models under fails here, at startup. With
         // the JDBC repository every valid name has a table of its own, so the exact-name duplicate
         // check below is also the check that no two registrations share a read-model table.
-        atomicProcessor.checkProjectionName(reg.name());
+        pair.processor().checkProjectionName(reg.name());
         if (!names.add(reg.name())) {
           throw new IllegalArgumentException("Duplicate projection name: " + reg.name().value());
         }
+        pairs.put(reg.name(), pair);
       }
 
       boolean hasDlq =
@@ -458,32 +542,31 @@ public final class MultiProjectionRunner implements AutoCloseable {
             "deadLetterStore is required when any registration uses DLQ strategy");
       }
 
-      // Fail here rather than at start(), where the same pairing would be handed to
-      // every per-registration ContinuousProjectionRunner on its own virtual thread.
-      ProjectionFencingPolicy.requireFencingCapable(
-          leadership, atomicProcessor, "MultiProjectionRunner");
-
-      // Every registration shares this runner's single atomicProcessor, so each is checked
-      // against its OWN declared mode; a refusal here is the same refusal the per-registration
-      // ContinuousProjectionRunner would raise at run(), surfaced at build() instead of on a
-      // virtual thread.
+      // Each registration is checked against the processor IT commits through and its OWN
+      // declared mode, so a runner that mixes targets refuses only the offending registration,
+      // by name. A refusal here is the same refusal the per-registration
+      // ContinuousProjectionRunner would raise at build()/run(), surfaced at build() instead of
+      // on a virtual thread.
       for (var reg : registrations) {
+        RegistrationCheckpoints pair = pairs.get(reg.name());
+        ProjectionFencingPolicy.requireFencingCapable(
+            leadership, pair.processor(), RUNNER_NAME, reg.name().value(), pair.targetName());
         ProjectionDeliveryPolicy.require(
             reg.projection(),
             reg.deliveryMode(),
-            atomicProcessor,
-            "MultiProjectionRunner",
-            reg.name().value());
+            pair.processor(),
+            RUNNER_NAME,
+            reg.name().value(),
+            pair.targetName());
       }
 
       return new MultiProjectionRunner(
           registrations,
+          pairs,
           eventStore,
-          offsetStore,
           fetchSize,
           batchSize,
           subscriptionConfig,
-          atomicProcessor,
           deadLetterStore,
           stopTimeout,
           metrics,

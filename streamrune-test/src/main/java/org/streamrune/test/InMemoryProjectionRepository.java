@@ -54,8 +54,8 @@ import org.streamrune.core.types.ProjectionName;
  * actions run after the apply and dropped on rollback. {@link #executeReplay} takes the same
  * per-name lock and leaves the checkpoint alone. Pass the same instance as {@code
  * .offsetStore(...)} and {@code .atomicProcessor(...)} of a runner, exactly as {@code
- * PostgresOffsetStore} and {@code JdbcProjectionRepository} share {@code projection_offset}. Passes
- * {@link AtomicBatchProcessorContract}.
+ * PostgresReadModelCheckpoints} and {@code JdbcProjectionRepository} share {@code
+ * readmodel_checkpoint}. Passes {@link AtomicBatchProcessorContract}.
  *
  * <p>Same rules as the JDBC repository: an inserted row starts at version 0 and every save adds
  * one; a versioned save only updates an existing row at the expected version, so a missing row is
@@ -762,7 +762,12 @@ public final class InMemoryProjectionRepository
   // ---- AtomicBatchProcessor ----
 
   @Override
-  public boolean supportsFencing() {
+  public boolean transactional() {
+    return true;
+  }
+
+  @Override
+  public boolean fencesCheckpoint() {
     return true;
   }
 

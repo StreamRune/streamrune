@@ -55,7 +55,7 @@ class JdbcProjectionRepositoryAtomicityTest {
       new PostgreSQLContainer(PostgresTestImage.NAME).withDatabaseName("streamrune_atomic_test");
 
   static PGSimpleDataSource dataSource;
-  static PostgresOffsetStore offsetStore;
+  static PostgresReadModelCheckpoints offsetStore;
 
   record TestView(String id, String data) {}
 
@@ -67,18 +67,14 @@ class JdbcProjectionRepositoryAtomicityTest {
     dataSource.setPassword(PG.getPassword());
 
     createOffsetTable();
-    offsetStore = new PostgresOffsetStore(dataSource);
+    offsetStore = new PostgresReadModelCheckpoints(dataSource);
   }
 
   static void createOffsetTable() {
-    // The shipped event-store baseline, applied the way the factory applies it. This test only
-    // uses projection_offset (with its epoch fencing column).
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    // The shipped read-model series, applied the way PostgresReadModelStore applies it. This test
+    // only uses readmodel_checkpoint (with its epoch fencing column), where the repository
+    // checkpoints.
+    ReadModelTestSchema.apply(dataSource);
   }
 
   /** Reads the epoch fencing token stamped on the projection's checkpoint row (0 if no row). */
@@ -86,7 +82,7 @@ class JdbcProjectionRepositoryAtomicityTest {
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, projectionName);
       try (var rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;
@@ -98,7 +94,7 @@ class JdbcProjectionRepositoryAtomicityTest {
   void cleanOffsets() throws SQLException {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM readmodel_checkpoint");
     }
   }
 
@@ -418,10 +414,121 @@ class JdbcProjectionRepositoryAtomicityTest {
     assertEquals(6L, storedEpoch(name.value()));
   }
 
+  /**
+   * The takeover stamp racing a batch the superseded leader already has open: the batch passed its
+   * fence under the checkpoint row's {@code FOR UPDATE} lock, so the stamp waits for it, the batch
+   * commits whole, and the stamp lands right after. Every batch the old leader starts after that is
+   * fenced; the new leader's proceeds. Either interleaving leaves the read model and the checkpoint
+   * consistent — a batch is applied whole or not at all.
+   */
+  @Test
+  void takeoverStampRacingAnOpenBatch_waitsForIt_thenFencesTheNextStaleBatch() throws Exception {
+    var repo = new JdbcProjectionRepository(dataSource);
+    var name = ProjectionName.of("takeover_stamp_race");
+    repo.executeAtomically(name, List.of(), GlobalOffset.of(10), 1L, tx -> {}, offsetStore);
+
+    var inside = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    var batchFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+    var stampFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+    Thread staleBatch =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    repo.executeAtomically(
+                        name,
+                        List.of(),
+                        GlobalOffset.of(20),
+                        1L,
+                        tx -> {
+                          tx.save(name, "id-1", new TestView("id-1", "epoch1"));
+                          inside.countDown();
+                          try {
+                            release.await();
+                          } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(e);
+                          }
+                        },
+                        offsetStore);
+                  } catch (Throwable t) {
+                    batchFailure.set(t);
+                  }
+                });
+    assertTrue(inside.await(30, java.util.concurrent.TimeUnit.SECONDS), "the batch is open");
+    Thread stamp =
+        Thread.ofPlatform()
+            .start(
+                () -> {
+                  try {
+                    repo.stampFencingEpoch(name, 2L);
+                  } catch (Throwable t) {
+                    stampFailure.set(t);
+                  }
+                });
+    try {
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(30))
+          .until(() -> !stamp.isAlive() || backendsWaitingForALock() > 0);
+      assertTrue(stamp.isAlive(), "the stamp waits for the open batch's row lock");
+      assertEquals(1L, storedEpoch(name.value()), "not stamped while the batch is open");
+    } finally {
+      release.countDown();
+      staleBatch.join(30_000);
+      stamp.join(30_000);
+    }
+
+    assertEquals(null, batchFailure.get(), "the batch passed its fence before the stamp: it lands");
+    assertEquals(null, stampFailure.get());
+    assertEquals(GlobalOffset.of(20), offsetStore.getLastOffset(name));
+    assertEquals(2L, storedEpoch(name.value()), "the stamp landed after the batch");
+    assertEquals("epoch1", repo.findById(name, "id-1", TestView.class).orElseThrow().data());
+
+    assertThrows(
+        OptimisticLockException.class,
+        () ->
+            repo.executeAtomically(
+                name,
+                List.of(),
+                GlobalOffset.of(30),
+                1L,
+                tx -> tx.save(name, "id-1", new TestView("id-1", "stale")),
+                offsetStore),
+        "a batch the old leader starts after the stamp is fenced");
+    assertEquals(GlobalOffset.of(20), offsetStore.getLastOffset(name));
+    assertEquals("epoch1", repo.findById(name, "id-1", TestView.class).orElseThrow().data());
+
+    repo.executeAtomically(
+        name,
+        List.of(),
+        GlobalOffset.of(30),
+        2L,
+        tx -> tx.save(name, "id-1", new TestView("id-1", "epoch2")),
+        offsetStore);
+    assertEquals(GlobalOffset.of(30), offsetStore.getLastOffset(name));
+    assertEquals("epoch2", repo.findById(name, "id-1", TestView.class).orElseThrow().data());
+  }
+
+  /** Backends of this database that are blocked on a lock another backend holds. */
+  private static int backendsWaitingForALock() throws SQLException {
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT count(*) FROM pg_stat_activity"
+                    + " WHERE datname = current_database() AND wait_event_type = 'Lock'")) {
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getInt(1);
+      }
+    }
+  }
+
   @Test
   void takeoverStamp_seedsZeroOffsetRowForNeverCommittedProjection() throws Exception {
     // A projection that has never committed has no checkpoint row. The takeover stamp must seed
-    // the same 0 floor lockAndReadCheckpoint seeds — establishing the fence from birth — and the
+    // the same 0 floor PostgresCheckpointFence#lockForBatch seeds — establishing the fence from
+    // birth — and the
     // new leader's genuine first advance must still pass the monotonic guard against that floor.
     var repo = new JdbcProjectionRepository(dataSource);
     var name = ProjectionName.of("takeover_stamp_seed");
@@ -498,7 +605,7 @@ class JdbcProjectionRepositoryAtomicityTest {
     // fence, and this is the declaration they consult. The three tests above are what makes it
     // true — the stale-epoch rejection, the monotonic stamp, and the untouched offset.
     assertTrue(
-        repo.supportsFencing(),
+        repo.fencesCheckpoint(),
         "JdbcProjectionRepository honours the fencing epoch, so it must declare it — otherwise the"
             + " projection runners reject every multi-replica configuration that uses it");
   }
@@ -701,13 +808,22 @@ class JdbcProjectionRepositoryAtomicityTest {
   @Test
   void offsetSaveFailureRollsBackProjectionWrite() throws Exception {
     var repo = new JdbcProjectionRepository(dataSource);
+    var name = ProjectionName.of("atomic_offset_fail");
+    var updaterWrote = new AtomicInteger();
 
-    // Sabotage the offset upsert: without the table, saveOffsetInternal fails after the
-    // projection write succeeded — the write must be rolled back. The table is moved aside rather
-    // than dropped, so the finally block can put the migrated table back as it was.
+    // Sabotage the offset advance only: a trigger fails the checkpoint row's UPDATE, which is what
+    // PostgresCheckpointFence#saveLocked's upsert does to the row lockForBatch seeded. So the lock
+    // passes, the updater's write succeeds on the transaction's connection, and then saveLocked
+    // fails — the write must be rolled back with it.
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
-      stmt.execute("ALTER TABLE projection_offset RENAME TO projection_offset_moved_aside");
+      stmt.execute(
+          "CREATE OR REPLACE FUNCTION atomic_offset_fail() RETURNS trigger AS $$ BEGIN"
+              + " RAISE EXCEPTION 'checkpoint advance sabotaged'; END $$ LANGUAGE plpgsql");
+      stmt.execute(
+          "CREATE TRIGGER atomic_offset_fail BEFORE UPDATE ON readmodel_checkpoint FOR EACH ROW"
+              + " WHEN (NEW.projection_name = 'atomic_offset_fail')"
+              + " EXECUTE FUNCTION atomic_offset_fail()");
     }
     try {
       var thrown =
@@ -715,30 +831,31 @@ class JdbcProjectionRepositoryAtomicityTest {
               EventStoreException.class,
               () ->
                   repo.executeAtomically(
-                      ProjectionName.of("atomic_offset_fail"),
+                      name,
                       List.of(),
                       GlobalOffset.of(7),
                       0L,
-                      txRepository ->
-                          txRepository.save(
-                              ProjectionName.of("atomic_offset_fail"),
-                              "id-1",
-                              new TestView("id-1", "data")),
+                      txRepository -> {
+                        txRepository.save(name, "id-1", new TestView("id-1", "data"));
+                        updaterWrote.incrementAndGet();
+                      },
                       offsetStore));
 
       assertEquals("Transaction failed during projection update", thrown.getMessage());
-      assertTrue(
-          repo.findById(ProjectionName.of("atomic_offset_fail"), "id-1", TestView.class).isEmpty());
+      assertEquals(1, updaterWrote.get(), "the write succeeded before the checkpoint advance");
+      assertTrue(repo.findById(name, "id-1", TestView.class).isEmpty());
+      assertEquals(GlobalOffset.initial(), offsetStore.getLastOffset(name));
     } finally {
       try (var conn = dataSource.getConnection();
           var stmt = conn.createStatement()) {
-        stmt.execute("ALTER TABLE projection_offset_moved_aside RENAME TO projection_offset");
+        stmt.execute("DROP TRIGGER IF EXISTS atomic_offset_fail ON readmodel_checkpoint");
+        stmt.execute("DROP FUNCTION IF EXISTS atomic_offset_fail()");
       }
     }
   }
 
   @Test
-  void saveOffsetInternalRejectsRegressionSilentNoOp() {
+  void saveLockedRejectsRegressionSilentNoOp() {
     var repo = new JdbcProjectionRepository(dataSource);
     var name = ProjectionName.of("atomic_guard");
 
@@ -882,7 +999,8 @@ class JdbcProjectionRepositoryAtomicityTest {
   void concurrentDoubleWriterAtTheSameOffsetAppliesExactlyOnce() throws Exception {
     // The real two-leader race. Two writers concurrently process the SAME overlapping range
     // and target the SAME offset against the same read-model row. Exactly one commits; the other is
-    // serialized on the projection_offset row lock and rejected. The non-idempotent increment is
+    // serialized on the readmodel_checkpoint row lock and rejected. The non-idempotent increment
+    // is
     // applied exactly once and the checkpoint lands on the target offset.
     var repo = new JdbcProjectionRepository(dataSource);
     var name = ProjectionName.of("concurrent_same_row");
@@ -902,7 +1020,8 @@ class JdbcProjectionRepositoryAtomicityTest {
   @Test
   void concurrentDoubleWriterOnDisjointRowsStillAppliesExactlyOnce() throws Exception {
     // Same race, but the two writers touch DISJOINT read-model rows — so there is no
-    // read-model row contention and the serialization rests SOLELY on the projection_offset row
+    // read-model row contention and the serialization rests SOLELY on the readmodel_checkpoint
+    // row
     // lock + rollback. Still exactly one commits; the loser's disjoint write is rolled back with
     // the
     // rejected offset advance, so only the winner's row exists.

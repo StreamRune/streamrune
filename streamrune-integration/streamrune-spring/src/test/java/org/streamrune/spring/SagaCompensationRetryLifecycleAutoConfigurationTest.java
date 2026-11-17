@@ -277,6 +277,7 @@ class SagaCompensationRetryLifecycleAutoConfigurationTest {
                       properties.validationEnabled(),
                       properties.startupLog(),
                       properties.eventStore(),
+                      properties.readModel(),
                       properties.metadata(),
                       properties.security(),
                       properties.sse(),

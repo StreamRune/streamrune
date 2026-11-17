@@ -81,7 +81,7 @@ import org.streamrune.core.types.SubscriptionName;
  *
  * {@code resign} sets {@code lease_until = now()} for our own holder id rather than deleting the
  * row. Deleting would reset the next acquire to epoch {@code 1}, which could fall <em>below</em> an
- * epoch already stamped into {@code projection_offset} and wrongly fence out a legitimate new
+ * epoch already stamped into {@code subscription_checkpoint} and wrongly fence out a legitimate new
  * leader. Keeping the row preserves epoch monotonicity across resign → reacquire.
  *
  * <p><b>Resign/renew race.</b> The shared heartbeat may hold an in-flight renew for a name captured

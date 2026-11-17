@@ -16,7 +16,11 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** {@link JdbcProjectionRepository} honours the {@code supportsFencing()} contract. */
+/**
+ * {@link JdbcProjectionRepository}, built by its public constructor, honours the {@code
+ * transactional()} and {@code fencesCheckpoint()} contract over {@code readmodel_checkpoint}, read
+ * through {@link PostgresReadModelCheckpoints}. The database holds the read-model series only.
+ */
 @Testcontainers
 class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract {
 
@@ -34,12 +38,7 @@ class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract 
     dataSource.setUrl(PG.getJdbcUrl());
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
-    org.flywaydb.core.Flyway.configure()
-        .dataSource(dataSource)
-        .locations(PostgresEventStoreFactory.EVENT_STORE_MIGRATION_LOCATION)
-        .table(PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE)
-        .load()
-        .migrate();
+    ReadModelTestSchema.apply(dataSource);
     repo = new JdbcProjectionRepository(dataSource);
   }
 
@@ -59,7 +58,7 @@ class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract 
 
   @Override
   protected OffsetStore offsetStore() {
-    return new PostgresOffsetStore(dataSource);
+    return new PostgresReadModelCheckpoints(dataSource);
   }
 
   /** Plain SELECT on a fresh connection: not blocked by the FOR UPDATE the transaction holds. */
@@ -68,7 +67,7 @@ class JdbcProjectionRepositoryContractTest extends AtomicBatchProcessorContract 
     try (var conn = dataSource.getConnection();
         var ps =
             conn.prepareStatement(
-                "SELECT last_offset FROM projection_offset WHERE projection_name = ?")) {
+                "SELECT last_offset FROM readmodel_checkpoint WHERE projection_name = ?")) {
       ps.setString(1, name.value());
       try (var rs = ps.executeQuery()) {
         return rs.next() ? GlobalOffset.of(rs.getLong(1)) : GlobalOffset.initial();

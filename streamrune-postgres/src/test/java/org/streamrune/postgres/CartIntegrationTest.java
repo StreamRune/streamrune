@@ -212,7 +212,7 @@ class CartIntegrationTest {
         var stmt = conn.createStatement()) {
       stmt.execute("DELETE FROM event_stream");
       stmt.execute("DELETE FROM snapshot_store");
-      stmt.execute("DELETE FROM projection_offset");
+      stmt.execute("DELETE FROM subscription_checkpoint");
     }
   }
 

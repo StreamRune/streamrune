@@ -30,7 +30,6 @@ import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.FieldEquals;
 import org.streamrune.core.projection.OffsetStore;
-import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.projection.ProjectionIndex;
 import org.streamrune.core.projection.ProjectionRepository;
@@ -63,9 +62,20 @@ import org.streamrune.core.types.ProjectionName;
  * commit alone creates no table, so an at-least-once projection that keeps its read models
  * elsewhere leaves no empty {@code <name>_view} behind.
  *
- * <p>{@link #supportsFencing()} is {@code true} and means all three of: the updater and the
- * checkpoint write run in one transaction; the repository handed to the updater is bound to it and
- * never {@code null}; a superseded epoch is rejected before any read-model write and stamped
+ * <p><b>Where the checkpoints live.</b> Every repository checkpoints in {@code
+ * readmodel_checkpoint} on its own DataSource — the read-model series ({@code
+ * db/readmodel-migration}), which {@link PostgresReadModelStore#create} applies — never in the
+ * event store's {@code subscription_checkpoint}. A runner that commits through this processor must
+ * therefore read the projection's position through {@link PostgresReadModelCheckpoints} on the same
+ * DataSource; paired with a {@link PostgresOffsetStore} it would read the wrong table and never see
+ * the batches it commits. {@link PostgresReadModelStore} is the way to get the matching pair
+ * ({@link PostgresReadModelStore#checkpointTarget()}); an at-least-once projection that writes
+ * elsewhere checkpoints with the events instead, through {@link
+ * PostgresOffsetStore#subscriptionCheckpoint()}.
+ *
+ * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}: the updater
+ * and the checkpoint write run in one transaction; the repository handed to the updater is bound to
+ * it and never {@code null}; a superseded epoch is rejected before any read-model write and stamped
  * durably. No mode makes an effect outside this database exactly-once.
  *
  * <p><b>No statement bound of its own.</b> Unlike {@link PostgresEventStore}, whose {@code
@@ -84,6 +94,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   private final DataSource dataSource;
   private final ObjectMapper objectMapper;
+
+  /** The fence over this repository's checkpoint table (see {@link #executeAtomically}). */
+  private final PostgresCheckpointFence checkpointFence;
 
   /**
    * The projection names this repository stores read models under: lower-case ASCII letters, digits
@@ -193,6 +206,16 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     return mapper;
   }
 
+  /**
+   * Creates a repository whose read models are (de)serialised with {@code objectMapper} — build it
+   * with {@link #createObjectMapper(CryptoEngine, StreamRuneMetrics)} to encrypt {@code @Encrypted}
+   * fields at rest. Its checkpoints live in {@code readmodel_checkpoint} on {@code dataSource} (see
+   * the class documentation, "Where the checkpoints live").
+   *
+   * @param dataSource the read-model database's pool, used as given
+   * @param objectMapper serialises the read models
+   * @throws IllegalArgumentException if an argument is {@code null}
+   */
   public JdbcProjectionRepository(DataSource dataSource, ObjectMapper objectMapper) {
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource is required");
@@ -202,6 +225,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
+    this.checkpointFence = new PostgresCheckpointFence(CheckpointTable.READ_MODEL);
   }
 
   // Connection discipline: with PostgresCryptoEngine (all three integrations wire it onto the
@@ -1172,8 +1196,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * never requests a second pooled connection, so a single-connection pool cannot self-deadlock.
    *
    * <p><b>Split-brain double-apply protection.</b> The transaction first {@code SELECT ... FOR
-   * UPDATE}-locks this projection's {@code projection_offset} row (seeding a 0 checkpoint if none
-   * exists), so <em>all</em> writers for one projection serialize on that row. It then rejects a
+   * UPDATE}-locks this projection's checkpoint row (seeding a 0 checkpoint if none exists) through
+   * the package-private {@code PostgresCheckpointFence}, which holds every checkpoint statement and
+   * guard, so <em>all</em> writers for one projection serialize on that row. It then rejects a
    * batch whose <b>first</b> offset is at or before the committed checkpoint: such a batch overlaps
    * events another writer already applied — the exact split-brain window where a stale/superseded
    * leader read at an older checkpoint and fetched a range extending past a newer leader's advance.
@@ -1181,10 +1206,10 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * commit and re-apply its already-applied prefix a second time, silently corrupting a
    * non-idempotent read model (count++/balance/list-append). The overlap guard rolls the whole
    * transaction back instead. <b>Empty batches</b> (a bare offset advance) are still governed by
-   * the monotonic guard in {@link #saveOffsetInternal}. This makes the read-model write — the write
-   * through the handed repository — exactly-once under an overlapping-batch split-brain; it does
-   * <em>not</em> remove the need for single-active-consumer leadership, which is what keeps two
-   * writers from racing in the first place.
+   * the monotonic guard on the offset save. This makes the read-model write — the write through the
+   * handed repository — exactly-once under an overlapping-batch split-brain; it does <em>not</em>
+   * remove the need for single-active-consumer leadership, which is what keeps two writers from
+   * racing in the first place.
    *
    * <p><b>Epoch fencing.</b> Under the same {@code FOR UPDATE} lock the transaction also reads the
    * row's stored fencing {@code epoch} and rejects — before the updater writes a single read-model
@@ -1193,9 +1218,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * GREATEST(stored, caller)} so it never regresses. A {@code fencingEpoch} of {@code 0} is
    * unfenced (single-node / {@link org.streamrune.core.subscription.SubscriptionLeadership#NOOP})
    * and always passes. This epoch fence, the first-offset overlap guard, and the monotonic offset
-   * guard in {@link #saveOffsetInternal} are the three checks that keep the read-model write
-   * through the handed repository exactly-once under split-brain; an HTTP call or a broker publish
-   * inside the updater is not covered and is at-least-once.
+   * guard on the offset save are the three checks that keep the read-model write through the handed
+   * repository exactly-once under split-brain; an HTTP call or a broker publish inside the updater
+   * is not covered and is at-least-once.
    *
    * <p><b>After-commit actions.</b> An action registered through the supplied repository's {@link
    * ProjectionRepository#afterCommit} runs after the COMMIT, before this method returns, and is
@@ -1207,8 +1232,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * AfterCommitActions} class lists the crash and failure points.
    *
    * <p>Implements {@link AtomicBatchProcessor#executeAtomically}. The {@code offsetStore} parameter
-   * is ignored — the offset is saved internally within the same transaction as the projection
-   * update.
+   * is ignored — the offset is saved internally, in {@code readmodel_checkpoint}, within the same
+   * transaction as the projection update.
    *
    * @param projectionName the name of the projection
    * @param batch the batch of events; its first offset is checked against the committed checkpoint
@@ -1236,17 +1261,21 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.BATCH,
-        (conn, checkpoint, transactionScopedRepository) -> {
-          // Reject a fenced-out (stale-epoch) or overlapping batch before it writes a single
-          // read-model row. Both checks read the row under the same FOR UPDATE.
-          rejectStaleEpoch(projectionName, fencingEpoch, checkpoint.epoch());
-          rejectOverlappingBatch(projectionName, batch, checkpoint.offset());
+        (conn, transactionScopedRepository) -> {
+          // Lock the checkpoint row and reject a fenced-out (stale-epoch) or overlapping batch
+          // before it writes a single read-model row. Both checks read the row under the same FOR
+          // UPDATE.
+          checkpointFence.lockForBatch(
+              conn,
+              projectionName,
+              fencingEpoch,
+              batch.isEmpty() ? null : batch.getFirst().globalOffset());
 
           // Execute projection update(s) on the transaction's connection
           projectionUpdater.update(transactionScopedRepository);
 
           // Save offset — both in same transaction, stamping the caller's epoch on the checkpoint.
-          saveOffsetInternal(conn, projectionName, newOffset, fencingEpoch);
+          checkpointFence.saveLocked(conn, projectionName, newOffset, fencingEpoch);
         });
   }
 
@@ -1268,8 +1297,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * A replay and a batch of one projection both lock its {@code projection_offset} row {@code FOR
-   * UPDATE}, so one waits for the other.
+   * A replay and a batch of one projection both lock its checkpoint row {@code FOR UPDATE}, so one
+   * waits for the other.
    *
    * @return always {@code true}
    */
@@ -1279,11 +1308,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * Applies a dead-lettered range in one transaction that first locks this projection's {@code
-   * projection_offset} row {@code FOR UPDATE} (seeding a 0 checkpoint if none exists) — the lock
-   * {@link #executeAtomically} takes — and never writes that row. A live batch of the same
-   * projection, in this process or another, waits for the replay's commit, and the replay waits for
-   * an open batch; whichever comes second reads the rows the first one committed.
+   * Applies a dead-lettered range in one transaction that first locks this projection's checkpoint
+   * row {@code FOR UPDATE} (seeding a 0 checkpoint if none exists) — the lock {@link
+   * #executeAtomically} takes — and never writes that row. A live batch of the same projection, in
+   * this process or another, waits for the replay's commit, and the replay waits for an open batch;
+   * whichever comes second reads the rows the first one committed.
    *
    * <p>The {@code projectionUpdater} receives a repository bound to the replay's transaction, with
    * the same {@link ProjectionRepository#afterCommit} behaviour as a batch. The range is applied
@@ -1319,37 +1348,20 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.REPLAY,
-        (conn, checkpoint, transactionScopedRepository) ->
-            projectionUpdater.update(transactionScopedRepository));
+        (conn, transactionScopedRepository) -> {
+          // The lock a batch takes, with no check and no checkpoint write.
+          checkpointFence.lockForReplay(conn, projectionName);
+          projectionUpdater.update(transactionScopedRepository);
+        });
   }
 
-  /** The two transactions that hold a projection's checkpoint row, and how each reports failure. */
-  private enum CheckpointTransaction {
-    BATCH(
-        "projection batch",
-        "Transaction failed during projection update",
-        "Failed to process projection batch atomically"),
-    REPLAY(
-        "projection dead-letter replay",
-        "Transaction failed during projection dead-letter replay",
-        "Failed to replay a projection dead-letter range");
-
-    private final String label;
-    private final String bodyFailure;
-    private final String connectionFailure;
-
-    CheckpointTransaction(String label, String bodyFailure, String connectionFailure) {
-      this.label = label;
-      this.bodyFailure = bodyFailure;
-      this.connectionFailure = connectionFailure;
-    }
-  }
-
-  /** What runs inside a checkpoint transaction, after the checkpoint row is locked. */
+  /**
+   * What runs inside a checkpoint transaction. Its first statement locks the checkpoint row through
+   * {@link #checkpointFence}, so every batch and every replay of the projection serializes there.
+   */
   @FunctionalInterface
   private interface CheckpointTransactionBody {
-    void run(Connection conn, Checkpoint checkpoint, TransactionScopedRepository repository)
-        throws SQLException;
+    void run(Connection conn, TransactionScopedRepository repository) throws SQLException;
   }
 
   /**
@@ -1363,7 +1375,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       ProjectionName projectionName, CheckpointTransaction kind, CheckpointTransactionBody body) {
     var afterCommitActions = new AfterCommitActions(projectionName);
     try {
-      commitUnderCheckpointLock(projectionName, kind, body, afterCommitActions);
+      commitUnderCheckpointLock(kind, body, afterCommitActions);
     } catch (Throwable inFlight) {
       afterCommitActions.runIfCommitIssued(inFlight);
       throw inFlight;
@@ -1372,69 +1384,32 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * One transaction under the projection's checkpoint-row lock: locks the row, runs {@code body}
-   * and commits. {@link #executeAtomically} runs the fences, the updater and the offset save in it;
-   * {@link #executeReplay} runs the updater alone. The after-commit actions the updater registers
-   * are queued on {@code afterCommitActions}; the caller runs them once this method has returned or
-   * thrown.
+   * One transaction under the projection's checkpoint-row lock, in the shell {@link
+   * CheckpointTransaction#run} shares with {@link PostgresSubscriptionCheckpointProcessor}: runs
+   * {@code body}, which locks the row first, and commits. {@link #executeAtomically} runs the lock
+   * with its fences, the updater and the offset save in it; {@link #executeReplay} runs the lock
+   * and the updater. The after-commit actions the updater registers are queued on {@code
+   * afterCommitActions}; the caller runs them once this method has returned or thrown.
    */
   private void commitUnderCheckpointLock(
-      ProjectionName projectionName,
       CheckpointTransaction kind,
       CheckpointTransactionBody body,
       AfterCommitActions afterCommitActions) {
-    try (var conn = dataSource.getConnection()) {
-      conn.setAutoCommit(false);
-      var transactionScopedRepository = new TransactionScopedRepository(conn, afterCommitActions);
-      boolean committed = false;
-      try {
-        // Lock the checkpoint row so every batch and every replay of this projection serializes
-        // here.
-        Checkpoint cp = lockAndReadCheckpoint(conn, projectionName);
-        body.run(conn, cp, transactionScopedRepository);
+    kind.run(
+        dataSource,
+        conn -> {
+          var transactionScopedRepository =
+              new TransactionScopedRepository(conn, afterCommitActions);
+          // The body locks the checkpoint row first, so every batch and every replay of this
+          // projection serializes there.
+          body.run(conn, transactionScopedRepository);
 
-        // From here on the outcome may be "committed" even if commit() throws (see
-        // AfterCommitActions), so the after-commit actions run whatever commit() reports.
-        afterCommitActions.commitIssued();
-        conn.commit();
-        committed = true;
-        // Tables created inside the transaction survive only after commit
-        tablesChecked.addAll(transactionScopedRepository.tablesEnsuredInTransaction);
-      } catch (SQLException e) {
-        // Wrap the transaction-body SQLException (rollback happens once, in the finally).
-        throw new EventStoreException(kind.bodyFailure, e);
-      } finally {
-        // The SINGLE rollback point for every non-committed exit — a
-        // RuntimeException (e.g. an updater IllegalStateException or the rejectOverlappingBatch
-        // OptimisticLock), the wrapped SQLException above, OR any OTHER Throwable (an Error such as
-        // StackOverflowError / OutOfMemoryError / AssertionError from user mapping code in
-        // projectionUpdater.update()). It must run BEFORE restoring autoCommit: pgjdbc's
-        // setAutoCommit(true) COMMITS an open transaction, so without this rollback a
-        // partially-applied read-model write would become durable WITHOUT the offset advance, and
-        // the retried batch would re-apply the same events (the overlap guard passes
-        // because the checkpoint never moved) — double-applying a non-idempotent projection.
-        // Mirrors PostgresEventStore's append discipline. A FAILED rollback must not
-        // be followed by that restore, and the pool must not be left to commit the transaction on
-        // return (Agroal resets autoCommit with no rollback first), so the physical connection is
-        // aborted instead and autoCommit is left alone (PostgresTransactions). An Error from the
-        // rollback propagates after the abort.
-        if (committed || PostgresTransactions.rollbackOrAbort(conn, kind.label)) {
-          // Restore auto-commit before the connection returns to the pool. Swallow a throw here:
-          // on the success path the tx has already committed (a throw must not fail a durable
-          // apply); on the abort path the rollback is already done.
-          try {
-            conn.setAutoCommit(true);
-          } catch (SQLException restoreEx) {
-            log.debug(
-                "Failed to restore autoCommit before returning connection to pool (benign — pool"
-                    + " resets on return): {}",
-                restoreEx.getMessage());
-          }
-        }
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException(kind.connectionFailure, e);
-    }
+          // From here on the outcome may be "committed" even if commit() throws (see
+          // AfterCommitActions), so the after-commit actions run whatever commit() reports.
+          afterCommitActions.commitIssued();
+          // Tables created inside the transaction survive only after commit
+          return () -> tablesChecked.addAll(transactionScopedRepository.tablesEnsuredInTransaction);
+        });
   }
 
   /**
@@ -1546,91 +1521,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             projectionName.value(),
             e);
       }
-    }
-  }
-
-  /**
-   * The committed checkpoint of a projection: its last applied offset and stamped fencing epoch.
-   */
-  private record Checkpoint(long offset, long epoch) {}
-
-  /**
-   * Seeds a {@code 0} checkpoint for {@code projectionName} if none exists, then {@code SELECT ...
-   * FOR UPDATE}-locks the row and returns its stored offset and epoch. Seeding guarantees a row to
-   * lock even for a first-ever application, so two concurrent writers for the same projection
-   * serialize on this row rather than both proceeding past a missing row. Runs on the transaction's
-   * connection so the lock is held until commit/rollback; the epoch read here feeds the {@link
-   * #rejectStaleEpoch} fence (epoch fencing).
-   */
-  private Checkpoint lockAndReadCheckpoint(Connection conn, ProjectionName projectionName)
-      throws SQLException {
-    String seed =
-        "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
-            + "VALUES (?, 0, NOW()) ON CONFLICT (projection_name) DO NOTHING";
-    try (var ps = conn.prepareStatement(seed)) {
-      ps.setString(1, projectionName.value());
-      ps.executeUpdate();
-    }
-    String select =
-        "SELECT last_offset, epoch FROM projection_offset WHERE projection_name = ? FOR UPDATE";
-    try (var ps = conn.prepareStatement(select)) {
-      ps.setString(1, projectionName.value());
-      try (var rs = ps.executeQuery()) {
-        return rs.next() ? new Checkpoint(rs.getLong(1), rs.getLong(2)) : new Checkpoint(0L, 0L);
-      }
-    }
-  }
-
-  /**
-   * Fences out a commit whose caller epoch is below the epoch already stored on the checkpoint row
-   * — a superseded leader whose lease was taken over by a newer one (which bumped the epoch).
-   * Throws {@link OptimisticLockException} so {@link #executeAtomically} rolls the whole
-   * transaction back <em>before</em> the updater writes a single read-model row. A {@code
-   * fencingEpoch} of {@code 0} is unfenced (single-node / {@link
-   * org.streamrune.core.subscription.SubscriptionLeadership#NOOP}) and always passes, so a
-   * single-node deployment commits unfenced (epoch fencing).
-   */
-  private void rejectStaleEpoch(ProjectionName name, long fencingEpoch, long storedEpoch) {
-    if (fencingEpoch != 0L && fencingEpoch < storedEpoch) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.EPOCH_FENCE,
-          "Projection '"
-              + shown(name)
-              + "' commit fenced out: caller epoch "
-              + fencingEpoch
-              + " is below the stored epoch "
-              + storedEpoch
-              + " — a newer leader has taken over the lease. Rolling back the stale leader's write"
-              + " (epoch fencing).");
-    }
-  }
-
-  /**
-   * Rejects a batch whose first event offset is at or before the committed checkpoint — it overlaps
-   * events already applied by another writer (a concurrent/failed-over stale leader or a
-   * redelivery). A forward batch always starts strictly after the checkpoint (the runners read the
-   * global stream from {@code storedOffset}); an overlapping start means part of the batch would be
-   * applied a second time, so the whole transaction rolls back. Empty batches carry no first offset
-   * and are governed solely by the monotonic guard on the offset advance.
-   */
-  private void rejectOverlappingBatch(
-      ProjectionName projectionName, List<EventEnvelope> batch, long storedOffset) {
-    if (batch.isEmpty()) {
-      return;
-    }
-    long firstOffset = batch.getFirst().globalOffset().value();
-    if (firstOffset <= storedOffset) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.OVERLAP,
-          "Projection '"
-              + shown(projectionName)
-              + "' batch starting at offset "
-              + firstOffset
-              + " overlaps the committed checkpoint ("
-              + storedOffset
-              + "): those events were already applied by another writer (a concurrent or"
-              + " failed-over stale leader, or a redelivery). Rolling back so the read-model write is"
-              + " not applied a second time.");
     }
   }
 
@@ -1845,65 +1735,30 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
   }
 
-  private void saveOffsetInternal(
-      Connection conn, ProjectionName projectionName, GlobalOffset offset, long fencingEpoch)
-      throws SQLException {
-    // Monotonic guard (byte-identical to PostgresOffsetStore.UPSERT_OFFSET): a backward/sideways
-    // save updates 0 rows. Intentional rewinds use the rebuild/reset path, never saveOffset (see
-    // OffsetStore javadoc). The advance also stamps the caller's fencing epoch with GREATEST so the
-    // stored epoch is monotonic and never regresses below a newer leader's takeover (epoch
-    // fencing);
-    // an unfenced epoch-0 caller leaves the stored epoch unchanged. The stamp rides the
-    // SAME monotonic WHERE guard, so a rejected (0-row) advance stamps nothing.
-    String upsert =
-        "INSERT INTO projection_offset (projection_name, last_offset, epoch, updated_at) "
-            + "VALUES (?, ?, ?, NOW()) "
-            + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = EXCLUDED.last_offset, "
-            + "epoch = GREATEST(projection_offset.epoch, EXCLUDED.epoch), "
-            + "updated_at = NOW() "
-            + "WHERE EXCLUDED.last_offset > projection_offset.last_offset";
-    try (var ps = conn.prepareStatement(upsert)) {
-      ps.setString(1, projectionName.value());
-      ps.setLong(2, offset.value());
-      ps.setLong(3, fencingEpoch);
-      int updated = ps.executeUpdate();
-      // The read-model write (projectionUpdater.update, already run above on
-      // this same transaction/connection) and this offset advance MUST be all-or-nothing. This
-      // monotonic guard catches a NON-ADVANCING endpoint (newOffset <= stored) — a fully-behind
-      // redelivery or a bare offset regression: a 0-row result means the stored offset is already
-      // at/past this batch, so committing would DOUBLE-APPLY a non-idempotent projection (count+1,
-      // balance, list append). Throw so executeAtomically rolls the whole batch back: the offset
-      // does not regress and the read model is not double-applied. An OVERLAPPING batch whose
-      // endpoint still ADVANCES past the checkpoint (stale leader read at an older checkpoint,
-      // fetched a wider range) would pass THIS guard — it is rejected earlier by the first-offset
-      // overlap check in executeAtomically, which holds the checkpoint row lock. Together they make
-      // the read-model write exactly-once under split-brain; in normal single-leader forward
-      // progress the guard always updates exactly one row and never fires.
-      if (updated == 0) {
-        throw new ProjectionCommitFencedException(
-            ProjectionCommitFencedException.Guard.MONOTONIC,
-            "Projection '"
-                + shown(projectionName)
-                + "' offset advance to "
-                + offset.value()
-                + " was rejected by the monotonic guard (stored offset already at/past it): the"
-                + " batch is already applied. Rolling back so the read-model write is not committed"
-                + " a second time.");
-      }
-    }
+  /**
+   * This repository runs the updater's writes through the handed repository and the checkpoint
+   * write in one transaction, and the handed repository is bound to it and never {@code null}. The
+   * delivery policy consults this to accept a {@code TRANSACTIONAL_LOCAL} or {@code
+   * EXTERNAL_EFFECT} registration.
+   *
+   * @return always {@code true}
+   */
+  @Override
+  public boolean transactional() {
+    return true;
   }
 
   /**
-   * This repository honours the leadership fencing epoch: {@link #executeAtomically} runs {@code
-   * rejectStaleEpoch} under the checkpoint row's {@code FOR UPDATE} lock <em>before</em> the
-   * updater writes anything, and {@link #stampFencingEpoch} durably arms the fence at takeover. The
+   * This repository honours the leadership fencing epoch: {@link #executeAtomically} runs the epoch
+   * fence under the checkpoint row's {@code FOR UPDATE} lock <em>before</em> the updater writes
+   * anything, and {@link #stampFencingEpoch} durably arms the fence at takeover. The
    * leadership-aware runners consult this to refuse booting a multi-replica projection on a
    * processor that cannot fence.
    *
    * @return always {@code true}
    */
   @Override
-  public boolean supportsFencing() {
+  public boolean fencesCheckpoint() {
     return true;
   }
 
@@ -1983,35 +1838,34 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * Stamps {@code fencingEpoch} on the projection's checkpoint row <em>without moving the
    * offset</em> — the takeover stamp (see {@link AtomicBatchProcessor#stampFencingEpoch}).
    *
-   * <p>{@link #rejectStaleEpoch} compares against the epoch STORED on the checkpoint row, which
-   * {@link #saveOffsetInternal} stamps only on a committed advance — so from a takeover until the
-   * new leader's first committed advance the row still carried the superseded leader's epoch and
-   * ALL of that leader's writes passed the fence (its fail-open local lease view can outlive DB
-   * lease expiry by a pause length, so a paused-then-resumed old leader could commit a stale
-   * SKIP/DLQ forward-jump in that window — silently dropping events). Leadership-aware runners call
-   * this immediately after acquiring the lease, before reading anything, which closes that window
-   * down to the instants between the acquire and this stamp committing (an in-flight stale
-   * transaction that already passed its fence read under the row lock is serialized before the
-   * stamp and still lands — no takeover-time stamping can reject a fence check that already
-   * happened; every transaction the old leader STARTS after this stamp commits is rejected).
+   * <p>The epoch fence compares against the epoch STORED on the checkpoint row, which the offset
+   * save stamps only on a committed advance — so from a takeover until the new leader's first
+   * committed advance the row still carried the superseded leader's epoch and ALL of that leader's
+   * writes passed the fence (its fail-open local lease view can outlive DB lease expiry by a pause
+   * length, so a paused-then-resumed old leader could commit a stale SKIP/DLQ forward-jump in that
+   * window — silently dropping events). Leadership-aware runners call this immediately after
+   * acquiring the lease, before reading anything, which closes that window down to the instants
+   * between the acquire and this stamp committing (an in-flight stale transaction that already
+   * passed its fence read under the row lock is serialized before the stamp and still lands — no
+   * takeover-time stamping can reject a fence check that already happened; every transaction the
+   * old leader STARTS after this stamp commits is rejected).
    *
-   * <p>Idempotent and monotonic: the {@code WHERE EXCLUDED.epoch > projection_offset.epoch} guard
+   * <p>Idempotent and monotonic: the {@code WHERE EXCLUDED.epoch > <checkpoint table>.epoch} guard
    * makes a same-epoch re-stamp (every scheduled tick) a 0-row no-op — the stored epoch never
    * regresses (same {@code GREATEST} discipline as the commit stamp), and an unchanged row is not
    * rewritten. The INSERT arm seeds {@code last_offset = 0} for a projection that has never
-   * committed — the same floor {@link #lockAndReadCheckpoint} seeds and {@code
-   * saveOffsetInternal}'s monotonic {@code WHERE} measures against — and the conflict arm never
-   * touches {@code last_offset}, so the checkpoint cannot move in either direction. Epoch {@code 0}
-   * (unfenced / NOOP leadership) is skipped entirely: there is nothing to fence and stamping would
-   * only churn the row.
+   * committed — the same floor the batch lock seeds and the offset save's monotonic {@code WHERE}
+   * measures against — and the conflict arm never touches {@code last_offset}, so the checkpoint
+   * cannot move in either direction. Epoch {@code 0} (unfenced / NOOP leadership) is skipped
+   * entirely: there is nothing to fence and stamping would only churn the row.
    *
    * <p><b>A 0-row outcome is not silently accepted.</b> Discarding the {@code executeUpdate()}
    * result would make "same epoch, already stamped" indistinguishable from "the epoch I was handed
    * is BELOW the stored one". The second case is never benign: the caller then runs under an epoch
-   * {@link #rejectStaleEpoch} rejects on every commit, and the runners classify that rejection as a
-   * benign leadership/CAS signal, so the projection freezes permanently at INFO level while
-   * reporting itself LIVE and healthy. On 0 rows this now re-reads the stored epoch and, when it is
-   * strictly greater, throws {@link ProjectionEpochRegressionException}. The re-read is a separate
+   * the epoch fence rejects on every commit, and the runners classify that rejection as a benign
+   * leadership/CAS signal, so the projection freezes permanently at INFO level while reporting
+   * itself LIVE and healthy. On 0 rows this now re-reads the stored epoch and, when it is strictly
+   * greater, throws {@link ProjectionEpochRegressionException}. The re-read is a separate
    * statement, so it can observe an epoch newer than the one that actually beat us — harmless,
    * because ANY stored epoch above ours means our epoch is not authoritative and the caller must
    * stop either way. An equal stored epoch (the ordinary re-stamp) still returns quietly, and so
@@ -2030,79 +1884,20 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   @Override
   public void stampFencingEpoch(ProjectionName projectionName, long fencingEpoch) {
     validateProjectionName(projectionName);
-    if (fencingEpoch == 0L) {
-      return;
-    }
-    String stamp =
-        "INSERT INTO projection_offset (projection_name, last_offset, epoch, updated_at) "
-            + "VALUES (?, 0, ?, NOW()) "
-            + "ON CONFLICT (projection_name) DO UPDATE SET "
-            + "epoch = GREATEST(projection_offset.epoch, EXCLUDED.epoch), updated_at = NOW() "
-            + "WHERE EXCLUDED.epoch > projection_offset.epoch";
-    try (var conn = dataSource.getConnection()) {
-      int stamped =
-          PostgresTransactions.commitIfManual(
-              conn,
-              "projection fencing stamp",
-              c -> {
-                try (var ps = c.prepareStatement(stamp)) {
-                  ps.setString(1, projectionName.value());
-                  ps.setLong(2, fencingEpoch);
-                  return ps.executeUpdate();
-                }
-              });
-      if (stamped == 0) {
-        long stored = readStoredEpoch(conn, projectionName);
-        if (stored > fencingEpoch) {
-          throw new ProjectionEpochRegressionException(projectionName, fencingEpoch, stored);
-        }
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to stamp fencing epoch "
-              + fencingEpoch
-              + " for projection: "
-              + shown(projectionName),
-          e);
-    }
+    checkpointFence.stampEpoch(dataSource, projectionName, fencingEpoch);
   }
 
   /**
-   * Reads the epoch currently stored on a projection's checkpoint row, or {@code 0} when the row
-   * does not exist. Only called to explain a 0-row stamp.
-   */
-  private long readStoredEpoch(Connection conn, ProjectionName projectionName) throws SQLException {
-    try (var ps =
-        conn.prepareStatement("SELECT epoch FROM projection_offset WHERE projection_name = ?")) {
-      ps.setString(1, projectionName.value());
-      try (var rs = ps.executeQuery()) {
-        return rs.next() ? rs.getLong("epoch") : 0L;
-      }
-    }
-  }
-
-  /**
-   * Rewinds the projection's checkpoint to offset 0, <b>bypassing the monotonic guard</b> in {@link
-   * #saveOffsetInternal}. This is the reset/rebuild path referenced in the {@link OffsetStore}
-   * contract: {@code saveOffset(name, initial())} would no-op the regression against the guard, so
-   * a genuine reset must use this direct unguarded write.
+   * Rewinds the projection's checkpoint to offset 0, <b>bypassing the monotonic guard</b> on the
+   * offset save. This is the reset/rebuild path referenced in the {@link OffsetStore} contract:
+   * {@code saveOffset(name, initial())} would no-op the regression against the guard, so a genuine
+   * reset must use this direct unguarded write.
    *
    * @param projectionName unique name of the projection to reset
    */
   public void resetOffset(ProjectionName projectionName) {
     validateProjectionName(projectionName);
-    String reset =
-        "INSERT INTO projection_offset (projection_name, last_offset, updated_at) "
-            + "VALUES (?, 0, NOW()) "
-            + "ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0, updated_at = NOW()";
-    try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(reset)) {
-      ps.setString(1, projectionName.value());
-      PostgresTransactions.commitIfManual(conn, "projection offset reset", c -> ps.executeUpdate());
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to reset offset for projection: " + shown(projectionName), e);
-    }
+    checkpointFence.reset(dataSource, projectionName);
   }
 
   /**

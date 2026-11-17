@@ -112,6 +112,43 @@ test kit — and the guarantees of the shipped code are described in detail in
 The parts below list its modules, its API stability policy, requirements, known limitations and
 license.
 
+Unreleased changes to read-model storage:
+
+- **Read-model stores.** A `ReadModelStore` (name, repository, checkpoints, processor, plus
+  `checkpointTarget()`) is one read-model backend, and a projection's checkpoint is stored with its
+  read model. `PostgresReadModelStore.create(...)` and `PostgresEventStoreFactory#createReadModelStore()`
+  build the PostgreSQL one; several stores, each on its own `DataSource`, can run in one application.
+  Each registration is routed to a store (`@ProjectionConfig(readModelStore = "...")`, then its
+  `writeTarget()`, then the only transactional store, then the event store's subscription checkpoint
+  for an at-least-once projection). `StreamRune.Builder#registerProjection` takes a
+  `ReadModelStore` or a `CheckpointTarget`; `ProjectionRunner#run` and `#reset` take a
+  `CheckpointTarget`. See the
+  [read-model stores guide](docs/guide/read-model-stores.md).
+- **Live subscription factory.** `ContinuousProjectionRunner.SubscriptionFactory#create` takes a
+  fourth argument, `OffsetStore checkpoints`: the checkpoints of the run (its `CheckpointTarget`'s,
+  or the runner's own). A factory-built subscription must read and save through it, never through
+  an offset store the factory captured. `SubscriptionHealthContributor#register(name, subscription)`
+  keeps a checkpoint source the four-argument `register` gave the name, so a subscription that
+  registers itself leaves a routed projection's lag on that projection's own checkpoint.
+- **Checkpoint split.** `projection_offset` is renamed `subscription_checkpoint`, and
+  `readmodel_checkpoint` (a separate Flyway series, `db/readmodel-migration`, history table
+  `flyway_schema_history_readmodel`) holds the checkpoints of projections committed with their read
+  model. `PostgresSubscriptionCheckpointProcessor` is the fencing at-least-once processor.
+- **Processor capabilities.** `AtomicBatchProcessor#supportsFencing()` is replaced by
+  `transactional()` and `fencesCheckpoint()`; every registration under real leadership needs
+  `fencesCheckpoint()`.
+- **Integrations.** The default store is named `postgres` (bean `streamRuneDefaultReadModelStore`)
+  and only a store named `postgres` replaces it; other stores are added. Duplicate store names or
+  identities fail startup. The property `streamrune.read-model.schema.auto-initialize` switches the
+  read-model migration. Health reports a `store` detail per projection, and lag is computed against
+  the projection's own checkpoint store. The one-processor-bean rule
+  (`ProjectionProcessorResolution`) and the factory's separate projection-repository method are
+  removed.
+
+Unreleased changes to the schema: the event-store table `projection_offset` is renamed
+`subscription_checkpoint`, and `streamrune-postgres` ships a separate read-model migration series
+(`classpath:db/readmodel-migration`, its own Flyway history) that creates `readmodel_checkpoint`.
+
 ### Modules
 
 Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three

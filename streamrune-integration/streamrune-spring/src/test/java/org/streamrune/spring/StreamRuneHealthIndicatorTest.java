@@ -198,6 +198,40 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
+  void rendersTheStoreOfAProjection_andNoneForAnEntryWithout() throws Exception {
+    DataSource ds = validDataSource();
+    stubEmptyEventStream(ds);
+    var contributor = mock(SubscriptionHealthContributor.class);
+    when(contributor.health())
+        .thenReturn(
+            List.of(
+                new SubscriptionHealth(
+                    SubscriptionName.of("order-summary"),
+                    SubscriptionLifecycleState.RUNNING,
+                    0,
+                    0,
+                    SubscriptionHealth.Status.UP,
+                    LeaseRole.LEADING,
+                    "postgres"),
+                new SubscriptionHealth(
+                    SubscriptionName.of("listener"),
+                    SubscriptionLifecycleState.RUNNING,
+                    0,
+                    0,
+                    SubscriptionHealth.Status.UP,
+                    LeaseRole.NOT_REPORTED)));
+
+    Health health = new StreamRuneHealthIndicator(ds, contributor).health();
+
+    assertThat(health.getDetails().get("subscription.order-summary"))
+        .asInstanceOf(InstanceOfAssertFactories.MAP)
+        .containsEntry("store", "postgres");
+    assertThat(health.getDetails().get("subscription.listener"))
+        .asInstanceOf(InstanceOfAssertFactories.MAP)
+        .doesNotContainKey("store");
+  }
+
+  @Test
   void shouldReturnDownWhenSubscriptionIsDown() throws Exception {
     DataSource ds = validDataSource();
     stubEmptyEventStream(ds);

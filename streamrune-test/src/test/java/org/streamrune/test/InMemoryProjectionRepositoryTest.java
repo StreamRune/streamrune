@@ -184,7 +184,8 @@ class InMemoryProjectionRepositoryTest {
 
   @Test
   void stampFencingEpochIsMonotonic_andNeverMovesTheOffset() {
-    assertTrue(repo.supportsFencing());
+    assertTrue(repo.transactional());
+    assertTrue(repo.fencesCheckpoint());
     repo.saveOffset(orders, GlobalOffset.of(5));
     repo.stampFencingEpoch(orders, 3L);
     repo.stampFencingEpoch(orders, 2L);

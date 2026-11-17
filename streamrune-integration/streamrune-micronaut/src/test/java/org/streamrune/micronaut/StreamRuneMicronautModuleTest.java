@@ -856,49 +856,115 @@ class StreamRuneMicronautModuleTest {
     assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"));
   }
 
-  // The projection repository bean must wire the CryptoEngine the same way the
-  // saga store bean does, so @Encrypted read-model fields are ciphertext at rest (not plaintext).
+  // The default read-model store's mapper wiring (CryptoShreddingModule with a CryptoEngine,
+  // crypto-blind without) needs a real database to create the store on:
+  // MicronautReadModelStoreWiringTest.
 
   @Test
-  void jdbcProjectionRepositoryWiresCryptoEngine_whenPresent() throws Exception {
-    var module = new StreamRuneMicronautModule();
-    var crypto = new InMemoryCryptoEngine();
-
-    var repo = module.jdbcProjectionRepository(mock(DataSource.class), List.of(crypto), null);
-
-    assertNotNull(repo);
-    var field = repo.getClass().getDeclaredField("objectMapper");
-    field.setAccessible(true);
-    var mapper = (ObjectMapper) field.get(repo);
-    assertTrue(mapper.getRegisteredModuleIds().contains("CryptoShreddingModule"));
-  }
-
-  @Test
-  void jdbcProjectionRepositoryMapperIsCryptoBlind_whenNoCryptoEngine() throws Exception {
-    var module = new StreamRuneMicronautModule();
-
-    var repo = module.jdbcProjectionRepository(mock(DataSource.class), List.of(), null);
-
-    assertNotNull(repo);
-    var field = repo.getClass().getDeclaredField("objectMapper");
-    field.setAccessible(true);
-    var mapper = (ObjectMapper) field.get(repo);
-    assertFalse(mapper.getRegisteredModuleIds().contains("CryptoShreddingModule"));
-  }
-
-  @Test
-  void jdbcProjectionRepositoryThrows_whenCryptoEngineAmbiguous() {
+  void postgresReadModelStoreThrows_whenCryptoEngineAmbiguous_beforeTouchingTheDatabase() {
     var module = new StreamRuneMicronautModule();
     var crypto1 = new InMemoryCryptoEngine();
     var crypto2 = new InMemoryCryptoEngine();
+    var dataSource = mock(DataSource.class);
 
     var ex =
         assertThrows(
             IllegalStateException.class,
             () ->
-                module.jdbcProjectionRepository(
-                    mock(DataSource.class), List.of(crypto1, crypto2), null));
+                module.postgresReadModelStore(
+                    dataSource,
+                    StreamRuneMicronautProperties.withDefaults(),
+                    List.of(crypto1, crypto2),
+                    null));
     assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"));
+    org.mockito.Mockito.verifyNoInteractions(dataSource);
+  }
+
+  @Test
+  void projectionRepository_isTheRepositoryOfTheStoreNamedPostgres() {
+    var module = new StreamRuneMicronautModule();
+    var postgres = new org.streamrune.test.InMemoryProjectionRepository();
+    var other = new org.streamrune.test.InMemoryProjectionRepository();
+    var context = storesContext(memoryStore("other", other), memoryStore("postgres", postgres));
+
+    assertSame(postgres, module.projectionRepository(module.readModelStores(context)));
+  }
+
+  @Test
+  void projectionRepository_withoutAStoreNamedPostgres_failsNamingTheStores() {
+    var module = new StreamRuneMicronautModule();
+    var context =
+        storesContext(
+            memoryStore("memory", new org.streamrune.test.InMemoryProjectionRepository()));
+
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () -> module.projectionRepository(module.readModelStores(context)));
+    assertTrue(
+        ex.getMessage().contains("No read-model store is named 'postgres'"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("'memory'"), ex.getMessage());
+  }
+
+  @Test
+  void subscriptionCheckpoint_ofAPostgresOffsetStore_isFencedOnItsDataSource() throws Exception {
+    var module = new StreamRuneMicronautModule();
+    var dataSource = mock(DataSource.class);
+    var offsetStore = new org.streamrune.postgres.PostgresOffsetStore(dataSource);
+
+    var target = module.subscriptionCheckpoint(offsetStore);
+
+    assertEquals(org.streamrune.core.projection.OffsetStore.SUBSCRIPTION_CHECKPOINT, target.name());
+    assertSame(offsetStore, target.checkpoints());
+    var processor =
+        assertInstanceOf(
+            org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor.class,
+            target.processor());
+    var field = processor.getClass().getDeclaredField("dataSource");
+    field.setAccessible(true);
+    assertSame(dataSource, field.get(processor), "the processor commits where the store reads");
+  }
+
+  @Test
+  void subscriptionCheckpoint_ofAnotherOffsetStore_isItWithTheNonatomicProcessor() {
+    var module = new StreamRuneMicronautModule();
+    var offsetStore = new org.streamrune.test.InMemoryOffsetStore();
+
+    var target = module.subscriptionCheckpoint(offsetStore);
+
+    assertEquals(org.streamrune.core.projection.OffsetStore.SUBSCRIPTION_CHECKPOINT, target.name());
+    assertSame(offsetStore, target.checkpoints());
+    assertSame(
+        org.streamrune.core.projection.AtomicBatchProcessor.nonAtomicAtLeastOnce(),
+        target.processor());
+  }
+
+  private static org.streamrune.core.projection.ReadModelStore memoryStore(
+      String name, org.streamrune.test.InMemoryProjectionRepository repo) {
+    return org.streamrune.core.projection.ReadModelStore.of(name, repo, repo, repo);
+  }
+
+  /** A context holding the application's {@code stores} and no default store. */
+  private static io.micronaut.context.BeanContext storesContext(
+      org.streamrune.core.projection.ReadModelStore... stores) {
+    var context = mock(io.micronaut.context.BeanContext.class);
+    org.mockito.Mockito.when(
+            context.getBeansOfType(
+                org.mockito.ArgumentMatchers.eq(
+                    org.streamrune.core.projection.ReadModelStore.class),
+                org.mockito.ArgumentMatchers
+                    .<io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>>
+                        any()))
+        .thenReturn(List.of(stores));
+    org.mockito.Mockito.when(
+            context.findBean(
+                org.mockito.ArgumentMatchers.eq(
+                    org.streamrune.core.projection.ReadModelStore.class),
+                org.mockito.ArgumentMatchers
+                    .<io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>>
+                        any()))
+        .thenReturn(java.util.Optional.empty());
+    return context;
   }
 
   @Test

@@ -57,6 +57,11 @@ streamrune:
     # bound on every event-store statement, per transaction or statement (never on the pooled
     # session); 0s sets none
     statement-timeout: 30s
+  read-model:
+    schema:
+      # the default read-model store's migration series; unset, it follows
+      # event-store.schema.auto-initialize
+      # auto-initialize:
 ```
 
 The event store borrows its connections from your `DataSource` bean as given and builds no pool of
@@ -99,7 +104,7 @@ comes from — see [Request identity](#request-identity).
 | `StreamRuneMicronautProperties` | `@ConfigurationProperties` record bound from `streamrune.*` |
 | `StreamRuneContextFilter` | HTTP filter that builds the request context — `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)) — and binds `StreamRuneContext.CURRENT` around the request; answers `400` to an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup listener: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
-| `ProjectionIndexDeclarer` | Startup listener: declares every `ProjectionIndex` bean on the application's `ProjectionRepository` bean (the framework's `JdbcProjectionRepository` or its own) before the projection runners start; a refused key or a failed creation fails startup |
+| `ProjectionIndexDeclarer` | Startup listener: declares every `ProjectionIndex` bean on the application's `ProjectionRepository` bean (the default read-model store's repository or its own) before the projection runners start; a refused key or a failed creation fails startup |
 | `StreamRuneAuthorizationValidator` | Startup listener: refuses startup when a command bus registers `@RequireRole`/`@RequirePermission` commands without an `AnnotationAuthorizationInterceptor` in its chain |
 | `StreamRuneContextHelper` | The request context of the request the calling thread serves, where `StreamRuneContext.CURRENT` is not bound: the context the filter stored on the current request, and otherwise a ThreadLocal mirror kept in sync by Micronaut's `PropagatedContext` (see [Context Propagation](#context-propagation)) |
 | `UnboundRequestContextQueryBus` (`streamrune-runtime`) | The `QueryBus` bean's outer layer: a query dispatched where `StreamRuneContext.CURRENT` is not bound runs under the request's context (see [Context Propagation](#context-propagation)) |
@@ -123,6 +128,43 @@ auto-assembles from your `@ProjectionConfig` beans, and only while
 stopped by the framework — you own its lifecycle. To supply and fully manage your own runner, set
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
+With auto-discovery on, your `@ProjectionConfig` declarations are still routed to read-model
+stores to place their `ProjectionIndex` beans, even when you own the runner: a declaration the
+routing would refuse fails the start.
+
+**Where each projection checkpoints.** With a `DataSource` bean the module defines the default
+read-model store, a `PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean
+`@Named("streamRuneDefaultReadModelStore")`): read models in `<name>_view` tables, their checkpoints beside them in
+`readmodel_checkpoint`. The injectable `ProjectionRepository` bean is that store's repository. Each
+discovered projection is routed on its own: a projection that names a store
+(`@ProjectionConfig(readModelStore = "postgres")`) or writes to its repository (a `BaseProjection`
+over the injected `ProjectionRepository`) goes to that store, so a `TRANSACTIONAL_LOCAL`
+projection's read-model writes and its checkpoint commit in one transaction. An
+`AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in the event store's
+`subscription_checkpoint` table (the `CheckpointTarget` bean `@Named("streamRuneSubscriptionCheckpoint")`;
+with an `OffsetStore` of your own that is not a `PostgresOffsetStore` it saves into that store,
+unfenced, which routing refuses while leadership is on). Creating the store applies the read-model
+migration series (`db/readmodel-migration`) when `streamrune.read-model.schema.auto-initialize` is
+on; unset, it follows `streamrune.event-store.schema.auto-initialize`. The store is created while
+the context starts: `StreamRuneLifecycle` resolves the framework's runners on `StartupEvent`, and
+their routes collect the stores.
+
+**Several read-model stores.** Every `ReadModelStore` bean you define is a routing target beside
+the default store, named by its `name()`. The default store is replaced only by name: a
+`ReadModelStore` bean whose `name()` is `postgres` takes its place, and the default store is then
+never created, so its database is never touched; a store of any other name is added beside it. The
+`ProjectionRepository` bean is the repository of the store named `postgres` — the default one, or
+yours — and another store's repository is reached through its `ReadModelStore` bean. Two stores
+with the same name, or over the same repository (equal `writeTargetIdentity()`), fail the start
+when the stores are collected. Each `ProjectionIndex` bean is declared on the store its projection
+is routed to; an index for a projection routed to no store (the subscription checkpoint, an
+`INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. The module
+collects store beans with `getBeansOfType`, so a store registered as a singleton before the context
+starts (`ApplicationContext.builder().singletons(...)`) counts too. The default store's bean is a
+placeholder that creates the Postgres store behind it when the stores are selected (or when a part
+of the bean is used first), so even a context started with `eagerInitSingletons(true)` never creates
+a replaced default store, and a kept one is migrated and validated at startup as in Spring and
+Quarkus.
 
 ## Transactional outbox
 
@@ -383,7 +425,7 @@ a framework enum held there failed the build (*An object of type
 it that way.
 
 It also ships `resource-config.json`, which registers the Flyway migration scripts schema
-auto-initialization reads by name (`db/streamrune-migration/*.sql`, `db/crypto-migration/*.sql`)
+auto-initialization reads by name (`db/streamrune-migration/*.sql`, `db/readmodel-migration/*.sql`, `db/crypto-migration/*.sql`)
 and Flyway's own `version.txt` as resources; without them the image cannot initialize the schema.
 `META-INF/native-image/org.streamrune/streamrune-micronaut-flyway/reachability-metadata.json`
 registers what Flyway reaches reflectively while it does: the no-argument constructor and declared

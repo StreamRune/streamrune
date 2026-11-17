@@ -76,9 +76,9 @@ CREATE TABLE snapshot_store (
 
 
 -- ===========================================================================================
--- projection_offset — each projection's / subscription's checkpoint in the global stream.
+-- subscription_checkpoint — each projection's / subscription's checkpoint in the global stream.
 -- ===========================================================================================
-CREATE TABLE projection_offset (
+CREATE TABLE subscription_checkpoint (
     projection_name VARCHAR(255) PRIMARY KEY,
     last_offset     BIGINT       NOT NULL,
     updated_at      TIMESTAMPTZ  DEFAULT NOW(),
