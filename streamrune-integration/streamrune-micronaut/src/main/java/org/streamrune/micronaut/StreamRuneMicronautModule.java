@@ -1286,12 +1286,15 @@ public class StreamRuneMicronautModule {
    * <p>Creating the store checks the server version, applies the read-model migration series
    * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
    * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
-   * read-model schema. A Micronaut singleton is created when it is first resolved, and only {@link
-   * #readModelStores} resolves it — when the stores are first selected: in an application with
-   * projections, while the context starts, on the starting thread — {@link StreamRuneLifecycle}
-   * resolves the framework's runners on the startup event, and the runners' routes select the
-   * stores (as does a {@code BaseProjection} that injects the {@link #projectionRepository
-   * ProjectionRepository}, and the {@link ProjectionIndexDeclarer} when index beans exist).
+   * read-model schema. That happens when a part of the store is first used ({@link
+   * DeferredReadModelStore}), not when the bean is created — Micronaut has no lazy singleton, and a
+   * context started with {@code eagerInitSingletons(true)} creates every singleton — so a replaced
+   * default store never touches its database. Only {@link #readModelStores} uses it, when the
+   * stores are first selected: in an application with projections, while the context starts, on the
+   * starting thread — {@link StreamRuneLifecycle} resolves the framework's runners on the startup
+   * event, and the runners' routes select the stores (as does a {@code BaseProjection} that injects
+   * the {@link #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer}
+   * when index beans exist).
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if exactly one is
    * present) through {@code CryptoShreddingModule}, the same way {@link #sagaStore} wires the saga
@@ -1299,17 +1302,17 @@ public class StreamRuneMicronautModule {
    * scope.
    *
    * <p>Replaced only by name: an application {@link org.streamrune.core.projection.ReadModelStore}
-   * bean whose {@code name()} is {@value #DEFAULT_READ_MODEL_STORE} takes its place, and this bean
-   * is then never created; a store of any other name is added beside it ({@link #readModelStores}).
-   * {@code @Secondary} only keeps an unqualified {@code ReadModelStore} injection point of the
-   * application resolving to the application's store.
+   * bean whose {@code name()} is {@value #DEFAULT_READ_MODEL_STORE} takes its place, and the
+   * Postgres store behind this bean is then never created; a store of any other name is added
+   * beside it ({@link #readModelStores}). {@code @Secondary} only keeps an unqualified {@code
+   * ReadModelStore} injection point of the application resolving to the application's store.
    *
    * @param dataSource the JDBC data source
    * @param properties the StreamRune configuration properties
    * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
    *     more than one triggers an {@link IllegalStateException})
    * @param metrics optional metrics collector the read-model decrypt path reports redactions to
-   * @return the default read-model store
+   * @return the default read-model store, created on first use
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
    *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
    */
@@ -1333,13 +1336,17 @@ public class StreamRuneMicronautModule {
     CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return org.streamrune.postgres.PostgresReadModelStore.create(
-        DEFAULT_READ_MODEL_STORE,
-        dataSource,
+    var objectMapper =
         org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics)),
-        properties.readModelAutoInitialize(),
-        true);
+            cryptoEngine, metricsOrNoop(metrics));
+    boolean migrate = properties.readModelAutoInitialize();
+    // Creating the bean touches nothing: a context with eagerInitSingletons creates every
+    // singleton, and a replaced default store must never reach its database.
+    return new DeferredReadModelStore(
+        DEFAULT_READ_MODEL_STORE,
+        () ->
+            org.streamrune.postgres.PostgresReadModelStore.create(
+                DEFAULT_READ_MODEL_STORE, dataSource, objectMapper, migrate, true));
   }
 
   /**

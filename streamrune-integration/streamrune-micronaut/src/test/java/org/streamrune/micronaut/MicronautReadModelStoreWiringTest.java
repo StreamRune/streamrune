@@ -310,7 +310,7 @@ class MicronautReadModelStoreWiringTest {
     var props = properties(DATABASE_ONLY);
     props.put("streamrune.read-model.schema.auto-initialize", "false");
     try (var ctx = ApplicationContext.run(props)) {
-      assertThatThrownBy(() -> ctx.getBean(ReadModelStore.class))
+      assertThatThrownBy(() -> ctx.getBean(ReadModelStore.class).repository())
           .hasStackTraceContaining("SchemaValidationException");
       assertThat(tableExists("flyway_schema_history_readmodel")).isFalse();
     }
@@ -323,7 +323,7 @@ class MicronautReadModelStoreWiringTest {
     var props = properties(DATABASE_ONLY);
     props.put("streamrune.event-store.schema.auto-initialize", "false");
     try (var ctx = ApplicationContext.run(props)) {
-      assertThatThrownBy(() -> ctx.getBean(ReadModelStore.class))
+      assertThatThrownBy(() -> ctx.getBean(ReadModelStore.class).repository())
           .hasStackTraceContaining("SchemaValidationException");
       assertThat(tableExists("flyway_schema_history_readmodel")).isFalse();
     }
@@ -337,7 +337,9 @@ class MicronautReadModelStoreWiringTest {
     props.put("streamrune.event-store.schema.auto-initialize", "false");
     props.put("streamrune.read-model.schema.auto-initialize", "true");
     try (var ctx = ApplicationContext.run(props)) {
-      assertThat(ctx.getBean(ReadModelStore.class).name()).isEqualTo("postgres");
+      ReadModelStore store = ctx.getBean(ReadModelStore.class);
+      assertThat(store.name()).isEqualTo("postgres");
+      store.repository(); // the deferred store is created on first use
       assertThat(tableExists("flyway_schema_history_readmodel")).isTrue();
     }
   }
@@ -491,6 +493,17 @@ class MicronautReadModelStoreWiringTest {
     }
   }
 
+  /** An application bean that injects a {@code ReadModelStore} without a qualifier. */
+  @Singleton
+  @Requires(property = "spec.name", value = PRIMARY)
+  static class InjectsAReadModelStore {
+    final ReadModelStore store;
+
+    InjectsAReadModelStore(ReadModelStore store) {
+      this.store = store;
+    }
+  }
+
   /** The test's properties, leadership off: the in-memory stores need no lease heartbeat. */
   private static Map<String, Object> storesProperties(String spec) {
     var props = properties(spec);
@@ -516,6 +529,28 @@ class MicronautReadModelStoreWiringTest {
       assertThat(targetNameOf(runner, StoresTransactional.NAME)).isEqualTo("postgres");
       assertThat(processorOf(runner, StoresTransactional.NAME))
           .isSameAs(ReplacementStore.repository);
+      assertThat(tableExists("readmodel_checkpoint"))
+          .as("the replaced default store is never created")
+          .isFalse();
+    }
+  }
+
+  /**
+   * Even a context that creates every singleton at startup ({@code eagerInitSingletons}) never
+   * creates a replaced default store: its series never reaches the database.
+   */
+  @Test
+  void aReplacedDefaultStore_isNotCreated_evenWithEagerSingletons() throws Exception {
+    applicationDataSource = freshDatabase();
+    ReplacementStore.repository = new InMemoryProjectionRepository();
+    try (var ctx =
+        ApplicationContext.builder()
+            .properties(storesProperties(REPLACED))
+            .eagerInitSingletons(true)
+            .start()) {
+      assertThat(ctx.getBean(ReadModelStores.class).stores())
+          .extracting(ReadModelStore::name)
+          .containsExactly("postgres");
       assertThat(tableExists("readmodel_checkpoint"))
           .as("the replaced default store is never created")
           .isFalse();
@@ -598,6 +633,21 @@ class MicronautReadModelStoreWiringTest {
       assertThat(ctx.getBean(ProjectionRepository.class))
           .isSameAs(defaultStore.repository())
           .isNotSameAs(SearchStore.repository);
+    }
+  }
+
+  /**
+   * An unqualified {@code ReadModelStore} injection point of the application resolves to its own
+   * store, not to the default one beside it.
+   */
+  @Test
+  void anUnqualifiedReadModelStoreInjection_resolvesToTheApplicationsStore() throws Exception {
+    applicationDataSource = freshDatabase();
+    SearchStore.repository = new InMemoryProjectionRepository();
+    try (var ctx = ApplicationContext.run(storesProperties(PRIMARY))) {
+      ReadModelStore injected = ctx.getBean(InjectsAReadModelStore.class).store;
+      assertThat(injected.name()).isEqualTo("search");
+      assertThat(injected.repository()).isSameAs(SearchStore.repository);
     }
   }
 
