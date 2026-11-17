@@ -1726,12 +1726,14 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * is alive here".
    *
    * <p>What makes a standby entry useful rather than noise: the contributor computes lag against
-   * the SHARED {@code subscription_checkpoint} checkpoint, so a registered standby answers "is this
-   * subscription making progress ANYWHERE?". A healthy leader keeps the shared lag low and every
-   * standby reports UP; a subscription frozen on every replica reads DEGRADED everywhere, never
-   * DOWN, with the growing lag in its detail — which is how the all-replicas-standby freeze this
-   * view exists to surface shows up, exactly as on the scheduled runner. Alert on {@code
-   * streamrune.subscriptions.lag} to catch it.
+   * the checkpoint of the pair the run reads and commits through — the event store's {@code
+   * subscription_checkpoint} or the read-model store's {@code readmodel_checkpoint} — which every
+   * replica SHARES, so a registered standby answers "is this subscription making progress
+   * ANYWHERE?". A healthy leader keeps the shared lag low and every standby reports UP; a
+   * subscription frozen on every replica reads DEGRADED everywhere, never DOWN, with the growing
+   * lag in its detail — which is how the all-replicas-standby freeze this view exists to surface
+   * shows up, exactly as on the scheduled runner. Alert on {@code streamrune.subscriptions.lag} to
+   * catch it.
    *
    * <p>{@link ProjectionState#ERROR} maps to STOPPED because, unlike a scheduled projection's
    * per-tick error, an ERROR here is terminal: {@code run()} is unwinding. The contributor's {@code

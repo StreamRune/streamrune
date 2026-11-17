@@ -470,13 +470,13 @@ class ProjectionRunnerHealthTest {
    * DOWN, because {@link ScheduledProjectionRunner} registers at {@code start()} and keeps the
    * entry through standby ticks.
    *
-   * <p>The contributor's lag is computed against the SHARED {@code subscription_checkpoint}
-   * checkpoint, so a registered standby answers the right question: "is this subscription making
-   * progress ANYWHERE?". A working leader keeps the shared lag low and every standby reports UP; a
-   * frozen-everywhere subscription crosses the lag threshold and reads DEGRADED on every replica,
-   * with the lag in its detail. Not DOWN: from the lag alone a frozen subscription cannot be told
-   * apart from one whose leader is still replaying a large backlog, and a DOWN there would take
-   * every replica out of readiness for the whole replay.
+   * <p>The contributor's lag is computed against the checkpoint every replica SHARES (here the
+   * runner's own pair's), so a registered standby answers the right question: "is this subscription
+   * making progress ANYWHERE?". A working leader keeps the shared lag low and every standby reports
+   * UP; a frozen-everywhere subscription crosses the lag threshold and reads DEGRADED on every
+   * replica, with the lag in its detail. Not DOWN: from the lag alone a frozen subscription cannot
+   * be told apart from one whose leader is still replaying a large backlog, and a DOWN there would
+   * take every replica out of readiness for the whole replay.
    */
   @Test
   void continuousRunner_neverLeadingReplica_reportsSharedCheckpointLagAsDegraded()
