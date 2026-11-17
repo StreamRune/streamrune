@@ -103,6 +103,11 @@ public interface OffsetStore {
    * checkpoint, so routing refuses it under real leadership. A store that can fence its checkpoint
    * overrides this with a processor that commits where this store reads.
    *
+   * <p>Meaningful only on the offset store that holds the event store's subscription checkpoint (or
+   * a test double standing in for it). A read-model store's checkpoints are never it, and should
+   * override this to refuse, as {@code PostgresReadModelCheckpoints} does: that store's pair is
+   * {@link ReadModelStore#checkpointTarget()}.
+   *
    * @return the pair, named {@value #SUBSCRIPTION_CHECKPOINT}
    */
   default CheckpointTarget subscriptionCheckpoint() {

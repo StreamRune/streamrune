@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import org.junit.jupiter.api.BeforeAll;
@@ -46,6 +47,21 @@ class PostgresReadModelCheckpointsContractTest extends OffsetStoreContract {
       throw new IllegalStateException(e);
     }
     return new PostgresReadModelCheckpoints(dataSource);
+  }
+
+  @Test
+  void isNeverTheEventStoresSubscriptionCheckpoint() {
+    // The inherited default would pair readmodel_checkpoint with the non-fencing at-least-once
+    // processor and name it subscription_checkpoint: a target that lies about its table.
+    var checkpoints = new PostgresReadModelCheckpoints(dataSource);
+
+    var refused =
+        assertThrows(UnsupportedOperationException.class, checkpoints::subscriptionCheckpoint);
+    assertTrue(
+        refused.getMessage().contains("readmodel_checkpoint")
+            && refused.getMessage().contains("checkpointTarget()")
+            && refused.getMessage().contains("PostgresOffsetStore"),
+        refused.getMessage());
   }
 
   @Test
