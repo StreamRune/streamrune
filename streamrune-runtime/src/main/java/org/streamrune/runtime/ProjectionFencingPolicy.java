@@ -98,11 +98,11 @@ final class ProjectionFencingPolicy {
             + (leadership.getClass().getName())
             + ") but its AtomicBatchProcessor cannot honour the leadership fencing epoch ("
             + processorDescription
-            + "). The epoch fence, the first-offset overlap guard and the atomic checkpoint would"
-            + " all be inert: a superseded leader resuming after a GC/VM pause would re-apply its"
-            + " in-flight batch to the read model with nothing to reject it, and the offset store's"
-            + " monotonic guard would swallow the trailing checkpoint save so nothing would even"
-            + " log. Route the projection to a store whose processor fences its checkpoint"
+            + "). The epoch fence and the first-offset overlap guard would be inert, and the"
+            + " checkpoint write would not be conditional on the epoch: a superseded leader"
+            + " resuming after a GC/VM pause would re-apply its in-flight batch to the read model"
+            + " with nothing to reject it, and the offset store's monotonic guard would swallow the"
+            + " trailing checkpoint save so nothing would even log. Route the projection to a store whose processor fences its checkpoint"
             + " (AtomicBatchProcessor.fencesCheckpoint() — org.streamrune.postgres"
             + ".JdbcProjectionRepository does) and keep leadership on, or — if exactly one instance"
             + " runs this projection — disable leadership with"

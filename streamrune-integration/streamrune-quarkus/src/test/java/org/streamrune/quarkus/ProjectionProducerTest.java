@@ -243,7 +243,7 @@ class ProjectionProducerTest {
    * A duplicate @ProjectionConfig.name across DIFFERENT modes (CONTINUOUS + SCHEDULED) must fail
    * loudly at boot. Before the fix the duplicate check ran after the per-mode filter, so
    * discover(CONTINUOUS) never saw the SCHEDULED duplicate and both booted silently, sharing one
-   * subscription_checkpoint checkpoint row.
+   * checkpoint row.
    */
   @Test
   void crossModeDuplicateNameThrows() {
