@@ -1286,15 +1286,16 @@ public class StreamRuneMicronautModule {
    * <p>Creating the store checks the server version, applies the read-model migration series
    * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
    * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
-   * read-model schema. That happens when a part of the store is first used ({@link
-   * DeferredReadModelStore}), not when the bean is created — Micronaut has no lazy singleton, and a
-   * context started with {@code eagerInitSingletons(true)} creates every singleton — so a replaced
-   * default store never touches its database. Only {@link #readModelStores} uses it, when the
-   * stores are first selected: in an application with projections, while the context starts, on the
-   * starting thread — {@link StreamRuneLifecycle} resolves the framework's runners on the startup
-   * event, and the runners' routes select the stores (as does a {@code BaseProjection} that injects
-   * the {@link #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer}
-   * when index beans exist).
+   * read-model schema. That happens when the stores are first selected — {@link #readModelStores}
+   * creates the store it keeps, as Spring and Quarkus do — or earlier if a part of the bean is used
+   * first ({@link DeferredReadModelStore}), never when the bean is created: Micronaut has no lazy
+   * singleton, and a context started with {@code eagerInitSingletons(true)} creates every
+   * singleton, so a replaced default store never touches its database. In an application with
+   * projections the stores are selected while the context starts, on the starting thread — {@link
+   * StreamRuneLifecycle} resolves the framework's runners on the startup event, and the runners'
+   * routes select the stores (as does a {@code BaseProjection} that injects the {@link
+   * #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer} when index
+   * beans exist).
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if exactly one is
    * present) through {@code CryptoShreddingModule}, the same way {@link #sagaStore} wires the saga
@@ -1363,7 +1364,10 @@ public class StreamRuneMicronautModule {
    * collection pattern — under a qualifier that leaves out the default store by its bean name,
    * {@value #DEFAULT_READ_MODEL_STORE_BEAN}, without creating it; the default store is resolved by
    * that name only when no application store took its name, so a replaced default store never
-   * touches its database.
+   * touches its database. A kept default store is created right there and selected as the Postgres
+   * store itself, not its {@link DeferredReadModelStore} bean: selecting the stores migrates and
+   * validates it whatever the projections use, as in Spring and Quarkus, and routing messages and
+   * health name the store's own class.
    *
    * @param beanContext the context the read-model stores are collected from
    * @return the stores
@@ -1396,11 +1400,19 @@ public class StreamRuneMicronautModule {
             };
     return new org.streamrune.integration.ReadModelStores(
         () ->
-            beanContext.findBean(org.streamrune.core.projection.ReadModelStore.class, defaultStore),
+            beanContext
+                .findBean(org.streamrune.core.projection.ReadModelStore.class, defaultStore)
+                .map(StreamRuneMicronautModule::created),
         () ->
             List.copyOf(
                 beanContext.getBeansOfType(
                     org.streamrune.core.projection.ReadModelStore.class, applicationStores)));
+  }
+
+  /** The store behind a {@link DeferredReadModelStore}, created now; any other store as it is. */
+  private static org.streamrune.core.projection.ReadModelStore created(
+      org.streamrune.core.projection.ReadModelStore store) {
+    return store instanceof DeferredReadModelStore deferred ? deferred.store() : store;
   }
 
   /**

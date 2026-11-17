@@ -57,6 +57,7 @@ import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.LeaseBasedLeadership;
 import org.streamrune.postgres.PostgresOffsetStore;
+import org.streamrune.postgres.PostgresReadModelStore;
 import org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.SubscriptionHealthContributor;
@@ -370,6 +371,25 @@ class MicronautReadModelStoreWiringTest {
       assertThat(subscription.processor())
           .isInstanceOf(PostgresSubscriptionCheckpointProcessor.class);
       assertThat(tableExists("readmodel_checkpoint")).isTrue();
+    }
+  }
+
+  /**
+   * Selecting the stores creates the default store, as in Spring and Quarkus: an application whose
+   * projections are all at least once and write nowhere routed never uses a part of the store, yet
+   * its read-model series must be migrated (and validated) at startup like everywhere else. The
+   * selected store is the Postgres store itself, so messages and health name its class.
+   */
+  @Test
+  void selectingTheStores_createsTheDefaultStore() throws Exception {
+    applicationDataSource = freshDatabase();
+    try (var ctx = ApplicationContext.run(properties(DATABASE_ONLY))) {
+      List<ReadModelStore> stores = ctx.getBean(ReadModelStores.class).stores();
+
+      assertThat(tableExists("readmodel_checkpoint"))
+          .as("the default store is created when the stores are selected")
+          .isTrue();
+      assertThat(stores).singleElement().isInstanceOf(PostgresReadModelStore.class);
     }
   }
 

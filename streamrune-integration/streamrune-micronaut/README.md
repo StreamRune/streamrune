@@ -161,8 +161,10 @@ is routed to; an index for a projection routed to no store (the subscription che
 `INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. The module
 collects store beans with `getBeansOfType`, so a store registered as a singleton before the context
 starts (`ApplicationContext.builder().singletons(...)`) counts too. The default store's bean is a
-placeholder that creates the Postgres store behind it on first use, so even a context started with
-`eagerInitSingletons(true)` never creates a replaced default store.
+placeholder that creates the Postgres store behind it when the stores are selected (or when a part
+of the bean is used first), so even a context started with `eagerInitSingletons(true)` never creates
+a replaced default store, and a kept one is migrated and validated at startup as in Spring and
+Quarkus.
 
 ## Transactional outbox
 
