@@ -3,7 +3,9 @@ package org.streamrune.integration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.streamrune.core.Internal;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.CheckpointTarget;
@@ -58,6 +60,21 @@ import org.streamrune.core.types.LogSanitizer;
 public final class ProjectionStoreRouting {
 
   private ProjectionStoreRouting() {}
+
+  /**
+   * The name of the default read-model store, {@value}: the {@code PostgresReadModelStore} each
+   * integration registers on the application's {@code DataSource}. A projection declares {@code
+   * readModelStore = "postgres"} to route to it explicitly; an application store of this name
+   * replaces it ({@link #selectStores}).
+   */
+  public static final String DEFAULT_STORE = "postgres";
+
+  /**
+   * The bean name each integration registers the default store under, {@value}: a framework name,
+   * so a bean the application names {@code postgres} never collides with it, and so each
+   * integration can leave it out of the application's stores without creating it.
+   */
+  public static final String DEFAULT_STORE_BEAN = "streamRuneDefaultReadModelStore";
 
   /**
    * One discovered registration, as routing needs it.
@@ -143,6 +160,60 @@ public final class ProjectionStoreRouting {
   }
 
   /**
+   * The stores an application routes to: the application's own, and the default store unless one of
+   * them takes its name. Replacing the default store is by name and explicit: an application store
+   * named {@value #DEFAULT_STORE} replaces it, and a store of any other name is added beside it.
+   *
+   * <p>{@code defaultStore} creates the default store — which checks the server version, migrates
+   * and validates its schema — so it is called only when no application store is named {@value
+   * #DEFAULT_STORE}: a replaced default store is never created and never touches its database. The
+   * application's stores are validated ({@link #validateStores}) before the default store is
+   * created, and the selection once more after, so a duplicate name or write target fails here, as
+   * a store error, before any registration is routed.
+   *
+   * @param defaultStore creates the default store, or supplies none (no {@code DataSource}); called
+   *     at most once
+   * @param applicationStores every store the application defines, the default store not among them
+   * @return the default store (when kept) followed by the application's stores, validated
+   * @throws NullPointerException if an argument, an element of {@code applicationStores} or the
+   *     supplied {@code Optional} is {@code null}
+   * @throws IllegalStateException on a duplicate name or write-target identity ({@link
+   *     #validateStores}), or when the supplied default store is not named {@value #DEFAULT_STORE}
+   */
+  public static List<ReadModelStore> selectStores(
+      Supplier<Optional<ReadModelStore>> defaultStore, List<ReadModelStore> applicationStores) {
+    Objects.requireNonNull(defaultStore, "defaultStore is required");
+    Objects.requireNonNull(applicationStores, "applicationStores is required");
+    for (ReadModelStore store : applicationStores) {
+      Objects.requireNonNull(store, "stores must not hold null");
+    }
+    List<ReadModelStore> application = List.copyOf(applicationStores);
+    validateStores(application);
+    if (application.stream().anyMatch(store -> DEFAULT_STORE.equals(store.name()))) {
+      return application;
+    }
+    Optional<ReadModelStore> created =
+        Objects.requireNonNull(defaultStore.get(), "defaultStore must supply an Optional");
+    if (created.isEmpty()) {
+      return application;
+    }
+    ReadModelStore store = created.get();
+    if (!DEFAULT_STORE.equals(store.name())) {
+      throw new IllegalStateException(
+          "The default read-model store must be named '"
+              + DEFAULT_STORE
+              + "', but it is named '"
+              + safeName(store)
+              + "' ("
+              + store.getClass().getName()
+              + ").");
+    }
+    List<ReadModelStore> selected = Stream.concat(Stream.of(store), application.stream()).toList();
+    validateStores(selected);
+    return selected;
+  }
+
+  /**
    * The repository of the store named {@code name} — the integrations' injectable {@code
    * ProjectionRepository} bean, which query handlers and {@code BaseProjection} constructors read
    * and write: the default read-model store's.
@@ -200,6 +271,24 @@ public final class ProjectionStoreRouting {
       List<ReadModelStore> stores,
       CheckpointTarget subscriptionCheckpoint,
       SubscriptionLeadership leadership) {
+    return resolve(registration, stores, subscriptionCheckpoint, leadership).target();
+  }
+
+  /**
+   * {@link #route}, keeping the store the target belongs to: the {@link ProjectionRoutes} the
+   * integrations compute declare a projection's indexes on it.
+   *
+   * @param registration the registration to route
+   * @param stores every store defined
+   * @param subscriptionCheckpoint rule 4's target
+   * @param leadership the configured leadership
+   * @return the routed target, and its store ({@code null} for the subscription checkpoint)
+   */
+  static Routed resolve(
+      Registration registration,
+      List<ReadModelStore> stores,
+      CheckpointTarget subscriptionCheckpoint,
+      SubscriptionLeadership leadership) {
     Objects.requireNonNull(registration, "registration is required");
     Objects.requireNonNull(stores, "stores is required");
     Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
@@ -240,7 +329,7 @@ public final class ProjectionStoreRouting {
               + " — or, if exactly one instance runs this projection, disable leadership"
               + " (streamrune.subscription.single-active-consumer.enabled=false).");
     }
-    return routed.target();
+    return routed;
   }
 
   /**
@@ -265,8 +354,11 @@ public final class ProjectionStoreRouting {
             + " of its own. Declare AT_LEAST_ONCE_IDEMPOTENT, or run it CONTINUOUS or SCHEDULED.");
   }
 
-  /** A routed target and the rule that chose it, for the capability refusals. */
-  private record Routed(CheckpointTarget target, String how) {}
+  /**
+   * A routed target, the rule that chose it (for the capability refusals), and the store it belongs
+   * to — {@code null} for the subscription checkpoint, which is no store.
+   */
+  record Routed(CheckpointTarget target, String how, ReadModelStore store) {}
 
   /** Rules 1–4 of the class javadoc, in order. */
   private static Routed select(
@@ -308,12 +400,12 @@ public final class ProjectionStoreRouting {
                 + FIX
                 + ".");
       }
-      return new Routed(declared.checkpointTarget(), "by its readModelStore declaration");
+      return new Routed(declared.checkpointTarget(), "by its readModelStore declaration", declared);
     }
 
     // Rule 2: writeTarget() matches a store.
     if (owner.isPresent()) {
-      return new Routed(owner.get().checkpointTarget(), "by its writeTarget()");
+      return new Routed(owner.get().checkpointTarget(), "by its writeTarget()", owner.get());
     }
 
     // Rule 3: a transactional mode with no match.
@@ -332,7 +424,9 @@ public final class ProjectionStoreRouting {
           stores.stream().filter(s -> s.processor().transactional()).toList();
       if (transactional.size() == 1) {
         return new Routed(
-            transactional.getFirst().checkpointTarget(), "as the only transactional store");
+            transactional.getFirst().checkpointTarget(),
+            "as the only transactional store",
+            transactional.getFirst());
       }
       if (transactional.isEmpty()) {
         throw new IllegalStateException(
@@ -357,7 +451,7 @@ public final class ProjectionStoreRouting {
     }
 
     // Rule 4: at-least-once with no match.
-    return new Routed(subscriptionCheckpoint, "as the event store's subscription checkpoint");
+    return new Routed(subscriptionCheckpoint, "as the event store's subscription checkpoint", null);
   }
 
   /**
