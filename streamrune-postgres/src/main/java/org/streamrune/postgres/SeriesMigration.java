@@ -39,9 +39,11 @@ final class SeriesMigration {
   static final String BASELINE_REFUSAL = "Unable to baseline schema history table";
 
   private final Flyway flyway;
+  private final String historyTable;
 
-  private SeriesMigration(Flyway flyway) {
+  private SeriesMigration(Flyway flyway, String historyTable) {
     this.flyway = flyway;
+    this.historyTable = historyTable;
   }
 
   /**
@@ -62,12 +64,13 @@ final class SeriesMigration {
             .table(historyTable)
             .baselineOnMigrate(true)
             .baselineVersion("0")
-            .load());
+            .load(),
+        historyTable);
   }
 
   /** Applies the series, through {@link #migrateConverging}. */
   void migrate() {
-    migrateConverging(flyway::migrate);
+    migrateConverging(historyTable, flyway::migrate);
   }
 
   /**
@@ -92,9 +95,11 @@ final class SeriesMigration {
    * (a pooler without a second server connection fails that way); so is a failure of the second
    * run, with the refusal attached as suppressed.
    *
+   * @param historyTable the series' history table, named in the line that logs the second run:
+   *     three series converge here, and an operator must be able to tell which one ran again
    * @param migrate one Flyway run of the series
    */
-  static void migrateConverging(Runnable migrate) {
+  static void migrateConverging(String historyTable, Runnable migrate) {
     try {
       migrate.run();
     } catch (FlywayException first) {
@@ -103,8 +108,9 @@ final class SeriesMigration {
         throw first;
       }
       log.info(
-          "Another instance created the schema history table while this one was starting ({});"
-              + " running the migration again",
+          "Another instance created the schema history table '{}' while this one was starting"
+              + " ({}); running the migration again",
+          historyTable,
           LogSanitizer.sanitizeForLog(message.lines().findFirst().orElse(message)));
       try {
         migrate.run();
