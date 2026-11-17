@@ -139,15 +139,19 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   /** The module's JAX-RS providers, which Quarkus REST registers as {@code Singleton} beans. */
   static final List<Class<?>> REST_PROVIDERS = List.of(StreamRuneRequestFilter.class);
 
-  /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
+  /**
+   * Started by the first behaviour that needs PostgreSQL, stopped after the class; the multi-store
+   * scenario's test class shares it.
+   */
   private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
   @AfterAll
-  static void stopPostgres() {
+  static synchronized void stopPostgres() {
     if (postgres != null) {
       postgres.stop();
+      postgres = null;
     }
   }
 

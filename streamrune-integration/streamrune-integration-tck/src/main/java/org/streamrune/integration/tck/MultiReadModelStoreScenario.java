@@ -29,8 +29,10 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
@@ -48,6 +50,7 @@ import org.streamrune.core.types.Version;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandExecuted;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
+import org.streamrune.integration.tck.ContractBeans.ContractCommandState;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresReadModelStore;
 import org.streamrune.runtime.VirtualThreadCommandBus;
@@ -118,9 +121,13 @@ public abstract class MultiReadModelStoreScenario {
           "streamrune.polling-interval", "PT0.05S",
           "streamrune.polling-jitter", "PT0S");
 
-  /** The application's beans: the secondary store, the three projections, and a command. */
+  /**
+   * The application's beans: the secondary store, the three projections, and a command with its
+   * event type.
+   */
   static final Set<Class<?>> APPLICATION =
       Set.of(
+          ContractEventTypes.class,
           SecondaryStoreBean.class,
           DefaultStoreProjection.class,
           SecondaryStoreProjection.class,
@@ -419,6 +426,20 @@ public abstract class MultiReadModelStoreScenario {
     @Override
     public ReadModelStore get() {
       return SecondaryDatabase.store();
+    }
+  }
+
+  /**
+   * The application's event types: {@link ContractCommandExecuted}, which the projections read back
+   * from the PostgreSQL event store.
+   */
+  public static final class ContractEventTypes implements Supplier<EventTypeRegistry> {
+    @Override
+    public EventTypeRegistry get() {
+      return SimpleEventTypeRegistry.builder()
+          .registerEvent(ContractCommandExecuted.class)
+          .registerState("ContractCommandState", ContractCommandState.class)
+          .build();
     }
   }
 

@@ -212,7 +212,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     }
   }
 
-  /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
+  /**
+   * Started by the first behaviour that needs PostgreSQL, stopped after the class; the multi-store
+   * scenario's test class shares it.
+   */
   private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
@@ -220,9 +223,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   @AfterAll
-  static void stopPostgres() {
+  static synchronized void stopPostgres() {
     if (postgres != null) {
       postgres.stop();
+      postgres = null;
     }
   }
 
