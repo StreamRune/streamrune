@@ -32,11 +32,13 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.Sort;
 import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.projection.ProjectionIndex;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionLeadership;
@@ -48,6 +50,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.LeaseBasedLeadership;
 import org.streamrune.postgres.PostgresOffsetStore;
@@ -75,9 +78,14 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * lease leadership (its checkpoint in {@code subscription_checkpoint}). Every test that needs a
  * database gets a fresh one, so what a test finds in it was created by that test's context.
  *
- * <p>Without a database: a {@link ReadModelStore} the application registers as a runtime singleton
- * is collected by the factory (Micronaut does not reliably collect runtime singletons into an
- * injected {@code List}) and replaces the default store.
+ * <p>Several stores: the default store is replaced only by a store named {@code postgres}, a store
+ * of another name is added beside it, duplicate names fail the start, each index is declared on the
+ * store its projection is routed to, and the {@code ProjectionRepository} bean stays the default
+ * store's repository.
+ *
+ * <p>Without a database: a {@link ReadModelStore} named {@code postgres} the application registers
+ * as a runtime singleton before the context starts is collected (with {@code getBeansOfType}, the
+ * codebase's established multi-bean collection pattern) and replaces the default store.
  */
 @Testcontainers
 class MicronautReadModelStoreWiringTest {
@@ -100,10 +108,17 @@ class MicronautReadModelStoreWiringTest {
   static final String ROUTED = "readmodel-store-routed";
   static final String DATABASE_ONLY = "readmodel-store-database-only";
   static final String RUNTIME_STORE = "readmodel-store-runtime-singleton";
+  static final String REPLACED = "readmodel-stores-replaced";
+  static final String ADDED = "readmodel-stores-added";
+  static final String DUPLICATE = "readmodel-stores-duplicate";
+  static final String INDEXED = "readmodel-stores-indexed";
+  static final String PRIMARY = "readmodel-stores-primary";
 
   /** What an application supplies: the {@code DataSource} and its event types. */
   @Factory
-  @Requires(property = "spec.name", pattern = "readmodel-store-(routed|database-only)")
+  @Requires(
+      property = "spec.name",
+      pattern = "readmodel-store-(routed|database-only)|readmodel-stores-.*")
   static class PostgresInfrastructure {
     @Singleton
     DataSource dataSource() {
@@ -181,7 +196,7 @@ class MicronautReadModelStoreWiringTest {
   @ProjectionConfig(
       name = "runtime_alo",
       deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
-      readModelStore = "memory")
+      readModelStore = "postgres")
   static class RuntimeStoreDeclared implements Projection {
     @Override
     public void process(List<EventEnvelope> batch) {}
@@ -268,7 +283,11 @@ class MicronautReadModelStoreWiringTest {
       assertThat(stores).hasSize(1);
       ReadModelStore store = stores.getFirst();
       assertThat(store.name()).isEqualTo("postgres");
-      assertThat(ctx.getBean(ReadModelStore.class, Qualifiers.byName("postgres"))).isSameAs(store);
+      assertThat(
+              ctx.getBean(
+                  ReadModelStore.class,
+                  Qualifiers.byName(StreamRuneMicronautModule.DEFAULT_READ_MODEL_STORE_BEAN)))
+          .isSameAs(store);
       assertThat(ctx.getBean(ProjectionRepository.class)).isSameAs(store.repository());
 
       CheckpointTarget subscription =
@@ -343,14 +362,16 @@ class MicronautReadModelStoreWiringTest {
   }
 
   /**
-   * A store the application registers at run time — not a compiled bean definition — is collected
-   * by the projection factory and routes registrations, and the default store backs off for it
-   * although a {@code DataSource} is present (the default store, created on this mock, would fail).
+   * A store named {@code postgres} the application registers at run time, before the context starts
+   * — not a compiled bean definition — is collected and routes registrations, and replaces the
+   * default store by its name although a {@code DataSource} is present (the default store, created
+   * on this mock, would fail).
    */
   @Test
-  void aRuntimeSingletonStore_isCollectedAndRoutedTo_andReplacesTheDefaultStore() throws Exception {
+  void aRuntimeSingletonStoreNamedPostgres_isCollectedAndRoutedTo_andReplacesTheDefaultStore()
+      throws Exception {
     var repository = new InMemoryProjectionRepository();
-    ReadModelStore memory = ReadModelStore.of("memory", repository, repository, repository);
+    ReadModelStore memory = ReadModelStore.of("postgres", repository, repository, repository);
     try (var ctx =
         ApplicationContext.builder()
             .properties(
@@ -367,13 +388,216 @@ class MicronautReadModelStoreWiringTest {
                 new InMemoryEventStore(TYPES),
                 new InMemoryOffsetStore())
             .start()) {
-      assertThat(List.copyOf(ctx.getBeansOfType(ReadModelStore.class))).containsExactly(memory);
+      assertThat(ctx.getBean(ReadModelStores.class).stores()).containsExactly(memory);
 
       MultiProjectionRunner runner = frameworkRunner(ctx);
-      assertThat(targetNameOf(runner, "runtime_tl")).isEqualTo("memory");
+      assertThat(targetNameOf(runner, "runtime_tl")).isEqualTo("postgres");
       assertThat(processorOf(runner, "runtime_tl")).isSameAs(repository);
-      assertThat(targetNameOf(runner, "runtime_alo")).isEqualTo("memory");
+      assertThat(targetNameOf(runner, "runtime_alo")).isEqualTo("postgres");
       assertThat(processorOf(runner, "runtime_alo")).isSameAs(repository);
+    }
+  }
+
+  // ── several read-model stores: the default replaced only by name ─────────────────
+
+  /** The application's own store named {@code postgres}: it replaces the default one. */
+  @Factory
+  @Requires(property = "spec.name", value = REPLACED)
+  static class ReplacementStore {
+    static volatile InMemoryProjectionRepository repository = new InMemoryProjectionRepository();
+
+    @Singleton
+    @jakarta.inject.Named("appPostgres")
+    ReadModelStore appPostgres() {
+      return ReadModelStore.of("postgres", repository, repository, repository);
+    }
+  }
+
+  /** The application's own store named {@code search}: it is added beside the default one. */
+  @Factory
+  @Requires(property = "spec.name", pattern = "readmodel-stores-(added|duplicate|indexed|primary)")
+  static class SearchStore {
+    static volatile InMemoryProjectionRepository repository = new InMemoryProjectionRepository();
+
+    @Singleton
+    @jakarta.inject.Named("searchStore")
+    ReadModelStore searchStore() {
+      return ReadModelStore.of("search", repository, repository, repository);
+    }
+  }
+
+  /** A second store named {@code search}. */
+  @Factory
+  @Requires(property = "spec.name", value = DUPLICATE)
+  static class SecondSearchStore {
+    @Singleton
+    @jakarta.inject.Named("secondSearch")
+    ReadModelStore secondSearch() {
+      var repository = new InMemoryProjectionRepository();
+      return ReadModelStore.of("search", repository, repository, repository);
+    }
+  }
+
+  /** A transactional projection over the injected {@code ProjectionRepository} bean. */
+  @Singleton
+  @Requires(property = "spec.name", pattern = "readmodel-stores-(replaced|added)")
+  @ProjectionConfig(
+      name = StoresTransactional.NAME,
+      deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
+  static class StoresTransactional extends BaseProjection {
+    static final String NAME = "stores_tl";
+
+    StoresTransactional(ProjectionRepository repository) {
+      super(repository, NAME);
+    }
+
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
+  /** An at-least-once projection that declares the {@code search} store. */
+  @Singleton
+  @Requires(property = "spec.name", pattern = "readmodel-stores-(added|duplicate|indexed)")
+  @ProjectionConfig(
+      name = SearchCatalog.NAME,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+      readModelStore = "search")
+  static class SearchCatalog implements Projection {
+    static final String NAME = "search_catalog";
+
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
+  static final ProjectionIndex ROUTED_INDEX =
+      ProjectionIndex.forSort(ProjectionName.of(SearchCatalog.NAME), Sort.by("title"));
+  static final ProjectionIndex UNREGISTERED_INDEX =
+      ProjectionIndex.forSort(ProjectionName.of("unregistered_view_model"), Sort.by("title"));
+
+  /** An index of the routed projection, and one of a projection with no registration. */
+  @Factory
+  @Requires(property = "spec.name", value = INDEXED)
+  static class Indexes {
+    @Singleton
+    @jakarta.inject.Named("routedIndex")
+    ProjectionIndex routedIndex() {
+      return ROUTED_INDEX;
+    }
+
+    @Singleton
+    @jakarta.inject.Named("unregisteredIndex")
+    ProjectionIndex unregisteredIndex() {
+      return UNREGISTERED_INDEX;
+    }
+  }
+
+  /** The test's properties, leadership off: the in-memory stores need no lease heartbeat. */
+  private static Map<String, Object> storesProperties(String spec) {
+    var props = properties(spec);
+    props.put("streamrune.subscription.single-active-consumer.enabled", "false");
+    return props;
+  }
+
+  /**
+   * An application store named {@code postgres} replaces the default store: it is the only store,
+   * the {@code ProjectionRepository} bean is its repository, a projection over that repository is
+   * routed to it, and the default store is never created: its series never reaches the database.
+   */
+  @Test
+  void userStoreNamedPostgresReplacesTheDefault() throws Exception {
+    applicationDataSource = freshDatabase();
+    ReplacementStore.repository = new InMemoryProjectionRepository();
+    try (var ctx = ApplicationContext.run(storesProperties(REPLACED))) {
+      assertThat(ctx.getBean(ReadModelStores.class).stores())
+          .extracting(ReadModelStore::name)
+          .containsExactly("postgres");
+      assertThat(ctx.getBean(ProjectionRepository.class)).isSameAs(ReplacementStore.repository);
+      MultiProjectionRunner runner = frameworkRunner(ctx);
+      assertThat(targetNameOf(runner, StoresTransactional.NAME)).isEqualTo("postgres");
+      assertThat(processorOf(runner, StoresTransactional.NAME))
+          .isSameAs(ReplacementStore.repository);
+      assertThat(tableExists("readmodel_checkpoint"))
+          .as("the replaced default store is never created")
+          .isFalse();
+    }
+  }
+
+  /**
+   * An application store of another name is added beside the default store: a projection declaring
+   * it goes there, a projection over the {@code ProjectionRepository} bean goes to the default
+   * store, which is created on the {@code DataSource}.
+   */
+  @Test
+  void additionalUserStoreKeepsTheDefault() throws Exception {
+    applicationDataSource = freshDatabase();
+    SearchStore.repository = new InMemoryProjectionRepository();
+    try (var ctx = ApplicationContext.run(storesProperties(ADDED))) {
+      assertThat(ctx.getBean(ReadModelStores.class).stores())
+          .extracting(ReadModelStore::name)
+          .containsExactly("postgres", "search");
+      MultiProjectionRunner runner = frameworkRunner(ctx);
+      assertThat(targetNameOf(runner, SearchCatalog.NAME)).isEqualTo("search");
+      assertThat(processorOf(runner, SearchCatalog.NAME)).isSameAs(SearchStore.repository);
+      assertThat(targetNameOf(runner, StoresTransactional.NAME)).isEqualTo("postgres");
+      assertThat(processorOf(runner, StoresTransactional.NAME))
+          .isInstanceOf(JdbcProjectionRepository.class);
+      assertThat(tableExists("readmodel_checkpoint"))
+          .as("the default store is created on the DataSource")
+          .isTrue();
+    }
+  }
+
+  /**
+   * Two stores with the same name fail the start as a store error, while the stores are collected —
+   * before any registration is routed and before the default store is created.
+   */
+  @Test
+  void duplicateStoreNamesFailStartup() throws Exception {
+    applicationDataSource = freshDatabase();
+    assertThatThrownBy(() -> ApplicationContext.run(storesProperties(DUPLICATE)).close())
+        .hasStackTraceContaining("Two read-model stores are named 'search'");
+    assertThat(tableExists("readmodel_checkpoint"))
+        .as("the default store is not created for an invalid store set")
+        .isFalse();
+  }
+
+  /**
+   * Each index is declared on the store its projection is routed to while the context starts: the
+   * added store's repository receives the routed projection's index and the default store does not;
+   * an index for a projection with no registration goes to the default store's database.
+   */
+  @Test
+  void indexIsDeclaredOnTheRoutedStore() throws Exception {
+    applicationDataSource = freshDatabase();
+    SearchStore.repository = new InMemoryProjectionRepository();
+    try (var ctx = ApplicationContext.run(storesProperties(INDEXED))) {
+      assertThat(SearchStore.repository.declaredIndexes()).containsExactly(ROUTED_INDEX);
+      assertThat(indexCount("unregistered_view_model_view"))
+          .as("the unregistered projection's index is on the default store")
+          .isPositive();
+      assertThat(tableExists(SearchCatalog.NAME + "_view"))
+          .as("the routed projection's index never reaches the default store")
+          .isFalse();
+    }
+  }
+
+  /**
+   * With an added store beside it, the injectable {@code ProjectionRepository} bean stays the
+   * default store's repository.
+   */
+  @Test
+  void primaryProjectionRepositoryBeanIsTheDefaultStoresRepository() throws Exception {
+    applicationDataSource = freshDatabase();
+    SearchStore.repository = new InMemoryProjectionRepository();
+    try (var ctx = ApplicationContext.run(storesProperties(PRIMARY))) {
+      ReadModelStore defaultStore =
+          ctx.getBean(
+              ReadModelStore.class,
+              Qualifiers.byName(StreamRuneMicronautModule.DEFAULT_READ_MODEL_STORE_BEAN));
+      assertThat(defaultStore.name()).isEqualTo("postgres");
+      assertThat(ctx.getBean(ProjectionRepository.class))
+          .isSameAs(defaultStore.repository())
+          .isNotSameAs(SearchStore.repository);
     }
   }
 
@@ -455,6 +679,21 @@ class MicronautReadModelStoreWiringTest {
     dataSource.setUser(PG.getUsername());
     dataSource.setPassword(PG.getPassword());
     return dataSource;
+  }
+
+  /** The indexes on {@code table} besides its primary key: the declared ones. */
+  private static int indexCount(String table) throws Exception {
+    try (var conn = applicationDataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT count(*) FROM pg_indexes WHERE tablename = ? AND indexname NOT LIKE"
+                    + " '%_pkey'")) {
+      ps.setString(1, table);
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getInt(1);
+      }
+    }
   }
 
   private static boolean tableExists(String table) throws Exception {

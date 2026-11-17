@@ -887,7 +887,7 @@ class StreamRuneMicronautModuleTest {
     var other = new org.streamrune.test.InMemoryProjectionRepository();
     var context = storesContext(memoryStore("other", other), memoryStore("postgres", postgres));
 
-    assertSame(postgres, module.projectionRepository(context));
+    assertSame(postgres, module.projectionRepository(module.readModelStores(context)));
   }
 
   @Test
@@ -897,7 +897,10 @@ class StreamRuneMicronautModuleTest {
         storesContext(
             memoryStore("memory", new org.streamrune.test.InMemoryProjectionRepository()));
 
-    var ex = assertThrows(IllegalStateException.class, () -> module.projectionRepository(context));
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () -> module.projectionRepository(module.readModelStores(context)));
     assertTrue(
         ex.getMessage().contains("No read-model store is named 'postgres'"), ex.getMessage());
     assertTrue(ex.getMessage().contains("'memory'"), ex.getMessage());
@@ -941,12 +944,26 @@ class StreamRuneMicronautModuleTest {
     return org.streamrune.core.projection.ReadModelStore.of(name, repo, repo, repo);
   }
 
+  /** A context holding the application's {@code stores} and no default store. */
   private static io.micronaut.context.BeanContext storesContext(
       org.streamrune.core.projection.ReadModelStore... stores) {
     var context = mock(io.micronaut.context.BeanContext.class);
     org.mockito.Mockito.when(
-            context.getBeansOfType(org.streamrune.core.projection.ReadModelStore.class))
+            context.getBeansOfType(
+                org.mockito.ArgumentMatchers.eq(
+                    org.streamrune.core.projection.ReadModelStore.class),
+                org.mockito.ArgumentMatchers
+                    .<io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>>
+                        any()))
         .thenReturn(List.of(stores));
+    org.mockito.Mockito.when(
+            context.findBean(
+                org.mockito.ArgumentMatchers.eq(
+                    org.streamrune.core.projection.ReadModelStore.class),
+                org.mockito.ArgumentMatchers
+                    .<io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>>
+                        any()))
+        .thenReturn(java.util.Optional.empty());
     return context;
   }
 

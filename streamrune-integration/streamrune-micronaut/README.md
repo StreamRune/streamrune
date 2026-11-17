@@ -131,7 +131,7 @@ nothing. This contract is identical across the Spring, Quarkus, and Micronaut in
 
 **Where each projection checkpoints.** With a `DataSource` bean the module defines the default
 read-model store, a `PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean
-`@Named("postgres")`): read models in `<name>_view` tables, their checkpoints beside them in
+`@Named("streamRuneDefaultReadModelStore")`): read models in `<name>_view` tables, their checkpoints beside them in
 `readmodel_checkpoint`. The injectable `ProjectionRepository` bean is that store's repository. Each
 discovered projection is routed on its own: a projection that names a store
 (`@ProjectionConfig(readModelStore = "postgres")`) or writes to its repository (a `BaseProjection`
@@ -144,9 +144,20 @@ unfenced, which routing refuses while leadership is on). Creating the store appl
 migration series (`db/readmodel-migration`) when `streamrune.read-model.schema.auto-initialize` is
 on; unset, it follows `streamrune.event-store.schema.auto-initialize`. The store is created while
 the context starts: `StreamRuneLifecycle` resolves the framework's runners on `StartupEvent`, and
-their factory methods collect the stores. A `ReadModelStore` bean you define replaces it; the
-module collects store beans with `getBeansOfType`, so a store registered as a runtime singleton
-counts too.
+their routes collect the stores.
+
+**Several read-model stores.** Every `ReadModelStore` bean you define is a routing target beside
+the default store, named by its `name()`. The default store is replaced only by name: a
+`ReadModelStore` bean whose `name()` is `postgres` takes its place, and the default store is then
+never created, so its database is never touched; a store of any other name is added beside it. The
+`ProjectionRepository` bean is the repository of the store named `postgres` — the default one, or
+yours — and another store's repository is reached through its `ReadModelStore` bean. Two stores
+with the same name, or over the same repository (equal `writeTargetIdentity()`), fail the start
+when the stores are collected. Each `ProjectionIndex` bean is declared on the store its projection
+is routed to; an index for a projection routed to no store (the subscription checkpoint, an
+`INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. The module
+collects store beans with `getBeansOfType`, so a store registered as a singleton before the context
+starts (`ApplicationContext.builder().singletons(...)`) counts too.
 
 ## Transactional outbox
 

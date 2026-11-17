@@ -1,7 +1,7 @@
 package org.streamrune.micronaut;
 
 import io.micronaut.context.ApplicationContext;
-import io.micronaut.context.BeanContext;
+import io.micronaut.context.BeanProvider;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Requires;
@@ -14,9 +14,7 @@ import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStore;
@@ -38,7 +36,9 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
+import org.streamrune.integration.ProjectionRoutes;
 import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
@@ -55,20 +55,23 @@ import org.streamrune.runtime.TracingProjectionDecorator;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares, and is routed on its own by {@link
- * ProjectionStoreRouting#route} to the {@link CheckpointTarget} it reads its position from and
- * commits through: a {@link ReadModelStore} bean's (named by {@code
- * ProjectionConfig.readModelStore()}, matched by the projection's {@code writeTarget()}, or the one
- * transactional store for a transactional registration with no write target), or, for an {@code
- * AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store, the event store's subscription
- * checkpoint (the {@code CheckpointTarget} bean named {@code streamRuneSubscriptionCheckpoint}).
- * The routed processor must carry what the registration needs — {@link
- * AtomicBatchProcessor#transactional()} for a transactional mode, {@link
- * AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or the runner is not created and
- * the start fails. The runners get no runner-wide offset store or processor: every registration
- * reads and commits through the pair it was routed to. The stores are collected with {@link
- * BeanContext#getBeansOfType}, which also sees a store registered as a runtime singleton (an
- * injected {@code List} does not reliably). An INLINE registration must declare {@code
- * AT_LEAST_ONCE_IDEMPOTENT}.
+ * ProjectionStoreRouting#route} — once, for both runners, into the {@link ProjectionRoutes} bean
+ * ({@link #projectionRoutes}) the {@link ProjectionIndexDeclarer} reads too — to the {@link
+ * CheckpointTarget} it reads its position from and commits through: a {@link ReadModelStore}'s (one
+ * of the {@link ReadModelStores} — the application's store beans, and the default {@code postgres}
+ * store unless one of them takes its name — named by {@code ProjectionConfig.readModelStore()},
+ * matched by the projection's {@code writeTarget()}, or the one transactional store for a
+ * transactional registration with no write target), or, for an {@code AT_LEAST_ONCE_IDEMPOTENT}
+ * registration that matches no store, the event store's subscription checkpoint (the {@code
+ * CheckpointTarget} bean named {@code streamRuneSubscriptionCheckpoint}). The routed processor must
+ * carry what the registration needs — {@link AtomicBatchProcessor#transactional()} for a
+ * transactional mode, {@link AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or
+ * the runner is not created and the start fails. The runners get no runner-wide offset store or
+ * processor: every registration reads and commits through the pair it was routed to. The stores are
+ * collected with {@code BeanContext#getBeansOfType}, the codebase's established multi-bean
+ * collection pattern, which also sees a store registered as a runtime singleton before the context
+ * starts ({@code StreamRuneMicronautModule#readModelStores}). An INLINE registration must declare
+ * {@code AT_LEAST_ONCE_IDEMPOTENT}.
  *
  * <p>Disabled when {@code streamrune.projections.auto-discovery.enabled=false} (or any other
  * canonical-false spelling — see {@code AutoDiscoveryEnabled}).
@@ -104,6 +107,50 @@ public class ProjectionFactory {
   public ProjectionFactory() {}
 
   /**
+   * Routes every registration of both runners — each enabled {@code CONTINUOUS} and {@code
+   * SCHEDULED} projection — once, each on its own ({@link ProjectionStoreRouting#route}), over the
+   * {@link ReadModelStores} (selected and validated once, so a duplicate store name or write target
+   * fails as a store error before any registration is routed). The runners register each
+   * registration on its route, and the {@link ProjectionIndexDeclarer} declares each {@code
+   * ProjectionIndex} on the store its projection is routed to. Present on the runners' own
+   * condition (an event store and an offset store); with no registration it routes nothing and
+   * touches no store.
+   *
+   * @param projections all {@link Projection} beans in the context
+   * @param env the Micronaut environment for property access
+   * @param stores the read-model stores
+   * @param subscriptionCheckpoint the event store's subscription checkpoint, where an {@code
+   *     AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store is routed
+   * @param leadership optional single-active-consumer leadership
+   * @return the routes
+   * @throws IllegalStateException if the store set is invalid, or a registration cannot be routed
+   *     or its routed processor lacks a capability it needs
+   */
+  @Singleton
+  @Requires(beans = {EventStore.class, OffsetStore.class})
+  public ProjectionRoutes projectionRoutes(
+      List<Projection> projections,
+      Environment env,
+      ReadModelStores stores,
+      @Named(StreamRuneMicronautModule.SUBSCRIPTION_CHECKPOINT)
+          CheckpointTarget subscriptionCheckpoint,
+      @Nullable SubscriptionLeadership leadership) {
+    var registrations = new ArrayList<ProjectionStoreRouting.Registration>();
+    for (var mode : List.of(ProjectionConfig.Mode.CONTINUOUS, ProjectionConfig.Mode.SCHEDULED)) {
+      for (var e : discover(projections, env, mode)) {
+        registrations.add(
+            new ProjectionStoreRouting.Registration(
+                e.name(), e.deliveryMode(), e.readModelStore(), e.projection()));
+      }
+    }
+    return ProjectionRoutes.route(
+        registrations,
+        stores,
+        () -> subscriptionCheckpoint,
+        leadership != null ? leadership : SubscriptionLeadership.NOOP);
+  }
+
+  /**
    * Produces a {@link MultiProjectionRunner} from all enabled CONTINUOUS projections. The bean is
    * only created when at least one enabled CONTINUOUS projection exists (see {@code
    * HasContinuousProjections}) — Micronaut factory methods must not return {@code null}.
@@ -114,9 +161,8 @@ public class ProjectionFactory {
    *
    * @param projections all {@link Projection} beans in the context
    * @param eventStore the event store
-   * @param beanContext the context the {@link ReadModelStore} beans are collected from
-   * @param subscriptionCheckpoint the event store's subscription checkpoint, where an {@code
-   *     AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store is routed
+   * @param routes the routes of both runners' registrations ({@link #projectionRoutes}), resolved
+   *     where the registrations are routed
    * @param dlqs optional dead-letter stores
    * @param metrics optional metrics collector
    * @param leadership optional single-active-consumer leadership
@@ -161,9 +207,7 @@ public class ProjectionFactory {
   public MultiProjectionRunner multiProjectionRunner(
       List<Projection> projections,
       EventStore eventStore,
-      BeanContext beanContext,
-      @Named(StreamRuneMicronautModule.SUBSCRIPTION_CHECKPOINT)
-          CheckpointTarget subscriptionCheckpoint,
+      BeanProvider<ProjectionRoutes> routes,
       List<ProjectionDeadLetterStore> dlqs,
       @Nullable StreamRuneMetrics metrics,
       @Nullable SubscriptionLeadership leadership,
@@ -227,14 +271,14 @@ public class ProjectionFactory {
 
     // Each registration is routed on its own: the runner sets no runner-wide offset store or
     // processor, so every registration reads and commits through the pair it was routed to.
-    var routes = route(entries, beanContext, subscriptionCheckpoint, resolvedLeadership);
+    ProjectionRoutes routed = routes.get();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
           e.projection(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routed.target(e.name()));
     }
 
     return builder.build();
@@ -249,9 +293,8 @@ public class ProjectionFactory {
    *
    * @param projections all {@link Projection} beans in the context
    * @param eventStore the event store
-   * @param beanContext the context the {@link ReadModelStore} beans are collected from
-   * @param subscriptionCheckpoint the event store's subscription checkpoint, where an {@code
-   *     AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store is routed
+   * @param routes the routes of both runners' registrations ({@link #projectionRoutes}), resolved
+   *     where the registrations are routed
    * @param dlqs optional dead-letter stores
    * @param metrics optional metrics collector
    * @param leadership optional single-active-consumer leadership
@@ -275,9 +318,7 @@ public class ProjectionFactory {
   public ScheduledProjectionRunner scheduledProjectionRunner(
       List<Projection> projections,
       EventStore eventStore,
-      BeanContext beanContext,
-      @Named(StreamRuneMicronautModule.SUBSCRIPTION_CHECKPOINT)
-          CheckpointTarget subscriptionCheckpoint,
+      BeanProvider<ProjectionRoutes> routes,
       List<ProjectionDeadLetterStore> dlqs,
       @Nullable StreamRuneMetrics metrics,
       @Nullable SubscriptionLeadership leadership,
@@ -332,7 +373,7 @@ public class ProjectionFactory {
     // The same routing as the CONTINUOUS runner: a TRANSACTIONAL_LOCAL scheduled chunk's read-model
     // write and its checkpoint commit in its store's one transaction, with the same split-brain
     // guard as CONTINUOUS.
-    var routes = route(entries, beanContext, subscriptionCheckpoint, resolvedLeadership);
+    ProjectionRoutes routed = routes.get();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
@@ -340,7 +381,7 @@ public class ProjectionFactory {
           e.cron(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routed.target(e.name()));
     }
 
     return builder.build();
@@ -675,36 +716,6 @@ public class ProjectionFactory {
               + " duplicates or qualify one with @Primary).");
     }
     return dlqs.getFirst();
-  }
-
-  /**
-   * Routes one runner's registrations, each on its own ({@link ProjectionStoreRouting#route}),
-   * after checking the store set once ({@link ProjectionStoreRouting#validateStores}). The stores
-   * are every {@link ReadModelStore} bean, collected by {@link
-   * StreamRuneMicronautModule#readModelStores}: the default {@code postgres} store is among them
-   * only when the application defines none.
-   *
-   * @return each registration's target, by projection name
-   * @throws IllegalStateException if the store set is invalid, or a registration cannot be routed
-   *     or its routed processor lacks a capability it needs
-   */
-  private static Map<String, CheckpointTarget> route(
-      List<DiscoveredEntry> entries,
-      BeanContext beanContext,
-      CheckpointTarget subscriptionCheckpoint,
-      SubscriptionLeadership leadership) {
-    List<ReadModelStore> stores = StreamRuneMicronautModule.readModelStores(beanContext);
-    ProjectionStoreRouting.validateStores(stores);
-    var routes = new LinkedHashMap<String, CheckpointTarget>();
-    for (var e : entries) {
-      var registration =
-          new ProjectionStoreRouting.Registration(
-              e.name(), e.deliveryMode(), e.readModelStore(), e.projection());
-      routes.put(
-          e.name(),
-          ProjectionStoreRouting.route(registration, stores, subscriptionCheckpoint, leadership));
-    }
-    return routes;
   }
 
   private static void requireNoDlqStrategy(List<DiscoveredEntry> entries) {
