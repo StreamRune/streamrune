@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Stream;
 import org.awaitility.Awaitility;
 import org.eclipse.microprofile.config.Config;
 import org.junit.jupiter.api.Test;
@@ -49,7 +48,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.ProjectionRoutes;
 import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
@@ -128,7 +129,8 @@ class ProjectionProducerTest {
 
   private static Instance<Projection> instanceOf(Projection... projections) {
     Instance<Projection> instance = mock(Instance.class);
-    when(instance.spliterator()).thenReturn(List.of(projections).spliterator());
+    // A fresh spliterator per call: the routes and each runner discover the projections.
+    when(instance.spliterator()).thenAnswer(inv -> List.of(projections).spliterator());
     return instance;
   }
 
@@ -138,9 +140,27 @@ class ProjectionProducerTest {
     return dlq;
   }
 
-  private static Instance<ReadModelStore> noStores() {
-    Instance<ReadModelStore> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(true);
+  private static ReadModelStores noStores() {
+    return storesOf();
+  }
+
+  /**
+   * The routes bean over these inputs, computed when the runner asks for it — as Arc creates the
+   * {@code @Singleton} on the runner producer's {@code get()}.
+   */
+  private static Instance<ProjectionRoutes> routes(
+      Instance<Projection> projections,
+      ReadModelStores stores,
+      CheckpointTarget subscriptionCheckpoint,
+      Instance<SubscriptionLeadership> leadership,
+      Config config) {
+    Instance<ProjectionRoutes> instance = mock(Instance.class);
+    when(instance.get())
+        .thenAnswer(
+            inv ->
+                new ProjectionProducer()
+                    .projectionRoutes(
+                        projections, config, stores, subscriptionCheckpoint, leadership));
     return instance;
   }
 
@@ -200,8 +220,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -232,8 +256,12 @@ class ProjectionProducerTest {
                 producer.multiProjectionRunner(
                     projections,
                     mock(EventStore.class),
-                    noStores(),
-                    subscriptionCheckpoint(mock(OffsetStore.class)),
+                    routes(
+                        projections,
+                        noStores(),
+                        subscriptionCheckpoint(mock(OffsetStore.class)),
+                        noLeadership(),
+                        defaultConfig()),
                     unsatisfiedDlq(),
                     noMetrics(),
                     noLeadership(),
@@ -255,8 +283,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            noStores(),
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", "false")),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -282,8 +314,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            noStores(),
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", value)),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -304,8 +340,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             instanceOf(new ContProjection()),
             mock(EventStore.class),
-            noStores(),
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                instanceOf(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", value)),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -324,8 +364,12 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             instanceOf(new SchedProjection()),
             mock(EventStore.class),
-            noStores(),
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                instanceOf(new SchedProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                configWith("streamrune.projections.auto-discovery.enabled", "false")),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -350,8 +394,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -376,8 +424,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -403,8 +455,12 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -429,8 +485,12 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -466,8 +526,12 @@ class ProjectionProducerTest {
             producer.scheduledProjectionRunner(
                 projections,
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
                 noMetrics(),
                 noLeadership(),
@@ -610,8 +674,12 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
                 noMetrics(),
                 noLeadership(),
@@ -640,8 +708,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -677,8 +749,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -709,8 +785,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -742,8 +822,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                config),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -782,8 +866,12 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    defaultConfig()),
                 unsatisfiedDlq(),
                 noMetrics(),
                 noLeadership(),
@@ -810,8 +898,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -852,8 +944,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             dlqInstance,
             noMetrics(),
             noLeadership(),
@@ -883,8 +979,12 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             dlqInstance,
             noMetrics(),
             noLeadership(),
@@ -981,30 +1081,14 @@ class ProjectionProducerTest {
     }
   }
 
-  /** An Instance over explicit stores: the producer reads isUnsatisfied() and stream(). */
-  private static Instance<ReadModelStore> storesOf(ReadModelStore... stores) {
-    Instance<ReadModelStore> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(stores.length == 0);
-    when(instance.isAmbiguous()).thenReturn(stores.length > 1);
-    when(instance.stream()).thenAnswer(inv -> java.util.Arrays.stream(stores));
-    return instance;
+  /** The application's stores, with no default store (no DataSource here). */
+  private static ReadModelStores storesOf(ReadModelStore... stores) {
+    return new ReadModelStores(java.util.Optional::empty, () -> List.of(stores));
   }
 
   /** A store whose repository, checkpoints and processor are one in-memory repository. */
   private static ReadModelStore memoryStore(String name, InMemoryProjectionRepository repo) {
     return ReadModelStore.of(name, repo, repo, repo);
-  }
-
-  /**
-   * A dependent-scoped store producer that yielded a null product: the bean exists, its instance is
-   * {@code null}.
-   */
-  private static Instance<ReadModelStore> nullStoreProduct() {
-    Instance<ReadModelStore> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(false);
-    when(instance.get()).thenReturn(null);
-    when(instance.stream()).thenAnswer(inv -> Stream.of((ReadModelStore) null));
-    return instance;
   }
 
   /** Anything but NOOP: resolveOrNull reads isUnsatisfied() then get(). */
@@ -1033,15 +1117,14 @@ class ProjectionProducerTest {
   private static MultiProjectionRunner multi(
       Instance<Projection> projections,
       EventStore eventStore,
-      Instance<ReadModelStore> stores,
+      ReadModelStores stores,
       CheckpointTarget subscriptionCheckpoint,
       Instance<SubscriptionLeadership> leadership) {
     return new ProjectionProducer()
         .multiProjectionRunner(
             projections,
             eventStore,
-            stores,
-            subscriptionCheckpoint,
+            routes(projections, stores, subscriptionCheckpoint, leadership, defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             leadership,
@@ -1054,7 +1137,7 @@ class ProjectionProducerTest {
 
   private static MultiProjectionRunner multi(
       Instance<Projection> projections,
-      Instance<ReadModelStore> stores,
+      ReadModelStores stores,
       Instance<SubscriptionLeadership> leadership) {
     return multi(
         projections,
@@ -1065,13 +1148,17 @@ class ProjectionProducerTest {
   }
 
   private static ScheduledProjectionRunner scheduled(
-      Instance<Projection> projections, Instance<ReadModelStore> stores) {
+      Instance<Projection> projections, ReadModelStores stores) {
     return new ProjectionProducer()
         .scheduledProjectionRunner(
             projections,
             mock(EventStore.class),
-            stores,
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                projections,
+                stores,
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -1381,23 +1468,6 @@ class ProjectionProducerTest {
     assertTrue(ex.getMessage().contains("'postgres'"), ex.getMessage());
   }
 
-  /**
-   * A dependent-scoped store producer may yield a null product; it counts as no store. An
-   * at-least-once registration needs none and boots on the subscription checkpoint; a
-   * TRANSACTIONAL_LOCAL one needs one and is refused naming that no store is defined.
-   */
-  @Test
-  void aNullStoreProduct_countsAsNoStore() throws Exception {
-    try (var runner = multi(instanceOf(new ContProjection()), nullStoreProduct(), noLeadership())) {
-      assertSame(AtomicBatchProcessor.nonAtomicAtLeastOnce(), processorOf(runner, "qcont"));
-    }
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () -> multi(instanceOf(new TlPlainProjection()), nullStoreProduct(), noLeadership()));
-    assertTrue(ex.getMessage().contains("no read-model store is defined"), ex.getMessage());
-  }
-
   @Test
   void inlineTl_throwsAtDiscovery() {
     var ex =
@@ -1468,8 +1538,12 @@ class ProjectionProducerTest {
                     .multiProjectionRunner(
                         instanceOf(new TlPlainProjection()),
                         mock(EventStore.class),
-                        storesOf(memoryStore("memory", repo)),
-                        subscriptionCheckpoint(repo),
+                        routes(
+                            instanceOf(new TlPlainProjection()),
+                            storesOf(memoryStore("memory", repo)),
+                            subscriptionCheckpoint(repo),
+                            noLeadership(),
+                            configWith("streamrune.projections.allow-at-least-once", "true")),
                         unsatisfiedDlq(),
                         noMetrics(),
                         noLeadership(),
@@ -1529,8 +1603,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -1571,8 +1649,12 @@ class ProjectionProducerTest {
             producer.multiProjectionRunner(
                 projections,
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    projections,
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    noLeadership(),
+                    config),
                 unsatisfiedDlq(),
                 noMetrics(),
                 noLeadership(),
@@ -1598,8 +1680,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             metricsInstanceOf(metrics),
             noLeadership(),
@@ -1626,8 +1712,12 @@ class ProjectionProducerTest {
         producer.multiProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             noMetrics(),
             noLeadership(),
@@ -1656,8 +1746,12 @@ class ProjectionProducerTest {
         producer.scheduledProjectionRunner(
             projections,
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                projections,
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                noLeadership(),
+                defaultConfig()),
             unsatisfiedDlq(),
             metricsInstanceOf(metrics),
             noLeadership(),

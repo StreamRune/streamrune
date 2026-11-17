@@ -2,16 +2,13 @@ package org.streamrune.quarkus;
 
 import io.quarkus.arc.DefaultBean;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Any;
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Named;
+import jakarta.inject.Singleton;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import java.util.stream.StreamSupport;
 import org.eclipse.microprofile.config.Config;
 import org.slf4j.Logger;
@@ -33,7 +30,9 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
+import org.streamrune.integration.ProjectionRoutes;
 import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
@@ -50,18 +49,20 @@ import org.streamrune.runtime.TracingProjectionDecorator;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares, and is routed on its own by {@link
- * ProjectionStoreRouting#route} to the {@link CheckpointTarget} it reads its position from and
- * commits through: a {@link ReadModelStore} bean's (named by {@code
- * ProjectionConfig.readModelStore()}, matched by the projection's {@code writeTarget()}, or the one
- * transactional store for a transactional registration with no write target), or, for an {@code
- * AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store, the event store's subscription
- * checkpoint (the {@code CheckpointTarget} bean named {@code streamRuneSubscriptionCheckpoint}).
- * The routed processor must carry what the registration needs — {@link
- * AtomicBatchProcessor#transactional()} for a transactional mode, {@link
- * AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or the runner is not produced
- * and the start fails. The runners get no runner-wide offset store or processor: every registration
- * reads and commits through the pair it was routed to. An INLINE registration must declare {@code
- * AT_LEAST_ONCE_IDEMPOTENT}.
+ * ProjectionStoreRouting#route} — once, for both runners, into the {@link ProjectionRoutes} bean
+ * ({@link #projectionRoutes}) the {@link ProjectionIndexDeclarer} reads too — to the {@link
+ * CheckpointTarget} it reads its position from and commits through: a {@link ReadModelStore}'s (one
+ * of the {@link ReadModelStores} — the application's store beans, and the default {@code postgres}
+ * store unless one of them takes its name — named by {@code ProjectionConfig.readModelStore()},
+ * matched by the projection's {@code writeTarget()}, or the one transactional store for a
+ * transactional registration with no write target), or, for an {@code AT_LEAST_ONCE_IDEMPOTENT}
+ * registration that matches no store, the event store's subscription checkpoint (the {@code
+ * CheckpointTarget} bean named {@code streamRuneSubscriptionCheckpoint}). The routed processor must
+ * carry what the registration needs — {@link AtomicBatchProcessor#transactional()} for a
+ * transactional mode, {@link AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or
+ * the runner is not produced and the start fails. The runners get no runner-wide offset store or
+ * processor: every registration reads and commits through the pair it was routed to. An INLINE
+ * registration must declare {@code AT_LEAST_ONCE_IDEMPOTENT}.
  *
  * <p>All three producers are dependent-scoped optional beans: they return {@code null} when no
  * projection of the relevant mode is registered (CDI permits a null product only for
@@ -110,8 +111,7 @@ public class ProjectionProducer {
   public MultiProjectionRunner multiProjectionRunner(
       Instance<Projection> projections,
       EventStore eventStore,
-      @Any Instance<ReadModelStore> storeInstance,
-      @Named(StreamRuneProducers.SUBSCRIPTION_CHECKPOINT) CheckpointTarget subscriptionCheckpoint,
+      Instance<ProjectionRoutes> routesInstance,
       Instance<ProjectionDeadLetterStore> dlqInstance,
       Instance<StreamRuneMetrics> metricsInstance,
       Instance<SubscriptionLeadership> leadershipInstance,
@@ -183,14 +183,14 @@ public class ProjectionProducer {
 
     // Each registration is routed on its own: the runner sets no runner-wide offset store or
     // processor, so every registration reads and commits through the pair it was routed to.
-    var routes = route(entries, storeInstance, subscriptionCheckpoint, leadership);
+    ProjectionRoutes routes = routesInstance.get();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
           e.projection(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routes.target(e.name()));
     }
 
     return builder.build();
@@ -210,8 +210,7 @@ public class ProjectionProducer {
   public ScheduledProjectionRunner scheduledProjectionRunner(
       Instance<Projection> projections,
       EventStore eventStore,
-      @Any Instance<ReadModelStore> storeInstance,
-      @Named(StreamRuneProducers.SUBSCRIPTION_CHECKPOINT) CheckpointTarget subscriptionCheckpoint,
+      Instance<ProjectionRoutes> routesInstance,
       Instance<ProjectionDeadLetterStore> dlqInstance,
       Instance<StreamRuneMetrics> metricsInstance,
       Instance<SubscriptionLeadership> leadershipInstance,
@@ -273,7 +272,7 @@ public class ProjectionProducer {
     // The same routing as the CONTINUOUS runner: a TRANSACTIONAL_LOCAL scheduled chunk's read-model
     // write and its checkpoint commit in its store's one transaction, with the same split-brain
     // guard as CONTINUOUS.
-    var routes = route(entries, storeInstance, subscriptionCheckpoint, leadership);
+    ProjectionRoutes routes = routesInstance.get();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
@@ -281,7 +280,7 @@ public class ProjectionProducer {
           e.cron(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routes.target(e.name()));
     }
 
     return builder.build();
@@ -381,42 +380,47 @@ public class ProjectionProducer {
   }
 
   /**
-   * Every {@link ReadModelStore} bean, whatever its qualifiers, in Arc's priority order. A {@code
-   * null} product (a dependent-scoped producer that declined) is no store. The default store is
-   * among them only when the application defines none: Arc drops a {@code @DefaultBean} from a
-   * resolution that holds another bean of its type.
-   */
-  private static List<ReadModelStore> storesOf(Instance<ReadModelStore> instance) {
-    return instance.isUnsatisfied()
-        ? List.of()
-        : instance.stream().filter(Objects::nonNull).toList();
-  }
-
-  /**
-   * Routes one runner's registrations, each on its own ({@link ProjectionStoreRouting#route}),
-   * after checking the store set once ({@link ProjectionStoreRouting#validateStores}).
+   * Routes every registration of both runners — each enabled {@code CONTINUOUS} and {@code
+   * SCHEDULED} projection — once, each on its own ({@link ProjectionStoreRouting#route}), over the
+   * {@link ReadModelStores} (selected and validated once, so a duplicate store name or write target
+   * fails as a store error before any registration is routed). The runners register each
+   * registration on its route, and the {@link ProjectionIndexDeclarer} declares each {@code
+   * ProjectionIndex} on the store its projection is routed to. With projection auto-discovery off,
+   * or no registration, it routes nothing and touches no store.
    *
-   * @return each registration's target, by projection name
+   * @param projections the projection beans
+   * @param config the per-projection property overrides
+   * @param stores the read-model stores
+   * @param subscriptionCheckpoint the event store's subscription checkpoint, rule 4's target
+   * @param leadershipInstance the single-active-consumer leadership, {@code NOOP} when absent
+   * @return the routes
    * @throws IllegalStateException if the store set is invalid, or a registration cannot be routed
    *     or its routed processor lacks a capability it needs
    */
-  private static Map<String, CheckpointTarget> route(
-      List<DiscoveredEntry> entries,
-      Instance<ReadModelStore> storeInstance,
-      CheckpointTarget subscriptionCheckpoint,
-      SubscriptionLeadership leadership) {
-    List<ReadModelStore> stores = storesOf(storeInstance);
-    ProjectionStoreRouting.validateStores(stores);
-    var routes = new LinkedHashMap<String, CheckpointTarget>();
-    for (var e : entries) {
-      var registration =
-          new ProjectionStoreRouting.Registration(
-              e.name(), e.deliveryMode(), e.readModelStore(), e.projection());
-      routes.put(
-          e.name(),
-          ProjectionStoreRouting.route(registration, stores, subscriptionCheckpoint, leadership));
+  @Produces
+  @Singleton
+  public ProjectionRoutes projectionRoutes(
+      Instance<Projection> projections,
+      Config config,
+      ReadModelStores stores,
+      @Named(StreamRuneProducers.SUBSCRIPTION_CHECKPOINT) CheckpointTarget subscriptionCheckpoint,
+      Instance<SubscriptionLeadership> leadershipInstance) {
+    if (!autoDiscoveryEnabled(config)) {
+      return ProjectionRoutes.none();
     }
-    return routes;
+    var registrations = new ArrayList<ProjectionStoreRouting.Registration>();
+    for (var mode : List.of(ProjectionConfig.Mode.CONTINUOUS, ProjectionConfig.Mode.SCHEDULED)) {
+      for (var e : discover(projections, config, mode)) {
+        registrations.add(
+            new ProjectionStoreRouting.Registration(
+                e.name(), e.deliveryMode(), e.readModelStore(), e.projection()));
+      }
+    }
+    return ProjectionRoutes.route(
+        registrations,
+        stores,
+        () -> subscriptionCheckpoint,
+        LeadershipInstances.resolve(leadershipInstance));
   }
 
   // === discovery + property override ===

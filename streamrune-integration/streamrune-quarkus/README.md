@@ -497,9 +497,10 @@ stopped by the framework — you own its lifecycle. To supply and fully manage y
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
 
 **Where each projection checkpoints.** The integration produces the default read-model store, a
-`PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean `@Named("postgres")`) on your
-`DataSource`: read models in `<name>_view` tables, their checkpoints beside them in
-`readmodel_checkpoint`. The injectable `ProjectionRepository` bean is that store's repository. Each
+`PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean
+`@Named("streamRuneDefaultReadModelStore")`) on your `DataSource`: read models in `<name>_view`
+tables, their checkpoints beside them in `readmodel_checkpoint`. The injectable
+`ProjectionRepository` bean is that store's repository. Each
 discovered projection is routed on its own: a projection that names a store
 (`@ProjectionConfig(readModelStore = "postgres")`) or writes to its repository (a `BaseProjection`
 over the injected `ProjectionRepository`) goes to that store, so a `TRANSACTIONAL_LOCAL`
@@ -511,7 +512,22 @@ unfenced, which routing refuses while leadership is on). Creating the store appl
 migration series (`db/readmodel-migration`) when `streamrune.read-model.schema.auto-initialize` is
 on; unset, it follows `streamrune.event-store.schema.auto-initialize`. Arc creates the store when
 the first bean that needs it is created — in an application with projections, the projection
-runners' producers on the startup event; a `ReadModelStore` bean you produce replaces it.
+runners' producers on the startup event.
+
+**Several read-model stores.** Every `ReadModelStore` bean you produce is a routing target beside
+the default store, named by its `name()`. The default store is replaced only by name: a
+`ReadModelStore` bean whose `name()` is `postgres` takes its place, and the default store is then
+never created, so its database is never touched; a store of any other name is added beside it. The
+`ProjectionRepository` bean is the repository of the store named `postgres` — the default one, or
+yours — and another store's repository is reached through its `ReadModelStore` bean. Two stores
+with the same name, or over the same repository (equal `writeTargetIdentity()`), fail the start
+when the stores are collected. Each `ProjectionIndex` bean is declared on the store its projection
+is routed to; an index for a projection routed to no store (the subscription checkpoint, an
+`INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. Quarkus always
+provides a `DataSource` bean, so the default store exists even in an application that uses no
+database: such an application produces its own `ReadModelStore` bean named `postgres` (an
+in-memory one, for instance), or the start fails saying so when the default store cannot read the
+database's server version.
 
 ## Known Limitations
 

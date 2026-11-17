@@ -264,10 +264,19 @@ public class StreamRuneProducers {
   }
 
   /**
-   * The bean name — and the {@link ReadModelStore#name()} — of the default read-model store,
-   * {@value}. A projection declares {@code readModelStore = "postgres"} to route to it explicitly.
+   * The {@link ReadModelStore#name()} of the default read-model store, {@value}. A projection
+   * declares {@code readModelStore = "postgres"} to route to it explicitly; an application store of
+   * this name replaces it.
    */
-  static final String DEFAULT_READ_MODEL_STORE = "postgres";
+  static final String DEFAULT_READ_MODEL_STORE =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE;
+
+  /**
+   * The bean name ({@code @Named}) of the default read-model store, {@value}: a framework name, so
+   * an application store {@code @Named("postgres")} never collides with it.
+   */
+  static final String DEFAULT_READ_MODEL_STORE_BEAN =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE_BEAN;
 
   /**
    * The bean name of the event store's subscription checkpoint, {@value}: the {@link
@@ -290,25 +299,35 @@ public class StreamRuneProducers {
    * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
    * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
    * read-model schema. Arc creates a {@code @Singleton} bean when it is first injected or looked
-   * up, so the database is touched when the first bean that needs the store is created: in an
-   * application with projection runners, the runners' producers on the startup event (or the {@link
+   * up, and only {@link #readModelStores} looks it up — when the stores are first selected — so the
+   * database is touched when the first bean that needs the stores is created: in an application
+   * with projection runners, the runners' producers on the startup event (or the {@link
    * ProjectionIndexDeclarer}, earlier on the same event, when index beans exist).
+   *
+   * <p>Quarkus always provides a {@code DataSource} bean, so this store is produced even in an
+   * application that uses no database: when the server version cannot be read (no usable database),
+   * the failure says that such an application produces its own {@code ReadModelStore} named {@value
+   * #DEFAULT_READ_MODEL_STORE}.
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if present) through
    * {@code CryptoShreddingModule}, the same way {@link #postgresEventStoreFactory} wires the event
    * store and {@link #sagaStore} wires the saga store — so {@code @Encrypted} read-model fields are
    * persisted as ciphertext instead of plaintext PII, and fall within GDPR forget scope.
    *
-   * <p>{@code @DefaultBean}: it backs off when the application produces any {@link ReadModelStore}
-   * bean.
+   * <p>Replaced only by name: an application {@link ReadModelStore} bean whose {@code name()} is
+   * {@value #DEFAULT_READ_MODEL_STORE} takes its place, and this bean is then never created; a
+   * store of any other name is added beside it ({@link #readModelStores}). {@code @DefaultBean}
+   * only keeps an unqualified {@code ReadModelStore} injection point of the application resolving
+   * to the application's store, as before.
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
-   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
+   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT — or the server
+   *     version cannot be read or is not supported (no usable database)
    */
   @Produces
   @Singleton
   @DefaultBean
-  @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE)
+  @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE_BEAN)
   public ReadModelStore postgresReadModelStore(
       DataSource dataSource,
       StreamRuneQuarkusProperties properties,
@@ -323,6 +342,22 @@ public class StreamRuneProducers {
     }
     CryptoEngine cryptoEngine =
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
+    try {
+      org.streamrune.postgres.PostgresServerVersion.requireSupported(dataSource);
+    } catch (RuntimeException e) {
+      throw new IllegalStateException(
+          "The default read-model store '"
+              + DEFAULT_READ_MODEL_STORE
+              + "' cannot be created on the application's DataSource, which is not a usable"
+              + " PostgreSQL database ("
+              + e.getMessage()
+              + "). Quarkus always provides a DataSource bean, so this store is produced even when"
+              + " the application uses no database: an application without a database produces"
+              + " its own ReadModelStore bean named '"
+              + DEFAULT_READ_MODEL_STORE
+              + "', which replaces this default store.",
+          e);
+    }
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
     return PostgresReadModelStore.create(
@@ -348,26 +383,72 @@ public class StreamRuneProducers {
   }
 
   /**
-   * Produces the default read-model store's repository as the injectable {@link
-   * ProjectionRepository}, so query handlers and {@code BaseProjection} constructors that take a
-   * {@code ProjectionRepository} read and write the store named {@value #DEFAULT_READ_MODEL_STORE}.
-   * {@code @DefaultBean}: it backs off when the application produces a {@code ProjectionRepository}
-   * bean.
+   * Produces the application's read-model stores in one bean: every {@link ReadModelStore} bean the
+   * application produces, whatever its qualifiers, and the default store ({@link
+   * #postgresReadModelStore}) unless one of them is named {@value #DEFAULT_READ_MODEL_STORE}
+   * ({@link org.streamrune.integration.ProjectionStoreRouting#selectStores}). Selected and
+   * validated once, when first asked for: producing this bean creates no store.
    *
-   * @throws IllegalStateException when the application's read-model stores replace the default one
-   *     and none is named {@value #DEFAULT_READ_MODEL_STORE}: there is no default store to take the
-   *     repository from
+   * <p>Replacing the default store is by name, which no bean condition can see: a store's name is
+   * known only once the store exists. The application's stores are read through the handles of
+   * {@code @Any Instance<ReadModelStore>}, leaving out the default store by its bean name, {@value
+   * #DEFAULT_READ_MODEL_STORE_BEAN}, without creating it (a handle's bean is metadata; only {@code
+   * get()} creates); the default store is looked up by that name only when no application store
+   * took its name, so a replaced default store never touches its database. A {@code null} product
+   * (a dependent-scoped producer that declined) is no store.
+   *
+   * @param storeInstance every read-model store bean
+   * @return the stores
+   */
+  @Produces
+  @Singleton
+  public org.streamrune.integration.ReadModelStores readModelStores(
+      @Any Instance<ReadModelStore> storeInstance) {
+    return new org.streamrune.integration.ReadModelStores(
+        () -> {
+          Instance<ReadModelStore> named =
+              storeInstance.select(
+                  jakarta.enterprise.inject.literal.NamedLiteral.of(DEFAULT_READ_MODEL_STORE_BEAN));
+          return named.isResolvable()
+              ? java.util.Optional.of(named.get())
+              : java.util.Optional.empty();
+        },
+        () -> {
+          List<ReadModelStore> stores = new ArrayList<>();
+          for (var handle : storeInstance.handles()) {
+            if (DEFAULT_READ_MODEL_STORE_BEAN.equals(handle.getBean().getName())) {
+              continue;
+            }
+            ReadModelStore store = handle.get();
+            if (store != null) {
+              stores.add(store);
+            }
+          }
+          return stores;
+        });
+  }
+
+  /**
+   * Produces the repository of the store named {@value #DEFAULT_READ_MODEL_STORE} — the default
+   * store's, or the application store's that replaced it — as the injectable {@link
+   * ProjectionRepository}, so query handlers and {@code BaseProjection} constructors that take a
+   * {@code ProjectionRepository} read and write it; other stores' repositories are reached through
+   * their {@code ReadModelStore} beans. {@code @DefaultBean}: it backs off when the application
+   * produces a {@code ProjectionRepository} bean.
+   *
+   * <p>Finding the store named {@value #DEFAULT_READ_MODEL_STORE} creates the application's store
+   * beans (a store's name is known only once it exists) and the default store only when none of
+   * them replaced it.
+   *
+   * @throws IllegalStateException when the stores are invalid, or none is named {@value
+   *     #DEFAULT_READ_MODEL_STORE}
    */
   @Produces
   @Singleton
   @DefaultBean
-  public ProjectionRepository projectionRepository(@Any Instance<ReadModelStore> storeInstance) {
-    List<ReadModelStore> stores =
-        storeInstance.isUnsatisfied()
-            ? List.of()
-            : storeInstance.stream().filter(java.util.Objects::nonNull).toList();
-    return org.streamrune.integration.ProjectionStoreRouting.defaultRepository(
-        stores, DEFAULT_READ_MODEL_STORE);
+  public ProjectionRepository projectionRepository(
+      org.streamrune.integration.ReadModelStores stores) {
+    return stores.defaultRepository();
   }
 
   /**

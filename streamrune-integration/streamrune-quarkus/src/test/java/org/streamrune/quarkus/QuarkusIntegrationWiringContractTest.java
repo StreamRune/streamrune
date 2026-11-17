@@ -274,8 +274,8 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
    * The stores of an application without a database: the test kit's in-memory ones, a read-model
-   * store among them, which replaces the integration's default {@code postgres} store as the
-   * in-memory event store replaces its event store.
+   * store named {@code postgres} among them, which replaces the integration's default store by its
+   * name as the in-memory event store replaces its event store.
    */
   @ApplicationScoped
   public static class InMemoryStores {
@@ -285,7 +285,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     public org.streamrune.core.projection.ReadModelStore readModelStore() {
       var repository = new org.streamrune.test.InMemoryProjectionRepository();
       return org.streamrune.core.projection.ReadModelStore.of(
-          "memory", repository, repository, repository);
+          "postgres", repository, repository, repository);
     }
 
     @Produces
