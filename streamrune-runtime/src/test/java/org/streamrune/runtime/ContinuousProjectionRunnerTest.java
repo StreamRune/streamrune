@@ -420,6 +420,79 @@ class ContinuousProjectionRunnerTest {
   }
 
   @Test
+  void runOnATarget_aFactoryBuiltSubscriptionReadsAndSavesThroughTheTargetsCheckpoints()
+      throws Exception {
+    // The factory is handed the run's checkpoints. A factory-built live subscription that read the
+    // runner's own offset store instead (no row: 0) would re-deliver what catch-up committed to the
+    // target and halt the run as diverged; a stale row ahead of the target would skip events.
+    // Self-registering with the contributor's 2-arg register must not repoint the projection's lag
+    // at the contributor's offset store either.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var memory = new InMemoryProjectionRepository();
+    var target = org.streamrune.core.projection.ReadModelStore.of("memory", memory, memory, memory);
+    var name = ProjectionName.of("seen");
+    var contributor = new SubscriptionHealthContributor(eventStore, new InMemoryOffsetStore(), 1);
+    var handed = new java.util.concurrent.atomic.AtomicReference<OffsetStore>();
+    ContinuousProjectionRunner.SubscriptionFactory factory =
+        (projectionName, listener, readPoisonBound, checkpoints) -> {
+          handed.set(checkpoints);
+          return PollingEventSubscription.builder()
+              .subscriptionName(SubscriptionName.of(projectionName.value()))
+              .eventStore(eventStore)
+              .offsetStore(checkpoints)
+              .listener(listener)
+              .config(fastConfig())
+              .fetchSize(10)
+              .readPoisonBound(readPoisonBound)
+              .healthContributor(contributor) // self-registers through the 2-arg register
+              .build();
+        };
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(own)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .fetchSize(10)
+            .batchSize(10)
+            .subscriptionConfig(fastConfig())
+            .subscriptionFactory(factory)
+            .healthContributor(contributor)
+            .build();
+    StreamId streamId = StreamId.of(TYPE, AggregateId.of("factory-routed"));
+    eventStore.append(streamId, List.of(envelope(streamId, 1, "catch-up")), Version.initial());
+
+    Thread thread =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    runner.run(
+                        name,
+                        new SeenProjection(memory),
+                        TRANSACTIONAL_LOCAL,
+                        target.checkpointTarget()));
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> runner.state() == ProjectionState.LIVE && handed.get() != null);
+      assertEquals(GlobalOffset.of(1), memory.committedOffset(name));
+      eventStore.append(streamId, List.of(envelope(streamId, 2, "live")), new Version(1));
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> memory.committedOffset(name).equals(GlobalOffset.of(2)));
+
+      assertTrue(handed.get() == memory, "the factory must be handed the target's checkpoints");
+      assertEquals(ProjectionState.LIVE, runner.state(), runner.lastError());
+      assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+      SubscriptionHealth health = contributor.health().getFirst();
+      assertEquals("memory", health.store(), "the routed lag source must survive");
+      assertEquals(0, health.lag());
+    } finally {
+      runner.close();
+      thread.join(5_000);
+    }
+  }
+
+  @Test
   void runWithoutATarget_onARunnerBuiltWithoutAPair_refusesNamingBothWaysOut() {
     var runner = runnerWithoutAPair();
 
@@ -940,12 +1013,12 @@ class ContinuousProjectionRunnerTest {
 
     var factoryCalled = new AtomicInteger();
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) -> {
+        (name, listener, readPoisonBound, checkpoints) -> {
           factoryCalled.incrementAndGet();
           return PollingEventSubscription.builder()
               .subscriptionName(SubscriptionName.of(name.value()))
               .eventStore(eventStore)
-              .offsetStore(offsetStore)
+              .offsetStore(checkpoints)
               .listener(listener)
               .config(fastConfig())
               .fetchSize(10)
@@ -989,11 +1062,11 @@ class ContinuousProjectionRunnerTest {
     // dead-lettered under DLQ and the checkpoint advances past it.
     var dlqStore = new InMemoryProjectionDeadLetterStore();
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             PollingEventSubscription.builder()
                 .subscriptionName(SubscriptionName.of(name.value()))
                 .eventStore(eventStore)
-                .offsetStore(offsetStore)
+                .offsetStore(checkpoints) // the run's checkpoints
                 .listener(listener) // the runner's WRAPPED listener — the error strategy applies
                 .config(fastConfig())
                 .fetchSize(10)
@@ -2501,7 +2574,7 @@ class ContinuousProjectionRunnerTest {
   void liveSubscriptionDeath_surfacesAsErrorInsteadOfReportingLiveForever() throws Exception {
     var subscriptionRunning = new java.util.concurrent.atomic.AtomicBoolean(true);
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             new org.streamrune.core.subscription.EventSubscription() {
               @Override
               public void start() {}
@@ -2565,7 +2638,7 @@ class ContinuousProjectionRunnerTest {
     var poison =
         new ProjectionReadPoisonException("read-poison-proj", 5, new RuntimeException("bad event"));
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             new ReadPoisonAwareTestSubscription(subscriptionRunning, poison);
 
     var runner =

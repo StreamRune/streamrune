@@ -107,7 +107,8 @@ public final class SubscriptionHealthContributor {
    * it, kept across {@link #unregister}: the live lag gauge outlives the entry (a meter is never
    * removed), and it must go on reading the checkpoint the registration's runner advances, not
    * {@link #offsetStore}, which holds no checkpoint for a projection routed to a read-model store.
-   * One small entry per projection name; a later {@link #register} of the name replaces it.
+   * One small entry per projection name; only a later {@link #register(SubscriptionName,
+   * SubscriptionLifecycle, OffsetStore, String)} of the name replaces it.
    */
   private final ConcurrentHashMap<SubscriptionName, CheckpointSource> checkpointSources =
       new ConcurrentHashMap<>();
@@ -185,9 +186,15 @@ public final class SubscriptionHealthContributor {
 
   /**
    * Registers {@code subscription} under {@code name}, starting a fresh episode (no errors, not
-   * terminally halted). Its lag is measured against the offset store this contributor was built
-   * with, and its entry names no store; a previous registration of {@code name} with its own offset
-   * store is forgotten.
+   * terminally halted), on whatever checkpoint source {@code name} already has. A name never given
+   * one by {@link #register(SubscriptionName, SubscriptionLifecycle, OffsetStore, String)} is
+   * measured against the offset store this contributor was built with, and its entry names no
+   * store. A name that was given one keeps it: a subscription self-registers this way when it
+   * starts ({@code PollingEventSubscription}, {@code HybridEventSubscription}), and the live
+   * subscription a projection runner's {@link ContinuousProjectionRunner.SubscriptionFactory}
+   * builds for a projection routed to a read-model store must not repoint that projection's lag at
+   * this contributor's offset store, where it has no row. Only the four-argument {@code register}
+   * changes a name's source.
    *
    * @param name the subscription's name; for a projection, its projection name
    * @param subscription the lifecycle whose state the entry reports
@@ -196,7 +203,6 @@ public final class SubscriptionHealthContributor {
     if (this == NOOP) {
       return;
     }
-    checkpointSources.remove(name);
     registerEntry(name, subscription);
   }
 
@@ -209,9 +215,10 @@ public final class SubscriptionHealthContributor {
    * offset store its lag would grow with every append and the entry would read {@code DEGRADED}
    * however current the read model is.
    *
-   * <p>The source holds for {@code name} until the next {@code register}: {@link #replaceLifecycle}
-   * keeps it, and so does {@link #unregister}, because the live lag gauge keeps reading after the
-   * entry is gone.
+   * <p>The source holds for {@code name} until the next call of this method: {@link
+   * #replaceLifecycle} keeps it, so does the two-argument {@link #register(SubscriptionName,
+   * SubscriptionLifecycle)}, and so does {@link #unregister}, because the live lag gauge keeps
+   * reading after the entry is gone.
    *
    * @param name the subscription's name; for a projection, its projection name
    * @param subscription the lifecycle whose state the entry reports

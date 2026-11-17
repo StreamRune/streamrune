@@ -272,7 +272,12 @@ public final class PostgresNotificationSubscription implements EventSubscription
       return this;
     }
 
-    /** The store holding this subscription's checkpoint. */
+    /**
+     * The store holding this subscription's checkpoint. Built by a {@code
+     * ContinuousProjectionRunner.SubscriptionFactory}, pass the {@code checkpoints} the factory is
+     * handed — the run's checkpoints, which the runner commits every batch through — never an
+     * offset store the factory captured.
+     */
     public Builder offsetStore(OffsetStore offsetStore) {
       this.offsetStore = offsetStore;
       return this;

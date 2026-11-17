@@ -877,7 +877,12 @@ public final class PollingEventSubscription
       return this;
     }
 
-    /** Sets the offset store for durable position tracking (required). */
+    /**
+     * Sets the offset store for durable position tracking (required). Built by a {@code
+     * ContinuousProjectionRunner.SubscriptionFactory}, pass the {@code checkpoints} the factory is
+     * handed — the run's checkpoints, which the runner commits every batch through — never an
+     * offset store the factory captured.
+     */
     public Builder offsetStore(OffsetStore store) {
       this.offsetStore = store;
       return this;

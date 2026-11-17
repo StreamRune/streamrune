@@ -124,6 +124,12 @@ Unreleased changes to read-model storage:
   `ReadModelStore` or a `CheckpointTarget`; `ProjectionRunner#run` and `#reset` take a
   `CheckpointTarget`. See the
   [read-model stores guide](docs/guide/read-model-stores.md).
+- **Live subscription factory.** `ContinuousProjectionRunner.SubscriptionFactory#create` takes a
+  fourth argument, `OffsetStore checkpoints`: the checkpoints of the run (its `CheckpointTarget`'s,
+  or the runner's own). A factory-built subscription must read and save through it, never through
+  an offset store the factory captured. `SubscriptionHealthContributor#register(name, subscription)`
+  now keeps a checkpoint source the four-argument `register` gave the name, so a subscription that
+  registers itself no longer repoints a routed projection's lag.
 - **Checkpoint split.** `projection_offset` is renamed `subscription_checkpoint`, and
   `readmodel_checkpoint` (a separate Flyway series, `db/readmodel-migration`, history table
   `flyway_schema_history_readmodel`) holds the checkpoints of projections committed with their read

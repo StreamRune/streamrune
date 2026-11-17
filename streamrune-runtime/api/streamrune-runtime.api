@@ -169,7 +169,7 @@ public static final class org.streamrune.runtime.ContinuousProjectionRunner$Buil
   public org.streamrune.runtime.ContinuousProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
 
 public static interface org.streamrune.runtime.ContinuousProjectionRunner$SubscriptionFactory
-  public abstract org.streamrune.core.subscription.EventSubscription create(org.streamrune.core.types.ProjectionName, org.streamrune.core.subscription.EventListener, int)
+  public abstract org.streamrune.core.subscription.EventSubscription create(org.streamrune.core.types.ProjectionName, org.streamrune.core.subscription.EventListener, int, org.streamrune.core.projection.OffsetStore)
 
 public final class org.streamrune.runtime.CronExpression
   public java.lang.String toString()

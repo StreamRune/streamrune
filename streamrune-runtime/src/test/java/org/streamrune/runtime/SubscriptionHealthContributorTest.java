@@ -251,7 +251,7 @@ class SubscriptionHealthContributorTest {
   }
 
   @Test
-  void theStoreSurvivesALifecycleSwap_aFallbackRegister_andAnUnregister() {
+  void theStoreSurvivesALifecycleSwap_aFallbackRegister_anUnregister_andAPlainRegister() {
     stubGlobalHead(42);
     stubLastOffset("orders-view", 0);
     var storeCheckpoints = mock(OffsetStore.class);
@@ -274,10 +274,50 @@ class SubscriptionHealthContributorTest {
     assertEquals("postgres", contributor.health().getFirst().store());
     assertEquals(0, contributor.health().getFirst().lag());
 
-    // A plain register says this name reads the contributor's offset store again.
+    // A plain register keeps the source: a subscription built for a routed projection (a runner's
+    // SubscriptionFactory, a HybridEventSubscription) self-registers this way, and must not repoint
+    // the projection's lag at the contributor's offset store, where it has no row.
     contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
-    assertEquals(null, contributor.health().getFirst().store());
-    assertEquals(42, contributor.health().getFirst().lag());
+    assertEquals("postgres", contributor.health().getFirst().store());
+    assertEquals(0, contributor.health().getFirst().lag());
+    assertEquals(0, contributor.currentLag(name));
+    verify(offsetStore, never()).getLastOffset(ProjectionName.of("orders-view"));
+  }
+
+  @Test
+  void aPlainRegisterAfterAStoreRegistration_keepsTheRoutedLagSource() {
+    stubGlobalHead(42);
+    stubLastOffset("orders-view", 0);
+    var storeCheckpoints = mock(OffsetStore.class);
+    when(storeCheckpoints.getLastOffset(ProjectionName.of("orders-view")))
+        .thenReturn(GlobalOffset.of(40));
+    var name = SubscriptionName.of("orders-view");
+    contributor.register(
+        name, mockSubscription(SubscriptionLifecycleState.RUNNING), storeCheckpoints, "search");
+
+    contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
+
+    SubscriptionHealth health = contributor.health().getFirst();
+    assertEquals("search", health.store());
+    assertEquals(2, health.lag());
+    assertEquals(SubscriptionHealth.Status.UP, health.status());
+  }
+
+  @Test
+  void aStoreRegistrationRepointsAName_thePlainRegisterOnlyKeepsWhatIsThere() {
+    // The 4-arg register is the one way to (re)point a name's source; a later one wins.
+    stubGlobalHead(42);
+    var first = mock(OffsetStore.class);
+    var second = mock(OffsetStore.class);
+    when(first.getLastOffset(ProjectionName.of("orders-view"))).thenReturn(GlobalOffset.of(10));
+    when(second.getLastOffset(ProjectionName.of("orders-view"))).thenReturn(GlobalOffset.of(41));
+    var name = SubscriptionName.of("orders-view");
+    contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING), first, "a");
+    contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING), second, "b");
+    contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
+
+    assertEquals("b", contributor.health().getFirst().store());
+    assertEquals(1, contributor.health().getFirst().lag());
   }
 
   @Test

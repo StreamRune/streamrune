@@ -1441,8 +1441,15 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // listener so processLiveBatch/health/leadership/atomic-checkpoint all apply; thread
       // this runner's read-poison bound so the factory-built live subscription HALTs a
       // deterministic read-poison instead of retrying it forever — the same bound the
-      // default-polling path uses.
-      subscription = subscriptionFactory.create(projectionName, liveListener, maxReadPoisonRetries);
+      // default-polling path uses. It also receives this run's checkpoints — the half of the pair
+      // processLiveBatch commits through — so the live subscription reads its start position from
+      // the store catch-up just committed to, exactly like the default-polling path below. A
+      // subscription reading any other offset store would start where that store says: re-deliver
+      // what catch-up committed (the overlap guard then halts the run as diverged), or skip events
+      // when that store is ahead.
+      subscription =
+          subscriptionFactory.create(
+              projectionName, liveListener, maxReadPoisonRetries, pair.checkpoints());
       warnIfFactorySubscriptionCannotSignalReadPoison(projectionName, subscription);
     } else {
       // Create default polling subscription with the same wrapped listener.
@@ -2325,11 +2332,34 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * the factory path HALTs the projection instead of retrying an unreadable event forever, exactly
    * like the default-polling path. {@code 0} disables the bound (unbounded retry). A subscription
    * that cannot read-poison may ignore the argument.
+   *
+   * <p>{@code checkpoints} is the offset store of the pair this run reads and commits through: the
+   * {@link CheckpointTarget}'s checkpoints when the run was given one ({@link #run(ProjectionName,
+   * Projection, ProjectionDeliveryMode, CheckpointTarget)}), otherwise the runner's own {@code
+   * offsetStore}. The subscription MUST read its start position from it and save through it (e.g.
+   * {@code HybridEventSubscription.builder().offsetStore(checkpoints)}), never through an offset
+   * store the factory captured: catch-up has just committed the projection's position to {@code
+   * checkpoints}, and every live batch commits there too. A subscription reading another store
+   * starts where that store says — with no row there, at {@code 0}, re-delivering what catch-up
+   * committed, which the first-offset overlap guard refuses and the run halts as diverged; with a
+   * row ahead, past events the projection never processed, which nothing reports.
    */
   @FunctionalInterface
   public interface SubscriptionFactory {
+    /**
+     * Builds the live subscription for one run.
+     *
+     * @param projectionName the projection the run processes
+     * @param listener the runner's fully-wrapped listener; wire it as the subscription's listener
+     * @param readPoisonBound the runner's read-poison bound; thread it into the subscription
+     * @param checkpoints the run's checkpoints; the subscription reads and saves through it
+     * @return the live subscription, not yet started
+     */
     EventSubscription create(
-        ProjectionName projectionName, EventListener listener, int readPoisonBound);
+        ProjectionName projectionName,
+        EventListener listener,
+        int readPoisonBound,
+        OffsetStore checkpoints);
   }
 
   // Builder

@@ -32,7 +32,7 @@ class MigrateConvergingTest {
       Delete the schema history table, and run baseline\
        again.""";
 
-  private static final String HISTORY = "flyway_schema_history_streamrune";
+  private static final String HISTORY = PostgresEventStoreFactory.EVENT_STORE_HISTORY_TABLE;
 
   private final AtomicInteger runs = new AtomicInteger();
 
@@ -65,7 +65,7 @@ class MigrateConvergingTest {
     logger.setAdditive(false);
     try {
       SeriesMigration.migrateConverging(
-          "flyway_schema_history_streamrune_readmodel",
+          PostgresReadModelStore.READ_MODEL_HISTORY_TABLE,
           failingFrom(new ArrayDeque<>(List.of(new FlywayException(REFUSAL)))));
     } finally {
       logger.setAdditive(additive);
@@ -80,7 +80,7 @@ class MigrateConvergingTest {
         .asString()
         .startsWith(
             "Another instance created the schema history table"
-                + " 'flyway_schema_history_streamrune_readmodel' while this one was starting");
+                + " 'flyway_schema_history_readmodel' while this one was starting");
   }
 
   @Test

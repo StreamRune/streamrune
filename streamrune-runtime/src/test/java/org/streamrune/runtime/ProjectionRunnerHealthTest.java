@@ -263,7 +263,8 @@ class ProjectionRunnerHealthTest {
             .fetchSize(10)
             .batchSize(10)
             .subscriptionConfig(fastConfig())
-            .subscriptionFactory((name, listener, readPoisonBound) -> new DeadSubscription())
+            .subscriptionFactory(
+                (name, listener, readPoisonBound, checkpoints) -> new DeadSubscription())
             .healthContributor(contributor)
             .build();
 
