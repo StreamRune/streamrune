@@ -1,6 +1,7 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
@@ -299,6 +300,45 @@ class StreamRuneHealthCheckTest {
     var data = response.getData().orElseThrow();
     assertEquals("LEADING", data.get("subscription.orders-saga.role"));
     assertEquals("NOT_REPORTED", data.get("subscription.orders.role"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void rendersTheStoreOfAProjection_andNoneForAnEntryWithout() throws Exception {
+    DataSource ds = mock(DataSource.class);
+    Connection conn = mock(Connection.class);
+    when(ds.getConnection()).thenReturn(conn);
+    when(conn.isValid(anyInt())).thenReturn(true);
+    SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
+    var routed =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            SubscriptionName.of("order-summary"),
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            0L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.LEADING,
+            "postgres");
+    var listener =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            SubscriptionName.of("listener"),
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            0L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
+    when(contributor.health()).thenReturn(List.of(routed, listener));
+    Instance<SubscriptionHealthContributor> healthInstance = mock(Instance.class);
+    when(healthInstance.isUnsatisfied()).thenReturn(false);
+    when(healthInstance.get()).thenReturn(contributor);
+
+    var check =
+        new StreamRuneHealthCheck(dataSource(ds), healthInstance, noEventStore(), noRelay());
+    HealthCheckResponse response = check.call();
+
+    var data = response.getData().orElseThrow();
+    assertEquals("postgres", data.get("subscription.order-summary.store"));
+    assertFalse(data.containsKey("subscription.listener.store"));
   }
 
   @Test

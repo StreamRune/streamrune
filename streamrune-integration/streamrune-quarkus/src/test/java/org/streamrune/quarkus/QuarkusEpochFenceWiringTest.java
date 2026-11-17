@@ -35,10 +35,12 @@ import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.projection.ReadModelStore;
+import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
@@ -51,7 +53,9 @@ import org.streamrune.core.types.Version;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresReadModelStore;
 import org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor;
+import org.streamrune.runtime.BackgroundRelayHealthContributor;
 import org.streamrune.runtime.MultiProjectionRunner;
+import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -94,9 +98,18 @@ class QuarkusEpochFenceWiringTest {
           .registerEvent("CustomerRegistered", CustomerRegistered.class)
           .build();
 
-  /** Fast polling so a projection sees an appended event within the test's patience. */
+  /**
+   * Fast polling so a projection sees an appended event within the test's patience, and a lag
+   * threshold of 1 so a subscription with any lag at all reads DEGRADED.
+   */
   static final Map<String, String> PROPERTIES =
-      Map.of("streamrune.polling-interval", "PT0.05S", "streamrune.polling-jitter", "PT0S");
+      Map.of(
+          "streamrune.polling-interval",
+          "PT0.05S",
+          "streamrune.polling-jitter",
+          "PT0S",
+          "streamrune.subscription.health.lag-threshold",
+          "1");
 
   @BeforeAll
   static void openDataSource() {
@@ -398,6 +411,91 @@ class QuarkusEpochFenceWiringTest {
         closeLeadership(arc);
       }
     }
+  }
+
+  /**
+   * A {@code TRANSACTIONAL_LOCAL} projection keeps its checkpoint in {@code readmodel_checkpoint}
+   * and has no row in {@code subscription_checkpoint}. Once it caught up, its health entry reads
+   * lag 0 and UP — measured against its own store's checkpoint — and names the store, in the
+   * contributor and in the readiness check's data. With the lag threshold of 1, a lag measured
+   * against {@code subscription_checkpoint} would read DEGRADED and grow with every append.
+   */
+  @Test
+  void aCaughtUpTransactionalProjection_reportsLagZeroAndUp_andNamesItsStore() throws Exception {
+    var streamId =
+        StreamId.of(AggregateType.of("customer"), AggregateId.of("health-" + UUID.randomUUID()));
+    try (var arc =
+        RealArcTestContainer.boot(
+            List.of(
+                StreamRuneProducers.class,
+                ProjectionProducer.class,
+                PostgresInfrastructure.class,
+                RoutedBeans.class,
+                RoutedTransactional.class,
+                RoutedAtLeastOnce.class))) {
+      MultiProjectionRunner runner = frameworkRunner(arc);
+      try {
+        runner.start();
+        long offset =
+            arc.container()
+                .select(EventStore.class)
+                .get()
+                .append(
+                    streamId,
+                    List.of(envelope(streamId, new CustomerRegistered("cust-h", "h@example.com"))),
+                    Version.initial())
+                .globalOffsets()
+                .getLast()
+                .value();
+        var contributor = arc.container().select(SubscriptionHealthContributor.class).get();
+        assertThat(contributor.lagThreshold()).isEqualTo(1);
+
+        Awaitility.await()
+            .atMost(Duration.ofSeconds(20))
+            .untilAsserted(
+                () -> {
+                  assertThat(checkpoint("readmodel_checkpoint", RoutedTransactional.NAME))
+                      .hasValueSatisfying(o -> assertThat(o).isGreaterThanOrEqualTo(offset));
+                  SubscriptionHealth transactional =
+                      healthOf(contributor, RoutedTransactional.NAME);
+                  assertThat(transactional.lag()).isZero();
+                  assertThat(transactional.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                  assertThat(transactional.store()).isEqualTo("postgres");
+                  SubscriptionHealth atLeastOnce = healthOf(contributor, RoutedAtLeastOnce.NAME);
+                  assertThat(atLeastOnce.lag()).isZero();
+                  assertThat(atLeastOnce.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                  assertThat(atLeastOnce.store()).isEqualTo(OffsetStore.SUBSCRIPTION_CHECKPOINT);
+                });
+        assertThat(checkpoint("subscription_checkpoint", RoutedTransactional.NAME))
+            .as("the lag was not read from the subscription checkpoint")
+            .isEmpty();
+
+        var data =
+            new StreamRuneHealthCheck(
+                    arc.container().select(DataSource.class),
+                    arc.container().select(SubscriptionHealthContributor.class),
+                    arc.container().select(EventStore.class),
+                    arc.container().select(BackgroundRelayHealthContributor.class))
+                .call()
+                .getData()
+                .orElseThrow();
+        String prefix = "subscription." + RoutedTransactional.NAME;
+        assertThat(data.get(prefix + ".lag")).isEqualTo(0L);
+        assertThat(data.get(prefix + ".status")).isEqualTo("UP");
+        assertThat(data.get(prefix + ".store")).isEqualTo("postgres");
+      } finally {
+        runner.stop();
+        closeLeadership(arc);
+      }
+    }
+  }
+
+  private static SubscriptionHealth healthOf(
+      SubscriptionHealthContributor contributor, String name) {
+    return contributor.health().stream()
+        .filter(h -> h.name().value().equals(name))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no health entry for " + name));
   }
 
   @Test

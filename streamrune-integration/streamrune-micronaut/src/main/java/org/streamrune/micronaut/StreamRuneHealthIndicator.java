@@ -21,7 +21,10 @@ import reactor.core.scheduler.Schedulers;
  * Micronaut {@link HealthIndicator} for StreamRune. Reports DOWN when the PostgreSQL DataSource
  * does not accept connections, when a subscription is DOWN (stopped or terminally halted) or when a
  * started background relay has lost its thread; otherwise UP. A subscription that is behind (lag)
- * or failing (consecutive errors) is DEGRADED in its own detail and does not change the status.
+ * or failing (consecutive errors) is DEGRADED in its own detail and does not change the status. A
+ * projection's entry also names the checkpoint target its checkpoint lives in ({@code store}: the
+ * read-model store it is routed to, or {@code subscription_checkpoint}); its lag is measured
+ * against that checkpoint.
  *
  * <p>Exposed at {@code /health} and, because it is not annotated {@code @Liveness}, at {@code
  * /health/readiness} too — Micronaut runs every indicator that is not a liveness indicator for
@@ -136,6 +139,9 @@ public class StreamRuneHealthIndicator implements HealthIndicator {
         subDetails.put("errorCount", sub.errorCount());
         subDetails.put("status", sub.status().name());
         subDetails.put("role", sub.role().name());
+        if (sub.store() != null) {
+          subDetails.put("store", sub.store());
+        }
         details.put("subscription." + sub.name().value(), subDetails);
       }
     }

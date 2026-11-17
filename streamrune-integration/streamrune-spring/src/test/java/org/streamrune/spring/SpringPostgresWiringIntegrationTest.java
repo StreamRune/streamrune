@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -45,6 +47,7 @@ import org.streamrune.core.types.Version;
 import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresSnapshotStorePurger;
+import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.runtime.gdpr.ForgetResult;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;
 import org.streamrune.test.InMemoryCryptoEngine;
@@ -356,6 +359,86 @@ class SpringPostgresWiringIntegrationTest {
                   .contains("r@example.com");
               assertThat(ctx.getBean(RoutedAtLeastOnce.class).seen.get()).isPositive();
             });
+  }
+
+  /**
+   * A {@code TRANSACTIONAL_LOCAL} projection keeps its checkpoint in {@code readmodel_checkpoint}
+   * and has no row in {@code subscription_checkpoint}. Once it caught up, its health entry reads
+   * lag 0 and UP — measured against its own store's checkpoint — and names the store, in the
+   * contributor and in the rendered health indicator. With a lag threshold of 1, a lag measured
+   * against {@code subscription_checkpoint} would read DEGRADED and grow with every append.
+   */
+  @Test
+  void aCaughtUpTransactionalProjection_reportsLagZeroAndUp_andNamesItsStore() {
+    var streamId =
+        StreamId.of(AggregateType.of("customer"), AggregateId.of("health-" + UUID.randomUUID()));
+    new ApplicationContextRunner()
+        .withPropertyValues(
+            SpringTestMocks.NO_SNAPSHOTS,
+            "streamrune.projections.auto-discovery.enabled=true",
+            "streamrune.polling-interval=50ms",
+            "streamrune.polling-jitter=0s",
+            "streamrune.subscription.health.lag-threshold=1")
+        .withConfiguration(
+            AutoConfigurations.of(StreamRuneAutoConfiguration.class, ProjectionAutoConfig.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withUserConfiguration(RoutedProjectionsConfig.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              long offset =
+                  ctx.getBean(EventStore.class)
+                      .append(
+                          streamId,
+                          List.of(
+                              envelope(
+                                  streamId, new CustomerRegistered("cust-h", "h@example.com"))),
+                          Version.initial())
+                      .globalOffsets()
+                      .getLast()
+                      .value();
+              var contributor = ctx.getBean(SubscriptionHealthContributor.class);
+
+              Awaitility.await()
+                  .atMost(Duration.ofSeconds(20))
+                  .untilAsserted(
+                      () -> {
+                        assertThat(checkpoint("readmodel_checkpoint", RoutedTransactional.NAME))
+                            .hasValueSatisfying(o -> assertThat(o).isGreaterThanOrEqualTo(offset));
+                        SubscriptionHealth transactional =
+                            healthOf(contributor, RoutedTransactional.NAME);
+                        assertThat(transactional.lag()).isZero();
+                        assertThat(transactional.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                        assertThat(transactional.store()).isEqualTo("postgres");
+                        SubscriptionHealth atLeastOnce =
+                            healthOf(contributor, RoutedAtLeastOnce.NAME);
+                        assertThat(atLeastOnce.lag()).isZero();
+                        assertThat(atLeastOnce.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                        assertThat(atLeastOnce.store())
+                            .isEqualTo(
+                                org.streamrune.core.projection.OffsetStore.SUBSCRIPTION_CHECKPOINT);
+                      });
+              assertThat(checkpoint("subscription_checkpoint", RoutedTransactional.NAME))
+                  .as("the lag was not read from the subscription checkpoint")
+                  .isEmpty();
+
+              var health = ctx.getBean(StreamRuneHealthIndicator.class).health();
+              assertThat(health.getDetails().get("subscription." + RoutedTransactional.NAME))
+                  .asInstanceOf(InstanceOfAssertFactories.MAP)
+                  .containsEntry("lag", 0L)
+                  .containsEntry("status", "UP")
+                  .containsEntry("store", "postgres");
+            });
+  }
+
+  private static SubscriptionHealth healthOf(
+      SubscriptionHealthContributor contributor, String name) {
+    return contributor.health().stream()
+        .filter(h -> h.name().value().equals(name))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no health entry for " + name));
   }
 
   /**

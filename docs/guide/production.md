@@ -211,8 +211,10 @@ relay in backoff, and a replica whose crypto forget channel does not hear its pe
 `DEGRADED` shows in that component's own `status` detail and never changes the overall status, so
 alert on the details and on the metrics below as well as on the check.
 
-**Lag never makes the check `DOWN`.** Lag is measured against the `subscription_checkpoint` checkpoint
-that every replica shares, so every replica reports the same value. A new projection replaying the
+**Lag never makes the check `DOWN`.** Lag is measured against the checkpoint every replica shares:
+a projection's own checkpoint — in `readmodel_checkpoint` for one routed to a read-model store, in
+`subscription_checkpoint` for one routed to the event store's subscription checkpoint — and
+`subscription_checkpoint` for an event subscription. Every replica reports the same value. A new projection replaying the
 store from offset 0, a projection reset for a rebuild (see [Offset reset / rebuild
 path](#offset-reset--rebuild-path)), or a large burst of appends puts it behind on all replicas at
 once; a lag-driven `DOWN` would take every replica out of the readiness probe until the one active
@@ -237,7 +239,10 @@ streamrune.subscription.health.lag-threshold=1000
 The details are:
 
 - `subscription.<name>` — `state`, `lag`, `errorCount`, `status`, `role`, one per registered
-  subscription. `role` is the subscription's role under its single-active-consumer lease:
+  subscription, and `store` for a projection: the checkpoint target its checkpoint lives in and its
+  lag is measured against (the read-model store it is routed to, such as `postgres`, or
+  `subscription_checkpoint`). Quarkus reports each detail as a flat key, `subscription.<name>.<detail>`.
+  `role` is the subscription's role under its single-active-consumer lease:
   `UNGATED` (it takes no lease and delivers on every replica), `LEADING` (this replica holds the
   lease and delivers), `STANDBY` (another replica holds it, or none does; this one waits to take
   over) or `NOT_REPORTED` (a registration that reports no role). A projection runner reports the
@@ -1087,12 +1092,17 @@ A dead-lettered batch failed deterministically (a projection bug or poison data)
 
 ### Replay
 
-Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store, the dead-letter store and the `AtomicBatchProcessor` the projection's runner commits through). Replay is explicit and operator-driven; there is no background loop.
+Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store, the dead-letter store and each projection's `CheckpointTarget`: the pair its runner registration reads and commits through). Each projection replays on its own target's processor, so one replayer serves projections of several read-model stores. Replay is explicit and operator-driven; there is no background loop.
 
 ```java
+// The read-model store a projection is routed to (the default store is the `postgres` one), or
+// the event store's subscription checkpoint for an at-least-once projection routed to no store.
+Map<ProjectionName, CheckpointTarget> targets =
+    Map.of(
+        ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint());
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(
-        eventStore, projectionDeadLetterStore, jdbcProjectionRepository); // the runner's processor
+    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
 // Replay up to maxEntries dead letters for one projection, oldest range first.
 ProjectionDeadLetterReplayer.ReplayResult result =
@@ -1106,6 +1116,8 @@ int recovered = result.replayed();   // entries re-processed (or empty) and disc
 int stillDead = result.failed();     // entries that failed again and were kept
 int fenced = result.fenced();        // entries the projection applied nothing from, kept
 ```
+
+A projection the function returns `null` for is refused before any entry is read. A runner whose projections all commit through one default pair can pass that one `AtomicBatchProcessor` instead of the function.
 
 Each entry is re-read from the global stream and fed to the projection through `Projection.processDeadLetterReplay`; on success the entry is discarded. A still-failing entry is kept and logged, and the remaining entries are still attempted, so one poisoned batch does not block recovery of the others. A feed that returns normally but reports it applied **nothing** keeps the entry too and counts it as `fenced`: a self-fencing projection such as `WindowedProjection`, whose offset fence has already moved past the hole, reads the never-accumulated range as done — replay such an entry from a fresh process before the live runner advances again, or discard it deliberately. A `Projection` decorator must forward `processDeadLetterReplay` to its delegate (the shipped decorators do), or a wrapped self-fencing projection reports "applied" and the replayer discards the range's only record.
 
