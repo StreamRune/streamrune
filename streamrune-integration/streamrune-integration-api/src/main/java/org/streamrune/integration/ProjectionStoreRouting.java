@@ -128,33 +128,41 @@ public final class ProjectionStoreRouting {
     Objects.requireNonNull(stores, "stores is required");
     for (int i = 0; i < stores.size(); i++) {
       ReadModelStore first = Objects.requireNonNull(stores.get(i), "stores must not hold null");
-      for (int j = i + 1; j < stores.size(); j++) {
-        ReadModelStore second = Objects.requireNonNull(stores.get(j), "stores must not hold null");
-        if (first.name().equals(second.name())) {
-          throw new IllegalStateException(
-              "Two read-model stores are named '"
-                  + LogSanitizer.sanitizeForLog(first.name())
-                  + "': "
-                  + describe(first)
-                  + " and "
-                  + describe(second)
-                  + ". Store names are unique: rename one, or — to replace a store — define only"
-                  + " the one you want under that name.");
-        }
-        if (sameStore(first.repository(), second.repository())) {
-          throw new IllegalStateException(
-              "Read-model stores '"
-                  + LogSanitizer.sanitizeForLog(first.name())
-                  + "' and '"
-                  + LogSanitizer.sanitizeForLog(second.name())
-                  + "' write to the same place (their repositories' writeTargetIdentity() are"
-                  + " equal): "
-                  + describe(first)
-                  + " and "
-                  + describe(second)
-                  + ". A projection's writeTarget() could not choose between them. Define one store"
-                  + " per place.");
-        }
+      validateAgainst(first, stores.subList(i + 1, stores.size()));
+    }
+  }
+
+  /**
+   * Refuses {@code first} beside any of {@code others} on a duplicate name or write-target
+   * identity: each pair is compared once.
+   */
+  private static void validateAgainst(ReadModelStore first, List<ReadModelStore> others) {
+    for (ReadModelStore second : others) {
+      Objects.requireNonNull(second, "stores must not hold null");
+      if (first.name().equals(second.name())) {
+        throw new IllegalStateException(
+            "Two read-model stores are named '"
+                + LogSanitizer.sanitizeForLog(first.name())
+                + "': "
+                + describe(first)
+                + " and "
+                + describe(second)
+                + ". Store names are unique: rename one, or — to replace a store — define only"
+                + " the one you want under that name.");
+      }
+      if (sameStore(first.repository(), second.repository())) {
+        throw new IllegalStateException(
+            "Read-model stores '"
+                + LogSanitizer.sanitizeForLog(first.name())
+                + "' and '"
+                + LogSanitizer.sanitizeForLog(second.name())
+                + "' write to the same place (their repositories' writeTargetIdentity() are"
+                + " equal): "
+                + describe(first)
+                + " and "
+                + describe(second)
+                + ". A projection's writeTarget() could not choose between them. Define one store"
+                + " per place.");
       }
     }
   }
@@ -167,9 +175,10 @@ public final class ProjectionStoreRouting {
    * <p>{@code defaultStore} creates the default store — which checks the server version, migrates
    * and validates its schema — so it is called only when no application store is named {@value
    * #DEFAULT_STORE}: a replaced default store is never created and never touches its database. The
-   * application's stores are validated ({@link #validateStores}) before the default store is
-   * created, and the selection once more after, so a duplicate name or write target fails here, as
-   * a store error, before any registration is routed.
+   * selection is validated ({@link #validateStores}) in one pass that compares each pair of stores
+   * once: the application's stores among themselves before the default store is created, then the
+   * default store against each of them. A duplicate name or write target fails here, as a store
+   * error, before any registration is routed.
    *
    * @param defaultStore creates the default store, or supplies none (no {@code DataSource}); called
    *     at most once
@@ -208,9 +217,8 @@ public final class ProjectionStoreRouting {
               + store.getClass().getName()
               + ").");
     }
-    List<ReadModelStore> selected = Stream.concat(Stream.of(store), application.stream()).toList();
-    validateStores(selected);
-    return selected;
+    validateAgainst(store, application);
+    return Stream.concat(Stream.of(store), application.stream()).toList();
   }
 
   /**
@@ -271,15 +279,21 @@ public final class ProjectionStoreRouting {
       List<ReadModelStore> stores,
       CheckpointTarget subscriptionCheckpoint,
       SubscriptionLeadership leadership) {
+    Objects.requireNonNull(registration, "registration is required");
+    Objects.requireNonNull(stores, "stores is required");
+    Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
+    Objects.requireNonNull(leadership, "leadership is required");
+    validateStores(stores);
     return resolve(registration, stores, subscriptionCheckpoint, leadership).target();
   }
 
   /**
-   * {@link #route}, keeping the store the target belongs to: the {@link ProjectionRoutes} the
-   * integrations compute declare a projection's indexes on it.
+   * {@link #route} over stores already validated — the {@link ReadModelStores} selection, validated
+   * once when the stores are collected — keeping the store the target belongs to: the {@link
+   * ProjectionRoutes} the integrations compute declare a projection's indexes on it.
    *
    * @param registration the registration to route
-   * @param stores every store defined
+   * @param stores every store defined, already validated ({@link #validateStores})
    * @param subscriptionCheckpoint rule 4's target
    * @param leadership the configured leadership
    * @return the routed target, and its store ({@code null} for the subscription checkpoint)
@@ -293,7 +307,6 @@ public final class ProjectionStoreRouting {
     Objects.requireNonNull(stores, "stores is required");
     Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
     Objects.requireNonNull(leadership, "leadership is required");
-    validateStores(stores);
 
     Routed routed = select(registration, stores, subscriptionCheckpoint);
     AtomicBatchProcessor processor = routed.target().processor();

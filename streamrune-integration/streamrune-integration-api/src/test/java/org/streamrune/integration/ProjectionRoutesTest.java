@@ -79,6 +79,57 @@ class ProjectionRoutesTest {
     assertThat(routes.store(ProjectionName.of("unregistered"))).isEmpty();
   }
 
+  /** A store over a repository that counts the calls of its writeTargetIdentity(). */
+  private static ReadModelStore counting(String name, AtomicInteger identityCalls) {
+    var repository = new InMemoryProjectionRepository();
+    ProjectionRepository counted =
+        (ProjectionRepository)
+            java.lang.reflect.Proxy.newProxyInstance(
+                ProjectionRoutesTest.class.getClassLoader(),
+                new Class<?>[] {ProjectionRepository.class},
+                (proxy, method, args) -> {
+                  if (method.getName().equals("writeTargetIdentity")) {
+                    identityCalls.incrementAndGet();
+                  }
+                  try {
+                    return method.invoke(repository, args);
+                  } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                  }
+                });
+    return ReadModelStore.of(name, counted, repository, repository);
+  }
+
+  /**
+   * The stores are validated in one pass when they are collected — each pair of stores compared
+   * once — and routing the registrations does not validate them again.
+   */
+  @Test
+  void theStoresAreValidatedOncePerCollection_notPerRegistration() {
+    var postgresCalls = new AtomicInteger();
+    var searchCalls = new AtomicInteger();
+    var auditCalls = new AtomicInteger();
+    var stores =
+        new ReadModelStores(
+            () -> Optional.of(counting("postgres", postgresCalls)),
+            () -> List.of(counting("search", searchCalls), counting("audit", auditCalls)));
+
+    ProjectionRoutes.route(
+        List.of(
+            new Registration("catalog", AT_LEAST_ONCE_IDEMPOTENT, "search", batch -> {}),
+            new Registration("ledger", AT_LEAST_ONCE_IDEMPOTENT, "audit", batch -> {}),
+            new Registration("orders", AT_LEAST_ONCE_IDEMPOTENT, "postgres", batch -> {}),
+            new Registration("events", AT_LEAST_ONCE_IDEMPOTENT, "", batch -> {})),
+        stores,
+        () -> SUBSCRIPTION,
+        SubscriptionLeadership.NOOP);
+
+    // Three stores, three pairs: each store's identity is read once per pair it is in.
+    assertThat(postgresCalls).hasValue(2);
+    assertThat(searchCalls).hasValue(2);
+    assertThat(auditCalls).hasValue(2);
+  }
+
   @Test
   void anIndexGoesToItsProjectionsRoutedStore_otherwiseToTheFallback() {
     var postgres = store("postgres");
