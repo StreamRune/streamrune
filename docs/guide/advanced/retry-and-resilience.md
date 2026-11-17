@@ -536,10 +536,19 @@ projection wrapper or decorator must override it and forward to its delegate's
 reaches only the delegate's `process`, reports "applied" for a wholly fenced range, and the replayer
 discards the range's only record.
 
+Each projection replays on the processor of its own checkpoint target — the same
+`CheckpointTarget` its runner registration reads and commits through — so one replayer serves
+projections of several read-model stores and a replay never runs on another store's processor:
+
 ```java
+// The read-model store a projection is routed to, or the event store's subscription checkpoint
+// for an at-least-once projection routed to no store.
+Map<ProjectionName, CheckpointTarget> targets =
+    Map.of(
+        ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint());
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(
-        eventStore, projectionDeadLetterStore, jdbcRepo); // the runner's atomicProcessor
+    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
 ProjectionDeadLetterReplayer.ReplayResult result =
     replayer.replay(
@@ -549,6 +558,10 @@ ProjectionDeadLetterReplayer.ReplayResult result =
         100);
 // result.replayed(), result.failed(), result.fenced()
 ```
+
+A projection the function returns `null` for is refused before any entry is read. For a runner
+whose projections all commit through one default pair, `new ProjectionDeadLetterReplayer(eventStore,
+projectionDeadLetterStore, atomicProcessor)` takes that one processor.
 
 ### Saga dead-letter replay
 

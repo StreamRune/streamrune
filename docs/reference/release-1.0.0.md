@@ -434,11 +434,13 @@ license.
   event type, `CryptoMappingException`, `SubjectForgottenException`, everything else —
   dead-lettered); the failed `[fromOffset, toOffset]` range lands in `projection_dead_letters` as
   metadata only (never the payload) and the runner continues past it.
-- `ProjectionDeadLetterReplayer(eventStore, deadLetterStore, processor)` takes the
-  `AtomicBatchProcessor` the projection's runner commits through.
+- `ProjectionDeadLetterReplayer(eventStore, deadLetterStore, targets)` takes each projection's
+  `CheckpointTarget` — the pair its runner registration reads and commits through — and replays
+  each projection on its own target's processor (`ProjectionDeadLetterReplayer(eventStore,
+  deadLetterStore, processor)` for a runner whose projections share one processor).
   `replay(name, projection, deliveryMode, max)` re-reads each range from the event store
   oldest-first and applies it through `AtomicBatchProcessor.executeReplay`, under the lock a live
-  batch of that projection takes (on `JdbcProjectionRepository`, the `subscription_checkpoint` row
+  batch of that projection takes (on `JdbcProjectionRepository`, the `readmodel_checkpoint` row
   `FOR UPDATE`): a replay and a live batch never interleave, so a read-modify-write projection keeps
   both writes, and a replay is safe while the runner is live. A `TRANSACTIONAL_LOCAL` /
   `EXTERNAL_EFFECT` projection is handed the replay transaction's repository and its range is

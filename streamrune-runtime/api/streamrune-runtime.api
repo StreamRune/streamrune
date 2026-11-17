@@ -414,6 +414,7 @@ public final class org.streamrune.runtime.PollingProjectionRunner implements org
 public final class org.streamrune.runtime.ProjectionCheckpointDivergedException extends java.lang.RuntimeException
 
 public final class org.streamrune.runtime.ProjectionDeadLetterReplayer
+  public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.ProjectionDeadLetterStore, java.util.function.Function<org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget>)
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.ProjectionDeadLetterStore, org.streamrune.core.projection.AtomicBatchProcessor)
   public org.streamrune.runtime.ProjectionDeadLetterReplayer$ReplayResult replay(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, int)
   public org.streamrune.runtime.ProjectionDeadLetterReplayer$ReplayResult replayWithRunnerStopped(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, int)
