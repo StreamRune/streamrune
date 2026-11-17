@@ -153,7 +153,11 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
             ctx -> {
               var repo = ctx.getBean(ProjectionRepository.class);
               assertThat(repo)
-                  .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+                  .isSameAs(
+                      ctx.getBean(
+                              StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN,
+                              ReadModelStore.class)
+                          .repository())
                   .isInstanceOf(JdbcProjectionRepository.class);
               var mapper =
                   (com.fasterxml.jackson.databind.ObjectMapper)
@@ -168,7 +172,11 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
         ctx -> {
           var repo = ctx.getBean(ProjectionRepository.class);
           assertThat(repo)
-              .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+              .isSameAs(
+                  ctx.getBean(
+                          StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN,
+                          ReadModelStore.class)
+                      .repository())
               .isInstanceOf(JdbcProjectionRepository.class);
           var mapper =
               (com.fasterxml.jackson.databind.ObjectMapper)
@@ -198,7 +206,11 @@ class ProjectionRepositoryWiringAutoConfigurationTest {
             ctx -> {
               var repo = ctx.getBean(ProjectionRepository.class);
               assertThat(repo)
-                  .isSameAs(ctx.getBean("postgres", ReadModelStore.class).repository())
+                  .isSameAs(
+                      ctx.getBean(
+                              StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN,
+                              ReadModelStore.class)
+                          .repository())
                   .isInstanceOf(JdbcProjectionRepository.class);
               var mapper =
                   (com.fasterxml.jackson.databind.ObjectMapper)
