@@ -495,6 +495,9 @@ auto-assembles from your `@ProjectionConfig` beans, and only while
 stopped by the framework — you own its lifecycle. To supply and fully manage your own runner, set
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
+With auto-discovery on, your `@ProjectionConfig` declarations are still routed to read-model
+stores to place their `ProjectionIndex` beans, even when you own the runner: a declaration the
+routing would refuse fails the start.
 
 **Where each projection checkpoints.** The integration produces the default read-model store, a
 `PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean

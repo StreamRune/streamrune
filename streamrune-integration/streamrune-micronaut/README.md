@@ -128,6 +128,9 @@ auto-assembles from your `@ProjectionConfig` beans, and only while
 stopped by the framework — you own its lifecycle. To supply and fully manage your own runner, set
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
+With auto-discovery on, your `@ProjectionConfig` declarations are still routed to read-model
+stores to place their `ProjectionIndex` beans, even when you own the runner: a declaration the
+routing would refuse fails the start.
 
 **Where each projection checkpoints.** With a `DataSource` bean the module defines the default
 read-model store, a `PostgresReadModelStore` named `postgres` (a `ReadModelStore` bean
@@ -157,7 +160,9 @@ when the stores are collected. Each `ProjectionIndex` bean is declared on the st
 is routed to; an index for a projection routed to no store (the subscription checkpoint, an
 `INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. The module
 collects store beans with `getBeansOfType`, so a store registered as a singleton before the context
-starts (`ApplicationContext.builder().singletons(...)`) counts too.
+starts (`ApplicationContext.builder().singletons(...)`) counts too. The default store's bean is a
+placeholder that creates the Postgres store behind it on first use, so even a context started with
+`eagerInitSingletons(true)` never creates a replaced default store.
 
 ## Transactional outbox
 
