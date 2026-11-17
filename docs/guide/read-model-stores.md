@@ -109,8 +109,9 @@ public class ProductSearchProjection extends BaseProjection { /* ... */ }
 ```
 
 Use it when routing cannot decide alone: several transactional stores. A `writeTarget()` that no store
-owns is refused under every rule, with or without a declaration: define a `ReadModelStore` over that
-repository, or make the projection write to `store.repository()`.
+owns is refused in two cases: for a transactional mode (rule 3), and whenever a `readModelStore`
+declaration is given. Define a `ReadModelStore` over that repository, or make the projection write
+to `store.repository()`. An at-least-once projection without a declaration is accepted (rule 4).
 
 **2. The projection's `writeTarget()` matches a store.** A `BaseProjection` exposes the repository
 it was built with; the store whose `repository().writeTargetIdentity()` equals it is the store. This
@@ -360,7 +361,7 @@ replayer.replay(ProjectionName.of("orders"), ordersProjection,
 
 A projection the function returns `null` for is refused before any entry is read. The dead-letter
 entries themselves stay in the event store whichever store the projection uses. Details are in
-[Projection dead-letter replay](advanced/retry-and-resilience.md#projection-dead-letter-replay).
+[Projection dead-letter replay](advanced/retry-and-resilience.md#per-store-replay).
 
 ## Health
 
