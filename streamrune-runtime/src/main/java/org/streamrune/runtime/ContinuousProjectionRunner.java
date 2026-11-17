@@ -1594,9 +1594,19 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * RunnerHealthView} without resetting accrued health. The ERROR path never reaches either method
    * — it keeps the live subscription registered so {@code markTerminalError} can force it
    * terminally DOWN.
+   *
+   * <p>The entry measures lag against this runner's own offset store — the checkpoints of the pair
+   * it reads and commits through — and names that pair's checkpoint target, so a projection routed
+   * to a read-model store is not measured against the event store's subscription checkpoint, where
+   * it has no row. Every later swap ({@link #registerHealth}, {@link
+   * #restoreStandbyHealthViewPreservingHealth}) keeps that source.
    */
   private void registerStandbyHealthView(ProjectionName projectionName) {
-    healthContributor.register(consumerName(projectionName), new RunnerHealthView(projectionName));
+    healthContributor.register(
+        consumerName(projectionName),
+        new RunnerHealthView(projectionName),
+        offsetStore,
+        checkpointTargetName);
   }
 
   /**

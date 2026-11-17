@@ -193,6 +193,115 @@ class SubscriptionHealthContributorTest {
         .orElse(-1);
   }
 
+  // ── A registration reads its checkpoint from the store it names ──────────────────────
+
+  @Test
+  void aRoutedProjection_readsLagFromItsOwnStore_andNamesIt() {
+    stubGlobalHead(42);
+    // The contributor's own offset store (the subscription checkpoint) has no row: 0.
+    stubLastOffset("orders-view", 0);
+    var storeCheckpoints = mock(OffsetStore.class);
+    when(storeCheckpoints.getLastOffset(ProjectionName.of("orders-view")))
+        .thenReturn(GlobalOffset.of(42));
+
+    contributor.register(
+        SubscriptionName.of("orders-view"),
+        mockSubscription(SubscriptionLifecycleState.RUNNING),
+        storeCheckpoints,
+        "postgres");
+
+    SubscriptionHealth health = contributor.health().getFirst();
+    assertEquals(0, health.lag(), "lag is measured against the store's checkpoint, at the head");
+    assertEquals(SubscriptionHealth.Status.UP, health.status());
+    assertEquals("postgres", health.store());
+    assertEquals(0, contributor.currentLag(SubscriptionName.of("orders-view")));
+    verify(offsetStore, never()).getLastOffset(ProjectionName.of("orders-view"));
+  }
+
+  @Test
+  void aRegistrationWithoutAStore_readsTheContributorsOffsetStore_andNamesNone() {
+    stubGlobalHead(42);
+    stubLastOffset("listener", 40);
+
+    contributor.register(
+        SubscriptionName.of("listener"), mockSubscription(SubscriptionLifecycleState.RUNNING));
+
+    SubscriptionHealth health = contributor.health().getFirst();
+    assertEquals(2, health.lag());
+    assertEquals(null, health.store(), "an event subscription names no store");
+  }
+
+  @Test
+  void aRunnerDefaultPair_readsItsOwnCheckpoints_withoutAStoreName() {
+    stubGlobalHead(42);
+    stubLastOffset("default-pair", 0);
+    var runnerCheckpoints = mock(OffsetStore.class);
+    when(runnerCheckpoints.getLastOffset(ProjectionName.of("default-pair")))
+        .thenReturn(GlobalOffset.of(41));
+
+    contributor.register(
+        SubscriptionName.of("default-pair"),
+        mockSubscription(SubscriptionLifecycleState.RUNNING),
+        runnerCheckpoints,
+        null);
+
+    SubscriptionHealth health = contributor.health().getFirst();
+    assertEquals(1, health.lag());
+    assertEquals(null, health.store());
+  }
+
+  @Test
+  void theStoreSurvivesALifecycleSwap_aFallbackRegister_andAnUnregister() {
+    stubGlobalHead(42);
+    stubLastOffset("orders-view", 0);
+    var storeCheckpoints = mock(OffsetStore.class);
+    when(storeCheckpoints.getLastOffset(ProjectionName.of("orders-view")))
+        .thenReturn(GlobalOffset.of(42));
+    var name = SubscriptionName.of("orders-view");
+    contributor.register(
+        name, mockSubscription(SubscriptionLifecycleState.RUNNING), storeCheckpoints, "postgres");
+
+    contributor.replaceLifecycle(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
+    assertEquals("postgres", contributor.health().getFirst().store());
+    assertEquals(0, contributor.health().getFirst().lag());
+
+    // The lag gauge outlives the entry: after an unregister it still reads the store.
+    contributor.unregister(name);
+    assertEquals(0, contributor.currentLag(name));
+
+    // A swap with no entry left falls back to a fresh registration on the same store.
+    contributor.replaceLifecycle(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
+    assertEquals("postgres", contributor.health().getFirst().store());
+    assertEquals(0, contributor.health().getFirst().lag());
+
+    // A plain register says this name reads the contributor's offset store again.
+    contributor.register(name, mockSubscription(SubscriptionLifecycleState.RUNNING));
+    assertEquals(null, contributor.health().getFirst().store());
+    assertEquals(42, contributor.health().getFirst().lag());
+  }
+
+  @Test
+  void registerWithAStoreRefusesNullCheckpoints() {
+    assertThrows(
+        NullPointerException.class,
+        () ->
+            contributor.register(
+                SubscriptionName.of("x"),
+                mockSubscription(SubscriptionLifecycleState.RUNNING),
+                null,
+                "postgres"));
+  }
+
+  @Test
+  void theNoopContributorIgnoresAStoreRegistration() {
+    SubscriptionHealthContributor.NOOP.register(
+        SubscriptionName.of("x"),
+        mockSubscription(SubscriptionLifecycleState.RUNNING),
+        mock(OffsetStore.class),
+        "postgres");
+    assertTrue(SubscriptionHealthContributor.NOOP.health().isEmpty());
+  }
+
   private void stubGlobalHead(long head) {
     when(eventStore.lastGlobalOffset()).thenReturn(GlobalOffset.of(head));
   }

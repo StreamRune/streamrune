@@ -236,10 +236,16 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * Registers a {@link SubscriptionLifecycle} view of the scheduled projection {@code name} with
    * the health contributor. The view derives its lifecycle state from the runner's live {@link
    * ScheduledProjectionState}, so a STOPPED/ERROR projection reports DOWN. Pause/resume are
-   * unsupported (scheduled projections have no pausable subscription).
+   * unsupported (scheduled projections have no pausable subscription). Lag is measured against the
+   * checkpoints of the projection's own pair, and the entry names its checkpoint target.
    */
   private void registerHealth(ProjectionName name) {
-    healthContributor.register(consumerName(name), new ScheduledSubscriptionView(name));
+    RegistrationCheckpoints pair = checkpointsOf(name);
+    healthContributor.register(
+        consumerName(name),
+        new ScheduledSubscriptionView(name),
+        pair.checkpoints(),
+        pair.targetName());
   }
 
   /**

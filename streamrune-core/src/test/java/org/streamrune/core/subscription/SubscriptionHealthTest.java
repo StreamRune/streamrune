@@ -26,6 +26,30 @@ class SubscriptionHealthTest {
   }
 
   @Test
+  void theStoreIsNullUnlessNamed() {
+    var unnamed =
+        new SubscriptionHealth(
+            SubscriptionName.of("orders"),
+            SubscriptionLifecycleState.RUNNING,
+            0,
+            0,
+            SubscriptionHealth.Status.UP,
+            LeaseRole.LEADING);
+    var named =
+        new SubscriptionHealth(
+            SubscriptionName.of("orders"),
+            SubscriptionLifecycleState.RUNNING,
+            0,
+            0,
+            SubscriptionHealth.Status.UP,
+            LeaseRole.LEADING,
+            "postgres");
+    assertNull(unnamed.store());
+    assertEquals("postgres", named.store());
+    assertNotEquals(unnamed, named);
+  }
+
+  @Test
   void statusEnum_allValues() {
     var values = SubscriptionHealth.Status.values();
     assertEquals(3, values.length);

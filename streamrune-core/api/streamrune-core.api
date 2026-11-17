@@ -1462,10 +1462,12 @@ public final record org.streamrune.core.subscription.SubscriptionConfig
 
 public final record org.streamrune.core.subscription.SubscriptionHealth
   public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole)
+  public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole, java.lang.String)
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
   public int errorCount()
+  public java.lang.String store()
   public long lag()
   public org.streamrune.core.subscription.LeaseRole role()
   public org.streamrune.core.subscription.SubscriptionHealth$Status status()

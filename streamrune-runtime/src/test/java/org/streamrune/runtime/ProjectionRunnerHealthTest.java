@@ -25,6 +25,7 @@ import org.streamrune.core.IdGenerator;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionErrorStrategy;
@@ -44,6 +45,7 @@ import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
+import org.streamrune.test.InMemoryProjectionRepository;
 
 /**
  * Verifies that the projection runners register their subscription with the {@link
@@ -841,5 +843,106 @@ class ProjectionRunnerHealthTest {
     assertTrue(errors > 0, "scheduled poison projection should accrue errors in the contributor");
     assertTrue(
         contributor.health().isEmpty(), "scheduled projection should be unregistered after stop");
+  }
+
+  // --- A routed registration's health reads its own store's checkpoint and names the store ---
+
+  /**
+   * A registration routed to a read-model store keeps its checkpoint in that store, not in the
+   * offset store the contributor was built with (the event store's subscription checkpoint). Its
+   * health entry measures lag against the store's checkpoint — lag 0 and UP once it caught up, with
+   * no row in the contributor's offset store — and names the store.
+   */
+  @Test
+  void healthNamesTheStore() throws Exception {
+    StreamId s = StreamId.of(TYPE, AggregateId.of("routed"));
+    eventStore.append(
+        s,
+        List.of(envelope(s, 1, "a"), envelope(s, 2, "b"), envelope(s, 3, "c")),
+        Version.initial());
+    // Threshold 1: any lag at all reads DEGRADED, so UP proves lag 0.
+    var contributor = new SubscriptionHealthContributor(eventStore, offsetStore, 1);
+    var search = new InMemoryProjectionRepository();
+    var name = ProjectionName.of("routed");
+    Projection proj = events -> {};
+
+    var runner =
+        MultiProjectionRunner.builder()
+            .eventStore(eventStore)
+            .fetchSize(10)
+            .batchSize(10)
+            .subscriptionConfig(fastConfig())
+            .healthContributor(contributor)
+            .register(
+                name,
+                proj,
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", search, search))
+            .build();
+
+    runner.start();
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> search.getLastOffset(name).value() == 3);
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(
+              () ->
+                  entryFor(contributor, "routed")
+                      .map(h -> h.status() == SubscriptionHealth.Status.UP)
+                      .orElse(false));
+      SubscriptionHealth health = entryFor(contributor, "routed").orElseThrow();
+      assertEquals(0, health.lag(), "lag is measured against the store's checkpoint");
+      assertEquals(SubscriptionHealth.Status.UP, health.status());
+      assertEquals("search", health.store(), "the entry names the store");
+      assertEquals(
+          GlobalOffset.initial(),
+          offsetStore.getLastOffset(name),
+          "the contributor's own offset store holds no checkpoint for the routed projection");
+      assertEquals(0, contributor.currentLag(SubscriptionName.of("routed")));
+    } finally {
+      runner.stop();
+    }
+  }
+
+  /** The scheduled runner registers its routed projections' health the same way. */
+  @Test
+  void scheduledRunner_healthNamesTheStore() throws Exception {
+    StreamId s = StreamId.of(TYPE, AggregateId.of("sched-routed"));
+    eventStore.append(s, List.of(envelope(s, 1, "a"), envelope(s, 2, "b")), Version.initial());
+    var contributor = new SubscriptionHealthContributor(eventStore, offsetStore, 1);
+    var search = new InMemoryProjectionRepository();
+    var name = ProjectionName.of("sched-routed");
+    Projection proj = events -> {};
+
+    var runner =
+        ScheduledProjectionRunner.builder()
+            .eventStore(eventStore)
+            .fetchSize(10)
+            .batchSize(10)
+            .healthContributor(contributor)
+            .register(
+                name,
+                proj,
+                "* * * * * *",
+                ProjectionErrorStrategy.HALT,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                new CheckpointTarget("search", search, search))
+            .build();
+
+    runner.start();
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(6))
+          .until(() -> search.getLastOffset(name).value() == 2);
+      SubscriptionHealth health = entryFor(contributor, "sched-routed").orElseThrow();
+      assertEquals(0, health.lag(), "lag is measured against the store's checkpoint");
+      assertEquals(SubscriptionHealth.Status.UP, health.status());
+      assertEquals("search", health.store());
+    } finally {
+      runner.stop();
+    }
   }
 }

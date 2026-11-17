@@ -833,6 +833,7 @@ public final class org.streamrune.runtime.SubscriptionHealthContributor
   public void recordError(org.streamrune.core.types.SubscriptionName)
   public void recordSuccess(org.streamrune.core.types.SubscriptionName)
   public void register(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle)
+  public void register(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle, org.streamrune.core.projection.OffsetStore, java.lang.String)
   public void replaceLifecycle(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle)
   public void unregister(org.streamrune.core.types.SubscriptionName)
 
