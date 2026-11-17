@@ -470,7 +470,8 @@ series under `streamrune.read-model.schema.auto-initialize`), and the injectable
 projection over that bean (any bean scope — identity survives proxies): routing sends it to the
 store whose repository it writes to, and its checkpoint lives in that store's `readmodel_checkpoint`.
 An `AT_LEAST_ONCE_IDEMPOTENT` projection that writes elsewhere checkpoints in the event store's
-`subscription_checkpoint`. Startup refuses anything else.
+`subscription_checkpoint`. Startup refuses anything else. The routing rules, several stores in
+one application and the leadership requirements are in [Read-model stores](read-model-stores.md).
 
 #### A processor and an offset store that disagree
 
@@ -528,7 +529,7 @@ range, and the replay applies all of it again, which an idempotent projection co
 naming the runner, the projection, the mode, the processor and the fix when a `TRANSACTIONAL_LOCAL`
 or `EXTERNAL_EFFECT` registration:
 
-- runs under a processor whose `supportsFencing()` is `false`, such as `nonAtomicAtLeastOnce()` —
+- runs under a processor whose `transactional()` is `false`, such as `nonAtomicAtLeastOnce()` —
   it cannot put the read-model write and the checkpoint in one transaction;
 - does not write through the handed repository — `writesThroughRepository()` answers `false`, so its
   `process(List, ProjectionRepository)` is taken to be the inherited default, which ignores the

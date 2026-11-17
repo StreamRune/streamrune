@@ -126,6 +126,11 @@ Looking for a full working example? The
 repository, licensed under the Apache License 2.0 — wires all three frameworks (Spring Boot,
 Quarkus, Micronaut) end to end.
 
+Read models can live in more than one store: each projection checkpoints beside the read model it
+writes, in the default PostgreSQL store or in a store you add (a second database, for instance), and
+startup routes every projection to its store. See the
+[read-model stores guide](docs/guide/read-model-stores.md).
+
 ## Modules
 
 Each row is a published artifact, `org.streamrune:<module>`.
@@ -134,7 +139,7 @@ Each row is a published artifact, `org.streamrune:<module>`.
 |---|---|
 | [streamrune-core](streamrune-core/README.md) | Core API: EventStore contracts, aggregate types, upcasting |
 | [streamrune-runtime](streamrune-runtime/README.md) | Runtime: command bus, projections, locker |
-| [streamrune-postgres](streamrune-postgres/README.md) | PostgreSQL-backed EventStore |
+| [streamrune-postgres](streamrune-postgres/README.md) | PostgreSQL-backed EventStore and read-model store |
 | [streamrune-test](streamrune-test/README.md) | Test support: in-memory store, fixtures |
 | [streamrune-spring](streamrune-integration/streamrune-spring/README.md) | Spring Boot auto-configuration |
 | [streamrune-spring-boot-starter](streamrune-integration/streamrune-spring-boot-starter/README.md) | Single-dependency setup for Spring Boot: auto-configuration, PostgreSQL store and runtime |

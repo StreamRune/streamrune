@@ -507,6 +507,7 @@ and projections and shuts them down with the application context.
 |---|---|
 | [concepts.md](concepts.md) | Deep-dive on CQRS/ES theory |
 | [testing.md](testing.md) | Unit, integration, and fixture-based tests |
+| [read-model-stores.md](read-model-stores.md) | Where read models and their checkpoints live, routing, several stores in one application |
 | [advanced/idempotency.md](advanced/idempotency.md) | Effectively-once command execution with `IdempotencyKey` |
 | [advanced/gdpr-erasure.md](advanced/gdpr-erasure.md) | Crypto-shredding and GDPR right-to-erasure |
 | [../QUICKSTART.md](../QUICKSTART.md) | Five-minute copy-paste bootstrap |
