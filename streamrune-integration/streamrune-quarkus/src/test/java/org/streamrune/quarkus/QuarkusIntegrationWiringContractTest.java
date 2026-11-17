@@ -80,7 +80,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * (with Quarkus' duration converter) and its two mappings, and the {@code DataSource}, which the
  * container disposes of when it shuts down, as quarkus-agroal closes its pool. An application
  * without a database declares the test kit's in-memory event store and offset store, and its {@code
- * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean, a
+ * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean (Arc
+ * injects the single constructor of a constructor-injected one, {@link ContractBeans#injected}), a
  * supplied one a synthetic bean of the type it supplies.
  *
  * <p>The HTTP endpoints are served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}) as a
