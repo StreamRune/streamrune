@@ -97,13 +97,13 @@ public abstract class MultiReadModelStoreScenario {
   static final String SECONDARY_STORE = "secondary";
 
   /** The name of {@code p1}, routed to the default store by its write target. */
-  static final String P1 = DefaultStoreProjection.NAME;
+  static final String ON_DEFAULT = DefaultStoreProjection.NAME;
 
   /** The name of {@code p2}, routed to the secondary store by its declaration. */
-  static final String P2 = SecondaryStoreProjection.NAME;
+  static final String ON_SECONDARY = SecondaryStoreProjection.NAME;
 
   /** The name of {@code p3}, routed to the subscription checkpoint. */
-  static final String P3 = UnroutedProjection.NAME;
+  static final String UNROUTED = UnroutedProjection.NAME;
 
   /** The checkpoint table of a PostgreSQL read-model store, in the store's own database. */
   static final String READ_MODEL_CHECKPOINT = "readmodel_checkpoint";
@@ -183,31 +183,32 @@ public abstract class MultiReadModelStoreScenario {
     try (Application application = start(a, PROPERTIES, APPLICATION)) {
       assertStarted(application);
       long top = appendEvents(application, a, "landing", 3);
-      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, P1, top);
-      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, P2, top);
-      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, P3, top);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, ON_DEFAULT, top);
+      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY, top);
+      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, UNROUTED, top);
 
-      assertNoCheckpoint(a, READ_MODEL_CHECKPOINT, P2);
-      assertNoCheckpoint(a, READ_MODEL_CHECKPOINT, P3);
-      assertNoCheckpoint(a, SUBSCRIPTION_CHECKPOINT, P1);
-      assertNoCheckpoint(a, SUBSCRIPTION_CHECKPOINT, P2);
-      assertNoCheckpoint(b, READ_MODEL_CHECKPOINT, P1);
-      assertNoCheckpoint(b, READ_MODEL_CHECKPOINT, P3);
+      assertNoCheckpoint(a, READ_MODEL_CHECKPOINT, ON_SECONDARY);
+      assertNoCheckpoint(a, READ_MODEL_CHECKPOINT, UNROUTED);
+      assertNoCheckpoint(a, SUBSCRIPTION_CHECKPOINT, ON_DEFAULT);
+      assertNoCheckpoint(a, SUBSCRIPTION_CHECKPOINT, ON_SECONDARY);
+      assertNoCheckpoint(b, READ_MODEL_CHECKPOINT, ON_DEFAULT);
+      assertNoCheckpoint(b, READ_MODEL_CHECKPOINT, UNROUTED);
       assertFalse(
           tableExists(b, SUBSCRIPTION_CHECKPOINT),
           "database B holds the read-model series only: no subscription_checkpoint");
 
       Map<Long, Integer> once = onceEach(eventOffsets(a));
-      assertEquals(once, applied(application.bean(ProjectionRepository.class), P1), "p1 in A");
-      assertEquals(once, applied(SecondaryDatabase.store().repository(), P2), "p2 in B");
-      assertFalse(tableExists(b, P1 + "_view"), "p1's read model is not in database B");
-      assertFalse(tableExists(a, P2 + "_view"), "p2's read model is not in database A");
+      assertEquals(
+          once, applied(application.bean(ProjectionRepository.class), ON_DEFAULT), "p1 in A");
+      assertEquals(once, applied(SecondaryDatabase.store().repository(), ON_SECONDARY), "p2 in B");
+      assertFalse(tableExists(b, ON_DEFAULT + "_view"), "p1's read model is not in database B");
+      assertFalse(tableExists(a, ON_SECONDARY + "_view"), "p2's read model is not in database A");
 
       Map<String, String> stores =
           Map.of(
-              P1, DEFAULT_STORE,
-              P2, SECONDARY_STORE,
-              P3, SUBSCRIPTION_CHECKPOINT);
+              ON_DEFAULT, DEFAULT_STORE,
+              ON_SECONDARY, SECONDARY_STORE,
+              UNROUTED, SUBSCRIPTION_CHECKPOINT);
       Map<String, Object> health =
           awaitHealth(application, details -> reportsCaughtUp(details, stores));
       Map<String, Object> details = IntegrationWiringContract.details(health);
@@ -241,9 +242,9 @@ public abstract class MultiReadModelStoreScenario {
     try (Application first = start(a, PROPERTIES, APPLICATION)) {
       assertStarted(first);
       top = appendEvents(first, a, "before-drop", 3);
-      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, P1, top);
-      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, P2, top);
-      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, P3, top);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, ON_DEFAULT, top);
+      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY, top);
+      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, UNROUTED, top);
     }
 
     execute(b, "DROP SCHEMA public CASCADE", "CREATE SCHEMA public");
@@ -252,25 +253,29 @@ public abstract class MultiReadModelStoreScenario {
     SecondaryDatabase.use(b);
     try (Application second = start(a, PROPERTIES, APPLICATION)) {
       assertStarted(second);
-      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, P2, top);
+      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY, top);
       assertEquals(
-          top, checkpoint(a, READ_MODEL_CHECKPOINT, P1), "p1's checkpoint in A is untouched");
+          top,
+          checkpoint(a, READ_MODEL_CHECKPOINT, ON_DEFAULT),
+          "p1's checkpoint in A is untouched");
       assertEquals(
-          top, checkpoint(a, SUBSCRIPTION_CHECKPOINT, P3), "p3's checkpoint in A is untouched");
+          top,
+          checkpoint(a, SUBSCRIPTION_CHECKPOINT, UNROUTED),
+          "p3's checkpoint in A is untouched");
 
       long last = appendEvents(second, a, "after-drop", 1);
-      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, P1, last);
-      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, P2, last);
-      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, P3, last);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, ON_DEFAULT, last);
+      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY, last);
+      awaitCheckpoint(a, SUBSCRIPTION_CHECKPOINT, UNROUTED, last);
 
       Map<Long, Integer> once = onceEach(eventOffsets(a));
       assertEquals(
           once,
-          applied(SecondaryDatabase.store().repository(), P2),
+          applied(SecondaryDatabase.store().repository(), ON_SECONDARY),
           "p2 replayed every event from the beginning into the re-created store, once each");
       assertEquals(
           once,
-          applied(second.bean(ProjectionRepository.class), P1),
+          applied(second.bean(ProjectionRepository.class), ON_DEFAULT),
           "p1 re-applied nothing: each event once, the last one included");
       assertEquals(
           Map.of(last, 1),
@@ -301,12 +306,12 @@ public abstract class MultiReadModelStoreScenario {
     try (Application first = start(a, PROPERTIES, APPLICATION)) {
       assertStarted(first);
       top = appendEvents(first, a, "fenced", 2);
-      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, P2, top);
-      oldEpoch = leaseEpoch(a, P2);
+      awaitCheckpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY, top);
+      oldEpoch = leaseEpoch(a, ON_SECONDARY);
       assertTrue(oldEpoch > 0, "p2 runs under a lease of database A");
       assertEquals(
           oldEpoch,
-          epoch(b, READ_MODEL_CHECKPOINT, P2),
+          epoch(b, READ_MODEL_CHECKPOINT, ON_SECONDARY),
           "the first leader's epoch is stamped into database B's row");
     }
 
@@ -314,19 +319,21 @@ public abstract class MultiReadModelStoreScenario {
     try (Application second = start(a, PROPERTIES, APPLICATION)) {
       assertStarted(second);
       await(
-          () -> leaseEpoch(a, P2) > oldEpoch && epoch(b, READ_MODEL_CHECKPOINT, P2) > oldEpoch,
+          () ->
+              leaseEpoch(a, ON_SECONDARY) > oldEpoch
+                  && epoch(b, READ_MODEL_CHECKPOINT, ON_SECONDARY) > oldEpoch,
           () ->
               "the takeover must stamp a new epoch into database B's row of p2 (lease epoch "
-                  + leaseEpoch(a, P2)
+                  + leaseEpoch(a, ON_SECONDARY)
                   + ", row epoch "
-                  + epoch(b, READ_MODEL_CHECKPOINT, P2)
+                  + epoch(b, READ_MODEL_CHECKPOINT, ON_SECONDARY)
                   + ", old epoch "
                   + oldEpoch
                   + ")");
-      long newEpoch = leaseEpoch(a, P2);
+      long newEpoch = leaseEpoch(a, ON_SECONDARY);
       assertEquals(
           newEpoch,
-          epoch(b, READ_MODEL_CHECKPOINT, P2),
+          epoch(b, READ_MODEL_CHECKPOINT, ON_SECONDARY),
           "database B's row carries the new leader's epoch");
 
       PostgresReadModelStore store = SecondaryDatabase.store();
@@ -338,7 +345,7 @@ public abstract class MultiReadModelStoreScenario {
               store
                   .processor()
                   .executeAtomically(
-                      ProjectionName.of(P2),
+                      ProjectionName.of(ON_SECONDARY),
                       inFlight,
                       GlobalOffset.of(top + 1),
                       oldEpoch,
@@ -346,10 +353,12 @@ public abstract class MultiReadModelStoreScenario {
                       store.checkpoints()),
           "a commit at the superseded epoch is rejected by database B's row");
       assertFalse(updaterRan.get(), "fenced before the updater ran");
-      assertEquals(top, checkpoint(b, READ_MODEL_CHECKPOINT, P2), "the checkpoint did not move");
-      assertEquals(newEpoch, epoch(b, READ_MODEL_CHECKPOINT, P2), "the row keeps the new epoch");
+      assertEquals(
+          top, checkpoint(b, READ_MODEL_CHECKPOINT, ON_SECONDARY), "the checkpoint did not move");
+      assertEquals(
+          newEpoch, epoch(b, READ_MODEL_CHECKPOINT, ON_SECONDARY), "the row keeps the new epoch");
       assertFalse(
-          applied(store.repository(), P2).containsKey(top + 1),
+          applied(store.repository(), ON_SECONDARY).containsKey(top + 1),
           "the fenced batch left no read-model row");
     }
   }
