@@ -45,10 +45,11 @@ import org.streamrune.core.types.ProjectionName;
  * offset store is not read for it. {@link #reset(ProjectionName, CheckpointTarget)} rewinds a
  * projection's checkpoint in a target, whether or not it has run here.
  *
- * <p>Under the nonatomic processor a checkpoint save that fails after the batch was applied ({@link
- * ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner backs off (100 ms
- * doubling to 60 s) and re-reads from the un-advanced checkpoint, so the idempotent projection
- * applies the batch again. It is never skipped and never dead-lettered.
+ * <p>Under a non-transactional processor ({@code nonAtomicAtLeastOnce()} or {@code
+ * PostgresSubscriptionCheckpointProcessor}) a checkpoint save that fails after the batch was
+ * applied ({@link ProjectionCheckpointSaveException}) is retried inside {@code run()}: the runner
+ * backs off (100 ms doubling to 60 s) and re-reads from the un-advanced checkpoint, so the
+ * idempotent projection applies the batch again. It is never skipped and never dead-lettered.
  */
 public final class PollingProjectionRunner implements ProjectionRunner {
 
