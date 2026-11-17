@@ -67,7 +67,7 @@ rule the rest of this page follows from.
   one database.
 - **One truth.** If the read model is rebuilt, restored from a backup or dropped, its checkpoint
   goes with it, and the projection replays what the restored read model is missing. A checkpoint in
-  another database could say "applied up to 5000" about rows that no longer exist.
+  another database would keep claiming progress over rows the restored read model does not hold.
 - **A store can move.** A read model in a second database brings its own checkpoint. Nothing in the
   event store knows it exists.
 
@@ -130,8 +130,8 @@ rule 1.
 
 **4. At-least-once, nothing matched.** An `AT_LEAST_ONCE_IDEMPOTENT` projection with no
 `writeTarget()`, or one that belongs to no store (JPA, Redis, a file, another database you manage
-yourself), checkpoints in the event store's `subscription_checkpoint`. This is what it did before
-stores existed, so nothing that ran before becomes a startup error.
+yourself), checkpoints in the event store's `subscription_checkpoint`. A projection that
+writes elsewhere is therefore never a startup error.
 
 ```java
 // Writes to Redis through its own client; hands the runner nothing to commit with.
