@@ -387,7 +387,7 @@ read each projection's target from the runner's startup INFO line (`… (checkpo
 store's, so rule 2 routes the projection to the `postgres` store, and it checkpoints in
 `readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
 `offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
-a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches no longer
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches do not
 exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
 exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
 subscription checkpoint. A transactional projection mapped to the wrong store has its range written
