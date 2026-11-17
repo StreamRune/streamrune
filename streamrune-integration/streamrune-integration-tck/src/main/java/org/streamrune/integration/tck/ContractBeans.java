@@ -72,6 +72,11 @@ import org.streamrune.test.InMemorySagaStore;
  * Supplier#get()} returns, whose bean type is the type it supplies; any other class stands for an
  * instance of itself. {@link #beanType(Class)} and {@link #create(Class)} read a class that way, so
  * an adapter declares the bean the way an application of its framework declares one.
+ *
+ * <p>A class whose public constructors all take arguments ({@link #injected(Class)}) stands for a
+ * bean the application's container builds, injecting the application's beans into its constructor:
+ * an adapter declares it as its framework declares a constructor-injected bean, not through {@link
+ * #create(Class)}.
  */
 public final class ContractBeans {
 
@@ -109,6 +114,27 @@ public final class ContractBeans {
     return type instanceof ParameterizedType parameterized
         ? (Class<?>) parameterized.getRawType()
         : (Class<?>) type;
+  }
+
+  /**
+   * Whether a bean class stands for a bean the application's container builds with the
+   * application's beans injected into its constructor: a class that is not a {@link Supplier} and
+   * has public constructors, none of them without arguments.
+   *
+   * @param beanClass a class of the contract's beans
+   * @return {@code true} when an adapter declares it as a constructor-injected bean
+   */
+  public static boolean injected(Class<?> beanClass) {
+    if (Supplier.class.isAssignableFrom(beanClass)) {
+      return false;
+    }
+    var constructors = beanClass.getConstructors();
+    for (var constructor : constructors) {
+      if (constructor.getParameterCount() == 0) {
+        return false;
+      }
+    }
+    return constructors.length > 0;
   }
 
   /**

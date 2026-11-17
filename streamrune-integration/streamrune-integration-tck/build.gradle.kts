@@ -10,6 +10,9 @@ dependencies {
     api(project(":streamrune-runtime"))
     api(project(":streamrune-integration:streamrune-integration-api"))
     api(project(":streamrune-test"))
+    // MultiReadModelStoreScenario builds a second PostgresReadModelStore and reads its checkpoints
+    // and read models; the three integrations already depend on the module.
+    api(project(":streamrune-postgres"))
     api(platform(libs.junit.bom))
     api("org.junit.jupiter:junit-jupiter-api")
     // The tracing rules run a command against an OpenTelemetry SDK whose spans an in-memory
