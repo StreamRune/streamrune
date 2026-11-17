@@ -307,7 +307,8 @@ public class StreamRuneProducers {
    * <p>Quarkus always provides a {@code DataSource} bean, so this store is produced even in an
    * application that uses no database: when the server version cannot be read (no usable database),
    * the failure says that such an application produces its own {@code ReadModelStore} named {@value
-   * #DEFAULT_READ_MODEL_STORE}.
+   * #DEFAULT_READ_MODEL_STORE}. A server whose version is read and too old fails with {@link
+   * org.streamrune.postgres.UnsupportedServerVersionException}, unwrapped.
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if present) through
    * {@code CryptoShreddingModule}, the same way {@link #postgresEventStoreFactory} wires the event
@@ -322,7 +323,9 @@ public class StreamRuneProducers {
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
    *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT — or the server
-   *     version cannot be read or is not supported (no usable database)
+   *     version cannot be read (no usable database)
+   * @throws org.streamrune.postgres.UnsupportedServerVersionException if the server is older than
+   *     StreamRune supports
    */
   @Produces
   @Singleton
@@ -342,8 +345,13 @@ public class StreamRuneProducers {
     }
     CryptoEngine cryptoEngine =
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
+    // The version check runs once more inside create; run first here, its "cannot read the server
+    // version" failure — no usable database behind the DataSource Quarkus always provides — gets
+    // the hint below. A readable but unsupported version is a real, old server: rethrown as is.
     try {
       org.streamrune.postgres.PostgresServerVersion.requireSupported(dataSource);
+    } catch (org.streamrune.postgres.UnsupportedServerVersionException e) {
+      throw e;
     } catch (RuntimeException e) {
       throw new IllegalStateException(
           "The default read-model store '"

@@ -545,6 +545,33 @@ class QuarkusReadModelStoreWiringTest {
     }
   }
 
+  /** An application bean that injects a {@code ReadModelStore} without a qualifier. */
+  @Singleton
+  public static class InjectsAReadModelStore {
+    final ReadModelStore store;
+
+    @jakarta.inject.Inject
+    public InjectsAReadModelStore(ReadModelStore store) {
+      this.store = store;
+    }
+  }
+
+  /**
+   * An unqualified {@code ReadModelStore} injection point of the application resolves to its own
+   * store, not to the default one beside it, which stays uncreated.
+   */
+  @Test
+  void anUnqualifiedReadModelStoreInjection_resolvesToTheApplicationsStore() throws Exception {
+    DataSource dataSource = freshDatabase();
+    SearchStore.repository = new InMemoryProjectionRepository();
+    try (var arc = bootRouting(dataSource, SearchStore.class, InjectsAReadModelStore.class)) {
+      ReadModelStore injected = arc.container().select(InjectsAReadModelStore.class).get().store;
+      assertThat(injected.name()).isEqualTo("search");
+      assertThat(injected.repository()).isSameAs(SearchStore.repository);
+      assertThat(tableExists(dataSource, "readmodel_checkpoint")).isFalse();
+    }
+  }
+
   /**
    * With an added store beside it, the injectable {@code ProjectionRepository} bean stays the
    * default store's repository.
@@ -585,5 +612,28 @@ class QuarkusReadModelStoreWiringTest {
             "an application without a database produces its own ReadModelStore bean")
         .hasMessageContaining("named 'postgres'")
         .hasRootCauseMessage("no database");
+  }
+
+  /**
+   * A real but old server is not a missing database: its typed failure is thrown as is, with no
+   * no-database hint.
+   */
+  @Test
+  void anOldServer_failsWithTheTypedVersionError_andNoNoDatabaseHint() throws Exception {
+    DataSource old = Mockito.mock(DataSource.class);
+    java.sql.Connection connection = Mockito.mock(java.sql.Connection.class);
+    java.sql.DatabaseMetaData meta = Mockito.mock(java.sql.DatabaseMetaData.class);
+    Mockito.when(old.getConnection()).thenReturn(connection);
+    Mockito.when(connection.getMetaData()).thenReturn(meta);
+    Mockito.when(meta.getDatabaseMajorVersion()).thenReturn(15);
+    Mockito.when(meta.getDatabaseProductVersion()).thenReturn("15.4");
+
+    assertThatThrownBy(
+            () ->
+                PRODUCERS.postgresReadModelStore(
+                    old, TestProperties.defaults(), unsatisfied(), unsatisfied()))
+        .isInstanceOf(org.streamrune.postgres.UnsupportedServerVersionException.class)
+        .hasMessageContaining("PostgreSQL 15.4 is older")
+        .hasMessageNotContaining("without a database");
   }
 }
