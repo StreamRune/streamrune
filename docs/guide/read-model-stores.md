@@ -108,8 +108,9 @@ An unknown name is an error, and so is a declaration that contradicts the projec
 public class ProductSearchProjection extends BaseProjection { /* ... */ }
 ```
 
-Use it when routing cannot decide alone: several transactional stores, or a `writeTarget()` that no
-store owns.
+Use it when routing cannot decide alone: several transactional stores. A `writeTarget()` that no store
+owns is refused under every rule, with or without a declaration: define a `ReadModelStore` over that
+repository, or make the projection write to `store.repository()`.
 
 **2. The projection's `writeTarget()` matches a store.** A `BaseProjection` exposes the repository
 it was built with; the store whose `repository().writeTargetIdentity()` equals it is the store. This
@@ -125,8 +126,8 @@ public class OrderProjection extends BaseProjection {
 
 **3. Exactly one transactional store.** A `TRANSACTIONAL_LOCAL` or `EXTERNAL_EFFECT` projection
 that exposes no `writeTarget()` and matches nothing goes to the one store whose processor is
-`transactional()`. With two transactional stores, or a `writeTarget()` that matches none, use
-rule 1.
+`transactional()`. With two transactional stores, use rule 1. A `writeTarget()` that matches no store is refused:
+define a `ReadModelStore` over that repository, or write through `store.repository()`.
 
 **4. At-least-once, nothing matched.** An `AT_LEAST_ONCE_IDEMPOTENT` projection with no
 `writeTarget()`, or one that belongs to no store (JPA, Redis, a file, another database you manage
@@ -169,8 +170,8 @@ Every `ReadModelStore` bean you define is a routing target beside the default `p
 named by its `name()`. A second PostgreSQL database is the common case: define its `DataSource`
 and a store over it, then point a projection at it with `readModelStore`.
 
-The default store uses the primary `DataSource`; mark that one primary where your framework needs
-it. Two stores with the same name, or over the same repository, fail startup. Each store applies
+The default store and the event store use the primary `DataSource`, so with a second one you must
+declare the primary explicitly (see the Spring snippet). Two stores with the same name, or over the same repository, fail startup. Each store applies
 its own read-model migration series on its own database under
 `streamrune.read-model.schema.auto-initialize` (the `migrate` argument of `create`).
 
@@ -179,6 +180,19 @@ its own read-model migration series on its own database under
 ```java
 @Configuration
 class SearchStoreConfig {
+
+  // Boot's DataSource auto-configuration backs off once any DataSource bean exists, so declare the
+  // primary one too: the event store and the default "postgres" store use it.
+  @Bean
+  @Primary
+  @ConfigurationProperties("spring.datasource")
+  DataSourceProperties primaryDataSourceProperties() { return new DataSourceProperties(); }
+
+  @Bean
+  @Primary
+  DataSource dataSource(@Qualifier("primaryDataSourceProperties") DataSourceProperties props) {
+    return props.initializeDataSourceBuilder().build();
+  }
 
   @Bean
   @ConfigurationProperties("search.datasource")
@@ -197,6 +211,7 @@ class SearchStoreConfig {
   }
 }
 
+@Component
 @ProjectionConfig(name = "product_search",
     deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, readModelStore = "search")
 class ProductSearchProjection extends BaseProjection {
@@ -206,8 +221,9 @@ class ProductSearchProjection extends BaseProjection {
 }
 ```
 
-With a user-defined `DataSource`, Boot's own `DataSource` auto-configuration backs off. Mark your
-primary `DataSource` bean `@Primary` so the event store and the default store keep using it.
+Without the `@Primary` pair, Boot would create no primary `DataSource`, and the event store, the
+leases and the default store would bind to the search database without any error. Set
+`spring.datasource.*` for the primary database and `search.datasource.*` for the second.
 
 **Quarkus**
 
@@ -217,6 +233,7 @@ class SearchStoreProducer {
 
   @Produces
   @Singleton
+  @Named("search")
   ReadModelStore searchStore(@io.quarkus.agroal.DataSource("search") AgroalDataSource ds,
                              Instance<CryptoEngine> cryptoEngine) {
     return PostgresReadModelStore.create("search", ds,
@@ -224,10 +241,27 @@ class SearchStoreProducer {
             cryptoEngine.isResolvable() ? cryptoEngine.get() : null), true, true);
   }
 }
+
+@ApplicationScoped
+@ProjectionConfig(name = "product_search",
+    deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, readModelStore = "search")
+class ProductSearchProjection extends BaseProjection {
+  @Inject
+  ProductSearchProjection(@Named("search") ReadModelStore search) {
+    super(search.repository(), "product_search");
+  }
+}
 ```
 
-Declare the second datasource with `quarkus.datasource."search".db-kind=postgresql` and its
-`jdbc.url`, as for any Quarkus named datasource.
+```properties
+quarkus.datasource."search".db-kind=postgresql
+quarkus.datasource."search".jdbc.url=jdbc:postgresql://search-db:5432/search
+quarkus.datasource."search".username=search
+quarkus.datasource."search".password=${SEARCH_DB_PASSWORD}
+```
+
+The producer is `@Named("search")` so the projection can inject this store by name beside the
+default one.
 
 **Micronaut**
 
@@ -240,6 +274,15 @@ class SearchStoreFactory {
   ReadModelStore searchStore(@Named("search") DataSource ds, Optional<CryptoEngine> cryptoEngine) {
     return PostgresReadModelStore.create("search", ds,
         JdbcProjectionRepository.createObjectMapper(cryptoEngine.orElse(null)), true, true);
+  }
+}
+
+@Singleton
+@ProjectionConfig(name = "product_search",
+    deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL, readModelStore = "search")
+class ProductSearchProjection extends BaseProjection {
+  ProductSearchProjection(@Named("search") ReadModelStore search) {
+    super(search.repository(), "product_search");
   }
 }
 ```

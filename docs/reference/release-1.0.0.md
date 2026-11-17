@@ -382,8 +382,8 @@ license.
 
 - **Every projection registration declares a `ProjectionDeliveryMode`; there is no default.**
   - `TRANSACTIONAL_LOCAL` — the read-model write and the checkpoint commit in one transaction. Needs
-    a processor with `transactional()` and `fencesCheckpoint()` and a projection that writes through the repository handed
-    to `process(batch, repository)`.
+    a processor with `transactional()` and `fencesCheckpoint()` and a projection that writes through
+    the repository handed to `process(batch, repository)`.
   - `AT_LEAST_ONCE_IDEMPOTENT` — the write and the checkpoint commit separately; the projection is
     handed `null` as its repository under every processor and must dedup, version-guard or upsert.
     Declaring this mode is the only acceptance of at-least-once delivery.

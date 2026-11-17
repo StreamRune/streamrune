@@ -462,7 +462,10 @@ through the projection. There is no background loop — replay is explicit and o
 because a batch that failed deterministically would only re-fail on a schedule.
 
 Construct it directly (no builder) with the event store, the dead-letter store and **the
-`AtomicBatchProcessor` the projection's runner commits through**, and call
+checkpoint target of each projection's runner registration**: a
+`Function<ProjectionName, CheckpointTarget>`, so each projection replays on the processor of its
+own read-model store (see [per-store replay](#per-store-replay) below; a runner whose projections
+all commit through one pair can pass that one `AtomicBatchProcessor` instead). Call
 `replay(ProjectionName, Projection, ProjectionDeliveryMode, int maxEntries)` with the delivery mode
 the projection is registered with. It replays up to `maxEntries` entries oldest-range-first and
 returns a `ReplayResult(int replayed, int failed, int fenced)`. A range none of whose events is left
@@ -536,7 +539,7 @@ projection wrapper or decorator must override it and forward to its delegate's
 reaches only the delegate's `process`, reports "applied" for a wholly fenced range, and the replayer
 discards the range's only record.
 
-Each projection replays on the processor of its own checkpoint target — the same
+<a id="per-store-replay"></a>Each projection replays on the processor of its own checkpoint target — the same
 `CheckpointTarget` its runner registration reads and commits through — so one replayer serves
 projections of several read-model stores and a replay never runs on another store's processor:
 

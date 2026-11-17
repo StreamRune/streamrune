@@ -120,8 +120,9 @@ Unreleased changes to read-model storage:
   build the PostgreSQL one; several stores, each on its own `DataSource`, can run in one application.
   Each registration is routed to a store (`@ProjectionConfig(readModelStore = "...")`, then its
   `writeTarget()`, then the only transactional store, then the event store's subscription checkpoint
-  for an at-least-once projection), and `StreamRune.Builder#registerProjection`,
-  `ProjectionRunner#run` and `#reset` take the store or `CheckpointTarget`. See the
+  for an at-least-once projection). `StreamRune.Builder#registerProjection` takes a
+  `ReadModelStore` or a `CheckpointTarget`; `ProjectionRunner#run` and `#reset` take a
+  `CheckpointTarget`. See the
   [read-model stores guide](docs/guide/read-model-stores.md).
 - **Checkpoint split.** `projection_offset` is renamed `subscription_checkpoint`, and
   `readmodel_checkpoint` (a separate Flyway series, `db/readmodel-migration`, history table

@@ -601,8 +601,8 @@ is an `assertThatThrownBy(...).isInstanceOf(IllegalArgumentException.class)` on 
 repository itself as the offset store, because its checkpoint is the one it advances.
 
 `AtomicBatchProcessorContract` (also in `streamrune-test`) is what a custom transactional processor
-extends to prove it honours `transactional()` and `fencesCheckpoint()`: a JUnit suite that checks the handed repository is
-never `null`, an updater exception commits nothing, the write and the checkpoint become visible
+extends to prove it honours `transactional()` and `fencesCheckpoint()`: a JUnit suite that checks
+the handed repository is never `null`, an updater exception commits nothing, the write and the checkpoint become visible
 together, a stale epoch and an overlapping batch are rejected before the updater writes, after-commit
 actions run only after a commit, and `writesTo` holds through a forwarding proxy.
 `InMemoryProjectionRepository` and `JdbcProjectionRepository` both pass it.
