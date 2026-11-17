@@ -20,6 +20,7 @@ import org.streamrune.core.EventStore;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionCheckpointSaveException;
@@ -53,6 +54,12 @@ import org.streamrune.core.types.ProjectionName;
  *
  * <p>Phase 2: Live - subscribes to new events and processes them in real-time
  *
+ * <p><b>Checkpoints.</b> A run reads its position from, and commits every batch through, one pair:
+ * the {@link CheckpointTarget} handed to {@link #run(ProjectionName, Projection,
+ * ProjectionDeliveryMode, CheckpointTarget)} — a {@code ReadModelStore}'s, or the event store's
+ * subscription checkpoint — or else the {@code offsetStore} and {@code atomicProcessor} the runner
+ * was built with. A runner built without that pair runs only on a target.
+ *
  * <p><b>Important:</b> Each instance supports only one concurrent projection. Calling {@link
  * #run(ProjectionName, Projection, ProjectionDeliveryMode)} while another projection is running
  * throws {@link IllegalStateException}. Create one runner per projection when running multiple
@@ -62,17 +69,22 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
 
   private static final Logger logger = LoggerFactory.getLogger(ContinuousProjectionRunner.class);
 
+  private static final String RUNNER_NAME = "ContinuousProjectionRunner";
+
   private final EventStore eventStore;
-  private final OffsetStore offsetStore;
   private final int fetchSize;
   private final int batchSize;
   private final SubscriptionConfig subscriptionConfig;
   private final SubscriptionFactory subscriptionFactory;
   private final Consumer<Throwable> errorHandler;
-  private final AtomicBatchProcessor atomicProcessor;
-  // The name of the checkpoint target offsetStore + atomicProcessor came from, for the processor
-  // label in the delivery-mode line and in refusals; null: the runner's own pair.
-  private final String checkpointTargetName;
+  // The pair the runner was built with (its offsetStore + atomicProcessor and the name of the
+  // checkpoint target they came from), or null when it was built without one: every run() then
+  // brings its own CheckpointTarget.
+  private final RegistrationCheckpoints ownPair;
+  // The pair the current — or, between runs, the last — run reads and commits through: a run's
+  // CheckpointTarget, otherwise ownPair. Set once per run, right after the run claims the runner,
+  // and read by everything that run does; reset() rewinds it.
+  private volatile RegistrationCheckpoints pair;
   private final ProjectionErrorStrategy errorStrategy;
   private final ProjectionDeadLetterStore deadLetterStore;
   private final StreamRuneMetrics metrics;
@@ -179,27 +191,27 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     if (eventStore == null) {
       throw new IllegalArgumentException("eventStore is required");
     }
-    if (offsetStore == null) {
-      throw new IllegalArgumentException("offsetStore is required");
-    }
     if (fetchSize <= 0) {
       throw new IllegalArgumentException("fetchSize must be positive");
     }
     if (batchSize <= 0) {
       throw new IllegalArgumentException("batchSize must be positive");
     }
-    if (atomicProcessor == null) {
-      throw new IllegalArgumentException("atomicProcessor is required");
+    if ((offsetStore == null) != (atomicProcessor == null)) {
+      throw new IllegalArgumentException(
+          "offsetStore and atomicProcessor are a pair: set both, or neither");
     }
     this.eventStore = eventStore;
-    this.offsetStore = offsetStore;
     this.fetchSize = fetchSize;
     this.batchSize = batchSize;
     this.subscriptionConfig = subscriptionConfig;
     this.subscriptionFactory = subscriptionFactory;
     this.errorHandler = errorHandler;
-    this.atomicProcessor = atomicProcessor;
-    this.checkpointTargetName = checkpointTargetName;
+    this.ownPair =
+        offsetStore == null
+            ? null
+            : new RegistrationCheckpoints(offsetStore, atomicProcessor, checkpointTargetName);
+    this.pair = ownPair;
     this.errorStrategy = errorStrategy != null ? errorStrategy : ProjectionErrorStrategy.HALT;
     this.deadLetterStore = deadLetterStore;
     this.metrics = Objects.requireNonNull(metrics, "metrics is required");
@@ -221,22 +233,73 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   @Override
   public void run(
       ProjectionName projectionName, Projection projection, ProjectionDeliveryMode mode) {
+    run(projectionName, projection, mode, ownPairOrRefuse(projectionName));
+  }
+
+  /**
+   * Runs the projection like {@link #run(ProjectionName, Projection, ProjectionDeliveryMode)},
+   * reading its position from {@code target}'s checkpoints and committing every batch — catch-up
+   * and live — through {@code target}'s processor; the runner's own pair, if it has one, is not
+   * used. The target's processor is the one the name, the mode and (under real leadership) the
+   * fencing are checked against, before the runner is claimed. {@link #reset(ProjectionName)}
+   * afterwards rewinds the target's checkpoints.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}, its processor refuses the
+   *     projection's name or mode, or it cannot fence the checkpoint under this runner's real
+   *     leadership
+   * @throws IllegalStateException if the runner is already running
+   */
+  @Override
+  public void run(
+      ProjectionName projectionName,
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      CheckpointTarget target) {
+    var routed =
+        RegistrationCheckpoints.ofTarget(
+            target, RUNNER_NAME, projectionName, "run(name, projection, mode)");
+    // The build-time fencing check covered only the runner's own processor.
+    ProjectionFencingPolicy.requireFencingCapable(
+        leadership, routed.processor(), RUNNER_NAME, projectionName.value(), routed.targetName());
+    run(projectionName, projection, mode, routed);
+  }
+
+  /** The runner's own pair, or the refusal naming both ways to give this run one. */
+  private RegistrationCheckpoints ownPairOrRefuse(ProjectionName projectionName) {
+    if (ownPair != null) {
+      return ownPair;
+    }
+    throw new IllegalArgumentException(
+        RUNNER_NAME
+            + " projection '"
+            + LogSanitizer.sanitizeForLog(projectionName.value())
+            + "' has no checkpoint source: the runner was built without offsetStore and"
+            + " atomicProcessor, so run it with a CheckpointTarget (a ReadModelStore's"
+            + " checkpointTarget(), or the event store's subscription checkpoint), or build the"
+            + " runner with both");
+  }
+
+  private void run(
+      ProjectionName projectionName,
+      Projection projection,
+      ProjectionDeliveryMode mode,
+      RegistrationCheckpoints runPair) {
     // Every batch of this run, catch-up and live, is processed inside the projection's span when
     // the tracing traces projections.
     projection = TracingProjectionDecorator.traced(projectionName, projection, tracing);
     // A name the processor cannot store read models under (the JDBC repository's table-name
     // rule) fails here, before a single event is read — not on the first batch.
-    atomicProcessor.checkProjectionName(projectionName);
+    runPair.processor().checkProjectionName(projectionName);
     // Refuse before claiming the runner — a rejected projection never half-starts, and a caller
     // that fixes the wiring can call run() again. The verdict is logged once the runner is claimed.
     ProjectionDeliveryPolicy.Verdict verdict =
         ProjectionDeliveryPolicy.require(
             projection,
             mode,
-            atomicProcessor,
-            "ContinuousProjectionRunner",
+            runPair.processor(),
+            RUNNER_NAME,
             projectionName.value(),
-            checkpointTargetName);
+            runPair.targetName());
     CountDownLatch done = new CountDownLatch(1);
     // A stop held from before this call (STOP_HELD) is consumed here — the run claims the
     // runner already STOPPING, so it takes exactly the path of a stop that lands just after the
@@ -247,6 +310,12 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     Phase claimed = claimRunner(projectionName, done).phase();
 
     try {
+      // Only now, with the runner claimed: a run refused as already running must not repoint the
+      // pair the running one reads and commits through.
+      pair = runPair;
+      // A rejection the previous run recorded was against its own pair's checkpoint; counting it
+      // here could take this run's first rejection for a repeat and halt it.
+      commitRejections.reset();
       logDeliveryMode(projectionName, mode, verdict);
       if (claimed == Phase.STOPPING) {
         // The held stop's run processes nothing, so it keeps the previous run's failure: state()
@@ -506,7 +575,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     try {
       runHeldFromClose(
           () -> {
-            atomicProcessor.stampFencingEpoch(projectionName, epoch);
+            pair.processor().stampFencingEpoch(projectionName, epoch);
             return null;
           });
       return StampOutcome.STAMPED;
@@ -683,7 +752,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     }
     long checkpoint;
     try {
-      checkpoint = offsetStore.getLastOffset(projectionName).value();
+      checkpoint = pair.checkpoints().getLastOffset(projectionName).value();
     } catch (RuntimeException readFailed) {
       // Whether the checkpoint moved is unknown; the next rejection decides.
       return null;
@@ -720,7 +789,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       }
       List<EventEnvelope> events;
       try {
-        GlobalOffset lastOffset = offsetStore.getLastOffset(projectionName);
+        GlobalOffset lastOffset = pair.checkpoints().getLastOffset(projectionName);
         events = eventStore.readGlobalStream(lastOffset, fetchSize);
         consecutiveReadFailures = 0;
         consecutiveReadPoisonFailures = 0;
@@ -1051,12 +1120,13 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * which the monotonic offset guard cannot reject — so a stale leader still inside its local
    * {@code leadership.current()}-staleness window could advance the checkpoint past events a newer
    * leader has not yet applied, silently and permanently skipping them from the read model (no
-   * dead-letter under SKIP). Routing the advance through {@code atomicProcessor.executeAtomically}
-   * with an <b>empty batch</b> takes the checkpoint row lock, runs {@code rejectStaleEpoch} (the
-   * epoch fence) and the monotonic guard, and stamps the epoch with NO read-model write; a
-   * superseded leader's advance is rejected with an {@link OptimisticLockException}, exactly like
-   * the normal atomic-batch commit path. Under {@code nonAtomicAtLeastOnce()} (single-node, {@code
-   * fencingEpoch == 0}) this is the plain {@code saveOffset}.
+   * dead-letter under SKIP). Routing the advance through the pair's {@code
+   * processor().executeAtomically} with an <b>empty batch</b> takes the checkpoint row lock, runs
+   * {@code rejectStaleEpoch} (the epoch fence) and the monotonic guard, and stamps the epoch with
+   * NO read-model write; a superseded leader's advance is rejected with an {@link
+   * OptimisticLockException}, exactly like the normal atomic-batch commit path. Under {@code
+   * nonAtomicAtLeastOnce()} (single-node, {@code fencingEpoch == 0}) this is the plain {@code
+   * saveOffset}.
    *
    * <p>A fence rejection ({@link OptimisticLockException}) is a LEADERSHIP/CAS signal, not a
    * transient blip: abandon WITHOUT advancing and {@link ErrorAction#STOP} so the outer loop drops
@@ -1082,8 +1152,16 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     try {
       runHeldFromClose(
           () -> {
-            atomicProcessor.executeAtomically(
-                projectionName, List.of(), newOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
+            RegistrationCheckpoints current = pair;
+            current
+                .processor()
+                .executeAtomically(
+                    projectionName,
+                    List.of(),
+                    newOffset,
+                    fencingEpoch,
+                    NO_OP_UPDATER,
+                    current.checkpoints());
             return null;
           });
       commitRejections.reset();
@@ -1232,22 +1310,26 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // processor's store to prepare; an at-least-once one keeps its read models wherever it
       // writes them.
       if (mode.writesInCheckpointTransaction()) {
-        atomicProcessor.prepareReadModel(projectionName);
+        pair.processor().prepareReadModel(projectionName);
       }
       // Thread the held lease's fencing epoch into the atomic commit: a transactional processor
       // rejects a commit whose epoch is below the epoch already stamped for this projection,
       // fencing out a superseded (partitioned old) leader. NOOP's epoch 0 is unfenced.
-      atomicProcessor.executeAtomically(
-          projectionName,
-          batch,
-          newOffset,
-          lease.get().epoch(),
-          // Only a TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT registration may write inside the
-          // processor's transaction; an AT_LEAST_ONCE_IDEMPOTENT one is handed null and writes
-          // wherever it writes, outside it — under every processor.
-          txRepository ->
-              projection.process(batch, mode.writesInCheckpointTransaction() ? txRepository : null),
-          offsetStore);
+      RegistrationCheckpoints current = pair;
+      current
+          .processor()
+          .executeAtomically(
+              projectionName,
+              batch,
+              newOffset,
+              lease.get().epoch(),
+              // Only a TRANSACTIONAL_LOCAL / EXTERNAL_EFFECT registration may write inside the
+              // processor's transaction; an AT_LEAST_ONCE_IDEMPOTENT one is handed null and writes
+              // wherever it writes, outside it — under every processor.
+              txRepository ->
+                  projection.process(
+                      batch, mode.writesInCheckpointTransaction() ? txRepository : null),
+              current.checkpoints());
       commitRejections.reset();
       recordProcessed(projectionName, batch.size());
     } catch (RuntimeException e) {
@@ -1295,7 +1377,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
         "Projection '{}' delivery mode {} on {} — {}",
         LogSanitizer.sanitizeForLog(projectionName.value()),
         mode,
-        ProjectionDeliveryPolicy.processorLabel(atomicProcessor, checkpointTargetName),
+        pair.processorLabel(),
         verdict.describe());
     try {
       metrics.recordProjectionDeliveryMode(projectionName, mode);
@@ -1359,8 +1441,15 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       // listener so processLiveBatch/health/leadership/atomic-checkpoint all apply; thread
       // this runner's read-poison bound so the factory-built live subscription HALTs a
       // deterministic read-poison instead of retrying it forever — the same bound the
-      // default-polling path uses.
-      subscription = subscriptionFactory.create(projectionName, liveListener, maxReadPoisonRetries);
+      // default-polling path uses. It also receives this run's checkpoints — the half of the pair
+      // processLiveBatch commits through — so the live subscription reads its start position from
+      // the store catch-up just committed to, exactly like the default-polling path below. A
+      // subscription reading any other offset store would start where that store says: re-deliver
+      // what catch-up committed (the overlap guard then halts the run as diverged), or skip events
+      // when that store is ahead.
+      subscription =
+          subscriptionFactory.create(
+              projectionName, liveListener, maxReadPoisonRetries, pair.checkpoints());
       warnIfFactorySubscriptionCannotSignalReadPoison(projectionName, subscription);
     } else {
       // Create default polling subscription with the same wrapped listener.
@@ -1368,7 +1457,7 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
           PollingEventSubscription.builder()
               .subscriptionName(consumerName(projectionName))
               .eventStore(eventStore)
-              .offsetStore(offsetStore)
+              .offsetStore(pair.checkpoints())
               .listener(liveListener)
               .config(subscriptionConfig)
               .fetchSize(batchSize)
@@ -1594,9 +1683,19 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * RunnerHealthView} without resetting accrued health. The ERROR path never reaches either method
    * — it keeps the live subscription registered so {@code markTerminalError} can force it
    * terminally DOWN.
+   *
+   * <p>The entry measures lag against this runner's own offset store — the checkpoints of the pair
+   * it reads and commits through — and names that pair's checkpoint target, so a projection routed
+   * to a read-model store is not measured against the event store's subscription checkpoint, where
+   * it has no row. Every later swap ({@link #registerHealth}, {@link
+   * #restoreStandbyHealthViewPreservingHealth}) keeps that source.
    */
   private void registerStandbyHealthView(ProjectionName projectionName) {
-    healthContributor.register(consumerName(projectionName), new RunnerHealthView(projectionName));
+    healthContributor.register(
+        consumerName(projectionName),
+        new RunnerHealthView(projectionName),
+        pair.checkpoints(),
+        pair.targetName());
   }
 
   /**
@@ -1627,12 +1726,14 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * is alive here".
    *
    * <p>What makes a standby entry useful rather than noise: the contributor computes lag against
-   * the SHARED {@code subscription_checkpoint} checkpoint, so a registered standby answers "is this
-   * subscription making progress ANYWHERE?". A healthy leader keeps the shared lag low and every
-   * standby reports UP; a subscription frozen on every replica reads DEGRADED everywhere, never
-   * DOWN, with the growing lag in its detail — which is how the all-replicas-standby freeze this
-   * view exists to surface shows up, exactly as on the scheduled runner. Alert on {@code
-   * streamrune.subscriptions.lag} to catch it.
+   * the checkpoint of the pair the run reads and commits through — the event store's {@code
+   * subscription_checkpoint} or the read-model store's {@code readmodel_checkpoint} — which every
+   * replica SHARES, so a registered standby answers "is this subscription making progress
+   * ANYWHERE?". A healthy leader keeps the shared lag low and every standby reports UP; a
+   * subscription frozen on every replica reads DEGRADED everywhere, never DOWN, with the growing
+   * lag in its detail — which is how the all-replicas-standby freeze this view exists to surface
+   * shows up, exactly as on the scheduled runner. Alert on {@code streamrune.subscriptions.lag} to
+   * catch it.
    *
    * <p>{@link ProjectionState#ERROR} maps to STOPPED because, unlike a scheduled projection's
    * per-tick error, an ERROR here is terminal: {@code run()} is unwinding. The contributor's {@code
@@ -1981,8 +2082,16 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
   private void advanceLiveCheckpointFenced(
       ProjectionName projectionName, GlobalOffset toOffset, long fencingEpoch) {
     try {
-      atomicProcessor.executeAtomically(
-          projectionName, List.of(), toOffset, fencingEpoch, NO_OP_UPDATER, offsetStore);
+      RegistrationCheckpoints current = pair;
+      current
+          .processor()
+          .executeAtomically(
+              projectionName,
+              List.of(),
+              toOffset,
+              fencingEpoch,
+              NO_OP_UPDATER,
+              current.checkpoints());
       commitRejections.reset();
     } catch (ProjectionCommitFencedException fenced) {
       ProjectionCheckpointDivergedException diverged =
@@ -2001,26 +2110,49 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     }
   }
 
+  /**
+   * Rewinds the projection's checkpoint where the runner reads it: the checkpoints of the last
+   * run's pair on this instance — its {@link CheckpointTarget} when it ran on one — or, before any
+   * run, the runner's own offset store. It knows only what has run on this instance: a routed
+   * projection that has not run here yet (a fresh process rebuilding before its first run) would be
+   * rewound in the runner's own offset store, where it has no checkpoint — reset it with {@link
+   * #reset(ProjectionName, CheckpointTarget)}. The rewind uses the unguarded {@link
+   * OffsetStore#reset} ({@code saveOffset(initial())} would be no-op'd by the monotonic guard) and
+   * is read back, so a reset that returns without rewinding fails loudly instead of letting a
+   * rebuild quietly resume from the old offset.
+   *
+   * @throws IllegalStateException if the runner has no pair yet (built without one and never run),
+   *     or the checkpoint is not at {@link GlobalOffset#initial()} after the reset
+   */
   @Override
   public void reset(ProjectionName projectionName) {
-    // Unguarded rewind: saveOffset(initial()) would be no-op'd by the monotonic offset guard, so a
-    // reset must use the dedicated OffsetStore.reset() path (see OffsetStore contract).
-    offsetStore.reset(projectionName);
-    // Defense-in-depth: even a correctly-overridden reset() could have a latent bug (e.g. an
-    // unguarded write that targets the wrong row/key) that leaves the checkpoint un-rewound.
-    // Verify the rewind actually took before declaring the reset successful, converting a silent
-    // partial rewind into a loud failure instead of a rebuild that quietly resumes from the old
-    // offset.
-    GlobalOffset after = offsetStore.getLastOffset(projectionName);
-    if (!GlobalOffset.initial().equals(after)) {
+    RegistrationCheckpoints current = pair;
+    if (current == null) {
       throw new IllegalStateException(
-          "OffsetStore.reset(\""
-              + projectionName.value()
-              + "\") returned but the checkpoint did not rewind to initial (still at "
-              + after.value()
-              + "); this OffsetStore's reset() is not performing an unguarded rewind as required by"
-              + " the OffsetStore contract.");
+          RUNNER_NAME
+              + " cannot reset projection '"
+              + LogSanitizer.sanitizeForLog(projectionName.value())
+              + "': it was built without offsetStore and atomicProcessor and has not run on a"
+              + " CheckpointTarget yet, so it does not know where the checkpoint lives. Call"
+              + " reset(name, target).");
     }
+    current.reset(projectionName);
+  }
+
+  /**
+   * Rewinds the projection's checkpoint in {@code target}'s checkpoints, whether or not it has run
+   * on this instance; the runner's own offset store and the pair of its last run are not touched.
+   * Unguarded and read back like {@link #reset(ProjectionName)}, and like it meant for a projection
+   * that is not running.
+   *
+   * @throws IllegalArgumentException if {@code target} is {@code null}
+   * @throws IllegalStateException if the checkpoint is not at {@link GlobalOffset#initial()} after
+   *     the reset
+   */
+  @Override
+  public void reset(ProjectionName projectionName, CheckpointTarget target) {
+    RegistrationCheckpoints.ofTarget(target, RUNNER_NAME, projectionName, "reset(name)")
+        .reset(projectionName);
   }
 
   /**
@@ -2202,11 +2334,34 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
    * the factory path HALTs the projection instead of retrying an unreadable event forever, exactly
    * like the default-polling path. {@code 0} disables the bound (unbounded retry). A subscription
    * that cannot read-poison may ignore the argument.
+   *
+   * <p>{@code checkpoints} is the offset store of the pair this run reads and commits through: the
+   * {@link CheckpointTarget}'s checkpoints when the run was given one ({@link #run(ProjectionName,
+   * Projection, ProjectionDeliveryMode, CheckpointTarget)}), otherwise the runner's own {@code
+   * offsetStore}. The subscription MUST read its start position from it and save through it (e.g.
+   * {@code HybridEventSubscription.builder().offsetStore(checkpoints)}), never through an offset
+   * store the factory captured: catch-up has just committed the projection's position to {@code
+   * checkpoints}, and every live batch commits there too. A subscription reading another store
+   * starts where that store says — with no row there, at {@code 0}, re-delivering what catch-up
+   * committed, which the first-offset overlap guard refuses and the run halts as diverged; with a
+   * row ahead, past events the projection never processed, which nothing reports.
    */
   @FunctionalInterface
   public interface SubscriptionFactory {
+    /**
+     * Builds the live subscription for one run.
+     *
+     * @param projectionName the projection the run processes
+     * @param listener the runner's fully-wrapped listener; wire it as the subscription's listener
+     * @param readPoisonBound the runner's read-poison bound; thread it into the subscription
+     * @param checkpoints the run's checkpoints; the subscription reads and saves through it
+     * @return the live subscription, not yet started
+     */
     EventSubscription create(
-        ProjectionName projectionName, EventListener listener, int readPoisonBound);
+        ProjectionName projectionName,
+        EventListener listener,
+        int readPoisonBound,
+        OffsetStore checkpoints);
   }
 
   // Builder
@@ -2274,6 +2429,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       return this;
     }
 
+    /**
+     * Sets the offset store the runner reads its position from when {@link #run(ProjectionName,
+     * Projection, ProjectionDeliveryMode)} is given no {@link CheckpointTarget}; a pair with {@link
+     * #atomicProcessor}: set both, or neither.
+     */
     public Builder offsetStore(OffsetStore store) {
       this.offsetStore = store;
       return this;
@@ -2305,9 +2465,11 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
     }
 
     /**
-     * Sets the batch processor this runner commits through. Required: pass the {@code
-     * JdbcProjectionRepository} a {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} projection
-     * writes to, or {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for an {@code
+     * Sets the batch processor this runner commits through when {@link #run(ProjectionName,
+     * Projection, ProjectionDeliveryMode)} is given no {@link CheckpointTarget}. Set it together
+     * with {@link #offsetStore}, or leave both unset and run every projection on a target. Pass the
+     * {@code JdbcProjectionRepository} a {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
+     * projection writes to, or {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()} for an {@code
      * AT_LEAST_ONCE_IDEMPOTENT} projection. The {@link #offsetStore} must read the checkpoint it
      * advances: for a {@code JdbcProjectionRepository}, {@code PostgresReadModelCheckpoints} on the
      * same {@code DataSource} ({@code PostgresReadModelStore#checkpointTarget()}), never a {@code
@@ -2423,18 +2585,26 @@ public final class ContinuousProjectionRunner implements ProjectionRunner, AutoC
       if (errorStrategy == ProjectionErrorStrategy.DLQ && deadLetterStore == null) {
         throw new IllegalArgumentException("deadLetterStore is required when errorStrategy is DLQ");
       }
-      if (atomicProcessor == null) {
+      if (offsetStore != null && atomicProcessor == null) {
         throw new IllegalArgumentException(
             "atomicProcessor is required: pass the JdbcProjectionRepository your"
                 + " TRANSACTIONAL_LOCAL projections write to, or"
                 + " AtomicBatchProcessor.nonAtomicAtLeastOnce() for a runner of"
-                + " AT_LEAST_ONCE_IDEMPOTENT projections");
+                + " AT_LEAST_ONCE_IDEMPOTENT projections. The offsetStore and atomicProcessor are a"
+                + " pair: set both, or neither and run every projection with a CheckpointTarget.");
+      }
+      if (offsetStore == null && atomicProcessor != null) {
+        throw new IllegalArgumentException(
+            "offsetStore is required: the atomicProcessor commits the checkpoint the runner reads"
+                + " from the offsetStore. Set both, or neither and run every projection with a"
+                + " CheckpointTarget.");
       }
       // An unfenceable multi-replica projection is a configuration error, not a
       // degraded mode — refuse to boot rather than run the leadership protocol against a processor
-      // that ignores its epoch.
-      ProjectionFencingPolicy.requireFencingCapable(
-          leadership, atomicProcessor, "ContinuousProjectionRunner");
+      // that ignores its epoch. A run on a CheckpointTarget checks the target's processor at run().
+      if (atomicProcessor != null) {
+        ProjectionFencingPolicy.requireFencingCapable(leadership, atomicProcessor, RUNNER_NAME);
+      }
       return new ContinuousProjectionRunner(
           eventStore,
           offsetStore,

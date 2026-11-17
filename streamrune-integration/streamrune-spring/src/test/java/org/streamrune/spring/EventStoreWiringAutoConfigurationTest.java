@@ -145,9 +145,13 @@ class EventStoreWiringAutoConfigurationTest {
     runner.run(
         ctx -> {
           assertThat(ctx).hasNotFailed();
-          var store = ctx.getBeanFactory().getBeanDefinition("postgres");
+          var store =
+              ctx.getBeanFactory()
+                  .getBeanDefinition(StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN);
           assertThat(store.isLazyInit()).as("the default store is created on first use").isTrue();
-          assertThat(ctx.getBeanFactory().getType("postgres"))
+          assertThat(
+                  ctx.getBeanFactory()
+                      .getType(StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN))
               .isEqualTo(PostgresReadModelStore.class);
           var checkpoint =
               ctx.getBean(
@@ -309,20 +313,77 @@ class EventStoreWiringAutoConfigurationTest {
   }
 
   /**
-   * Any store the application defines replaces the default one. Without a store named {@code
-   * postgres} there is no default repository to inject, and asking for one says so.
+   * A store of another name does not replace the default one: the default store stays defined
+   * (lazily — the mock DataSource is never touched here), beside the application's store.
    */
   @Test
-  void userDefinedReadModelStoreBacksOffTheDefaultStore() {
+  void aUserStoreOfAnotherName_leavesTheDefaultStoreDefined() {
     var repository = new JdbcProjectionRepository(mock(DataSource.class));
     runner
+        .withBean(
+            "searchStore",
+            ReadModelStore.class,
+            () -> ReadModelStore.of("search", repository, mock(OffsetStore.class), repository))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(
+                      ctx.getBeanFactory()
+                          .containsBeanDefinition(
+                              StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN))
+                  .isTrue();
+              assertThat(ctx.getBean(ReadModelStore.class).name()).isEqualTo("search");
+            });
+  }
+
+  /**
+   * An unqualified {@code ReadModelStore} injection point of the application resolves to its own
+   * store, not to the default one beside it — which stays uncreated (its creation would read the
+   * mock DataSource's server version).
+   */
+  @Test
+  void anUnqualifiedReadModelStoreInjection_resolvesToTheApplicationsStore() {
+    var repository = new JdbcProjectionRepository(mock(DataSource.class));
+    var search = ReadModelStore.of("search", repository, mock(OffsetStore.class), repository);
+    runner
+        .withBean("searchStore", ReadModelStore.class, () -> search)
+        .withUserConfiguration(InjectsAReadModelStore.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(InjectsAReadModelStore.Holder.class).store()).isSameAs(search);
+            });
+  }
+
+  /** An application bean that injects a {@code ReadModelStore} without a qualifier. */
+  @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+  static class InjectsAReadModelStore {
+    record Holder(ReadModelStore store) {}
+
+    @org.springframework.context.annotation.Bean
+    Holder holder(ReadModelStore store) {
+      return new Holder(store);
+    }
+  }
+
+  /**
+   * Without a DataSource there is no default store: the {@code ProjectionRepository} bean needs an
+   * application store named {@code postgres}, and asking for it without one says so.
+   */
+  @Test
+  void withoutADataSource_andNoStoreNamedPostgres_theProjectionRepositoryBeanRefuses() {
+    var repository = new JdbcProjectionRepository(mock(DataSource.class));
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS)
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .withBean(EventStore.class, () -> mock(EventStore.class))
         .withBean(
             ReadModelStore.class,
             () -> ReadModelStore.of("search", repository, mock(OffsetStore.class), repository))
         .run(
             ctx -> {
-              assertThat(ctx).doesNotHaveBean("postgres");
-              assertThat(ctx.getBean(ReadModelStore.class).name()).isEqualTo("search");
+              assertThat(ctx)
+                  .doesNotHaveBean(StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN);
               org.assertj.core.api.Assertions.assertThatThrownBy(
                       () -> ctx.getBean(ProjectionRepository.class))
                   .hasStackTraceContaining("No read-model store is named 'postgres'")
@@ -330,7 +391,11 @@ class EventStoreWiringAutoConfigurationTest {
             });
   }
 
-  /** The default store's repository is the injectable ProjectionRepository. */
+  /**
+   * The repository of the store named {@code postgres} is the injectable ProjectionRepository —
+   * here an application store's, which replaces the default one: the default store, whose creation
+   * would read the mock DataSource's server version, is never created.
+   */
   @Test
   void theProjectionRepositoryBeanIsTheDefaultStoresRepository() {
     var repository = new JdbcProjectionRepository(mock(DataSource.class));

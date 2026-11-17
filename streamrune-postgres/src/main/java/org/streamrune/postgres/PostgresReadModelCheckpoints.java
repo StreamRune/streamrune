@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import javax.sql.DataSource;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
@@ -57,5 +58,25 @@ public final class PostgresReadModelCheckpoints implements OffsetStore {
   @Override
   public void reset(ProjectionName projectionName) {
     checkpointFence.reset(dataSource, projectionName);
+  }
+
+  /**
+   * Refused: these are a read-model store's checkpoints, never the event store's subscription
+   * checkpoint. The inherited default would pair {@code readmodel_checkpoint} with {@link
+   * org.streamrune.core.projection.AtomicBatchProcessor#nonAtomicAtLeastOnce()} — which does not
+   * fence — under the name {@value OffsetStore#SUBSCRIPTION_CHECKPOINT}, a target that names a
+   * table it does not use. The store's own pair is {@link
+   * PostgresReadModelStore#checkpointTarget()}; the subscription checkpoint is {@link
+   * PostgresOffsetStore#subscriptionCheckpoint()}.
+   *
+   * @throws UnsupportedOperationException always
+   */
+  @Override
+  public CheckpointTarget subscriptionCheckpoint() {
+    throw new UnsupportedOperationException(
+        "PostgresReadModelCheckpoints are a read-model store's checkpoints (readmodel_checkpoint),"
+            + " never the event store's subscription checkpoint: use the store's"
+            + " checkpointTarget() to run a projection on them, or PostgresOffsetStore's"
+            + " subscriptionCheckpoint() for the event store's subscription_checkpoint");
   }
 }

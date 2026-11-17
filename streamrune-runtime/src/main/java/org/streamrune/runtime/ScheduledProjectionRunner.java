@@ -236,10 +236,16 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * Registers a {@link SubscriptionLifecycle} view of the scheduled projection {@code name} with
    * the health contributor. The view derives its lifecycle state from the runner's live {@link
    * ScheduledProjectionState}, so a STOPPED/ERROR projection reports DOWN. Pause/resume are
-   * unsupported (scheduled projections have no pausable subscription).
+   * unsupported (scheduled projections have no pausable subscription). Lag is measured against the
+   * checkpoints of the projection's own pair, and the entry names its checkpoint target.
    */
   private void registerHealth(ProjectionName name) {
-    healthContributor.register(consumerName(name), new ScheduledSubscriptionView(name));
+    RegistrationCheckpoints pair = checkpointsOf(name);
+    healthContributor.register(
+        consumerName(name),
+        new ScheduledSubscriptionView(name),
+        pair.checkpoints(),
+        pair.targetName());
   }
 
   /**
@@ -1341,9 +1347,10 @@ public final class ScheduledProjectionRunner implements AutoCloseable {
    * offset store. As with {@link org.streamrune.core.projection.ProjectionRunner#reset}, the
    * checkpoint is all this resets: read models and dead-letter entries are left untouched.
    *
+   * <p>A {@link #start()} called while the reset runs waits for it to finish.
+   *
    * @param name the registered projection to rewind
    * @throws IllegalArgumentException if no projection of that name is registered
-   *     <p>A {@link #start()} called while the reset runs waits for it to finish.
    * @throws IllegalStateException if the runner is started (a running drain could save a higher
    *     offset after the reset, undoing it), or if the offset store's reset returned without
    *     rewinding the checkpoint

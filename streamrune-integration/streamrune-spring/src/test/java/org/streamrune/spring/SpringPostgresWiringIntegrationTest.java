@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.saga.SagaStore;
+import org.streamrune.core.subscription.SubscriptionHealth;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
@@ -42,8 +44,10 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresSnapshotStorePurger;
+import org.streamrune.runtime.SubscriptionHealthContributor;
 import org.streamrune.runtime.gdpr.ForgetResult;
 import org.streamrune.runtime.gdpr.ForgetSubjectService;
 import org.streamrune.test.InMemoryCryptoEngine;
@@ -358,6 +362,86 @@ class SpringPostgresWiringIntegrationTest {
   }
 
   /**
+   * A {@code TRANSACTIONAL_LOCAL} projection keeps its checkpoint in {@code readmodel_checkpoint}
+   * and has no row in {@code subscription_checkpoint}. Once it caught up, its health entry reads
+   * lag 0 and UP — measured against its own store's checkpoint — and names the store, in the
+   * contributor and in the rendered health indicator. With a lag threshold of 1, a lag measured
+   * against {@code subscription_checkpoint} would read DEGRADED and grow with every append.
+   */
+  @Test
+  void aCaughtUpTransactionalProjection_reportsLagZeroAndUp_andNamesItsStore() {
+    var streamId =
+        StreamId.of(AggregateType.of("customer"), AggregateId.of("health-" + UUID.randomUUID()));
+    new ApplicationContextRunner()
+        .withPropertyValues(
+            SpringTestMocks.NO_SNAPSHOTS,
+            "streamrune.projections.auto-discovery.enabled=true",
+            "streamrune.polling-interval=50ms",
+            "streamrune.polling-jitter=0s",
+            "streamrune.subscription.health.lag-threshold=1")
+        .withConfiguration(
+            AutoConfigurations.of(StreamRuneAutoConfiguration.class, ProjectionAutoConfig.class))
+        .withBean(DataSource.class, () -> dataSource)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new)
+        .withUserConfiguration(RoutedProjectionsConfig.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              long offset =
+                  ctx.getBean(EventStore.class)
+                      .append(
+                          streamId,
+                          List.of(
+                              envelope(
+                                  streamId, new CustomerRegistered("cust-h", "h@example.com"))),
+                          Version.initial())
+                      .globalOffsets()
+                      .getLast()
+                      .value();
+              var contributor = ctx.getBean(SubscriptionHealthContributor.class);
+
+              Awaitility.await()
+                  .atMost(Duration.ofSeconds(20))
+                  .untilAsserted(
+                      () -> {
+                        assertThat(checkpoint("readmodel_checkpoint", RoutedTransactional.NAME))
+                            .hasValueSatisfying(o -> assertThat(o).isGreaterThanOrEqualTo(offset));
+                        SubscriptionHealth transactional =
+                            healthOf(contributor, RoutedTransactional.NAME);
+                        assertThat(transactional.lag()).isZero();
+                        assertThat(transactional.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                        assertThat(transactional.store()).isEqualTo("postgres");
+                        SubscriptionHealth atLeastOnce =
+                            healthOf(contributor, RoutedAtLeastOnce.NAME);
+                        assertThat(atLeastOnce.lag()).isZero();
+                        assertThat(atLeastOnce.status()).isEqualTo(SubscriptionHealth.Status.UP);
+                        assertThat(atLeastOnce.store())
+                            .isEqualTo(
+                                org.streamrune.core.projection.OffsetStore.SUBSCRIPTION_CHECKPOINT);
+                      });
+              assertThat(checkpoint("subscription_checkpoint", RoutedTransactional.NAME))
+                  .as("the lag was not read from the subscription checkpoint")
+                  .isEmpty();
+
+              var health = ctx.getBean(StreamRuneHealthIndicator.class).health();
+              assertThat(health.getDetails().get("subscription." + RoutedTransactional.NAME))
+                  .asInstanceOf(InstanceOfAssertFactories.MAP)
+                  .containsEntry("lag", 0L)
+                  .containsEntry("status", "UP")
+                  .containsEntry("store", "postgres");
+            });
+  }
+
+  private static SubscriptionHealth healthOf(
+      SubscriptionHealthContributor contributor, String name) {
+    return contributor.health().stream()
+        .filter(h -> h.name().value().equals(name))
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no health entry for " + name));
+  }
+
+  /**
    * An application that keeps its subscription checkpoints on a second database — its own {@code
    * PostgresOffsetStore} over a DataSource that is not the application's {@code DataSource} bean —
    * gets a subscription checkpoint whose processor commits to that same second database: the batch
@@ -403,6 +487,266 @@ class SpringPostgresWiringIntegrationTest {
                   .as("nothing lands in the primary database")
                   .isEmpty();
             });
+  }
+
+  // ── several read-model stores: the default replaced only by name ─────────────────
+
+  /**
+   * An application store named {@code postgres} — here a Postgres store on a database of its own —
+   * replaces the default store: it is the only store, the {@code ProjectionRepository} bean is its
+   * repository, a projection over that repository is routed to it, and the default store is never
+   * created: its read-model series never reaches the application's {@code DataSource}.
+   */
+  @Test
+  void userStoreNamedPostgresReplacesTheDefault() throws Exception {
+    PGSimpleDataSource fresh = secondDatabase();
+    PGSimpleDataSource own = secondDatabase();
+    var replacement =
+        org.streamrune.postgres.PostgresReadModelStore.create(
+            "postgres",
+            own,
+            org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(null),
+            true,
+            true);
+    storesRunner(fresh)
+        .withBean(
+            "appPostgres", org.streamrune.core.projection.ReadModelStore.class, () -> replacement)
+        .withUserConfiguration(TransactionalOverTheRepositoryBean.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(ReadModelStores.class).stores()).containsExactly(replacement);
+              assertThat(ctx.getBean(org.streamrune.core.projection.ProjectionRepository.class))
+                  .isSameAs(replacement.repository());
+              var runner = ctx.getBean(org.streamrune.runtime.MultiProjectionRunner.class);
+              assertThat(targetNameOf(runner, RoutedTransactional.NAME)).isEqualTo("postgres");
+              assertThat(processorOf(runner, RoutedTransactional.NAME))
+                  .isSameAs(replacement.processor());
+              assertThat(tableExists(fresh, "readmodel_checkpoint"))
+                  .as("the replaced default store is never created")
+                  .isFalse();
+            });
+  }
+
+  /**
+   * An application store of another name is added beside the default store: both are routing
+   * targets — a projection declaring the added store goes there, a projection over the {@code
+   * ProjectionRepository} bean goes to the default store, which is created on the {@code
+   * DataSource}.
+   */
+  @Test
+  void additionalUserStoreKeepsTheDefault() throws Exception {
+    PGSimpleDataSource fresh = secondDatabase();
+    var search = new org.streamrune.test.InMemoryProjectionRepository();
+    storesRunner(fresh)
+        .withBean(
+            "searchStore",
+            org.streamrune.core.projection.ReadModelStore.class,
+            () ->
+                org.streamrune.core.projection.ReadModelStore.of("search", search, search, search))
+        .withUserConfiguration(TransactionalOverTheRepositoryBean.class)
+        .withBean(SearchCatalog.class, SearchCatalog::new)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(ReadModelStores.class).stores())
+                  .extracting(org.streamrune.core.projection.ReadModelStore::name)
+                  .containsExactly("postgres", "search");
+              var runner = ctx.getBean(org.streamrune.runtime.MultiProjectionRunner.class);
+              assertThat(targetNameOf(runner, SearchCatalog.NAME)).isEqualTo("search");
+              assertThat(processorOf(runner, SearchCatalog.NAME)).isSameAs(search);
+              assertThat(targetNameOf(runner, RoutedTransactional.NAME)).isEqualTo("postgres");
+              assertThat(processorOf(runner, RoutedTransactional.NAME))
+                  .isInstanceOf(org.streamrune.postgres.JdbcProjectionRepository.class);
+              assertThat(tableExists(fresh, "readmodel_checkpoint"))
+                  .as("the default store is created on the DataSource")
+                  .isTrue();
+            });
+  }
+
+  /**
+   * Two stores with the same name fail the start as a store error, while the stores are collected —
+   * before any registration is routed and before the default store is created.
+   */
+  @Test
+  void duplicateStoreNamesFailStartup() throws Exception {
+    PGSimpleDataSource fresh = secondDatabase();
+    var first = new org.streamrune.test.InMemoryProjectionRepository();
+    var second = new org.streamrune.test.InMemoryProjectionRepository();
+    storesRunner(fresh)
+        .withBean(
+            "firstSearch",
+            org.streamrune.core.projection.ReadModelStore.class,
+            () -> org.streamrune.core.projection.ReadModelStore.of("search", first, first, first))
+        .withBean(
+            "secondSearch",
+            org.streamrune.core.projection.ReadModelStore.class,
+            () ->
+                org.streamrune.core.projection.ReadModelStore.of("search", second, second, second))
+        .withBean(SearchCatalog.class, SearchCatalog::new)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining("Two read-model stores are named 'search'");
+              assertThat(tableExists(fresh, "readmodel_checkpoint"))
+                  .as("the default store is not created for an invalid store set")
+                  .isFalse();
+            });
+  }
+
+  /**
+   * Each index is declared on the store its projection is routed to: the added store's repository
+   * receives the routed projection's index and the default store does not; an index for a
+   * projection with no registration goes to the default store, whose database gets it.
+   */
+  @Test
+  void indexIsDeclaredOnTheRoutedStore() throws Exception {
+    PGSimpleDataSource fresh = secondDatabase();
+    var search = new org.streamrune.test.InMemoryProjectionRepository();
+    var routedIndex =
+        org.streamrune.core.projection.ProjectionIndex.forSort(
+            org.streamrune.core.types.ProjectionName.of(SearchCatalog.NAME),
+            org.streamrune.core.Sort.by("title"));
+    var unregisteredIndex =
+        org.streamrune.core.projection.ProjectionIndex.forSort(
+            org.streamrune.core.types.ProjectionName.of("unregistered_view_model"),
+            org.streamrune.core.Sort.by("title"));
+    storesRunner(fresh)
+        .withBean(
+            "searchStore",
+            org.streamrune.core.projection.ReadModelStore.class,
+            () ->
+                org.streamrune.core.projection.ReadModelStore.of("search", search, search, search))
+        .withBean(SearchCatalog.class, SearchCatalog::new)
+        .withBean(
+            "routedIndex", org.streamrune.core.projection.ProjectionIndex.class, () -> routedIndex)
+        .withBean(
+            "unregisteredIndex",
+            org.streamrune.core.projection.ProjectionIndex.class,
+            () -> unregisteredIndex)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(search.declaredIndexes()).containsExactly(routedIndex);
+              assertThat(indexCount(fresh, "unregistered_view_model_view"))
+                  .as("the unregistered projection's index is on the default store")
+                  .isPositive();
+              assertThat(tableExists(fresh, SearchCatalog.NAME + "_view"))
+                  .as("the routed projection's index never reaches the default store")
+                  .isFalse();
+            });
+  }
+
+  /**
+   * With an added store beside it, the injectable {@code ProjectionRepository} bean stays the
+   * default store's repository.
+   */
+  @Test
+  void primaryProjectionRepositoryBeanIsTheDefaultStoresRepository() throws Exception {
+    PGSimpleDataSource fresh = secondDatabase();
+    var search = new org.streamrune.test.InMemoryProjectionRepository();
+    storesRunner(fresh)
+        .withBean(
+            "searchStore",
+            org.streamrune.core.projection.ReadModelStore.class,
+            () ->
+                org.streamrune.core.projection.ReadModelStore.of("search", search, search, search))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              var defaultStore =
+                  ctx.getBean(
+                      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE_BEAN,
+                      org.streamrune.core.projection.ReadModelStore.class);
+              assertThat(defaultStore.name()).isEqualTo("postgres");
+              assertThat(ctx.getBean(org.streamrune.core.projection.ProjectionRepository.class))
+                  .isSameAs(defaultStore.repository())
+                  .isNotSameAs(search);
+            });
+  }
+
+  /** The auto-configuration with projection discovery, over {@code database}. */
+  private static ApplicationContextRunner storesRunner(DataSource database) {
+    return new ApplicationContextRunner()
+        .withPropertyValues(
+            SpringTestMocks.NO_SNAPSHOTS,
+            "streamrune.projections.auto-discovery.enabled=true",
+            "streamrune.polling-interval=50ms",
+            "streamrune.polling-jitter=0s")
+        .withConfiguration(
+            AutoConfigurations.of(StreamRuneAutoConfiguration.class, ProjectionAutoConfig.class))
+        .withBean(DataSource.class, () -> database)
+        .withBean(EventTypeRegistry.class, () -> typeRegistry)
+        .withBean(CryptoEngine.class, InMemoryCryptoEngine::new);
+  }
+
+  /** The transactional projection over the injected {@code ProjectionRepository} bean. */
+  @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+  static class TransactionalOverTheRepositoryBean {
+    @org.springframework.context.annotation.Bean
+    RoutedTransactional routedTransactional(
+        org.streamrune.core.projection.ProjectionRepository repository) {
+      return new RoutedTransactional(repository);
+    }
+  }
+
+  /** An at-least-once projection that declares the {@code search} store. */
+  @ProjectionConfig(
+      name = SearchCatalog.NAME,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+      readModelStore = "search")
+  static class SearchCatalog implements Projection {
+    static final String NAME = "search_catalog";
+
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
+  private static Object processorOf(
+      org.streamrune.runtime.MultiProjectionRunner runner, String projection) {
+    return pairPart(runner, projection, "processor");
+  }
+
+  private static String targetNameOf(
+      org.streamrune.runtime.MultiProjectionRunner runner, String projection) {
+    return (String) pairPart(runner, projection, "targetName");
+  }
+
+  private static Object pairPart(
+      org.streamrune.runtime.MultiProjectionRunner runner, String projection, String part) {
+    var pairs =
+        (java.util.Map<?, ?>)
+            org.springframework.test.util.ReflectionTestUtils.getField(runner, "checkpoints");
+    Object pair = pairs.get(org.streamrune.core.types.ProjectionName.of(projection));
+    assertThat(pair).as("the routed pair of %s", projection).isNotNull();
+    return org.springframework.test.util.ReflectionTestUtils.invokeMethod(pair, part);
+  }
+
+  private static boolean tableExists(DataSource database, String table) throws Exception {
+    try (var conn = database.getConnection();
+        var ps = conn.prepareStatement("SELECT to_regclass(?) IS NOT NULL")) {
+      ps.setString(1, table);
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getBoolean(1);
+      }
+    }
+  }
+
+  /** The indexes on {@code table} besides its primary key: the declared ones. */
+  private static int indexCount(DataSource database, String table) throws Exception {
+    try (var conn = database.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "SELECT count(*) FROM pg_indexes WHERE tablename = ? AND indexname NOT LIKE"
+                    + " '%_pkey'")) {
+      ps.setString(1, table);
+      try (var rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getInt(1);
+      }
+    }
   }
 
   /** A second database on the container, carrying the event-store series. */

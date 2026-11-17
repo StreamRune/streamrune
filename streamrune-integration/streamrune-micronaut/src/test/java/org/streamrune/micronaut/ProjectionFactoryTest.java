@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import io.micronaut.context.BeanContext;
+import io.micronaut.context.BeanProvider;
 import io.micronaut.context.env.Environment;
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
@@ -46,7 +46,9 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.ProjectionRoutes;
 import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
@@ -165,8 +167,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -194,8 +200,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -219,8 +229,12 @@ class ProjectionFactoryTest {
         factory.scheduledProjectionRunner(
             List.of(new SchedProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new SchedProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -298,8 +312,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 List.of(new SchedProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new SchedProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -396,14 +414,28 @@ class ProjectionFactoryTest {
    * A context holding these stores, as the factory collects them ({@code getBeansOfType}, which
    * also sees a store registered as a runtime singleton).
    */
-  private static BeanContext stores(ReadModelStore... stores) {
-    BeanContext context = mock(BeanContext.class);
-    when(context.getBeansOfType(ReadModelStore.class)).thenReturn(List.of(stores));
-    return context;
+  /** The application's stores, with no default store (no DataSource here). */
+  private static ReadModelStores stores(ReadModelStore... stores) {
+    return new ReadModelStores(java.util.Optional::empty, () -> List.of(stores));
   }
 
-  private static BeanContext noStores() {
+  private static ReadModelStores noStores() {
     return stores();
+  }
+
+  /**
+   * The routes bean over these inputs, computed when the runner asks for it — as Micronaut creates
+   * the singleton on the runner's {@code get()}.
+   */
+  private static BeanProvider<ProjectionRoutes> routes(
+      List<Projection> projections,
+      ReadModelStores stores,
+      CheckpointTarget subscriptionCheckpoint,
+      SubscriptionLeadership leadership,
+      Environment env) {
+    return () ->
+        new ProjectionFactory()
+            .projectionRoutes(projections, env, stores, subscriptionCheckpoint, leadership);
   }
 
   /** A store whose repository, checkpoints and processor are one in-memory repository. */
@@ -424,15 +456,14 @@ class ProjectionFactoryTest {
   private static MultiProjectionRunner multi(
       List<Projection> projections,
       EventStore eventStore,
-      BeanContext stores,
+      ReadModelStores stores,
       CheckpointTarget subscriptionCheckpoint,
       SubscriptionLeadership leadership) {
     return new ProjectionFactory()
         .multiProjectionRunner(
             projections,
             eventStore,
-            stores,
-            subscriptionCheckpoint,
+            routes(projections, stores, subscriptionCheckpoint, leadership, defaultEnv()),
             Collections.emptyList(),
             null,
             leadership,
@@ -444,7 +475,7 @@ class ProjectionFactoryTest {
   }
 
   private static MultiProjectionRunner multi(
-      List<Projection> projections, BeanContext stores, SubscriptionLeadership leadership) {
+      List<Projection> projections, ReadModelStores stores, SubscriptionLeadership leadership) {
     return multi(
         projections,
         mock(EventStore.class),
@@ -454,13 +485,17 @@ class ProjectionFactoryTest {
   }
 
   private static ScheduledProjectionRunner scheduled(
-      List<Projection> projections, BeanContext stores) {
+      List<Projection> projections, ReadModelStores stores) {
     return new ProjectionFactory()
         .scheduledProjectionRunner(
             projections,
             mock(EventStore.class),
-            stores,
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                projections,
+                stores,
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -852,8 +887,12 @@ class ProjectionFactoryTest {
                     .multiProjectionRunner(
                         List.of(new TlPlainProjection()),
                         mock(EventStore.class),
-                        stores(memoryStore("memory", repo)),
-                        subscriptionCheckpoint(repo),
+                        routes(
+                            List.of(new TlPlainProjection()),
+                            stores(memoryStore("memory", repo)),
+                            subscriptionCheckpoint(repo),
+                            null,
+                            env),
                         Collections.emptyList(),
                         null,
                         null,
@@ -911,8 +950,12 @@ class ProjectionFactoryTest {
             factory.scheduledProjectionRunner(
                 List.of(new ContProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new ContProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -949,8 +992,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 Collections.emptyList(),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    Collections.emptyList(),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -983,8 +1030,12 @@ class ProjectionFactoryTest {
             factory.scheduledProjectionRunner(
                 List.of(new NoCronProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new NoCronProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -1016,8 +1067,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 List.of(new ContProjection(), new DuplicateCont()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new ContProjection(), new DuplicateCont()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -1045,8 +1100,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 List.of(new ContProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new ContProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    env),
                 Collections.emptyList(),
                 null,
                 null,
@@ -1078,8 +1137,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                env),
             Collections.emptyList(),
             null,
             null,
@@ -1110,8 +1173,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                env),
             Collections.emptyList(),
             null,
             null,
@@ -1146,8 +1213,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 List.of(new DlqProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new DlqProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    defaultEnv()),
                 Collections.emptyList(),
                 null,
                 null,
@@ -1193,8 +1264,12 @@ class ProjectionFactoryTest {
                 factory.multiProjectionRunner(
                     List.of(new MultiDlqProjection()),
                     mock(EventStore.class),
-                    noStores(),
-                    subscriptionCheckpoint(mock(OffsetStore.class)),
+                    routes(
+                        List.of(new MultiDlqProjection()),
+                        noStores(),
+                        subscriptionCheckpoint(mock(OffsetStore.class)),
+                        null,
+                        defaultEnv()),
                     List.of(dlqA, dlqB),
                     null,
                     null,
@@ -1221,8 +1296,12 @@ class ProjectionFactoryTest {
                 factory.scheduledProjectionRunner(
                     List.of(new MultiDlqScheduledProjection()),
                     mock(EventStore.class),
-                    noStores(),
-                    subscriptionCheckpoint(mock(OffsetStore.class)),
+                    routes(
+                        List.of(new MultiDlqScheduledProjection()),
+                        noStores(),
+                        subscriptionCheckpoint(mock(OffsetStore.class)),
+                        null,
+                        defaultEnv()),
                     List.of(dlqA, dlqB),
                     null,
                     null,
@@ -1242,8 +1321,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new MultiDlqProjection()),
             mock(EventStore.class),
-            noStores(),
-            subscriptionCheckpoint(mock(OffsetStore.class)),
+            routes(
+                List.of(new MultiDlqProjection()),
+                noStores(),
+                subscriptionCheckpoint(mock(OffsetStore.class)),
+                null,
+                defaultEnv()),
             List.of(dlq),
             null,
             null,
@@ -1269,8 +1352,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ProxiedCont()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ProxiedCont()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -1302,8 +1389,12 @@ class ProjectionFactoryTest {
             factory.multiProjectionRunner(
                 List.of(new ContProjection()),
                 eventStore,
-                noStores(),
-                subscriptionCheckpoint(offsetStore),
+                routes(
+                    List.of(new ContProjection()),
+                    noStores(),
+                    subscriptionCheckpoint(offsetStore),
+                    null,
+                    env),
                 Collections.emptyList(),
                 null,
                 null,
@@ -1327,8 +1418,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             metrics,
             null,
@@ -1354,8 +1449,12 @@ class ProjectionFactoryTest {
         factory.multiProjectionRunner(
             List.of(new ContProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new ContProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             null,
             null,
@@ -1382,8 +1481,12 @@ class ProjectionFactoryTest {
         factory.scheduledProjectionRunner(
             List.of(new SchedProjection()),
             eventStore,
-            noStores(),
-            subscriptionCheckpoint(offsetStore),
+            routes(
+                List.of(new SchedProjection()),
+                noStores(),
+                subscriptionCheckpoint(offsetStore),
+                null,
+                defaultEnv()),
             Collections.emptyList(),
             metrics,
             null,

@@ -1179,6 +1179,8 @@ public interface org.streamrune.core.projection.ProjectionRepository
 public interface org.streamrune.core.projection.ProjectionRunner
   public abstract void reset(org.streamrune.core.types.ProjectionName)
   public abstract void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public default void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
+  public default void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public interface org.streamrune.core.projection.ReadModelStore
   public abstract java.lang.String name()
@@ -1462,10 +1464,12 @@ public final record org.streamrune.core.subscription.SubscriptionConfig
 
 public final record org.streamrune.core.subscription.SubscriptionHealth
   public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole)
+  public <init>(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycleState, long, int, org.streamrune.core.subscription.SubscriptionHealth$Status, org.streamrune.core.subscription.LeaseRole, java.lang.String)
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
   public int errorCount()
+  public java.lang.String store()
   public long lag()
   public org.streamrune.core.subscription.LeaseRole role()
   public org.streamrune.core.subscription.SubscriptionHealth$Status status()

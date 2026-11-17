@@ -76,6 +76,20 @@ class ContractBeansTest {
         ContractBeans.create(FirstLeadership.class), ContractBeans.create(FirstLeadership.class));
   }
 
+  @Test
+  void aClassWhoseConstructorsAllTakeArgumentsIsInjected() {
+    assertTrue(ContractBeans.injected(NeedsAnArgument.class));
+    assertTrue(ContractBeans.injected(MultiReadModelStoreScenario.DefaultStoreProjection.class));
+    assertFalse(ContractBeans.injected(FirstLeadership.class));
+    assertFalse(ContractBeans.injected(OutboxStoreBean.class));
+    assertFalse(ContractBeans.injected(NoPublicConstructor.class));
+  }
+
+  /** A bean class with no public constructor at all. */
+  static final class NoPublicConstructor {
+    private NoPublicConstructor() {}
+  }
+
   /** A supplier that does not say what it supplies. */
   @SuppressWarnings("rawtypes")
   public static final class Untyped implements Supplier {

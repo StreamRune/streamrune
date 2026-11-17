@@ -382,8 +382,8 @@ license.
 
 - **Every projection registration declares a `ProjectionDeliveryMode`; there is no default.**
   - `TRANSACTIONAL_LOCAL` — the read-model write and the checkpoint commit in one transaction. Needs
-    a processor with `supportsFencing()` and a projection that writes through the repository handed
-    to `process(batch, repository)`.
+    a processor with `transactional()` and `fencesCheckpoint()` and a projection that writes through
+    the repository handed to `process(batch, repository)`.
   - `AT_LEAST_ONCE_IDEMPOTENT` — the write and the checkpoint commit separately; the projection is
     handed `null` as its repository under every processor and must dedup, version-guard or upsert.
     Declaring this mode is the only acceptance of at-least-once delivery.
@@ -413,7 +413,7 @@ license.
 - `BaseProjection` provides `save()`, `findById()` and `delete()` helpers that use the batch's handed
   repository and the captured one otherwise; inside `process` a projection writes only through them.
 - `ProjectionFencingPolicy`: a leadership-aware runner refuses to build real (multi-replica)
-  `SubscriptionLeadership` over a processor whose `supportsFencing()` is `false`.
+  `SubscriptionLeadership` over a processor whose `fencesCheckpoint()` is `false`.
 - Runners: `ContinuousProjectionRunner` / `MultiProjectionRunner` (polling the global stream, one
   virtual thread per registration), `ScheduledProjectionRunner` (cron-triggered drain,
   `CronExpression`), `PollingProjectionRunner`; `ProjectionRunner.reset(name)` rewinds the offset
@@ -434,11 +434,13 @@ license.
   event type, `CryptoMappingException`, `SubjectForgottenException`, everything else —
   dead-lettered); the failed `[fromOffset, toOffset]` range lands in `projection_dead_letters` as
   metadata only (never the payload) and the runner continues past it.
-- `ProjectionDeadLetterReplayer(eventStore, deadLetterStore, processor)` takes the
-  `AtomicBatchProcessor` the projection's runner commits through.
+- `ProjectionDeadLetterReplayer(eventStore, deadLetterStore, targets)` takes each projection's
+  `CheckpointTarget` — the pair its runner registration reads and commits through — and replays
+  each projection on its own target's processor (`ProjectionDeadLetterReplayer(eventStore,
+  deadLetterStore, processor)` for a runner whose projections share one processor).
   `replay(name, projection, deliveryMode, max)` re-reads each range from the event store
   oldest-first and applies it through `AtomicBatchProcessor.executeReplay`, under the lock a live
-  batch of that projection takes (on `JdbcProjectionRepository`, the `subscription_checkpoint` row
+  batch of that projection takes (on `JdbcProjectionRepository`, the `readmodel_checkpoint` row
   `FOR UPDATE`): a replay and a live batch never interleave, so a read-modify-write projection keeps
   both writes, and a replay is safe while the runner is live. A `TRANSACTIONAL_LOCAL` /
   `EXTERNAL_EFFECT` projection is handed the replay transaction's repository and its range is
@@ -480,8 +482,11 @@ license.
   `ScheduledProjectionState.ERROR`, health `DOWN`), whose message names the likely causes: the
   processor and the offset store are not over the same `DataSource`, or two runners share the
   projection name.
-- `PostgresOffsetStore` ignores a backward or sideways `saveOffset` (a monotonic no-op);
-  `OffsetStore.reset(name)` is the deliberate rewind for a rebuild.
+- `PostgresOffsetStore` and `PostgresReadModelCheckpoints` ignore a backward or sideways
+  `saveOffset` (a monotonic no-op); `OffsetStore.reset(name)` is the deliberate rewind for a
+  rebuild, called on the offset store the projection reads — its checkpoint target's checkpoints
+  (a read-model store's `readmodel_checkpoint`, or the event store's `subscription_checkpoint`), or
+  through the runner that holds the registration.
 - `WindowedProjection` — time-windowed aggregation over `Window(start, end)`, `WindowSink`,
   `LateDataPolicy` (`DROP`, `REOPEN`), self-fencing on the highest offset it has accumulated.
 - `Projection.writesThroughRepository()` is a declaration, `false` by default and `true` in

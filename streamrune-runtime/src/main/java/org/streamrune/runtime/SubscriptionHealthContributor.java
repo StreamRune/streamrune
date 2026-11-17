@@ -46,6 +46,14 @@ import org.streamrune.core.types.SubscriptionName;
  * are batches it dead-lettered or skipped, holes in the read model that standing by does not close,
  * and they clear when it processes a clean batch.
  *
+ * <p><b>Where lag is read.</b> A registration made with {@link #register(SubscriptionName,
+ * SubscriptionLifecycle, OffsetStore, String)} measures its lag against the checkpoint in the
+ * {@link OffsetStore} it names — a projection runner registers each projection with the offset
+ * store of the pair it reads and commits through, so a projection routed to a read-model store is
+ * measured against that store's checkpoints and its entry names the store ({@link
+ * SubscriptionHealth#store()}). Every other registration reads the offset store this contributor
+ * was built with: the event store's subscription checkpoint in the framework integrations.
+ *
  * <p>Lag never makes a subscription {@code DOWN}. It is measured against the checkpoint all
  * replicas share, so every replica reports the same value: a new projection replaying the store, a
  * projection reset for a rebuild, or a burst of appends would read {@code DOWN} on every replica at
@@ -91,6 +99,18 @@ public final class SubscriptionHealthContributor {
   private final StreamRuneMetrics metrics;
 
   private final ConcurrentHashMap<SubscriptionName, SubscriptionEntry> subscriptions =
+      new ConcurrentHashMap<>();
+
+  /**
+   * The checkpoint each name registered with its own offset store reads, and that store's name. A
+   * name absent here reads {@link #offsetStore}. Kept apart from {@link #subscriptions} and, unlike
+   * it, kept across {@link #unregister}: the live lag gauge outlives the entry (a meter is never
+   * removed), and it must go on reading the checkpoint the registration's runner advances, not
+   * {@link #offsetStore}, which holds no checkpoint for a projection routed to a read-model store.
+   * One small entry per projection name; only a later {@link #register(SubscriptionName,
+   * SubscriptionLifecycle, OffsetStore, String)} of the name replaces it.
+   */
+  private final ConcurrentHashMap<SubscriptionName, CheckpointSource> checkpointSources =
       new ConcurrentHashMap<>();
 
   /**
@@ -164,10 +184,69 @@ public final class SubscriptionHealthContributor {
     return lagThreshold;
   }
 
+  /**
+   * Registers {@code subscription} under {@code name}, starting a fresh episode (no errors, not
+   * terminally halted), on whatever checkpoint source {@code name} already has. A name never given
+   * one by {@link #register(SubscriptionName, SubscriptionLifecycle, OffsetStore, String)} is
+   * measured against the offset store this contributor was built with, and its entry names no
+   * store. A name that was given one keeps it: a subscription self-registers this way when it
+   * starts ({@code PollingEventSubscription}, {@code HybridEventSubscription}), and the live
+   * subscription a projection runner's {@link ContinuousProjectionRunner.SubscriptionFactory}
+   * builds for a projection routed to a read-model store must not repoint that projection's lag at
+   * this contributor's offset store, where it has no row. Only the four-argument {@code register}
+   * changes a name's source.
+   *
+   * @param name the subscription's name; for a projection, its projection name
+   * @param subscription the lifecycle whose state the entry reports
+   */
   public void register(SubscriptionName name, SubscriptionLifecycle subscription) {
     if (this == NOOP) {
       return;
     }
+    registerEntry(name, subscription);
+  }
+
+  /**
+   * Registers {@code subscription} under {@code name}, starting a fresh episode, with its lag
+   * measured against {@code checkpoints} instead of the offset store this contributor was built
+   * with. A projection runner registers each projection this way, with the offset store of the pair
+   * it reads the projection's position from and commits it through: a projection routed to a
+   * read-model store keeps its checkpoint in that store, so measured against this contributor's
+   * offset store its lag would grow with every append and the entry would read {@code DEGRADED}
+   * however current the read model is.
+   *
+   * <p>The source holds for {@code name} until the next call of this method: {@link
+   * #replaceLifecycle} keeps it, so does the two-argument {@link #register(SubscriptionName,
+   * SubscriptionLifecycle)}, and so does {@link #unregister}, because the live lag gauge keeps
+   * reading after the entry is gone.
+   *
+   * @param name the subscription's name; for a projection, its projection name
+   * @param subscription the lifecycle whose state the entry reports
+   * @param checkpoints the offset store holding {@code name}'s checkpoint; not {@code null}
+   * @param store the name of the checkpoint target {@code checkpoints} belongs to ({@link
+   *     org.streamrune.core.projection.CheckpointTarget#name()}), reported as {@link
+   *     SubscriptionHealth#store()}; {@code null} for a runner's default pair, which has none
+   * @throws NullPointerException if {@code checkpoints} is {@code null}
+   */
+  public void register(
+      SubscriptionName name,
+      SubscriptionLifecycle subscription,
+      OffsetStore checkpoints,
+      String store) {
+    Objects.requireNonNull(checkpoints, "checkpoints is required");
+    if (this == NOOP) {
+      return;
+    }
+    // Before the entry and the lag gauge: the gauge may sample the moment it is registered.
+    checkpointSources.put(name, new CheckpointSource(checkpoints, store));
+    registerEntry(name, subscription);
+  }
+
+  /**
+   * Publishes a fresh entry for {@code name} on whatever checkpoint source {@code name} has: the
+   * shared body of both {@code register} methods and of {@link #replaceLifecycle}'s fallback.
+   */
+  private void registerEntry(SubscriptionName name, SubscriptionLifecycle subscription) {
     // A fresh registration starts with no held lag, so a restarted/reset projection
     // never inherits the previous incarnation's last known value. Cleared before the gauge is
     // registered, since registration may sample the supplier immediately.
@@ -238,18 +317,18 @@ public final class SubscriptionHealthContributor {
    * count intact across the swap so the DEGRADED verdict earned during catch-up survives into LIVE
    * until a genuinely clean batch resets it via {@link #recordSuccess}.
    *
-   * <p>Falls back to {@link #register(SubscriptionName, SubscriptionLifecycle)} — a fresh episode —
-   * only when no entry is currently registered for {@code name} (nothing to preserve). A
-   * <b>terminally errored</b> existing entry is NOT a fresh-register case — swapping in a fresh
-   * entry silently cleared {@code terminalError} back to {@code false}, i.e. DOWN silently became
-   * UP, exactly the "silently resurrect" outcome this javadoc has always said must not happen. A
-   * terminal entry now takes the SAME swap-only path as any other existing entry: only the {@link
-   * SubscriptionLifecycle} reference changes, and {@code errorCount}/{@code terminalError}/{@code
-   * pushPathDeadWarned} — including a {@code true} {@code terminalError} — carry over unchanged,
-   * because those are the SAME {@link java.util.concurrent.atomic.AtomicBoolean}/{@link
-   * java.util.concurrent.atomic.AtomicInteger} instances, not copied values. The runner does not
-   * call this after {@link #markTerminalError} in practice, but the method stays total and correct
-   * either way.
+   * <p>Falls back to a fresh registration — a fresh episode, on the checkpoint source {@code name}
+   * was last registered with — only when no entry is currently registered for {@code name} (nothing
+   * to preserve). A <b>terminally errored</b> existing entry is NOT a fresh-register case —
+   * swapping in a fresh entry silently cleared {@code terminalError} back to {@code false}, i.e.
+   * DOWN silently became UP, exactly the "silently resurrect" outcome this javadoc has always said
+   * must not happen. A terminal entry now takes the SAME swap-only path as any other existing
+   * entry: only the {@link SubscriptionLifecycle} reference changes, and {@code errorCount}/{@code
+   * terminalError}/{@code pushPathDeadWarned} — including a {@code true} {@code terminalError} —
+   * carry over unchanged, because those are the SAME {@link
+   * java.util.concurrent.atomic.AtomicBoolean}/{@link java.util.concurrent.atomic.AtomicInteger}
+   * instances, not copied values. The runner does not call this after {@link #markTerminalError} in
+   * practice, but the method stays total and correct either way.
    */
   public void replaceLifecycle(SubscriptionName name, SubscriptionLifecycle subscription) {
     if (this == NOOP) {
@@ -257,7 +336,7 @@ public final class SubscriptionHealthContributor {
     }
     SubscriptionEntry existing = subscriptions.get(name);
     if (existing == null) {
-      register(name, subscription);
+      registerEntry(name, subscription);
       return;
     }
     subscriptions.put(
@@ -317,6 +396,13 @@ public final class SubscriptionHealthContributor {
     }
   }
 
+  /**
+   * Removes {@code name}'s entry from {@link #health()}. The checkpoint source a {@link
+   * #register(SubscriptionName, SubscriptionLifecycle, OffsetStore, String)} gave it is kept, so
+   * the lag gauge, which outlives the entry, still reads the right checkpoint.
+   *
+   * @param name the subscription to remove
+   */
   public void unregister(SubscriptionName name) {
     subscriptions.remove(name);
     roleProbeFailedWarned.remove(name);
@@ -417,6 +503,8 @@ public final class SubscriptionHealthContributor {
       entry.errorCount().set(0);
     }
     int errors = entry.errorCount().get();
+    CheckpointSource source = checkpointSources.get(name);
+    String store = source == null ? null : source.store();
     LagSample sample = computeLag(name);
     long lag = sample.lag();
     // Guarded — was bare, and computeHealth() runs once per subscription for EVERY
@@ -445,12 +533,13 @@ public final class SubscriptionHealthContributor {
           entry.subscription() != null
               ? entry.subscription().state()
               : SubscriptionLifecycleState.STOPPED;
-      return new SubscriptionHealth(name, state, lag, errors, SubscriptionHealth.Status.DOWN, role);
+      return new SubscriptionHealth(
+          name, state, lag, errors, SubscriptionHealth.Status.DOWN, role, store);
     }
     SubscriptionLifecycleState state = entry.subscription().state();
     SubscriptionHealth.Status status = determineStatus(state, sample, errors);
     status = applyPushPathHealth(name, entry, state, status);
-    return new SubscriptionHealth(name, state, lag, errors, status, role);
+    return new SubscriptionHealth(name, state, lag, errors, status, role, store);
   }
 
   /**
@@ -550,7 +639,9 @@ public final class SubscriptionHealthContributor {
     // checkpoint can pair up). It means the database is inconsistent: the event table was
     // restored to an earlier point than the checkpoint, or rows were deleted, and the events later
     // appended at the offsets in between are never delivered to this subscription.
-    GlobalOffset checkpoint = offsetStore.getLastOffset(ProjectionName.of(name.value()));
+    CheckpointSource source = checkpointSources.get(name);
+    OffsetStore checkpoints = source == null ? offsetStore : source.checkpoints();
+    GlobalOffset checkpoint = checkpoints.getLastOffset(ProjectionName.of(name.value()));
     // EventStore.lastGlobalOffset() reports the head of the global stream. The previous
     // implementation read readGlobalStream(Long.MAX_VALUE - 1, 1), which returns events with an
     // offset STRICTLY GREATER than the argument — always empty against a real store, so the
@@ -603,6 +694,14 @@ public final class SubscriptionHealthContributor {
     }
     return SubscriptionHealth.Status.UP;
   }
+
+  /**
+   * Where one registration's checkpoint is read.
+   *
+   * @param checkpoints the offset store holding the checkpoint
+   * @param store the checkpoint target's name, or {@code null} when it has none
+   */
+  private record CheckpointSource(OffsetStore checkpoints, String store) {}
 
   /**
    * @param pushPathDeadWarned one-shot latch so the dead-push-path WARN fires once per transition

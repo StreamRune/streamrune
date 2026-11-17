@@ -27,9 +27,11 @@ import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRunner;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
@@ -198,7 +200,11 @@ public final class StreamRune implements CommandBus, AutoCloseable {
             .start(
                 () -> {
                   try {
-                    runner.run(reg.name(), reg.projection(), reg.deliveryMode());
+                    if (reg.target() == null) {
+                      runner.run(reg.name(), reg.projection(), reg.deliveryMode());
+                    } else {
+                      runner.run(reg.name(), reg.projection(), reg.deliveryMode(), reg.target());
+                    }
                   } catch (Throwable e) {
                     // Mirrors MultiProjectionRunner#start(): catch Throwable, not just Exception,
                     // so an Error unwinding the virtual thread is still logged rather than
@@ -697,11 +703,98 @@ public final class StreamRune implements CommandBus, AutoCloseable {
 
     /**
      * Registers a projection to run via {@link #startProjections()}, with the delivery guarantee it
-     * declares. The runner the factory builds validates the mode against its processor at {@code
-     * run()}.
+     * declares, on the runner's own checkpoints and processor. The runner the factory builds
+     * validates the mode against its processor at {@code run()}. To name where the projection's
+     * checkpoint lives instead, use {@link #registerProjection(ProjectionName, Projection,
+     * ProjectionDeliveryMode, ReadModelStore)} or {@link #registerProjection(ProjectionName,
+     * Projection, ProjectionDeliveryMode, CheckpointTarget)}.
      */
     public Builder registerProjection(
         ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
+      return addProjection(name, projection, mode, null);
+    }
+
+    /**
+     * Registers a projection whose read models live in {@code store}: its checkpoint is read from
+     * and committed through {@link ReadModelStore#checkpointTarget()}, so a {@code
+     * TRANSACTIONAL_LOCAL} projection's read-model writes and its checkpoint commit in one
+     * transaction of that store. The store is the explicit declaration — nothing is looked up by
+     * name — and the runner checks the mode against the store's processor, not its own. {@link
+     * #startProjections()} calls {@link ProjectionRunner#run(ProjectionName, Projection,
+     * ProjectionDeliveryMode, CheckpointTarget)}; a runner that cannot route a projection to a
+     * target refuses it there (logged, by projection name), and never runs it on its own pair.
+     *
+     * @throws IllegalArgumentException if {@code name}, {@code mode} or {@code store} is {@code
+     *     null}, or the projection exposes a {@link Projection#writeTarget()} that is not {@code
+     *     store}'s repository (the declaration and the code disagree)
+     */
+    public Builder registerProjection(
+        ProjectionName name,
+        Projection projection,
+        ProjectionDeliveryMode mode,
+        ReadModelStore store) {
+      if (name == null) {
+        throw new IllegalArgumentException("name is required");
+      }
+      if (store == null) {
+        throw new IllegalArgumentException(
+            "store is required for projection '" + LogSanitizer.sanitizeForLog(name.value()) + "'");
+      }
+      if (projection != null
+          && projection
+              .writeTarget()
+              .map(
+                  target ->
+                      !target
+                          .writeTargetIdentity()
+                          .equals(store.repository().writeTargetIdentity()))
+              .orElse(false)) {
+        throw new IllegalArgumentException(
+            "projection '"
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "' is registered on read-model store '"
+                + LogSanitizer.sanitizeForLog(store.name())
+                + "', but its writeTarget() is not that store's repository: the declaration and"
+                + " the code disagree. Register it on the store its writeTarget() belongs to, or"
+                + " make the projection write to store.repository().");
+      }
+      return addProjection(name, projection, mode, store.checkpointTarget());
+    }
+
+    /**
+     * Registers a projection whose checkpoint is read from and committed through {@code target} —
+     * typically the event store's subscription checkpoint ({@link
+     * org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()}) for an {@code
+     * AT_LEAST_ONCE_IDEMPOTENT} projection that keeps its read models outside any read-model store.
+     * The target is the explicit declaration; the runner checks the mode against its processor.
+     * Routing at {@link #startProjections()} works as for {@link
+     * #registerProjection(ProjectionName, Projection, ProjectionDeliveryMode, ReadModelStore)}.
+     *
+     * @throws IllegalArgumentException if {@code name}, {@code mode} or {@code target} is {@code
+     *     null}
+     */
+    public Builder registerProjection(
+        ProjectionName name,
+        Projection projection,
+        ProjectionDeliveryMode mode,
+        CheckpointTarget target) {
+      if (name == null) {
+        throw new IllegalArgumentException("name is required");
+      }
+      if (target == null) {
+        throw new IllegalArgumentException(
+            "target is required for projection '"
+                + LogSanitizer.sanitizeForLog(name.value())
+                + "'");
+      }
+      return addProjection(name, projection, mode, target);
+    }
+
+    private Builder addProjection(
+        ProjectionName name,
+        Projection projection,
+        ProjectionDeliveryMode mode,
+        CheckpointTarget target) {
       if (name == null) {
         throw new IllegalArgumentException("name is required");
       }
@@ -711,7 +804,7 @@ public final class StreamRune implements CommandBus, AutoCloseable {
                 + LogSanitizer.sanitizeForLog(name.value())
                 + "'");
       }
-      projections.add(new ProjectionRegistration(name, projection, mode));
+      projections.add(new ProjectionRegistration(name, projection, mode, target));
       return this;
     }
 
@@ -724,16 +817,35 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     /**
      * Sets a factory that creates the projection runner from the built event store and the
      * configured {@link #subscriptionConfig(SubscriptionConfig)}. Mutually exclusive with {@link
-     * #projectionRunner(ProjectionRunner)}. Example:
+     * #projectionRunner(ProjectionRunner)}. Example — each registration names where its checkpoint
+     * lives, so the runners need no pair of their own:
      *
      * <pre>{@code
-     * .projectionRunnerFactory((store, config) ->
-     *     ContinuousProjectionRunner.builder()
-     *         .eventStore(store)
-     *         .offsetStore(offsetStore)
-     *         .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
-     *         .subscriptionConfig(config)
-     *         .build())
+     * ReadModelStore readModels =
+     *     PostgresReadModelStore.create("postgres", dataSource, objectMapper, true, true);
+     * OffsetStore subscriptionCheckpoints = new PostgresOffsetStore(dataSource);
+     *
+     * StreamRune.builder()
+     *     // ...
+     *     .projectionRunnerFactory((store, config) ->
+     *         ContinuousProjectionRunner.builder()
+     *             .eventStore(store)
+     *             .subscriptionConfig(config)
+     *             .build())
+     *     // Read models and checkpoint commit in one transaction of the read-model store.
+     *     .registerProjection(
+     *         ORDER_SUMMARY,
+     *         new OrderSummaryProjection(readModels.repository()),
+     *         ProjectionDeliveryMode.TRANSACTIONAL_LOCAL,
+     *         readModels)
+     *     // An idempotent side effect: its position lives in the event store's subscription
+     *     // checkpoint.
+     *     .registerProjection(
+     *         WELCOME_MAIL,
+     *         welcomeMailer,
+     *         ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+     *         subscriptionCheckpoints.subscriptionCheckpoint())
+     *     .build();
      * }</pre>
      *
      * <p><b>One instance PER registration.</b> The factory is invoked once for EACH {@link
@@ -898,7 +1010,8 @@ public final class StreamRune implements CommandBus, AutoCloseable {
                   new ProjectionRegistration(
                       reg.name(),
                       TracingProjectionDecorator.traced(reg.name(), reg.projection(), tracing),
-                      reg.deliveryMode()))
+                      reg.deliveryMode(),
+                      reg.target()))
           .toList();
     }
 
@@ -1063,6 +1176,10 @@ public final class StreamRune implements CommandBus, AutoCloseable {
     }
   }
 
+  /** A registered projection; {@code target} is {@code null} on the runner's own pair. */
   private record ProjectionRegistration(
-      ProjectionName name, Projection projection, ProjectionDeliveryMode deliveryMode) {}
+      ProjectionName name,
+      Projection projection,
+      ProjectionDeliveryMode deliveryMode,
+      CheckpointTarget target) {}
 }

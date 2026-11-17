@@ -455,7 +455,12 @@ event store's `subscription_checkpoint`. Never pair a `JdbcProjectionRepository`
 `PostgresOffsetStore`: the runner would read a table the processor never writes (see
 [a processor and an offset store that disagree](#a-processor-and-an-offset-store-that-disagree)).
 A runner-wide `offsetStore(...)` + `atomicProcessor(...)` pair still serves registrations given no
-target; set both from one pair (`store.checkpoints()` + `store.processor()`) or neither.
+target; set both from one pair (`store.checkpoints()` + `store.processor()`) or neither. The facade
+takes the same declaration: `StreamRune.Builder.registerProjection(name, projection, mode, store)`
+(a `ReadModelStore`) or `(…, target)` (a `CheckpointTarget`), which `startProjections()` hands to
+`ProjectionRunner.run(name, projection, mode, target)`; `ContinuousProjectionRunner` and
+`PollingProjectionRunner` route it, and a runner that cannot route refuses it instead of running
+the projection on its own pair.
 
 **Integration recipe:** with a `DataSource`, the integrations create the default read-model store
 `postgres` (a `PostgresReadModelStore` on the primary `DataSource`, which applies the read-model
@@ -465,7 +470,8 @@ series under `streamrune.read-model.schema.auto-initialize`), and the injectable
 projection over that bean (any bean scope — identity survives proxies): routing sends it to the
 store whose repository it writes to, and its checkpoint lives in that store's `readmodel_checkpoint`.
 An `AT_LEAST_ONCE_IDEMPOTENT` projection that writes elsewhere checkpoints in the event store's
-`subscription_checkpoint`. Startup refuses anything else.
+`subscription_checkpoint`. Startup refuses anything else. The routing rules, several stores in
+one application and the leadership requirements are in [Read-model stores](read-model-stores.md).
 
 #### A processor and an offset store that disagree
 
@@ -523,7 +529,7 @@ range, and the replay applies all of it again, which an idempotent projection co
 naming the runner, the projection, the mode, the processor and the fix when a `TRANSACTIONAL_LOCAL`
 or `EXTERNAL_EFFECT` registration:
 
-- runs under a processor whose `supportsFencing()` is `false`, such as `nonAtomicAtLeastOnce()` —
+- runs under a processor whose `transactional()` is `false`, such as `nonAtomicAtLeastOnce()` —
   it cannot put the read-model write and the checkpoint in one transaction;
 - does not write through the handed repository — `writesThroughRepository()` answers `false`, so its
   `process(List, ProjectionRepository)` is taken to be the inherited default, which ignores the
@@ -581,11 +587,21 @@ Because the source of truth is the event log, a projection can always be reconst
 Drop the projection table, reset the checkpoint offset to zero, and let the runner replay
 all events. This makes schema migrations for read models a non-event: just rebuild.
 
-Use `OffsetStore.reset(projectionName)` to rewind the checkpoint — not `saveOffset`. The
-PostgreSQL/JDBC offset stores reject any `saveOffset` that would move a checkpoint backward
-(a defense-in-depth guard against a stale replica regressing another instance's progress; see
+Rewind the checkpoint with a reset — not `saveOffset`. The PostgreSQL/JDBC offset stores reject
+any `saveOffset` that would move a checkpoint backward (a defense-in-depth guard against a stale
+replica regressing another instance's progress; see
 [Multi-replica deployment](production.md#multi-replica-deployment)), so an intentional rewind
 needs `reset`'s distinct, unguarded code path instead.
+
+Reset it where the projection keeps it. A projection committed with its read models checkpoints in
+its [read-model store](read-model-stores.md)'s `readmodel_checkpoint`, in that store's database;
+only an at-least-once projection that writes outside every store checkpoints in the event store's
+`subscription_checkpoint`, the table the integrations' `OffsetStore` bean resets. So reset through
+the runner that holds the registration (`runner.reset(name)`), on its target
+(`runner.reset(name, store.checkpointTarget())`), or through the store's checkpoints
+(`store.checkpoints().reset(name)`); the runner's startup line names each projection's
+`checkpoint target`, and its health entry the same `store`. See
+[Offset reset / rebuild path](production.md#offset-reset--rebuild-path).
 
 Running more than one instance of the same projection is safe: single-active-consumer
 leadership (also covered in the production guide) ensures only one instance processes and

@@ -111,11 +111,19 @@ public class StreamRuneMicronautModule {
   static final String FRAMEWORK_SSE_EVENT_FEED = "streamRuneSseEventFeed";
 
   /**
-   * The bean name — and the {@link org.streamrune.core.projection.ReadModelStore#name()} — of the
-   * default read-model store, {@value}. A projection declares {@code readModelStore = "postgres"}
-   * to route to it explicitly.
+   * The {@link org.streamrune.core.projection.ReadModelStore#name()} of the default read-model
+   * store, {@value}. A projection declares {@code readModelStore = "postgres"} to route to it
+   * explicitly; an application store of this name replaces it.
    */
-  static final String DEFAULT_READ_MODEL_STORE = "postgres";
+  static final String DEFAULT_READ_MODEL_STORE =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE;
+
+  /**
+   * The bean name ({@code @Named}) of the default read-model store, {@value}: a framework name, so
+   * an application store {@code @Named("postgres")} never collides with it.
+   */
+  static final String DEFAULT_READ_MODEL_STORE_BEAN =
+      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE_BEAN;
 
   /**
    * The bean name of the event store's subscription checkpoint, {@value}: the {@link
@@ -1278,10 +1286,14 @@ public class StreamRuneMicronautModule {
    * <p>Creating the store checks the server version, applies the read-model migration series
    * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
    * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
-   * read-model schema. A Micronaut singleton is created when it is first resolved: in an
-   * application with projections, while the context starts, on the starting thread — {@link
+   * read-model schema. That happens when the stores are first selected — {@link #readModelStores}
+   * creates the store it keeps, as Spring and Quarkus do — or earlier if a part of the bean is used
+   * first ({@link DeferredReadModelStore}), never when the bean is created: Micronaut has no lazy
+   * singleton, and a context started with {@code eagerInitSingletons(true)} creates every
+   * singleton, so a replaced default store never touches its database. In an application with
+   * projections the stores are selected while the context starts, on the starting thread — {@link
    * StreamRuneLifecycle} resolves the framework's runners on the startup event, and the runners'
-   * factory methods collect the stores (as does a {@code BaseProjection} that injects the {@link
+   * routes select the stores (as does a {@code BaseProjection} that injects the {@link
    * #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer} when index
    * beans exist).
    *
@@ -1290,23 +1302,25 @@ public class StreamRuneMicronautModule {
    * store — so {@code @Encrypted} read-model fields are ciphertext at rest and within GDPR forget
    * scope.
    *
-   * <p>It backs off when the application defines any {@link
-   * org.streamrune.core.projection.ReadModelStore} bean.
+   * <p>Replaced only by name: an application {@link org.streamrune.core.projection.ReadModelStore}
+   * bean whose {@code name()} is {@value #DEFAULT_READ_MODEL_STORE} takes its place, and the
+   * Postgres store behind this bean is then never created; a store of any other name is added
+   * beside it ({@link #readModelStores}). {@code @Secondary} only keeps an unqualified {@code
+   * ReadModelStore} injection point of the application resolving to the application's store.
    *
    * @param dataSource the JDBC data source
    * @param properties the StreamRune configuration properties
    * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
    *     more than one triggers an {@link IllegalStateException})
    * @param metrics optional metrics collector the read-model decrypt path reports redactions to
-   * @return the default read-model store
+   * @return the default read-model store, created on first use
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
    *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
    */
   @Singleton
   @Secondary
-  @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE)
+  @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE_BEAN)
   @Requires(beans = DataSource.class)
-  @Requires(missingBeans = org.streamrune.core.projection.ReadModelStore.class)
   public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(
       DataSource dataSource,
       StreamRuneMicronautProperties properties,
@@ -1323,55 +1337,110 @@ public class StreamRuneMicronautModule {
     CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
     // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
     // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return org.streamrune.postgres.PostgresReadModelStore.create(
-        DEFAULT_READ_MODEL_STORE,
-        dataSource,
+    var objectMapper =
         org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics)),
-        properties.readModelAutoInitialize(),
-        true);
+            cryptoEngine, metricsOrNoop(metrics));
+    boolean migrate = properties.readModelAutoInitialize();
+    // Creating the bean touches nothing: a context with eagerInitSingletons creates every
+    // singleton, and a replaced default store must never reach its database.
+    return new DeferredReadModelStore(
+        DEFAULT_READ_MODEL_STORE,
+        () ->
+            org.streamrune.postgres.PostgresReadModelStore.create(
+                DEFAULT_READ_MODEL_STORE, dataSource, objectMapper, migrate, true));
   }
 
   /**
-   * Creates the default read-model store's repository as the injectable {@link
-   * org.streamrune.core.projection.ProjectionRepository}, so query handlers and {@code
-   * BaseProjection} constructors that take a {@code ProjectionRepository} read and write the store
-   * named {@value #DEFAULT_READ_MODEL_STORE}. It backs off when the application defines a {@code
-   * ProjectionRepository} bean.
+   * Creates the application's read-model stores in one bean: every {@link
+   * org.streamrune.core.projection.ReadModelStore} bean the application defines — compiled, or
+   * registered as a runtime singleton before the context starts — and the default store ({@link
+   * #postgresReadModelStore}) unless one of them is named {@value #DEFAULT_READ_MODEL_STORE}
+   * ({@link org.streamrune.integration.ProjectionStoreRouting#selectStores}). Selected and
+   * validated once, when first asked for: creating this bean creates no store.
    *
-   * <p>The stores are collected with {@link io.micronaut.context.BeanContext#getBeansOfType}, as
-   * {@link ProjectionFactory} collects them: Micronaut does not reliably collect a
-   * runtime-registered singleton into an injected {@code List}.
+   * <p>Replacing the default store is by name, which no bean condition can see: a store's name is
+   * known only once the store exists. The application's stores are collected with {@link
+   * io.micronaut.context.BeanContext#getBeansOfType} — the codebase's established multi-bean
+   * collection pattern — under a qualifier that leaves out the default store by its bean name,
+   * {@value #DEFAULT_READ_MODEL_STORE_BEAN}, without creating it; the default store is resolved by
+   * that name only when no application store took its name, so a replaced default store never
+   * touches its database. A kept default store is created right there and selected as the Postgres
+   * store itself, not its {@link DeferredReadModelStore} bean: selecting the stores migrates and
+   * validates it whatever the projections use, as in Spring and Quarkus, and routing messages and
+   * health name the store's own class.
    *
    * @param beanContext the context the read-model stores are collected from
+   * @return the stores
+   * @hidden
+   */
+  @Singleton
+  @Internal
+  public org.streamrune.integration.ReadModelStores readModelStores(
+      io.micronaut.context.BeanContext beanContext) {
+    io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore> defaultStore =
+        io.micronaut.inject.qualifiers.Qualifiers.byName(DEFAULT_READ_MODEL_STORE_BEAN);
+    io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>
+        applicationStores =
+            new io.micronaut.context.Qualifier<>() {
+              @Override
+              public <
+                      B extends
+                          io.micronaut.inject.BeanType<
+                                  org.streamrune.core.projection.ReadModelStore>>
+                  java.util.stream.Stream<B> reduce(
+                      Class<org.streamrune.core.projection.ReadModelStore> beanType,
+                      java.util.stream.Stream<B> candidates) {
+                return candidates.filter(
+                    candidate ->
+                        defaultStore
+                            .reduce(beanType, java.util.stream.Stream.of(candidate))
+                            .findAny()
+                            .isEmpty());
+              }
+            };
+    return new org.streamrune.integration.ReadModelStores(
+        () ->
+            beanContext
+                .findBean(org.streamrune.core.projection.ReadModelStore.class, defaultStore)
+                .map(StreamRuneMicronautModule::created),
+        () ->
+            List.copyOf(
+                beanContext.getBeansOfType(
+                    org.streamrune.core.projection.ReadModelStore.class, applicationStores)));
+  }
+
+  /** The store behind a {@link DeferredReadModelStore}, created now; any other store as it is. */
+  private static org.streamrune.core.projection.ReadModelStore created(
+      org.streamrune.core.projection.ReadModelStore store) {
+    return store instanceof DeferredReadModelStore deferred ? deferred.store() : store;
+  }
+
+  /**
+   * Creates the repository of the store named {@value #DEFAULT_READ_MODEL_STORE} — the default
+   * store's, or the application store's that replaced it — as the injectable {@link
+   * org.streamrune.core.projection.ProjectionRepository}, so query handlers and {@code
+   * BaseProjection} constructors that take a {@code ProjectionRepository} read and write it; other
+   * stores' repositories are reached through their {@code ReadModelStore} beans. It backs off when
+   * the application defines a {@code ProjectionRepository} bean.
+   *
+   * <p>Finding the store named {@value #DEFAULT_READ_MODEL_STORE} creates the application's store
+   * beans (a store's name is known only once it exists) and the default store only when none of
+   * them replaced it.
+   *
+   * @param stores the read-model stores
    * @return the repository of the store named {@value #DEFAULT_READ_MODEL_STORE}
-   * @throws IllegalStateException when the application's read-model stores replace the default one
-   *     and none is named {@value #DEFAULT_READ_MODEL_STORE}: there is no default store to take the
-   *     repository from
+   * @throws IllegalStateException when the stores are invalid, or none is named {@value
+   *     #DEFAULT_READ_MODEL_STORE}
+   * @hidden
    */
   @Singleton
   @Secondary
   @Requires(beans = org.streamrune.core.projection.ReadModelStore.class)
   @Requires(missingBeans = org.streamrune.core.projection.ProjectionRepository.class)
+  @Internal
   public org.streamrune.core.projection.ProjectionRepository projectionRepository(
-      io.micronaut.context.BeanContext beanContext) {
-    return org.streamrune.integration.ProjectionStoreRouting.defaultRepository(
-        readModelStores(beanContext), DEFAULT_READ_MODEL_STORE);
-  }
-
-  /**
-   * Every {@link org.streamrune.core.projection.ReadModelStore} bean in the context, compiled or
-   * registered at run time. {@link io.micronaut.context.BeanContext#getBeansOfType} sees both;
-   * Micronaut does not reliably collect a runtime-registered singleton into an injected {@code
-   * List}, so a store the application registers with {@code registerSingleton} would be missed.
-   *
-   * @param beanContext the context to collect from
-   * @return the stores, in the context's order
-   */
-  static List<org.streamrune.core.projection.ReadModelStore> readModelStores(
-      io.micronaut.context.BeanContext beanContext) {
-    return List.copyOf(
-        beanContext.getBeansOfType(org.streamrune.core.projection.ReadModelStore.class));
+      org.streamrune.integration.ReadModelStores stores) {
+    return stores.defaultRepository();
   }
 
   /**

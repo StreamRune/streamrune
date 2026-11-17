@@ -80,7 +80,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * (with Quarkus' duration converter) and its two mappings, and the {@code DataSource}, which the
  * container disposes of when it shuts down, as quarkus-agroal closes its pool. An application
  * without a database declares the test kit's in-memory event store and offset store, and its {@code
- * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean, a
+ * DataSource} is {@link NoDatabase}. A plain contract bean is a {@code Singleton} class bean (Arc
+ * injects the single constructor of a constructor-injected one, {@link ContractBeans#injected}), a
  * supplied one a synthetic bean of the type it supplies.
  *
  * <p>The HTTP endpoints are served by Quarkus REST over HTTP ({@link QuarkusRestTestServer}) as a
@@ -139,15 +140,19 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   /** The module's JAX-RS providers, which Quarkus REST registers as {@code Singleton} beans. */
   static final List<Class<?>> REST_PROVIDERS = List.of(StreamRuneRequestFilter.class);
 
-  /** Started by the first behaviour that needs PostgreSQL, stopped after the class. */
+  /**
+   * Started by the first behaviour that needs PostgreSQL, stopped after the class; the multi-store
+   * scenario's test class shares it.
+   */
   private static PostgreSQLContainer postgres;
 
   private static final AtomicInteger DATABASES = new AtomicInteger();
 
   @AfterAll
-  static void stopPostgres() {
+  static synchronized void stopPostgres() {
     if (postgres != null) {
       postgres.stop();
+      postgres = null;
     }
   }
 
@@ -274,8 +279,8 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
   /**
    * The stores of an application without a database: the test kit's in-memory ones, a read-model
-   * store among them, which replaces the integration's default {@code postgres} store as the
-   * in-memory event store replaces its event store.
+   * store named {@code postgres} among them, which replaces the integration's default store by its
+   * name as the in-memory event store replaces its event store.
    */
   @ApplicationScoped
   public static class InMemoryStores {
@@ -285,7 +290,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     public org.streamrune.core.projection.ReadModelStore readModelStore() {
       var repository = new org.streamrune.test.InMemoryProjectionRepository();
       return org.streamrune.core.projection.ReadModelStore.of(
-          "memory", repository, repository, repository);
+          "postgres", repository, repository, repository);
     }
 
     @Produces

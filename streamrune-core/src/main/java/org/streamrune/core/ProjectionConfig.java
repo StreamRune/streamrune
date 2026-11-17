@@ -74,7 +74,8 @@ public @interface ProjectionConfig {
    *
    * <p>A name no store carries is a startup error, and so is a declaration that disagrees with the
    * projection's own {@code writeTarget()}. Declare it when routing cannot decide alone — several
-   * transactional stores, or a {@code writeTarget()} that no store owns.
+   * transactional stores. A {@code writeTarget()} that no store owns is refused even with a
+   * declaration: define a store over that repository, or write through the store's repository.
    *
    * @return the name of the read-model store, or empty to let routing choose
    */

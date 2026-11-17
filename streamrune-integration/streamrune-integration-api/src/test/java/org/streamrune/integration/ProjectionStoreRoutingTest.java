@@ -30,6 +30,10 @@ import org.streamrune.test.InMemoryProjectionRepository;
 
 class ProjectionStoreRoutingTest {
 
+  /** The remedy offered to a projection that exposes writeTarget(): it moves by what it writes. */
+  private static final String WRITE_TARGET_FIX =
+      "return that store's repository from writeTarget(), which decides where it writes";
+
   /**
    * A processor with chosen capabilities and no behaviour: routing reads capabilities only, never
    * commits.
@@ -389,8 +393,10 @@ class ProjectionStoreRoutingTest {
         .hasMessageContaining("belongs to no read-model store")
         .hasMessageContaining("'postgres'")
         .hasMessageContaining("'search'")
-        .hasMessageContaining("readModelStore = \"<name>\"")
-        .hasMessageContaining("writeTarget()");
+        .hasMessageContaining("Define a ReadModelStore over that repository")
+        .hasMessageContaining(WRITE_TARGET_FIX)
+        // rule 1 refuses a declaration that disagrees with writeTarget(): never offer it alone
+        .hasMessageNotContaining("declare readModelStore");
   }
 
   // ---------- Rule 4: at-least-once, no match ----------
@@ -444,8 +450,19 @@ class ProjectionStoreRoutingTest {
           .hasMessageContaining("routed to 'search'")
           .hasMessageContaining("transactional()")
           .hasMessageContaining("'postgres'")
-          .hasMessageContaining("readModelStore = \"<name>\"")
-          .hasMessageContaining("writeTarget()");
+          .satisfies(
+              refused -> {
+                if (projection.writeTarget().isPresent()) {
+                  // routed by writeTarget(): a declaration naming another store is refused
+                  assertThat(refused.getMessage())
+                      .contains(WRITE_TARGET_FIX)
+                      .doesNotContain("declare readModelStore");
+                } else {
+                  assertThat(refused.getMessage())
+                      .contains("readModelStore = \"<name>\"")
+                      .contains("writeTarget()");
+                }
+              });
     }
   }
 
@@ -484,6 +501,22 @@ class ProjectionStoreRoutingTest {
         .hasMessageContaining("routed to 'sqlite'")
         .hasMessageContaining("fencesCheckpoint()")
         .hasMessageContaining("'postgres'");
+    // an at-least-once registration over a foreign repository: it moves by its writeTarget()
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.route(
+                    registration(
+                        "audit",
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        "",
+                        writingTo(new InMemoryProjectionRepository())),
+                    List.of(fullStore("postgres")),
+                    UNFENCED_SUBSCRIPTION,
+                    REAL))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("routed to 'subscription_checkpoint'")
+        .hasMessageContaining(WRITE_TARGET_FIX)
+        .hasMessageNotContaining("declare readModelStore");
   }
 
   @Test
@@ -642,6 +675,129 @@ class ProjectionStoreRoutingTest {
     assertThat(ProjectionStoreRouting.INLINE_INFO)
         .contains("'{}'")
         .contains("AT_LEAST_ONCE_IDEMPOTENT inline");
+  }
+
+  // ── selecting the stores: the default replaced only by name ─────────────────────
+
+  /** A default-store supplier that counts its calls: calling it is what creates the store. */
+  private static final class DefaultSupplier
+      implements java.util.function.Supplier<Optional<ReadModelStore>> {
+    private final Optional<ReadModelStore> store;
+    int calls;
+
+    DefaultSupplier(Optional<ReadModelStore> store) {
+      this.store = store;
+    }
+
+    @Override
+    public Optional<ReadModelStore> get() {
+      calls++;
+      return store;
+    }
+  }
+
+  @Test
+  void selectStores_anApplicationStoreNamedPostgresReplacesTheDefault_whichIsNeverCreated() {
+    var defaultStore = new DefaultSupplier(Optional.of(fullStore("postgres")));
+    var replacement = fullStore("postgres");
+    var search = fullStore("search");
+
+    assertThat(ProjectionStoreRouting.selectStores(defaultStore, List.of(search, replacement)))
+        .containsExactly(search, replacement);
+    assertThat(defaultStore.calls).as("the replaced default is never created").isZero();
+  }
+
+  @Test
+  void selectStores_anApplicationStoreOfAnotherNameKeepsTheDefault_first() {
+    var postgres = fullStore("postgres");
+    var defaultStore = new DefaultSupplier(Optional.of(postgres));
+    var search = fullStore("search");
+
+    assertThat(ProjectionStoreRouting.selectStores(defaultStore, List.of(search)))
+        .containsExactly(postgres, search);
+    assertThat(defaultStore.calls).isEqualTo(1);
+  }
+
+  @Test
+  void selectStores_withoutADefault_isTheApplicationsStores() {
+    var search = fullStore("search");
+
+    assertThat(
+            ProjectionStoreRouting.selectStores(
+                new DefaultSupplier(Optional.empty()), List.of(search)))
+        .containsExactly(search);
+    assertThat(ProjectionStoreRouting.selectStores(Optional::empty, List.of())).isEmpty();
+  }
+
+  @Test
+  void selectStores_duplicateApplicationStoreNames_failBeforeTheDefaultIsCreated() {
+    var defaultStore = new DefaultSupplier(Optional.of(fullStore("postgres")));
+
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    defaultStore, List.of(fullStore("search"), store("search", false, true))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Two read-model stores are named 'search'");
+    assertThat(defaultStore.calls).isZero();
+  }
+
+  @Test
+  void selectStores_twoApplicationStoresNamedPostgres_fail() {
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    Optional::empty, List.of(fullStore("postgres"), fullStore("postgres"))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Two read-model stores are named 'postgres'");
+  }
+
+  @Test
+  void selectStores_anApplicationStoreOverTheDefaultsRepository_fails() {
+    var repository = new InMemoryProjectionRepository();
+    var postgres = ReadModelStore.of("postgres", repository, repository, repository);
+    var alias = ReadModelStore.of("alias", repository, repository, repository);
+
+    assertThatThrownBy(
+            () -> ProjectionStoreRouting.selectStores(() -> Optional.of(postgres), List.of(alias)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("'postgres' and 'alias' write to the same place");
+  }
+
+  @Test
+  void selectStores_aDefaultNotNamedPostgres_isRefused() {
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    () -> Optional.of(fullStore("other")), List.of()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("The default read-model store must be named 'postgres'")
+        .hasMessageContaining("'other'");
+  }
+
+  @Test
+  void selectStores_refusesNulls() {
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(null, List.of()))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("defaultStore is required");
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(Optional::empty, null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("applicationStores is required");
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(() -> null, List.of()))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("defaultStore must supply an Optional");
+    var withNull = new java.util.ArrayList<ReadModelStore>();
+    withNull.add(null);
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(Optional::empty, withNull))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("stores must not hold null");
+  }
+
+  @Test
+  void theDefaultStoreNameAndBeanName() {
+    assertThat(ProjectionStoreRouting.DEFAULT_STORE).isEqualTo("postgres");
+    assertThat(ProjectionStoreRouting.DEFAULT_STORE_BEAN)
+        .isEqualTo("streamRuneDefaultReadModelStore");
   }
 
   // ── the default store's repository ──────────────────────────────────────────────

@@ -18,9 +18,11 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionCommitFencedException.Guard;
+import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionHealth;
@@ -179,6 +181,79 @@ class ProjectionCommitRejectionEscalationTest {
       assertThat(store.findById(name, "row", Applied.class)).contains(new Applied(2));
     } finally {
       run.join(10_000);
+    }
+  }
+
+  @Test
+  void continuous_aRunOnAnotherTarget_doesNotInheritThePreviousRunsRejection() throws Exception {
+    // Run 1, on target X, ends halted with a rejection recorded at checkpoint 0. Run 2, on target
+    // Y, is rejected once at Y's checkpoint 0 and then commits: its first rejection is a first one
+    // again, not a repeat of X's, so it is tolerated and the projection catches up.
+    var name = ProjectionName.of("orders");
+    var events = storeWithTwoEvents();
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(events)
+            .fetchSize(10)
+            .batchSize(10)
+            .subscriptionConfig(fastPolling())
+            .build();
+
+    AtomicBatchProcessor alwaysRejects =
+        (pn, batch, newOffset, epoch, updater, offsets) -> {
+          throw new ProjectionCommitFencedException(Guard.MONOTONIC, "X rejects every commit");
+        };
+    var xCheckpoints = new InMemoryOffsetStore();
+    Thread first =
+        Thread.ofVirtual()
+            .start(
+                () -> {
+                  try {
+                    runner.run(
+                        name,
+                        batch -> {},
+                        ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("x", xCheckpoints, alwaysRejects));
+                  } catch (Throwable ignored) {
+                    // the halt is what this run is for
+                  }
+                });
+    first.join(15_000);
+    assertThat(first.isAlive()).isFalse();
+    assertThat(runner.state()).isEqualTo(ProjectionState.ERROR);
+
+    var yRejections = new AtomicInteger();
+    AtomicBatchProcessor rejectsOnce =
+        (pn, batch, newOffset, epoch, updater, offsets) -> {
+          if (yRejections.getAndIncrement() == 0) {
+            throw new ProjectionCommitFencedException(
+                Guard.MONOTONIC, "Y rejects its first commit");
+          }
+          AtomicBatchProcessor.nonAtomicAtLeastOnce()
+              .executeAtomically(pn, batch, newOffset, epoch, updater, offsets);
+        };
+    var yCheckpoints = new InMemoryOffsetStore();
+    Thread second =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    runner.run(
+                        name,
+                        batch -> {},
+                        ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT,
+                        new CheckpointTarget("y", yCheckpoints, rejectsOnce)));
+    try (runner) {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(15))
+          .until(
+              () ->
+                  yCheckpoints.getLastOffset(name).equals(GlobalOffset.of(2))
+                      || runner.state() == ProjectionState.ERROR);
+      assertThat(runner.state()).isNotEqualTo(ProjectionState.ERROR);
+      assertThat(runner.lastError()).isNull();
+      assertThat(yCheckpoints.getLastOffset(name)).isEqualTo(GlobalOffset.of(2));
+    } finally {
+      second.join(10_000);
     }
   }
 

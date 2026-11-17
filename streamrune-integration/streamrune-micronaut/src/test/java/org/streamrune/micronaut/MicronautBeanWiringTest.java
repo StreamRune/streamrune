@@ -266,7 +266,7 @@ class MicronautBeanWiringTest {
           ctx.findBeanDefinition(
                   ReadModelStore.class,
                   io.micronaut.inject.qualifiers.Qualifiers.byName(
-                      StreamRuneMicronautModule.DEFAULT_READ_MODEL_STORE))
+                      StreamRuneMicronautModule.DEFAULT_READ_MODEL_STORE_BEAN))
               .isPresent(),
           "the default read-model store must be defined when a DataSource is present — leadership"
               + " is auto-wired on the same condition and its epoch fence is inert without one");
@@ -2108,7 +2108,7 @@ class MicronautBeanWiringTest {
         identityValidator < sagaSweeperLifecycleStart,
         "StreamRuneRequestIdentityValidator must run before SagaCompensationRetryLifecycle");
     // The projection indexes are declared before any runner reads or writes a read model.
-    int indexDeclarer = new ProjectionIndexDeclarer(null, List.of()).getOrder();
+    int indexDeclarer = new ProjectionIndexDeclarer(null, List.of(), null).getOrder();
     assertTrue(
         indexDeclarer < lifecycleStart,
         "ProjectionIndexDeclarer must run before StreamRuneLifecycle");
@@ -2289,13 +2289,13 @@ class MicronautBeanWiringTest {
       return mock(DataSource.class);
     }
 
-    // The application's store replaces the default one, which would be created on the mock
-    // DataSource (and fail reading its server version) when the runner collects the stores. The
-    // projection has no write target, so the store does not take it.
+    // The application's store, named postgres, replaces the default one, which would be created
+    // on the mock DataSource (and fail reading its server version) when the runner collects the
+    // stores. The projection has no write target, so the store does not take it.
     @Singleton
     ReadModelStore memoryStore() {
       var repository = new InMemoryProjectionRepository();
-      return ReadModelStore.of("memory", repository, repository, repository);
+      return ReadModelStore.of("postgres", repository, repository, repository);
     }
 
     @Singleton

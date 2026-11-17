@@ -3,7 +3,9 @@ package org.streamrune.integration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.streamrune.core.Internal;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.CheckpointTarget;
@@ -60,6 +62,21 @@ public final class ProjectionStoreRouting {
   private ProjectionStoreRouting() {}
 
   /**
+   * The name of the default read-model store, {@value}: the {@code PostgresReadModelStore} each
+   * integration registers on the application's {@code DataSource}. A projection declares {@code
+   * readModelStore = "postgres"} to route to it explicitly; an application store of this name
+   * replaces it ({@link #selectStores}).
+   */
+  public static final String DEFAULT_STORE = "postgres";
+
+  /**
+   * The bean name each integration registers the default store under, {@value}: a framework name,
+   * so a bean the application names {@code postgres} never collides with it, and so each
+   * integration can leave it out of the application's stores without creating it.
+   */
+  public static final String DEFAULT_STORE_BEAN = "streamRuneDefaultReadModelStore";
+
+  /**
    * One discovered registration, as routing needs it.
    *
    * @param projectionName the name it is registered under (sanitized into messages)
@@ -98,6 +115,15 @@ public final class ProjectionStoreRouting {
           + " or expose writeTarget() returning that store's repository";
 
   /**
+   * {@link #FIX} for a projection that exposes {@code writeTarget()}: rule 1 refuses a declaration
+   * naming another store than the one its {@code writeTarget()} writes to, so declaring alone
+   * cannot move it.
+   */
+  private static final String WRITE_TARGET_FIX =
+      "return that store's repository from writeTarget(), which decides where it writes (a"
+          + " readModelStore declaration naming any other store is refused)";
+
+  /**
    * Refuses a store set routing could not decide over: two stores with the same {@link
    * ReadModelStore#name()} (explicit routing would be ambiguous), or two whose repositories have
    * equal {@link ProjectionRepository#writeTargetIdentity()} (rule 2 would match both). Replacing a
@@ -111,35 +137,97 @@ public final class ProjectionStoreRouting {
     Objects.requireNonNull(stores, "stores is required");
     for (int i = 0; i < stores.size(); i++) {
       ReadModelStore first = Objects.requireNonNull(stores.get(i), "stores must not hold null");
-      for (int j = i + 1; j < stores.size(); j++) {
-        ReadModelStore second = Objects.requireNonNull(stores.get(j), "stores must not hold null");
-        if (first.name().equals(second.name())) {
-          throw new IllegalStateException(
-              "Two read-model stores are named '"
-                  + LogSanitizer.sanitizeForLog(first.name())
-                  + "': "
-                  + describe(first)
-                  + " and "
-                  + describe(second)
-                  + ". Store names are unique: rename one, or — to replace a store — define only"
-                  + " the one you want under that name.");
-        }
-        if (sameStore(first.repository(), second.repository())) {
-          throw new IllegalStateException(
-              "Read-model stores '"
-                  + LogSanitizer.sanitizeForLog(first.name())
-                  + "' and '"
-                  + LogSanitizer.sanitizeForLog(second.name())
-                  + "' write to the same place (their repositories' writeTargetIdentity() are"
-                  + " equal): "
-                  + describe(first)
-                  + " and "
-                  + describe(second)
-                  + ". A projection's writeTarget() could not choose between them. Define one store"
-                  + " per place.");
-        }
+      validateAgainst(first, stores.subList(i + 1, stores.size()));
+    }
+  }
+
+  /**
+   * Refuses {@code first} beside any of {@code others} on a duplicate name or write-target
+   * identity: each pair is compared once.
+   */
+  private static void validateAgainst(ReadModelStore first, List<ReadModelStore> others) {
+    for (ReadModelStore second : others) {
+      Objects.requireNonNull(second, "stores must not hold null");
+      if (first.name().equals(second.name())) {
+        throw new IllegalStateException(
+            "Two read-model stores are named '"
+                + LogSanitizer.sanitizeForLog(first.name())
+                + "': "
+                + describe(first)
+                + " and "
+                + describe(second)
+                + ". Store names are unique: rename one, or — to replace a store — define only"
+                + " the one you want under that name.");
+      }
+      if (sameStore(first.repository(), second.repository())) {
+        throw new IllegalStateException(
+            "Read-model stores '"
+                + LogSanitizer.sanitizeForLog(first.name())
+                + "' and '"
+                + LogSanitizer.sanitizeForLog(second.name())
+                + "' write to the same place (their repositories' writeTargetIdentity() are"
+                + " equal): "
+                + describe(first)
+                + " and "
+                + describe(second)
+                + ". A projection's writeTarget() could not choose between them. Define one store"
+                + " per place.");
       }
     }
+  }
+
+  /**
+   * The stores an application routes to: the application's own, and the default store unless one of
+   * them takes its name. Replacing the default store is by name and explicit: an application store
+   * named {@value #DEFAULT_STORE} replaces it, and a store of any other name is added beside it.
+   *
+   * <p>{@code defaultStore} creates the default store — which checks the server version, migrates
+   * and validates its schema — so it is called only when no application store is named {@value
+   * #DEFAULT_STORE}: a replaced default store is never created and never touches its database. The
+   * selection is validated ({@link #validateStores}) in one pass that compares each pair of stores
+   * once: the application's stores among themselves before the default store is created, then the
+   * default store against each of them. A duplicate name or write target fails here, as a store
+   * error, before any registration is routed.
+   *
+   * @param defaultStore creates the default store, or supplies none (no {@code DataSource}); called
+   *     at most once
+   * @param applicationStores every store the application defines, the default store not among them
+   * @return the default store (when kept) followed by the application's stores, validated
+   * @throws NullPointerException if an argument, an element of {@code applicationStores} or the
+   *     supplied {@code Optional} is {@code null}
+   * @throws IllegalStateException on a duplicate name or write-target identity ({@link
+   *     #validateStores}), or when the supplied default store is not named {@value #DEFAULT_STORE}
+   */
+  public static List<ReadModelStore> selectStores(
+      Supplier<Optional<ReadModelStore>> defaultStore, List<ReadModelStore> applicationStores) {
+    Objects.requireNonNull(defaultStore, "defaultStore is required");
+    Objects.requireNonNull(applicationStores, "applicationStores is required");
+    for (ReadModelStore store : applicationStores) {
+      Objects.requireNonNull(store, "stores must not hold null");
+    }
+    List<ReadModelStore> application = List.copyOf(applicationStores);
+    validateStores(application);
+    if (application.stream().anyMatch(store -> DEFAULT_STORE.equals(store.name()))) {
+      return application;
+    }
+    Optional<ReadModelStore> created =
+        Objects.requireNonNull(defaultStore.get(), "defaultStore must supply an Optional");
+    if (created.isEmpty()) {
+      return application;
+    }
+    ReadModelStore store = created.get();
+    if (!DEFAULT_STORE.equals(store.name())) {
+      throw new IllegalStateException(
+          "The default read-model store must be named '"
+              + DEFAULT_STORE
+              + "', but it is named '"
+              + safeName(store)
+              + "' ("
+              + store.getClass().getName()
+              + ").");
+    }
+    validateAgainst(store, application);
+    return Stream.concat(Stream.of(store), application.stream()).toList();
   }
 
   /**
@@ -205,6 +293,29 @@ public final class ProjectionStoreRouting {
     Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
     Objects.requireNonNull(leadership, "leadership is required");
     validateStores(stores);
+    return resolve(registration, stores, subscriptionCheckpoint, leadership).target();
+  }
+
+  /**
+   * {@link #route} over stores already validated — the {@link ReadModelStores} selection, validated
+   * once when the stores are collected — keeping the store the target belongs to: the {@link
+   * ProjectionRoutes} the integrations compute declare a projection's indexes on it.
+   *
+   * @param registration the registration to route
+   * @param stores every store defined, already validated ({@link #validateStores})
+   * @param subscriptionCheckpoint rule 4's target
+   * @param leadership the configured leadership
+   * @return the routed target, and its store ({@code null} for the subscription checkpoint)
+   */
+  static Routed resolve(
+      Registration registration,
+      List<ReadModelStore> stores,
+      CheckpointTarget subscriptionCheckpoint,
+      SubscriptionLeadership leadership) {
+    Objects.requireNonNull(registration, "registration is required");
+    Objects.requireNonNull(stores, "stores is required");
+    Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
+    Objects.requireNonNull(leadership, "leadership is required");
 
     Routed routed = select(registration, stores, subscriptionCheckpoint);
     AtomicBatchProcessor processor = routed.target().processor();
@@ -219,7 +330,7 @@ public final class ProjectionStoreRouting {
               + " checkpoint would not commit together; "
               + storesClause(stores)
               + ". Route it to a transactional store — "
-              + FIX
+              + fixFor(registration)
               + " — or declare the projection AT_LEAST_ONCE_IDEMPOTENT.");
     }
     if (leadership != SubscriptionLeadership.NOOP && !processor.fencesCheckpoint()) {
@@ -236,11 +347,11 @@ public final class ProjectionStoreRouting {
               + " batch or move the checkpoint with nothing to reject it; "
               + storesClause(stores)
               + ". Route it to a store whose processor fences its checkpoint — "
-              + FIX
+              + fixFor(registration)
               + " — or, if exactly one instance runs this projection, disable leadership"
               + " (streamrune.subscription.single-active-consumer.enabled=false).");
     }
-    return routed.target();
+    return routed;
   }
 
   /**
@@ -265,8 +376,11 @@ public final class ProjectionStoreRouting {
             + " of its own. Declare AT_LEAST_ONCE_IDEMPOTENT, or run it CONTINUOUS or SCHEDULED.");
   }
 
-  /** A routed target and the rule that chose it, for the capability refusals. */
-  private record Routed(CheckpointTarget target, String how) {}
+  /**
+   * A routed target, the rule that chose it (for the capability refusals), and the store it belongs
+   * to — {@code null} for the subscription checkpoint, which is no store.
+   */
+  record Routed(CheckpointTarget target, String how, ReadModelStore store) {}
 
   /** Rules 1–4 of the class javadoc, in order. */
   private static Routed select(
@@ -308,12 +422,12 @@ public final class ProjectionStoreRouting {
                 + FIX
                 + ".");
       }
-      return new Routed(declared.checkpointTarget(), "by its readModelStore declaration");
+      return new Routed(declared.checkpointTarget(), "by its readModelStore declaration", declared);
     }
 
     // Rule 2: writeTarget() matches a store.
     if (owner.isPresent()) {
-      return new Routed(owner.get().checkpointTarget(), "by its writeTarget()");
+      return new Routed(owner.get().checkpointTarget(), "by its writeTarget()", owner.get());
     }
 
     // Rule 3: a transactional mode with no match.
@@ -324,15 +438,18 @@ public final class ProjectionStoreRouting {
                 + ": its writeTarget() belongs to no read-model store, so its read-model writes"
                 + " cannot commit with its checkpoint; "
                 + storesClause(stores)
-                + ". Define a ReadModelStore over that repository, or "
-                + FIX
-                + ".");
+                + ". Define a ReadModelStore over that repository, route it to a transactional"
+                + " store — "
+                + WRITE_TARGET_FIX
+                + " — or declare the projection AT_LEAST_ONCE_IDEMPOTENT.");
       }
       List<ReadModelStore> transactional =
           stores.stream().filter(s -> s.processor().transactional()).toList();
       if (transactional.size() == 1) {
         return new Routed(
-            transactional.getFirst().checkpointTarget(), "as the only transactional store");
+            transactional.getFirst().checkpointTarget(),
+            "as the only transactional store",
+            transactional.getFirst());
       }
       if (transactional.isEmpty()) {
         throw new IllegalStateException(
@@ -357,7 +474,7 @@ public final class ProjectionStoreRouting {
     }
 
     // Rule 4: at-least-once with no match.
-    return new Routed(subscriptionCheckpoint, "as the event store's subscription checkpoint");
+    return new Routed(subscriptionCheckpoint, "as the event store's subscription checkpoint", null);
   }
 
   /**
@@ -372,6 +489,11 @@ public final class ProjectionStoreRouting {
 
   private static boolean sameStore(ProjectionRepository a, ProjectionRepository b) {
     return a.writeTargetIdentity().equals(b.writeTargetIdentity());
+  }
+
+  /** How to move {@code registration} to another store: by its writeTarget() when it has one. */
+  private static String fixFor(Registration registration) {
+    return registration.projection().writeTarget().isPresent() ? WRITE_TARGET_FIX : FIX;
   }
 
   private static String head(Registration registration) {

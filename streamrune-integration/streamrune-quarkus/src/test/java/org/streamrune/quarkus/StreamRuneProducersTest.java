@@ -220,12 +220,91 @@ class StreamRuneProducersTest {
   }
 
   @SuppressWarnings("unchecked")
-  private static Instance<org.streamrune.core.projection.ReadModelStore> storesOf(
+  /** The application's stores as {@link StreamRuneProducers#readModelStores} collects them. */
+  private static org.streamrune.integration.ReadModelStores storesOf(
+      org.streamrune.core.projection.ReadModelStore... stores) {
+    return new StreamRuneProducers().readModelStores(storeInstance(null, stores));
+  }
+
+  /**
+   * An {@code @Any Instance<ReadModelStore>} over a default store bean (when {@code defaultStore}
+   * is not {@code null}) and application store beans; a {@code null} application store is a
+   * declined dependent product.
+   */
+  @SuppressWarnings("unchecked")
+  private static Instance<org.streamrune.core.projection.ReadModelStore> storeInstance(
+      org.streamrune.core.projection.ReadModelStore defaultStore,
       org.streamrune.core.projection.ReadModelStore... stores) {
     Instance<org.streamrune.core.projection.ReadModelStore> instance = mock(Instance.class);
-    when(instance.isUnsatisfied()).thenReturn(stores.length == 0);
-    when(instance.stream()).thenAnswer(inv -> java.util.Arrays.stream(stores));
+    var handles =
+        new java.util.ArrayList<Instance.Handle<org.streamrune.core.projection.ReadModelStore>>();
+    if (defaultStore != null) {
+      handles.add(handle(StreamRuneProducers.DEFAULT_READ_MODEL_STORE_BEAN, defaultStore));
+    }
+    for (var store : stores) {
+      handles.add(handle(null, store));
+    }
+    doReturn(handles).when(instance).handles();
+    Instance<org.streamrune.core.projection.ReadModelStore> named = mock(Instance.class);
+    when(named.isResolvable()).thenReturn(defaultStore != null);
+    when(named.get()).thenReturn(defaultStore);
+    when(instance.select(
+            jakarta.enterprise.inject.literal.NamedLiteral.of(
+                StreamRuneProducers.DEFAULT_READ_MODEL_STORE_BEAN)))
+        .thenReturn(named);
     return instance;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Instance.Handle<org.streamrune.core.projection.ReadModelStore> handle(
+      String beanName, org.streamrune.core.projection.ReadModelStore store) {
+    Instance.Handle<org.streamrune.core.projection.ReadModelStore> handle =
+        mock(Instance.Handle.class);
+    jakarta.enterprise.inject.spi.Bean<org.streamrune.core.projection.ReadModelStore> bean =
+        mock(jakarta.enterprise.inject.spi.Bean.class);
+    when(bean.getName()).thenReturn(beanName);
+    when(handle.getBean()).thenReturn(bean);
+    when(handle.get()).thenReturn(store);
+    return handle;
+  }
+
+  private static org.streamrune.core.projection.ReadModelStore memoryStore(String name) {
+    var repository = new org.streamrune.test.InMemoryProjectionRepository();
+    return org.streamrune.core.projection.ReadModelStore.of(
+        name, repository, repository, repository);
+  }
+
+  /**
+   * The default store is left out of the application's stores by its bean name and taken only when
+   * no application store is named {@code postgres}: replaced, it is never looked up.
+   */
+  @Test
+  void readModelStores_takeTheDefaultStoreOnlyWhenNoApplicationStoreHasItsName() {
+    var producers = new StreamRuneProducers();
+    var defaultStore = memoryStore("postgres");
+    var search = memoryStore("search");
+    assertEquals(
+        List.of(defaultStore, search),
+        producers.readModelStores(storeInstance(defaultStore, search)).stores());
+
+    var replacement = memoryStore("postgres");
+    var instance = storeInstance(defaultStore, replacement);
+    assertEquals(List.of(replacement), producers.readModelStores(instance).stores());
+    verify(instance, never())
+        .select(
+            jakarta.enterprise.inject.literal.NamedLiteral.of(
+                StreamRuneProducers.DEFAULT_READ_MODEL_STORE_BEAN));
+  }
+
+  /** A dependent-scoped store producer may yield a null product; it counts as no store. */
+  @Test
+  void readModelStores_aNullProductIsNoStore() {
+    assertEquals(
+        List.of(),
+        new StreamRuneProducers()
+            .readModelStores(
+                storeInstance(null, (org.streamrune.core.projection.ReadModelStore) null))
+            .stores());
   }
 
   @Test

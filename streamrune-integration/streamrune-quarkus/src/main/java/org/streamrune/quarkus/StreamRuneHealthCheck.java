@@ -35,6 +35,10 @@ import org.streamrune.runtime.SubscriptionHealthContributor;
  * for applications that use a custom (non-JDBC) {@link EventStore} and have no DataSource bean at
  * all. When no DataSource exists the connectivity check is skipped and that is reported explicitly
  * in the response data.
+ *
+ * <p>A projection's entry also names the checkpoint target its checkpoint lives in ({@code
+ * subscription.<name>.store}: the read-model store it is routed to, or {@code
+ * subscription_checkpoint}); its lag is measured against that checkpoint.
  */
 @Readiness
 @ApplicationScoped
@@ -129,6 +133,9 @@ public class StreamRuneHealthCheck implements HealthCheck {
         builder.withData("subscription." + sub.name().value() + ".errorCount", sub.errorCount());
         builder.withData("subscription." + sub.name().value() + ".status", sub.status().name());
         builder.withData("subscription." + sub.name().value() + ".role", sub.role().name());
+        if (sub.store() != null) {
+          builder.withData("subscription." + sub.name().value() + ".store", sub.store());
+        }
       }
     } else {
       builder.up();

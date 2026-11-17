@@ -16,11 +16,8 @@ public class org.streamrune.micronaut.MicronautSecurityUserRoleResolver implemen
 public class org.streamrune.micronaut.ProjectionFactory
   public <init>()
   public org.streamrune.runtime.InlineProjectionInterceptor inlineProjectionInterceptor(java.util.List<org.streamrune.core.projection.Projection>, io.micronaut.context.env.Environment, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.tracing.StreamRuneTracing)
-  public org.streamrune.runtime.MultiProjectionRunner multiProjectionRunner(java.util.List<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, io.micronaut.context.BeanContext, org.streamrune.core.projection.CheckpointTarget, java.util.List<org.streamrune.core.projection.ProjectionDeadLetterStore>, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.projection.ProjectionErrorClassifier, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.env.Environment, org.streamrune.core.tracing.StreamRuneTracing)
-  public org.streamrune.runtime.ScheduledProjectionRunner scheduledProjectionRunner(java.util.List<org.streamrune.core.projection.Projection>, org.streamrune.core.EventStore, io.micronaut.context.BeanContext, org.streamrune.core.projection.CheckpointTarget, java.util.List<org.streamrune.core.projection.ProjectionDeadLetterStore>, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.subscription.SubscriptionLeadership, org.streamrune.core.projection.ProjectionErrorClassifier, org.streamrune.runtime.SubscriptionHealthContributor, io.micronaut.context.env.Environment, org.streamrune.core.tracing.StreamRuneTracing)
 
 public class org.streamrune.micronaut.ProjectionIndexDeclarer implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
-  public <init>(io.micronaut.context.BeanProvider<org.streamrune.core.projection.ProjectionRepository>, java.util.List<org.streamrune.core.projection.ProjectionIndex>)
   public int getOrder()
   public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
 
@@ -166,7 +163,6 @@ public class org.streamrune.micronaut.StreamRuneMicronautModule
   public org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery(javax.sql.DataSource)
   public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.core.projection.OffsetStore offsetStore(javax.sql.DataSource)
-  public org.streamrune.core.projection.ProjectionRepository projectionRepository(io.micronaut.context.BeanContext)
   public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.micronaut.StreamRuneMicronautProperties, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.core.saga.SagaStore sagaStore(javax.sql.DataSource, java.util.List<org.streamrune.core.crypto.CryptoEngine>, org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(javax.sql.DataSource, org.streamrune.micronaut.StreamRuneMicronautProperties)

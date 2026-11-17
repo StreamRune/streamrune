@@ -254,9 +254,10 @@ public final class MultiProjectionRunner implements AutoCloseable {
    * store. As with {@link org.streamrune.core.projection.ProjectionRunner#reset}, the checkpoint is
    * all this resets: read models and dead-letter entries are left untouched.
    *
+   * <p>A {@link #start()} called while the reset runs waits for it to finish.
+   *
    * @param name the registered projection to rewind
    * @throws IllegalArgumentException if no projection of that name is registered
-   *     <p>A {@link #start()} called while the reset runs waits for it to finish.
    * @throws IllegalStateException if the runner is started (a running batch could save a higher
    *     offset after the reset, undoing it), or if the offset store's reset returned without
    *     rewinding the checkpoint

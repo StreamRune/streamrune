@@ -144,7 +144,9 @@ public final class org.streamrune.runtime.ContinuousProjectionRunner implements 
   public void close()
   public void requestStop()
   public void reset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public static final class org.streamrune.runtime.ContinuousProjectionRunner$Builder
   public <init>()
@@ -167,7 +169,7 @@ public static final class org.streamrune.runtime.ContinuousProjectionRunner$Buil
   public org.streamrune.runtime.ContinuousProjectionRunner$Builder tracing(org.streamrune.core.tracing.StreamRuneTracing)
 
 public static interface org.streamrune.runtime.ContinuousProjectionRunner$SubscriptionFactory
-  public abstract org.streamrune.core.subscription.EventSubscription create(org.streamrune.core.types.ProjectionName, org.streamrune.core.subscription.EventListener, int)
+  public abstract org.streamrune.core.subscription.EventSubscription create(org.streamrune.core.types.ProjectionName, org.streamrune.core.subscription.EventListener, int, org.streamrune.core.projection.OffsetStore)
 
 public final class org.streamrune.runtime.CronExpression
   public java.lang.String toString()
@@ -409,11 +411,14 @@ public final class org.streamrune.runtime.PollingProjectionRunner implements org
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, int, int, org.streamrune.core.projection.AtomicBatchProcessor)
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, int, int, org.streamrune.core.projection.AtomicBatchProcessor, org.streamrune.core.StreamRuneMetrics)
   public void reset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public final class org.streamrune.runtime.ProjectionCheckpointDivergedException extends java.lang.RuntimeException
 
 public final class org.streamrune.runtime.ProjectionDeadLetterReplayer
+  public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.ProjectionDeadLetterStore, java.util.function.Function<org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.CheckpointTarget>)
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.ProjectionDeadLetterStore, org.streamrune.core.projection.AtomicBatchProcessor)
   public org.streamrune.runtime.ProjectionDeadLetterReplayer$ReplayResult replay(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, int)
   public org.streamrune.runtime.ProjectionDeadLetterReplayer$ReplayResult replayWithRunnerStopped(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, int)
@@ -789,6 +794,8 @@ public static final class org.streamrune.runtime.StreamRune$Builder
   public org.streamrune.runtime.StreamRune$Builder projectionRunnerFactory(org.streamrune.runtime.StreamRune$ProjectionRunnerFactory)
   public org.streamrune.runtime.StreamRune$Builder registerEventType(java.lang.String, java.lang.Class<?>)
   public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
+  public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.ReadModelStore)
   public org.streamrune.runtime.StreamRune$Builder registerStateType(java.lang.String, java.lang.Class<?>)
   public org.streamrune.runtime.StreamRune$Builder retryPolicy(org.streamrune.core.RetryPolicy)
   public org.streamrune.runtime.StreamRune$Builder snapshotPolicy(org.streamrune.core.SnapshotPolicy)
@@ -833,6 +840,7 @@ public final class org.streamrune.runtime.SubscriptionHealthContributor
   public void recordError(org.streamrune.core.types.SubscriptionName)
   public void recordSuccess(org.streamrune.core.types.SubscriptionName)
   public void register(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle)
+  public void register(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle, org.streamrune.core.projection.OffsetStore, java.lang.String)
   public void replaceLifecycle(org.streamrune.core.types.SubscriptionName, org.streamrune.core.subscription.SubscriptionLifecycle)
   public void unregister(org.streamrune.core.types.SubscriptionName)
 

@@ -211,8 +211,10 @@ relay in backoff, and a replica whose crypto forget channel does not hear its pe
 `DEGRADED` shows in that component's own `status` detail and never changes the overall status, so
 alert on the details and on the metrics below as well as on the check.
 
-**Lag never makes the check `DOWN`.** Lag is measured against the `subscription_checkpoint` checkpoint
-that every replica shares, so every replica reports the same value. A new projection replaying the
+**Lag never makes the check `DOWN`.** Lag is measured against the checkpoint every replica shares:
+a projection's own checkpoint — in `readmodel_checkpoint` for one routed to a read-model store, in
+`subscription_checkpoint` for one routed to the event store's subscription checkpoint — and
+`subscription_checkpoint` for an event subscription. Every replica reports the same value. A new projection replaying the
 store from offset 0, a projection reset for a rebuild (see [Offset reset / rebuild
 path](#offset-reset--rebuild-path)), or a large burst of appends puts it behind on all replicas at
 once; a lag-driven `DOWN` would take every replica out of the readiness probe until the one active
@@ -237,7 +239,10 @@ streamrune.subscription.health.lag-threshold=1000
 The details are:
 
 - `subscription.<name>` — `state`, `lag`, `errorCount`, `status`, `role`, one per registered
-  subscription. `role` is the subscription's role under its single-active-consumer lease:
+  subscription, and `store` for a projection: the checkpoint target its checkpoint lives in and its
+  lag is measured against (the read-model store it is routed to, such as `postgres`, or
+  `subscription_checkpoint`). Quarkus reports each detail as a flat key, `subscription.<name>.<detail>`.
+  `role` is the subscription's role under its single-active-consumer lease:
   `UNGATED` (it takes no lease and delivers on every replica), `LEADING` (this replica holds the
   lease and delivers), `STANDBY` (another replica holds it, or none does; this one waits to take
   over) or `NOT_REPORTED` (a registration that reports no role). A projection runner reports the
@@ -1087,12 +1092,17 @@ A dead-lettered batch failed deterministically (a projection bug or poison data)
 
 ### Replay
 
-Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store, the dead-letter store and the `AtomicBatchProcessor` the projection's runner commits through). Replay is explicit and operator-driven; there is no background loop.
+Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no builder — a direct constructor takes the event store, the dead-letter store and each projection's `CheckpointTarget`: the pair its runner registration reads and commits through). Each projection replays on its own target's processor, so one replayer serves projections of several read-model stores. Replay is explicit and operator-driven; there is no background loop.
 
 ```java
+// The read-model store a projection is routed to (the default store is the `postgres` one), or
+// the event store's subscription checkpoint for an at-least-once projection routed to no store.
+Map<ProjectionName, CheckpointTarget> targets =
+    Map.of(
+        ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint()); // writes elsewhere
 ProjectionDeadLetterReplayer replayer =
-    new ProjectionDeadLetterReplayer(
-        eventStore, projectionDeadLetterStore, jdbcProjectionRepository); // the runner's processor
+    new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
 // Replay up to maxEntries dead letters for one projection, oldest range first.
 ProjectionDeadLetterReplayer.ReplayResult result =
@@ -1106,6 +1116,23 @@ int recovered = result.replayed();   // entries re-processed (or empty) and disc
 int stillDead = result.failed();     // entries that failed again and were kept
 int fenced = result.fenced();        // entries the projection applied nothing from, kept
 ```
+
+A projection the function returns `null` for is refused before any entry is read. A runner whose projections all commit through one default pair can pass that one `AtomicBatchProcessor` instead of the function.
+
+**Build the map from the routes, not from the mode — a wrong map fails silently.** Nothing checks
+the function against the runner's routing (an integration keeps the routed targets to itself), so
+read each projection's target from the runner's startup INFO line (`… (checkpoint target
+'<target>') …`) or its `store` health detail. The trap is an `AT_LEAST_ONCE_IDEMPOTENT`
+`BaseProjection` over the injected `ProjectionRepository`: that repository is the `postgres`
+store's, so routing sends the projection to the `postgres` store by its `writeTarget()` (rule 2 of
+[How a projection finds its store](read-model-stores.md#how-a-projection-finds-its-store)), and it checkpoints in
+`readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
+`offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches do not
+exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
+exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
+subscription checkpoint. A transactional projection mapped to the wrong store has its range written
+into that store's database instead of its own.
 
 Each entry is re-read from the global stream and fed to the projection through `Projection.processDeadLetterReplay`; on success the entry is discarded. A still-failing entry is kept and logged, and the remaining entries are still attempted, so one poisoned batch does not block recovery of the others. A feed that returns normally but reports it applied **nothing** keeps the entry too and counts it as `fenced`: a self-fencing projection such as `WindowedProjection`, whose offset fence has already moved past the hole, reads the never-accumulated range as done — replay such an entry from a fresh process before the live runner advances again, or discard it deliberately. A `Projection` decorator must forward `processDeadLetterReplay` to its delegate (the shipped decorators do), or a wrapped self-fencing projection reports "applied" and the replayer discards the range's only record.
 
@@ -1517,7 +1544,7 @@ Quarkus, Micronaut — same property name and prefix as the other command-bus se
 
 `ContinuousProjectionRunner`/`MultiProjectionRunner` and `ScheduledProjectionRunner` gate all reading, processing, and offset advancement on holding a **live lease** for their projection/subscription name. Leadership is a persisted, **DB-clocked lease** (`LeaseBasedLeadership`, backed by the `subscription_leases` table) — not a PostgreSQL advisory lock. Acquire and the renew heartbeat are each a single atomic statement over that table, using the *database's* clock rather than the JVM's, so no connection is held across calls and no session-stable route to Postgres is required. Only the leader processes; every other replica of that name sits in `ProjectionState.STANDBY`, periodically retrying acquisition.
 
-- **A STANDBY replica is still visible to `/health`.** Every projection runner registers with `SubscriptionHealthContributor` for its whole life, not only while it leads, so a replica that has never won the lease still appears in the health view. Because lag is computed against the **shared** `subscription_checkpoint` checkpoint, the entry answers "is this subscription making progress *anywhere*?": while a healthy leader advances the checkpoint every standby reports `UP`, and if **no** replica can lead (a lease table revoked at runtime, or a leader that stood down terminally) the shared lag crosses the lag threshold and every replica reports the subscription `DEGRADED` with the growing lag in its detail. It is not `DOWN`: from the lag alone such a freeze cannot be told apart from a leader still replaying a large backlog, which must not take the replicas out of readiness (see [Health checks](#health-checks)). Alert on the `streamrune.subscriptions.lag` gauge to catch it. A runner that registered only while `LIVE` would leave an all-replicas-standby freeze reporting `UP` forever, with no entry for the projection at all.
+- **A STANDBY replica is still visible to `/health`.** Every projection runner registers with `SubscriptionHealthContributor` for its whole life, not only while it leads, so a replica that has never won the lease still appears in the health view. Because lag is computed against the projection's **shared** checkpoint — its store's `readmodel_checkpoint`, or `subscription_checkpoint` — the entry answers "is this subscription making progress *anywhere*?": while a healthy leader advances the checkpoint every standby reports `UP`, and if **no** replica can lead (a lease table revoked at runtime, or a leader that stood down terminally) the shared lag crosses the lag threshold and every replica reports the subscription `DEGRADED` with the growing lag in its detail. It is not `DOWN`: from the lag alone such a freeze cannot be told apart from a leader still replaying a large backlog, which must not take the replicas out of readiness (see [Health checks](#health-checks)). Alert on the `streamrune.subscriptions.lag` gauge to catch it. A runner that registered only while `LIVE` would leave an all-replicas-standby freeze reporting `UP` forever, with no entry for the projection at all.
 - **The lease TTL is the explicit failover bound.** `streamrune.subscription.single-active-consumer.lease-ttl` (default **15s**) is how long a granted lease stays live before another replica may take it over: a standby wins the name **at most `lease-ttl` after** a dead leader stops renewing — full stop, regardless of *how* the leader died (clean shutdown, crash, or a silent network partition all converge on the same bound). This replaces the retired advisory-lock design's failover story, where latency depended on the failure mode and, for a silent partition, on the PostgreSQL server's own TCP-keepalive reaping interval (up to hours on stock settings) — there is no server-side tuning knob to reach for any more. The renew heartbeat runs at `lease-ttl / 3` (a live leader renews with ample margin before its own lease could expire).
 - **No dedicated connection, no advisory locks in the leadership path.** Every lease operation (`tryAcquire`, renew, `resign`) borrows a connection from the normal pool for the duration of one statement and returns it immediately — leadership holds no connection out of `maximumPoolSize` for the process lifetime, so the pool needs no headroom per replica for it. `pg_advisory_lock`/`pg_try_advisory_lock` do not appear anywhere in this path.
 - **Bound a lease statement on a dead connection.** A resign runs when a leased subscription pauses or closes, before its `close()` returns (up to 30 seconds) — and a pool bounds only how long it waits for a connection, not a statement sent on a connection whose server vanished without closing it. Set the PostgreSQL driver's `socketTimeout` (seconds; above your longest statement, e.g. `?socketTimeout=60` on the JDBC URL) on the `DataSource` the leadership uses, so such a statement fails instead of waiting for TCP to give up; the lease then expires at its TTL. A `close()` that waited its 30 seconds says so in its `WARN` line, which names the lease resign as a possible cause.
@@ -1550,12 +1577,39 @@ streamrune.subscription.single-active-consumer.lease-ttl=PT15S
 
 ### Offset reset / rebuild path
 
-Because the monotonic guard rejects any backward `saveOffset`, an intentional checkpoint rewind — replaying a projection from the beginning after a read-model schema change — must **not** go through `saveOffset`. Use `OffsetStore.reset(projectionName)` instead: it bypasses the guard by design (that is the whole point of a reset) and rewinds the checkpoint to `GlobalOffset.initial()`.
+Because the monotonic guard rejects any backward `saveOffset`, an intentional checkpoint rewind — replaying a projection from the beginning after a read-model schema change — must **not** go through `saveOffset`. Use a reset: it bypasses the guard by design (that is the whole point of a reset) and rewinds the checkpoint to `GlobalOffset.initial()`.
+
+**Reset the checkpoint the projection reads, in the table and database it lives in.** Each projection checkpoints in the [checkpoint target it is routed to](read-model-stores.md): a projection committed with its read models — `TRANSACTIONAL_LOCAL`, `EXTERNAL_EFFECT`, and an at-least-once `BaseProjection` over a store's repository, the injected `ProjectionRepository` included — keeps it in that store's `readmodel_checkpoint`, in the store's own database; only an at-least-once projection that writes outside every store keeps it in the event store's `subscription_checkpoint`. The `OffsetStore` bean of the Spring, Quarkus and Micronaut integrations is the event store's `PostgresOffsetStore`, over `subscription_checkpoint`: `offsetStore.reset(name)` on a projection routed to a store rewinds nothing that projection reads (it seeds a stray `0` row in the wrong table), and a rebuild that then truncates `<name>_view` leaves the projection resuming from its old checkpoint into an empty table — the read model silently loses its history.
+
+Find each projection's target in either place:
+
+- the INFO line each runner logs when it starts the projection: `Projection '<name>' delivery mode <MODE> on <processor> (checkpoint target '<target>') — <verdict>`. The target is the store's name (`postgres`, `search`, …) or `subscription_checkpoint`;
+- the `store` detail of the projection's [health entry](#health-checks) (`subscription.<name>.store` on Quarkus), which names the same target.
+
+Then reset it there, with the projection stopped on every replica (a running batch can save a higher offset after the reset, undoing it):
 
 ```java
-offsetStore.reset(ProjectionName.of("order_summary"));
-// Then restart (or let the runner naturally re-read) the projection — it replays from offset 0.
+// A runner that holds the registration resets the registration's own pair, whatever it is routed to.
+// The integrations' MultiProjectionRunner / ScheduledProjectionRunner beans refuse while started.
+multiProjectionRunner.reset(ProjectionName.of("order_summary"));
+
+// Name the target: a ContinuousProjectionRunner or PollingProjectionRunner, whatever it has run...
+continuousRunner.reset(ProjectionName.of("order_summary"), store.checkpointTarget());
+// ...or the store's checkpoints directly.
+store.checkpoints().reset(ProjectionName.of("order_summary"));       // readmodel_checkpoint
+
+// Only for a projection whose target is subscription_checkpoint:
+offsetStore.reset(ProjectionName.of("audit"));
 ```
+
+With every replica down, the same rewind in SQL, in the target's database (the store's for `readmodel_checkpoint`, the event store's for `subscription_checkpoint`); leave `epoch` as it is:
+
+```sql
+UPDATE readmodel_checkpoint SET last_offset = 0, updated_at = NOW()
+ WHERE projection_name = 'order_summary';
+```
+
+Then restart (or let the runner naturally re-read) the projection — it replays from offset 0.
 
 During the replay the projection's lag is the whole event history, on every replica, until the active consumer catches up: its health detail reads `DEGRADED` and `streamrune.subscriptions.lag` jumps to the size of the store. That is expected and leaves the health check `UP`, so the replicas stay in the readiness probe; silence lag alerts for the rebuilt projection for the length of the replay, and watch the gauge fall to confirm it is progressing.
 
@@ -1567,8 +1621,12 @@ cannot see what an earlier mode left behind. When you change a projection's `del
 1. **Stop the runner** that drives the projection (every replica).
 2. **`AT_LEAST_ONCE_IDEMPOTENT` → `TRANSACTIONAL_LOCAL` on a non-idempotent read model:** rebuild it
    before the first run under the new mode. A redelivery in the at-least-once era may have applied a
-   batch twice, and the transaction does not undo history. Reset the checkpoint
-   (`OffsetStore.reset(name)`, above), truncate the `<name>_view` table, and discard the projection's
+   batch twice, and the transaction does not undo history. Reset the checkpoint **in the target the
+   projection runs on under the new mode** — after the switch a `TRANSACTIONAL_LOCAL` projection
+   checkpoints in its store's `readmodel_checkpoint`, not in `subscription_checkpoint`, so never
+   through the integrations' `OffsetStore` bean (see [Offset reset / rebuild
+   path](#offset-reset--rebuild-path); confirm the target on the new deployment's INFO line or
+   `store` health detail) — truncate the `<name>_view` table, and discard the projection's
    dead-letter entries (`ProjectionDeadLetterStore.read(name, limit)`, then `discard(name,
    fromOffset)` for each); the replay from offset 0 then rebuilds the model inside checkpoint
    transactions. An idempotent model needs no rebuild.
@@ -1580,16 +1638,20 @@ cannot see what an earlier mode left behind. When you change a projection's `del
    new store whatever the model's idempotency. A `BaseProjection` that moves onto the processor's
    repository to become `TRANSACTIONAL_LOCAL` writes to a `<name>_view` table that is empty while
    the checkpoint is already advanced, and the same holds for a move from `TRANSACTIONAL_LOCAL` to
-   at-least-once writes into another store. Reset the checkpoint, discard the projection's
-   dead-letter entries and replay from offset 0, as in step 2; "needs no rebuild" and "nothing to
-   migrate" above hold only while the projection keeps writing to the same store.
+   at-least-once writes into another store. Reset the checkpoint in the **new** target (its store's
+   `readmodel_checkpoint`, or `subscription_checkpoint` for an at-least-once projection that now
+   writes outside every store), discard the projection's dead-letter entries and replay from offset
+   0, as in step 2; "needs no rebuild" and "nothing to migrate" above hold only while the projection
+   keeps writing to the same store.
 5. **Redeploy**, and confirm the INFO line and the gauge below report the new mode.
 
 ### Verifying a projection's mode at runtime
 
 - **The INFO line** each executing runner logs once per registration when it starts:
-  `Projection '<name>' delivery mode <MODE> on <processor> — <verdict>`. The processor is the class
-  name, or `nonAtomicAtLeastOnce`; the verdict says whether the write target was verified, only
+  `Projection '<name>' delivery mode <MODE> on <processor> (checkpoint target '<target>') —
+  <verdict>`. The processor is the class name, or `nonAtomicAtLeastOnce`; the target is the store
+  the registration is routed to, or `subscription_checkpoint` (absent for a registration on a
+  hand-built runner's own pair); the verdict says whether the write target was verified, only
   declared, or at-least-once. INLINE registrations log their own line at discovery.
 - **The gauge** `streamrune.projections.delivery_mode{projection.name, delivery.mode}` (value 1).
 - **The checkpoint row:** `SELECT projection_name, last_offset, epoch FROM readmodel_checkpoint` for a
@@ -1682,6 +1744,13 @@ carry invariants that a restore from mixed points breaks:
 - `readmodel_checkpoint` and the `<name>_view` tables: a projection's checkpoint commits with its read
   models, so restore them to one point; a checkpoint restored ahead of its read models skips the
   events in between, one restored behind them re-applies them.
+- `event_stream` and **every** read-model store's `readmodel_checkpoint`, whatever database it is in:
+  a store on another database keeps its projections' checkpoints there, not in the event-store
+  database. Restore each store database to the same point as the event store; if one cannot be,
+  reset and rebuild every projection routed to it (`store` health detail, or the `checkpoint target`
+  in the runner's INFO line). Otherwise a store restored ahead of the restored event store holds
+  checkpoints past the restored head, and the events later appended at the re-used offsets are
+  skipped for good.
 - `subscription_checkpoint` / `readmodel_checkpoint` and `subscription_leases`: the checkpoint row carries the last leader's fencing
   epoch; a lease table restored behind it hands out a lower epoch and the projection stops with
   `ProjectionEpochRegressionException`, whose message names the two recoveries.
@@ -1724,8 +1793,12 @@ plaintext data; the Vault and AWS KMS backends keep key material out of the data
    `FAILED` stay blocking on a strict channel until resolved.
 5. **Rebuild or reconcile read models kept outside the restored database.** Projections resume from
    the restored checkpoints, but an external read model still carries the effects of events after the
-   restore point; rewind it with `OffsetStore.reset(projectionName)` (see
-   [Offset reset / rebuild path](#offset-reset--rebuild-path)) or reconcile it.
+   restore point; rewind its projection's checkpoint in the target it is routed to (see
+   [Offset reset / rebuild path](#offset-reset--rebuild-path): `subscription_checkpoint` through the
+   `OffsetStore` bean only for a projection on the subscription checkpoint, otherwise its store's
+   `readmodel_checkpoint`) or reconcile it. A read-model store on another database that was not
+   restored to the same point is such an external read model: reset and rebuild every projection
+   routed to it (pair above).
 6. The command dead-letter queue and the saga dead-letter store hold exactly what they held at the
    restore point; work them off as usual (`streamrune.dlq.pending`, `streamrune.saga.faulted_backlog`).
 
@@ -1735,7 +1808,8 @@ targets — this guide publishes no numbers for you:
 - [ ] Target RPO and RTO written down.
 - [ ] Base backup + WAL replay to a chosen point completes; measured restore time and data-loss
       window recorded against the targets.
-- [ ] Every StreamRune table and the crypto key store came back from that same point.
+- [ ] Every StreamRune table and the crypto key store came back from that same point — every
+      read-model store's database included, or its projections reset and rebuilt.
 - [ ] Erasures after the restore point re-applied from the external record before traffic; a sample
       erased subject reads back `[REDACTED]`.
 - [ ] The first replica boots (schema validation passes) before the rest start.

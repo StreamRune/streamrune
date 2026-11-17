@@ -1,6 +1,7 @@
 package org.streamrune.micronaut;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -216,6 +217,45 @@ class StreamRuneHealthIndicatorTest {
     Map<String, Object> ordersDetails = (Map<String, Object>) details.get("subscription.orders");
     assertEquals("LEADING", sagaDetails.get("role"));
     assertEquals("NOT_REPORTED", ordersDetails.get("role"));
+  }
+
+  @Test
+  void rendersTheStoreOfAProjection_andNoneForAnEntryWithout() throws Exception {
+    DataSource ds = validDataSource();
+    SubscriptionHealthContributor contributor = mock(SubscriptionHealthContributor.class);
+    var routed =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            SubscriptionName.of("order-summary"),
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            0L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.LEADING,
+            "postgres");
+    var listener =
+        new org.streamrune.core.subscription.SubscriptionHealth(
+            SubscriptionName.of("listener"),
+            org.streamrune.core.subscription.SubscriptionLifecycleState.RUNNING,
+            0L,
+            0,
+            org.streamrune.core.subscription.SubscriptionHealth.Status.UP,
+            org.streamrune.core.subscription.LeaseRole.NOT_REPORTED);
+    when(contributor.health()).thenReturn(List.of(routed, listener));
+
+    var indicator = new StreamRuneHealthIndicator(ds, contributor);
+    HealthResult result = Mono.from(indicator.getResult()).block();
+
+    assertNotNull(result);
+    @SuppressWarnings("unchecked")
+    Map<String, Object> details = (Map<String, Object>) result.getDetails();
+    @SuppressWarnings("unchecked")
+    Map<String, Object> routedDetails =
+        (Map<String, Object>) details.get("subscription.order-summary");
+    @SuppressWarnings("unchecked")
+    Map<String, Object> listenerDetails =
+        (Map<String, Object>) details.get("subscription.listener");
+    assertEquals("postgres", routedDetails.get("store"));
+    assertFalse(listenerDetails.containsKey("store"));
   }
 
   @Test

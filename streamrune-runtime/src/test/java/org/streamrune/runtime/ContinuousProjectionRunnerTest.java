@@ -335,8 +335,305 @@ class ContinuousProjectionRunnerTest {
     assertEquals(
         "atomicProcessor is required: pass the JdbcProjectionRepository your TRANSACTIONAL_LOCAL"
             + " projections write to, or AtomicBatchProcessor.nonAtomicAtLeastOnce() for a runner of"
-            + " AT_LEAST_ONCE_IDEMPOTENT projections",
+            + " AT_LEAST_ONCE_IDEMPOTENT projections. The offsetStore and atomicProcessor are a"
+            + " pair: set both, or neither and run every projection with a CheckpointTarget.",
         ex.getMessage());
+  }
+
+  @Test
+  void buildRefusesAProcessorWithoutAnOffsetStore() {
+    var ex =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                ContinuousProjectionRunner.builder()
+                    .eventStore(eventStore)
+                    .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+                    .build());
+    assertEquals(
+        "offsetStore is required: the atomicProcessor commits the checkpoint the runner reads"
+            + " from the offsetStore. Set both, or neither and run every projection with a"
+            + " CheckpointTarget.",
+        ex.getMessage());
+  }
+
+  // ==================== Runs on a CheckpointTarget ====================
+
+  private ContinuousProjectionRunner runnerWithoutAPair() {
+    return ContinuousProjectionRunner.builder()
+        .eventStore(eventStore)
+        .subscriptionConfig(fastConfig())
+        .build();
+  }
+
+  /** A transactional projection writing one read model per event through the handed repository. */
+  static final class SeenProjection extends org.streamrune.core.projection.BaseProjection {
+    SeenProjection(org.streamrune.core.projection.ProjectionRepository repository) {
+      super(repository, "seen");
+    }
+
+    @Override
+    public void process(List<EventEnvelope> batch) {
+      for (var event : batch) {
+        save(String.valueOf(event.globalOffset().value()), new TestEvent("seen"));
+      }
+    }
+  }
+
+  @Test
+  void runOnATarget_commitsThroughTheTarget_andResetRewindsTheTarget() throws Exception {
+    // A runner built without a pair runs only on a target: the TRANSACTIONAL_LOCAL projection's
+    // read model and its checkpoint commit in the target's store, live events included, and
+    // reset() afterwards rewinds that same store.
+    var memory = new InMemoryProjectionRepository();
+    var target = org.streamrune.core.projection.ReadModelStore.of("memory", memory, memory, memory);
+    var name = ProjectionName.of("seen");
+    StreamId streamId = StreamId.of(TYPE, AggregateId.of("routed"));
+    eventStore.append(streamId, List.of(envelope(streamId, 1, "catch-up")), Version.initial());
+    var runner = runnerWithoutAPair();
+
+    Thread thread =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    runner.run(
+                        name,
+                        new SeenProjection(memory),
+                        TRANSACTIONAL_LOCAL,
+                        target.checkpointTarget()));
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> memory.committedOffset(name).equals(GlobalOffset.of(1)));
+      eventStore.append(streamId, List.of(envelope(streamId, 2, "live")), new Version(1));
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> memory.committedOffset(name).equals(GlobalOffset.of(2)));
+      assertTrue(memory.hasReadModels(name), "the read model must be written in the target");
+    } finally {
+      runner.close();
+      thread.join(5_000);
+    }
+
+    runner.reset(name);
+    assertEquals(GlobalOffset.initial(), memory.getLastOffset(name));
+  }
+
+  @Test
+  void runOnATarget_aFactoryBuiltSubscriptionReadsAndSavesThroughTheTargetsCheckpoints()
+      throws Exception {
+    // The factory is handed the run's checkpoints. A factory-built live subscription that read the
+    // runner's own offset store instead (no row: 0) would re-deliver what catch-up committed to the
+    // target and halt the run as diverged; a stale row ahead of the target would skip events.
+    // Self-registering with the contributor's 2-arg register must not repoint the projection's lag
+    // at the contributor's offset store either.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var memory = new InMemoryProjectionRepository();
+    var target = org.streamrune.core.projection.ReadModelStore.of("memory", memory, memory, memory);
+    var name = ProjectionName.of("seen");
+    var contributor = new SubscriptionHealthContributor(eventStore, new InMemoryOffsetStore(), 1);
+    var handed = new java.util.concurrent.atomic.AtomicReference<OffsetStore>();
+    ContinuousProjectionRunner.SubscriptionFactory factory =
+        (projectionName, listener, readPoisonBound, checkpoints) -> {
+          handed.set(checkpoints);
+          return PollingEventSubscription.builder()
+              .subscriptionName(SubscriptionName.of(projectionName.value()))
+              .eventStore(eventStore)
+              .offsetStore(checkpoints)
+              .listener(listener)
+              .config(fastConfig())
+              .fetchSize(10)
+              .readPoisonBound(readPoisonBound)
+              .healthContributor(contributor) // self-registers through the 2-arg register
+              .build();
+        };
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(own)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .fetchSize(10)
+            .batchSize(10)
+            .subscriptionConfig(fastConfig())
+            .subscriptionFactory(factory)
+            .healthContributor(contributor)
+            .build();
+    StreamId streamId = StreamId.of(TYPE, AggregateId.of("factory-routed"));
+    eventStore.append(streamId, List.of(envelope(streamId, 1, "catch-up")), Version.initial());
+
+    Thread thread =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    runner.run(
+                        name,
+                        new SeenProjection(memory),
+                        TRANSACTIONAL_LOCAL,
+                        target.checkpointTarget()));
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> runner.state() == ProjectionState.LIVE && handed.get() != null);
+      assertEquals(GlobalOffset.of(1), memory.committedOffset(name));
+      eventStore.append(streamId, List.of(envelope(streamId, 2, "live")), new Version(1));
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> memory.committedOffset(name).equals(GlobalOffset.of(2)));
+
+      assertTrue(handed.get() == memory, "the factory must be handed the target's checkpoints");
+      assertEquals(ProjectionState.LIVE, runner.state(), runner.lastError());
+      assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+      SubscriptionHealth health = contributor.health().getFirst();
+      assertEquals("memory", health.store(), "the routed lag source must survive");
+      assertEquals(0, health.lag());
+    } finally {
+      runner.close();
+      thread.join(5_000);
+    }
+  }
+
+  @Test
+  void runWithoutATarget_onARunnerBuiltWithoutAPair_refusesNamingBothWaysOut() {
+    var runner = runnerWithoutAPair();
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> runner.run(ProjectionName.of("orphan"), projection, AT_LEAST_ONCE_IDEMPOTENT));
+    assertEquals(
+        "ContinuousProjectionRunner projection 'orphan' has no checkpoint source: the runner was"
+            + " built without offsetStore and atomicProcessor, so run it with a CheckpointTarget (a"
+            + " ReadModelStore's checkpointTarget(), or the event store's subscription checkpoint),"
+            + " or build the runner with both",
+        refused.getMessage());
+  }
+
+  @Test
+  void runOnANullTarget_refuses() {
+    var runner = runnerWithoutAPair();
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                runner.run(
+                    ProjectionName.of("orphan"),
+                    projection,
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "ContinuousProjectionRunner projection 'orphan': target is required; call run(name,"
+            + " projection, mode) to use the runner's own pair",
+        refused.getMessage());
+  }
+
+  @Test
+  void resetWithATarget_beforeAnyRun_rewindsTheTargetsCheckpoints_notTheOwnStore() {
+    // The rebuild a fresh process does: reset, then run on the target. The reset must rewind the
+    // target, which this instance has never run on, and leave the runner's own store alone.
+    var own = new StreamRuneBuilderTest.RecordingOffsetStore();
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(eventStore)
+            .offsetStore(own)
+            .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+            .build();
+    var targetCheckpoints = new InMemoryOffsetStore();
+    var name = ProjectionName.of("feed");
+    targetCheckpoints.saveOffset(name, GlobalOffset.of(5));
+
+    runner.reset(name, targetCheckpoints.subscriptionCheckpoint());
+
+    assertEquals(GlobalOffset.initial(), targetCheckpoints.getLastOffset(name));
+    assertEquals(List.of(), own.calls, "the runner's own offset store must stay untouched");
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> runner.reset(name, (org.streamrune.core.projection.CheckpointTarget) null));
+    assertEquals(
+        "ContinuousProjectionRunner projection 'feed': target is required; call reset(name) to use"
+            + " the runner's own pair",
+        refused.getMessage());
+  }
+
+  @Test
+  void resetBeforeAnyRun_onARunnerBuiltWithoutAPair_refuses() {
+    var runner = runnerWithoutAPair();
+
+    var refused =
+        assertThrows(IllegalStateException.class, () -> runner.reset(ProjectionName.of("orphan")));
+    assertTrue(
+        refused
+            .getMessage()
+            .startsWith("ContinuousProjectionRunner cannot reset projection 'orphan'"),
+        refused.getMessage());
+  }
+
+  @Test
+  void runOnATarget_underRealLeadership_refusesATargetThatCannotFence() {
+    // The build-time fencing check saw no processor; the target's is checked at run(), by name.
+    var runner =
+        ContinuousProjectionRunner.builder()
+            .eventStore(eventStore)
+            .leadership(
+                org.mockito.Mockito.mock(
+                    org.streamrune.core.subscription.SubscriptionLeadership.class))
+            .build();
+    var target = new InMemoryOffsetStore().subscriptionCheckpoint();
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                runner.run(
+                    ProjectionName.of("feed"), projection, AT_LEAST_ONCE_IDEMPOTENT, target));
+    assertTrue(
+        refused
+            .getMessage()
+            .startsWith("ContinuousProjectionRunner projection 'feed' was configured with"),
+        refused.getMessage());
+    assertTrue(
+        refused.getMessage().contains("(checkpoint target 'subscription_checkpoint')"),
+        refused.getMessage());
+  }
+
+  @Test
+  void runOnATarget_whileRunning_doesNotRepointTheRunningPair() throws Exception {
+    // A second run() is refused as already running; its target must not become the pair the
+    // running run reads and commits through.
+    var first = new InMemoryOffsetStore();
+    var second = new InMemoryOffsetStore();
+    var name = ProjectionName.of("feed");
+    var runner = runnerWithoutAPair();
+    Thread thread =
+        Thread.ofVirtual()
+            .start(
+                () ->
+                    runner.run(
+                        name,
+                        projection,
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        first.subscriptionCheckpoint()));
+    try {
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> runner.state() == ProjectionState.LIVE);
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              runner.run(
+                  name, projection, AT_LEAST_ONCE_IDEMPOTENT, second.subscriptionCheckpoint()));
+
+      StreamId streamId = StreamId.of(TYPE, AggregateId.of("running"));
+      eventStore.append(streamId, List.of(envelope(streamId, 1, "after")), Version.initial());
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> first.getLastOffset(name).equals(GlobalOffset.of(1)));
+      assertEquals(GlobalOffset.initial(), second.getLastOffset(name));
+    } finally {
+      runner.close();
+      thread.join(5_000);
+    }
   }
 
   /**
@@ -716,12 +1013,12 @@ class ContinuousProjectionRunnerTest {
 
     var factoryCalled = new AtomicInteger();
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) -> {
+        (name, listener, readPoisonBound, checkpoints) -> {
           factoryCalled.incrementAndGet();
           return PollingEventSubscription.builder()
               .subscriptionName(SubscriptionName.of(name.value()))
               .eventStore(eventStore)
-              .offsetStore(offsetStore)
+              .offsetStore(checkpoints)
               .listener(listener)
               .config(fastConfig())
               .fetchSize(10)
@@ -765,11 +1062,11 @@ class ContinuousProjectionRunnerTest {
     // dead-lettered under DLQ and the checkpoint advances past it.
     var dlqStore = new InMemoryProjectionDeadLetterStore();
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             PollingEventSubscription.builder()
                 .subscriptionName(SubscriptionName.of(name.value()))
                 .eventStore(eventStore)
-                .offsetStore(offsetStore)
+                .offsetStore(checkpoints) // the run's checkpoints
                 .listener(listener) // the runner's WRAPPED listener — the error strategy applies
                 .config(fastConfig())
                 .fetchSize(10)
@@ -2277,7 +2574,7 @@ class ContinuousProjectionRunnerTest {
   void liveSubscriptionDeath_surfacesAsErrorInsteadOfReportingLiveForever() throws Exception {
     var subscriptionRunning = new java.util.concurrent.atomic.AtomicBoolean(true);
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             new org.streamrune.core.subscription.EventSubscription() {
               @Override
               public void start() {}
@@ -2341,7 +2638,7 @@ class ContinuousProjectionRunnerTest {
     var poison =
         new ProjectionReadPoisonException("read-poison-proj", 5, new RuntimeException("bad event"));
     ContinuousProjectionRunner.SubscriptionFactory factory =
-        (name, listener, readPoisonBound) ->
+        (name, listener, readPoisonBound, checkpoints) ->
             new ReadPoisonAwareTestSubscription(subscriptionRunning, poison);
 
     var runner =

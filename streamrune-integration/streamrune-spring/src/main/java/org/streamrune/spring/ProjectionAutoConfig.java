@@ -2,7 +2,6 @@ package org.streamrune.spring;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -40,7 +39,9 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.ProjectionDiscoveryMessages;
+import org.streamrune.integration.ProjectionRoutes;
 import org.streamrune.integration.ProjectionStoreRouting;
+import org.streamrune.integration.ReadModelStores;
 import org.streamrune.runtime.InlineProjectionInterceptor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.ScheduledProjectionRunner;
@@ -53,15 +54,18 @@ import org.streamrune.runtime.TracingProjectionDecorator;
  *
  * <p>Every registration carries the {@link ProjectionDeliveryMode} its {@code
  * ProjectionConfig.deliveryMode()} declares, and is routed on its own by {@link
- * ProjectionStoreRouting#route} to the {@link CheckpointTarget} it reads its position from and
- * commits through: a {@link ReadModelStore} bean's (named by {@code
- * ProjectionConfig.readModelStore()}, matched by the projection's {@code writeTarget()}, or the one
- * transactional store for a transactional registration with no write target), or, for an {@code
- * AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store, the event store's subscription
- * checkpoint (the {@code streamRuneSubscriptionCheckpoint} bean). The routed processor must carry
- * what the registration needs — {@link AtomicBatchProcessor#transactional()} for a transactional
- * mode, {@link AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or the context does
- * not start. An INLINE registration must declare {@code AT_LEAST_ONCE_IDEMPOTENT}.
+ * ProjectionStoreRouting#route} — once, for both runners, into the {@link ProjectionRoutes} bean
+ * the index declaration reads too — to the {@link CheckpointTarget} it reads its position from and
+ * commits through: a {@link ReadModelStore}'s (one of the {@link ReadModelStores} — the
+ * application's store beans, and the default {@code postgres} store unless one of them takes its
+ * name — named by {@code ProjectionConfig.readModelStore()}, matched by the projection's {@code
+ * writeTarget()}, or the one transactional store for a transactional registration with no write
+ * target), or, for an {@code AT_LEAST_ONCE_IDEMPOTENT} registration that matches no store, the
+ * event store's subscription checkpoint (the {@code streamRuneSubscriptionCheckpoint} bean). The
+ * routed processor must carry what the registration needs — {@link
+ * AtomicBatchProcessor#transactional()} for a transactional mode, {@link
+ * AtomicBatchProcessor#fencesCheckpoint()} under real leadership — or the context does not start.
+ * An INLINE registration must declare {@code AT_LEAST_ONCE_IDEMPOTENT}.
  *
  * <p>Disabled when {@code streamrune.projections.auto-discovery.enabled=false} (or any other
  * canonical-false spelling RelaxedBoolean accepts — see {@link AutoDiscoveryEnabledCondition}).
@@ -69,6 +73,7 @@ import org.streamrune.runtime.TracingProjectionDecorator;
 @AutoConfiguration
 @EnableConfigurationProperties(StreamRuneProperties.class)
 @Conditional(ProjectionAutoConfig.AutoDiscoveryEnabledCondition.class)
+@org.springframework.context.annotation.Import(ReadModelStoresConfiguration.class)
 public class ProjectionAutoConfig {
 
   private static final Logger log = LoggerFactory.getLogger(ProjectionAutoConfig.class);
@@ -93,16 +98,20 @@ public class ProjectionAutoConfig {
     }
   }
 
+  /**
+   * Builds the framework's runner from the discovered projections (see the class javadoc).
+   *
+   * @hidden
+   */
   @Bean
   @ConditionalOnMissingBean
+  @org.streamrune.core.Internal
   public MultiProjectionRunner streamRuneMultiProjectionRunner(
       ApplicationContext ctx,
       Environment env,
       EventStore eventStore,
       StreamRuneProperties properties,
-      ObjectProvider<ReadModelStore> storeProvider,
-      @Qualifier(StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT)
-          ObjectProvider<CheckpointTarget> subscriptionCheckpointProvider,
+      ObjectProvider<ProjectionRoutes> routesProvider,
       ObjectProvider<ProjectionDeadLetterStore> dlqProvider,
       ObjectProvider<StreamRuneMetrics> metricsProvider,
       ObjectProvider<SubscriptionLeadership> leadershipProvider,
@@ -155,14 +164,14 @@ public class ProjectionAutoConfig {
     }
     // Each registration is routed on its own: the runner sets no runner-wide offset store or
     // processor, so every registration reads and commits through the pair it was routed to.
-    var routes = route(entries, storeProvider, subscriptionCheckpointProvider, leadership);
+    ProjectionRoutes routes = routesProvider.getObject();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
           e.projection(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routes.target(e.name()));
     }
     return builder.build();
   }
@@ -186,15 +195,19 @@ public class ProjectionAutoConfig {
     return new RunnerLifecycle("MultiProjectionRunner", runner::start, runner::stop);
   }
 
+  /**
+   * Builds the framework's runner from the discovered projections (see the class javadoc).
+   *
+   * @hidden
+   */
   @Bean
   @ConditionalOnMissingBean
+  @org.streamrune.core.Internal
   public ScheduledProjectionRunner streamRuneScheduledProjectionRunner(
       ApplicationContext ctx,
       Environment env,
       EventStore eventStore,
-      ObjectProvider<ReadModelStore> storeProvider,
-      @Qualifier(StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT)
-          ObjectProvider<CheckpointTarget> subscriptionCheckpointProvider,
+      ObjectProvider<ProjectionRoutes> routesProvider,
       ObjectProvider<ProjectionDeadLetterStore> dlqProvider,
       ObjectProvider<StreamRuneMetrics> metricsProvider,
       ObjectProvider<SubscriptionLeadership> leadershipProvider,
@@ -236,7 +249,7 @@ public class ProjectionAutoConfig {
         throw new IllegalStateException(ProjectionDiscoveryMessages.cronRequired(e.name()));
       }
     }
-    var routes = route(entries, storeProvider, subscriptionCheckpointProvider, leadership);
+    ProjectionRoutes routes = routesProvider.getObject();
     for (var e : entries) {
       builder.register(
           ProjectionName.of(e.name()),
@@ -244,7 +257,7 @@ public class ProjectionAutoConfig {
           e.cron(),
           e.errorStrategy(),
           e.deliveryMode(),
-          routes.get(e.name()));
+          routes.target(e.name()));
     }
     return builder.build();
   }
@@ -436,20 +449,53 @@ public class ProjectionAutoConfig {
   }
 
   /**
-   * Routes one runner's registrations, each on its own ({@link ProjectionStoreRouting#route}),
-   * after checking the store set once ({@link ProjectionStoreRouting#validateStores}).
+   * Routes every registration of both runners — each enabled {@code CONTINUOUS} and {@code
+   * SCHEDULED} projection — once, each on its own ({@link ProjectionStoreRouting#route}), over the
+   * {@link ReadModelStores} (selected and validated once, so a duplicate store name or write target
+   * fails as a store error before any registration is routed). The runners register each
+   * registration on its route, and the index declaration declares each {@code ProjectionIndex} on
+   * the store its projection is routed to. Lazy: created by the first runner, or by the index
+   * declaration when index beans exist; with no registration it touches no store.
    *
-   * @return each registration's target, by projection name
+   * @param ctx the context the projection beans are discovered in
+   * @param env the per-projection property overrides
+   * @param stores the read-model stores
+   * @param subscriptionCheckpointProvider the event store's subscription checkpoint, rule 4's
+   *     target
+   * @param leadershipProvider the single-active-consumer leadership, {@code NOOP} when absent
+   * @return the routes
    * @throws IllegalStateException if the store set is invalid, a registration cannot be routed or
-   *     its routed processor lacks a capability it needs, or no subscription checkpoint bean exists
+   *     its routed processor lacks a capability it needs, or registrations exist and no
+   *     subscription checkpoint bean does
+   * @hidden
    */
-  private static Map<String, CheckpointTarget> route(
-      List<DiscoveredEntry> entries,
-      ObjectProvider<ReadModelStore> storeProvider,
-      ObjectProvider<CheckpointTarget> subscriptionCheckpointProvider,
-      SubscriptionLeadership leadership) {
-    List<ReadModelStore> stores = storeProvider.orderedStream().toList();
-    ProjectionStoreRouting.validateStores(stores);
+  @Bean
+  @org.springframework.context.annotation.Lazy
+  @org.streamrune.core.Internal
+  public ProjectionRoutes streamRuneProjectionRoutes(
+      ApplicationContext ctx,
+      Environment env,
+      ReadModelStores stores,
+      @Qualifier(StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT)
+          ObjectProvider<CheckpointTarget> subscriptionCheckpointProvider,
+      ObjectProvider<SubscriptionLeadership> leadershipProvider) {
+    var registrations = new ArrayList<ProjectionStoreRouting.Registration>();
+    for (var mode : List.of(ProjectionConfig.Mode.CONTINUOUS, ProjectionConfig.Mode.SCHEDULED)) {
+      for (var e : discover(ctx, env, mode)) {
+        registrations.add(
+            new ProjectionStoreRouting.Registration(
+                e.name(), e.deliveryMode(), e.readModelStore(), e.projection()));
+      }
+    }
+    return ProjectionRoutes.route(
+        registrations,
+        stores,
+        () -> requireSubscriptionCheckpoint(subscriptionCheckpointProvider),
+        LeadershipBeans.resolve(leadershipProvider));
+  }
+
+  private static CheckpointTarget requireSubscriptionCheckpoint(
+      ObjectProvider<CheckpointTarget> subscriptionCheckpointProvider) {
     CheckpointTarget subscriptionCheckpoint = subscriptionCheckpointProvider.getIfAvailable();
     if (subscriptionCheckpoint == null) {
       throw new IllegalStateException(
@@ -462,16 +508,7 @@ public class ProjectionAutoConfig {
               + StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT
               + ".");
     }
-    var routes = new LinkedHashMap<String, CheckpointTarget>();
-    for (var e : entries) {
-      var registration =
-          new ProjectionStoreRouting.Registration(
-              e.name(), e.deliveryMode(), e.readModelStore(), e.projection());
-      routes.put(
-          e.name(),
-          ProjectionStoreRouting.route(registration, stores, subscriptionCheckpoint, leadership));
-    }
-    return routes;
+    return subscriptionCheckpoint;
   }
 
   private static void requireNoDlqStrategy(List<DiscoveredEntry> entries) {

@@ -297,10 +297,14 @@ auto-assembles from your `@ProjectionConfig` beans, and only while
 stopped by the framework — you own its lifecycle. To supply and fully manage your own runner, set
 `streamrune.projections.auto-discovery.enabled=false`; the framework then assembles and starts
 nothing. This contract is identical across the Spring, Quarkus, and Micronaut integrations.
+With auto-discovery on, your `@ProjectionConfig` declarations are still routed to read-model
+stores to place their `ProjectionIndex` beans, even when you own the runner: a declaration the
+routing would refuse fails the start.
 
 **Where each projection checkpoints.** With a `DataSource`, the integration registers the default
-read-model store, a `PostgresReadModelStore` named `postgres` (bean `postgres`): read models in
-`<name>_view` tables, their checkpoints beside them in `readmodel_checkpoint`. The injectable
+read-model store, a `PostgresReadModelStore` named `postgres` (bean
+`streamRuneDefaultReadModelStore`): read models in `<name>_view` tables, their checkpoints beside
+them in `readmodel_checkpoint`. The injectable
 `ProjectionRepository` bean is that store's repository. Each discovered projection is routed on its
 own: a projection that names a store (`@ProjectionConfig(readModelStore = "postgres")`) or writes to
 its repository (a `BaseProjection` over the injected `ProjectionRepository`) goes to that store, so
@@ -310,7 +314,21 @@ An `AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in th
 applies the read-model migration series (`db/readmodel-migration`) when
 `streamrune.read-model.schema.auto-initialize` is on; unset, it follows
 `streamrune.event-store.schema.auto-initialize`. The store is created when the first bean that needs
-it is; a `ReadModelStore` bean you define replaces it.
+it is.
+
+**Several read-model stores.** Every `ReadModelStore` bean you define is a routing target beside
+the default store, named by its `name()`. The default store is replaced only by name: a
+`ReadModelStore` bean whose `name()` is `postgres` takes its place, and the default store is then
+never created, so its database is never touched; a store of any other name is added beside it. The
+`ProjectionRepository` bean is the repository of the store named `postgres` — the default one, or
+yours — and another store's repository is reached through its `ReadModelStore` bean. Two stores
+with the same name, or over the same repository (equal `writeTargetIdentity()`), fail the start
+when the stores are collected. Each `ProjectionIndex` bean is declared on the store its projection
+is routed to; an index for a projection routed to no store (the subscription checkpoint, an
+`INLINE` projection, or none registered) goes to the `ProjectionRepository` bean. The stores are
+collected into one bean, `streamRuneReadModelStores`, which leaves the default store out by its
+bean name until it is needed: inject your own store, not every `ReadModelStore` bean (a
+`List<ReadModelStore>` would create a replaced default store too).
 
 **A `BaseProjection` must not be a CGLIB proxy.** When an aspect applies to a projection class
 (a class-level `@Transactional`, `@Async` or `@Validated`, a metrics or tracing aspect, a scoped
