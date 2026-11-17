@@ -1179,6 +1179,7 @@ public interface org.streamrune.core.projection.ProjectionRepository
 public interface org.streamrune.core.projection.ProjectionRunner
   public abstract void reset(org.streamrune.core.types.ProjectionName)
   public abstract void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public default void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public interface org.streamrune.core.projection.ReadModelStore
   public abstract java.lang.String name()

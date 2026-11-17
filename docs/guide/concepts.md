@@ -455,7 +455,12 @@ event store's `subscription_checkpoint`. Never pair a `JdbcProjectionRepository`
 `PostgresOffsetStore`: the runner would read a table the processor never writes (see
 [a processor and an offset store that disagree](#a-processor-and-an-offset-store-that-disagree)).
 A runner-wide `offsetStore(...)` + `atomicProcessor(...)` pair still serves registrations given no
-target; set both from one pair (`store.checkpoints()` + `store.processor()`) or neither.
+target; set both from one pair (`store.checkpoints()` + `store.processor()`) or neither. The facade
+takes the same declaration: `StreamRune.Builder.registerProjection(name, projection, mode, store)`
+(a `ReadModelStore`) or `(…, target)` (a `CheckpointTarget`), which `startProjections()` hands to
+`ProjectionRunner.run(name, projection, mode, target)`; `ContinuousProjectionRunner` and
+`PollingProjectionRunner` route it, and a runner that cannot route refuses it instead of running
+the projection on its own pair.
 
 **Integration recipe:** with a `DataSource`, the integrations create the default read-model store
 `postgres` (a `PostgresReadModelStore` on the primary `DataSource`, which applies the read-model

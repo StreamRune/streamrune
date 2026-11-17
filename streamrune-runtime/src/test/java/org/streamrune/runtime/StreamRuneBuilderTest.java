@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.streamrune.core.projection.ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT;
+import static org.streamrune.core.projection.ProjectionDeliveryMode.TRANSACTIONAL_LOCAL;
 
 import java.time.Duration;
 import java.util.List;
@@ -29,9 +30,14 @@ import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.projection.AtomicBatchProcessor;
+import org.streamrune.core.projection.BaseProjection;
+import org.streamrune.core.projection.CheckpointTarget;
+import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.projection.ProjectionRunner;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanBaggage;
@@ -43,12 +49,14 @@ import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
+import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryEventStoreFactory;
 import org.streamrune.test.InMemoryOffsetStore;
+import org.streamrune.test.InMemoryProjectionRepository;
 
 /** Tests for enhanced StreamRune.Builder API */
 class StreamRuneBuilderTest {
@@ -1160,6 +1168,256 @@ class StreamRuneBuilderTest {
     public void close() {
       closed = true;
     }
+  }
+
+  // ==================== Registration on an explicit read-model store ====================
+
+  /** Records every call, so a test can prove that nothing read, wrote or rewound it. */
+  static final class RecordingOffsetStore implements OffsetStore {
+    final List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    @Override
+    public GlobalOffset getLastOffset(ProjectionName projectionName) {
+      calls.add("getLastOffset " + projectionName.value());
+      return GlobalOffset.initial();
+    }
+
+    @Override
+    public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
+      calls.add("saveOffset " + projectionName.value());
+    }
+
+    @Override
+    public void reset(ProjectionName projectionName) {
+      calls.add("reset " + projectionName.value());
+    }
+  }
+
+  record WidgetSeen(long offset) {}
+
+  /** Writes one read model per event through the repository the processor hands it. */
+  static final class WidgetSeenProjection extends BaseProjection {
+    WidgetSeenProjection(ProjectionRepository repository) {
+      super(repository, "widget_seen");
+    }
+
+    @Override
+    public void process(List<org.streamrune.core.EventEnvelope> batch) {
+      for (var event : batch) {
+        save(event.streamId().aggregateId().value(), new WidgetSeen(event.globalOffset().value()));
+      }
+    }
+  }
+
+  private static void appendOneEvent(InMemoryEventStore eventStore, String aggregateId) {
+    var streamId = org.streamrune.core.types.StreamId.of(TYPE, AggregateId.of(aggregateId));
+    eventStore.append(
+        streamId,
+        List.of(registrationEnvelope(streamId, 1)),
+        org.streamrune.core.types.Version.initial());
+  }
+
+  private static void awaitOffset(OffsetStore checkpoints, ProjectionName name, long offset)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (checkpoints.getLastOffset(name).value() < offset && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+    }
+  }
+
+  @Test
+  void registerProjectionWithStoreCommitsThroughThatStore() throws Exception {
+    // The factory builds each runner with a runner-wide pair; the registration names a store. The
+    // store is the explicit declaration (spec §5.6 rule 1): the TRANSACTIONAL_LOCAL projection's
+    // read model and its checkpoint commit together in THAT store, and the runner-wide offset
+    // store is never read, written or rewound.
+    var eventStore = new InMemoryEventStore(TYPES);
+    var memory = new InMemoryProjectionRepository();
+    var store = ReadModelStore.of("memory", memory, memory, memory);
+    var runnerWide = new RecordingOffsetStore();
+    var name = ProjectionName.of("widget_seen");
+
+    try (var streamRune =
+        StreamRune.builder()
+            .eventStore(eventStore)
+            .projectionRunnerFactory(
+                (es, config) ->
+                    ContinuousProjectionRunner.builder()
+                        .eventStore(es)
+                        .offsetStore(runnerWide)
+                        .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+                        .subscriptionConfig(config)
+                        .build())
+            .subscriptionConfig(
+                new SubscriptionConfig(false, Duration.ofMillis(20), Duration.ofMillis(5)))
+            .registerProjection(name, new WidgetSeenProjection(memory), TRANSACTIONAL_LOCAL, store)
+            .build()) {
+      streamRune.startProjections();
+      appendOneEvent(eventStore, "store-routed");
+
+      awaitOffset(memory, name, 1);
+      assertEquals(
+          GlobalOffset.of(1),
+          memory.committedOffset(name),
+          "the checkpoint must advance in the store the registration names");
+      assertEquals(
+          java.util.Optional.of(new WidgetSeen(1)),
+          memory.findById(name, "store-routed", WidgetSeen.class),
+          "the read model must be written in the same store");
+    }
+    assertEquals(List.of(), runnerWide.calls, "the runner-wide offset store must stay untouched");
+  }
+
+  @Test
+  void registerProjectionWithTargetCommitsAtLeastOnceThroughTheSubscriptionCheckpoint()
+      throws Exception {
+    // The at-least-once form: the projection writes wherever it writes, and its position lives in
+    // the event store's subscription checkpoint, named explicitly. A shared PollingProjectionRunner
+    // routes the registration there instead of to its own runner-wide pair.
+    var eventStore = new InMemoryEventStore(TYPES);
+    var subscriptionCheckpoints = new InMemoryOffsetStore();
+    var runnerWide = new RecordingOffsetStore();
+    var name = ProjectionName.of("widget_feed");
+    var seen = new java.util.concurrent.CopyOnWriteArrayList<org.streamrune.core.EventEnvelope>();
+    appendOneEvent(eventStore, "subscription-routed");
+
+    try (var streamRune =
+        StreamRune.builder()
+            .eventStore(eventStore)
+            .projectionRunner(
+                new PollingProjectionRunner(
+                    eventStore, runnerWide, 100, 50, AtomicBatchProcessor.nonAtomicAtLeastOnce()))
+            .registerProjection(
+                name,
+                (Projection) seen::addAll,
+                AT_LEAST_ONCE_IDEMPOTENT,
+                subscriptionCheckpoints.subscriptionCheckpoint())
+            .build()) {
+      streamRune.startProjections();
+
+      awaitOffset(subscriptionCheckpoints, name, 1);
+      assertEquals(GlobalOffset.of(1), subscriptionCheckpoints.getLastOffset(name));
+      assertEquals(1, seen.size());
+    }
+    assertEquals(List.of(), runnerWide.calls, "the runner-wide offset store must stay untouched");
+  }
+
+  @Test
+  void registerProjectionWithStore_onARunnerThatCannotRoute_refusesInsteadOfFallingBack()
+      throws Exception {
+    // A runner that only knows its own pair inherits ProjectionRunner's refusing overload: the
+    // registration fails, logged by name, and is never run on the runner's pair instead.
+    var memory = new InMemoryProjectionRepository();
+    var store = ReadModelStore.of("memory", memory, memory, memory);
+    var fallbacks = new java.util.concurrent.atomic.AtomicInteger();
+    var logger =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StreamRune.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try (var streamRune =
+        StreamRune.builder()
+            .eventStore(new InMemoryEventStore(TYPES))
+            .projectionRunner(
+                new ProjectionRunner() {
+                  @Override
+                  public void run(
+                      ProjectionName name, Projection projection, ProjectionDeliveryMode mode) {
+                    fallbacks.incrementAndGet();
+                  }
+
+                  @Override
+                  public void reset(ProjectionName name) {}
+                })
+            .registerProjection(
+                ProjectionName.of("widget_seen"),
+                new WidgetSeenProjection(memory),
+                TRANSACTIONAL_LOCAL,
+                store)
+            .build()) {
+      streamRune.startProjections();
+      streamRune.stopProjections();
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+
+    assertEquals(0, fallbacks.get(), "the runner's own pair must never stand in for the store");
+    var failure =
+        appender.list.stream()
+            .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR)
+            .findFirst()
+            .orElseThrow();
+    assertEquals("Projection 'widget_seen' failed", failure.getFormattedMessage());
+    assertEquals(
+        UnsupportedOperationException.class.getName(), failure.getThrowableProxy().getClassName());
+  }
+
+  @Test
+  void registerProjectionWithStore_refusesAWriteTargetOfAnotherStore() {
+    // Rule 1: the declaration and the code must agree. A projection whose writeTarget() is not the
+    // named store's repository fails at the call, before anything runs.
+    var store =
+        ReadModelStore.of(
+            "memory",
+            new InMemoryProjectionRepository(),
+            new InMemoryOffsetStore(),
+            AtomicBatchProcessor.nonAtomicAtLeastOnce());
+    var elsewhere = new InMemoryProjectionRepository();
+    var builder = StreamRune.builder();
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                builder.registerProjection(
+                    ProjectionName.of("widget_seen"),
+                    new WidgetSeenProjection(elsewhere),
+                    TRANSACTIONAL_LOCAL,
+                    store));
+    assertEquals(
+        "projection 'widget_seen' is registered on read-model store 'memory', but its"
+            + " writeTarget() is not that store's repository: the declaration and the code"
+            + " disagree. Register it on the store its writeTarget() belongs to, or make the"
+            + " projection write to store.repository().",
+        refused.getMessage());
+
+    // A projection that exposes no writeTarget() has nothing to disagree with.
+    assertDoesNotThrow(
+        () ->
+            builder.registerProjection(
+                ProjectionName.of("widget_feed"),
+                (Projection) batch -> {},
+                AT_LEAST_ONCE_IDEMPOTENT,
+                store));
+  }
+
+  @Test
+  void registerProjectionWithStoreOrTarget_refusesNull() {
+    var builder = StreamRune.builder();
+    var name = ProjectionName.of("widget_seen");
+
+    var noStore =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                builder.registerProjection(
+                    name,
+                    (Projection) batch -> {},
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    (ReadModelStore) null));
+    assertEquals("store is required for projection 'widget_seen'", noStore.getMessage());
+    var noTarget =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                builder.registerProjection(
+                    name,
+                    (Projection) batch -> {},
+                    AT_LEAST_ONCE_IDEMPOTENT,
+                    (CheckpointTarget) null));
+    assertEquals("target is required for projection 'widget_seen'", noTarget.getMessage());
   }
 
   record TestEvent(String payload) {}

@@ -145,6 +145,7 @@ public final class org.streamrune.runtime.ContinuousProjectionRunner implements 
   public void requestStop()
   public void reset(org.streamrune.core.types.ProjectionName)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public static final class org.streamrune.runtime.ContinuousProjectionRunner$Builder
   public <init>()
@@ -410,6 +411,7 @@ public final class org.streamrune.runtime.PollingProjectionRunner implements org
   public <init>(org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, int, int, org.streamrune.core.projection.AtomicBatchProcessor, org.streamrune.core.StreamRuneMetrics)
   public void reset(org.streamrune.core.types.ProjectionName)
   public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public void run(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
 
 public final class org.streamrune.runtime.ProjectionCheckpointDivergedException extends java.lang.RuntimeException
 
@@ -790,6 +792,8 @@ public static final class org.streamrune.runtime.StreamRune$Builder
   public org.streamrune.runtime.StreamRune$Builder projectionRunnerFactory(org.streamrune.runtime.StreamRune$ProjectionRunnerFactory)
   public org.streamrune.runtime.StreamRune$Builder registerEventType(java.lang.String, java.lang.Class<?>)
   public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode)
+  public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.CheckpointTarget)
+  public org.streamrune.runtime.StreamRune$Builder registerProjection(org.streamrune.core.types.ProjectionName, org.streamrune.core.projection.Projection, org.streamrune.core.projection.ProjectionDeliveryMode, org.streamrune.core.projection.ReadModelStore)
   public org.streamrune.runtime.StreamRune$Builder registerStateType(java.lang.String, java.lang.Class<?>)
   public org.streamrune.runtime.StreamRune$Builder retryPolicy(org.streamrune.core.RetryPolicy)
   public org.streamrune.runtime.StreamRune$Builder snapshotPolicy(org.streamrune.core.SnapshotPolicy)
