@@ -399,9 +399,11 @@ public class StreamRuneProducers {
    *
    * @param storeInstance every read-model store bean
    * @return the stores
+   * @hidden
    */
   @Produces
   @Singleton
+  @org.streamrune.core.Internal
   public org.streamrune.integration.ReadModelStores readModelStores(
       @Any Instance<ReadModelStore> storeInstance) {
     return new org.streamrune.integration.ReadModelStores(
@@ -442,10 +444,12 @@ public class StreamRuneProducers {
    *
    * @throws IllegalStateException when the stores are invalid, or none is named {@value
    *     #DEFAULT_READ_MODEL_STORE}
+   * @hidden
    */
   @Produces
   @Singleton
   @DefaultBean
+  @org.streamrune.core.Internal
   public ProjectionRepository projectionRepository(
       org.streamrune.integration.ReadModelStores stores) {
     return stores.defaultRepository();

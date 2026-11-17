@@ -39,7 +39,9 @@ public class ProjectionIndexDeclarer implements ApplicationEventListener<Startup
    * @param projectionIndexes the index beans
    * @param routes the routes of the projection runners' registrations, resolved only when index
    *     beans exist; absent when projection discovery is off
+   * @hidden
    */
+  @org.streamrune.core.Internal
   public ProjectionIndexDeclarer(
       BeanProvider<ProjectionRepository> repositories,
       List<ProjectionIndex> projectionIndexes,

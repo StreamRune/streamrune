@@ -125,9 +125,11 @@ public class ProjectionFactory {
    * @return the routes
    * @throws IllegalStateException if the store set is invalid, or a registration cannot be routed
    *     or its routed processor lacks a capability it needs
+   * @hidden
    */
   @Singleton
   @Requires(beans = {EventStore.class, OffsetStore.class})
+  @Internal
   public ProjectionRoutes projectionRoutes(
       List<Projection> projections,
       Environment env,
@@ -174,6 +176,7 @@ public class ProjectionFactory {
    * @return a new runner
    * @throws IllegalStateException if the store set is invalid or a registration cannot be routed
    *     ({@link ProjectionStoreRouting#route})
+   * @hidden
    */
   @Singleton
   @Secondary
@@ -204,6 +207,7 @@ public class ProjectionFactory {
   // their runner's lifecycle exactly as the named-bean ownership contract intends.
   @Requires(missingBeans = MultiProjectionRunner.class)
   @Bean(preDestroy = "close")
+  @Internal
   public MultiProjectionRunner multiProjectionRunner(
       List<Projection> projections,
       EventStore eventStore,
@@ -305,6 +309,7 @@ public class ProjectionFactory {
    * @return a new runner
    * @throws IllegalStateException if a projection has no cron, the store set is invalid, or a
    *     registration cannot be routed ({@link ProjectionStoreRouting#route})
+   * @hidden
    */
   @Singleton
   @Secondary
@@ -315,6 +320,7 @@ public class ProjectionFactory {
   // must REPLACE this default, not run beside it against the same @ProjectionConfig projections.
   @Requires(missingBeans = ScheduledProjectionRunner.class)
   @Bean(preDestroy = "close")
+  @Internal
   public ScheduledProjectionRunner scheduledProjectionRunner(
       List<Projection> projections,
       EventStore eventStore,

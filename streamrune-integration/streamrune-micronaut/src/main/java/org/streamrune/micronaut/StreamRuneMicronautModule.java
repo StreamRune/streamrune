@@ -1360,8 +1360,10 @@ public class StreamRuneMicronautModule {
    *
    * @param beanContext the context the read-model stores are collected from
    * @return the stores
+   * @hidden
    */
   @Singleton
+  @Internal
   public org.streamrune.integration.ReadModelStores readModelStores(
       io.micronaut.context.BeanContext beanContext) {
     io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore> defaultStore =
@@ -1410,11 +1412,13 @@ public class StreamRuneMicronautModule {
    * @return the repository of the store named {@value #DEFAULT_READ_MODEL_STORE}
    * @throws IllegalStateException when the stores are invalid, or none is named {@value
    *     #DEFAULT_READ_MODEL_STORE}
+   * @hidden
    */
   @Singleton
   @Secondary
   @Requires(beans = org.streamrune.core.projection.ReadModelStore.class)
   @Requires(missingBeans = org.streamrune.core.projection.ProjectionRepository.class)
+  @Internal
   public org.streamrune.core.projection.ProjectionRepository projectionRepository(
       org.streamrune.integration.ReadModelStores stores) {
     return stores.defaultRepository();

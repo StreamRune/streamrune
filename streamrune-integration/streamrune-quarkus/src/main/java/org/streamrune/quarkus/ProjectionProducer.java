@@ -104,10 +104,12 @@ public class ProjectionProducer {
    *
    * @throws IllegalStateException if the store set is invalid or a registration cannot be routed
    *     ({@link ProjectionStoreRouting#route})
+   * @hidden
    */
   @Produces
   @DefaultBean
   @Named(FRAMEWORK_MULTI_RUNNER)
+  @org.streamrune.core.Internal
   public MultiProjectionRunner multiProjectionRunner(
       Instance<Projection> projections,
       EventStore eventStore,
@@ -203,10 +205,12 @@ public class ProjectionProducer {
    *
    * @throws IllegalStateException if a projection has no cron, the store set is invalid, or a
    *     registration cannot be routed ({@link ProjectionStoreRouting#route})
+   * @hidden
    */
   @Produces
   @DefaultBean
   @Named(FRAMEWORK_SCHEDULED_RUNNER)
+  @org.streamrune.core.Internal
   public ScheduledProjectionRunner scheduledProjectionRunner(
       Instance<Projection> projections,
       EventStore eventStore,
@@ -396,9 +400,11 @@ public class ProjectionProducer {
    * @return the routes
    * @throws IllegalStateException if the store set is invalid, or a registration cannot be routed
    *     or its routed processor lacks a capability it needs
+   * @hidden
    */
   @Produces
   @Singleton
+  @org.streamrune.core.Internal
   public ProjectionRoutes projectionRoutes(
       Instance<Projection> projections,
       Config config,

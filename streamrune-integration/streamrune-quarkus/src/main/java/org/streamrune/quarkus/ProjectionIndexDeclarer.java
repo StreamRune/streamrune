@@ -43,7 +43,9 @@ public class ProjectionIndexDeclarer {
    *     beans exist; unsatisfied when the application has no routes bean
    * @throws IllegalStateException if an index is routed to no store and no single repository bean
    *     exists, or the routes cannot be computed
+   * @hidden
    */
+  @org.streamrune.core.Internal
   public void declare(
       @Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE) StartupEvent event,
       Instance<ProjectionRepository> repositories,

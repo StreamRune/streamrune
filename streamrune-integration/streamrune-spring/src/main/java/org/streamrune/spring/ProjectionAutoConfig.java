@@ -98,8 +98,14 @@ public class ProjectionAutoConfig {
     }
   }
 
+  /**
+   * Builds the framework's runner from the discovered projections (see the class javadoc).
+   *
+   * @hidden
+   */
   @Bean
   @ConditionalOnMissingBean
+  @org.streamrune.core.Internal
   public MultiProjectionRunner streamRuneMultiProjectionRunner(
       ApplicationContext ctx,
       Environment env,
@@ -189,8 +195,14 @@ public class ProjectionAutoConfig {
     return new RunnerLifecycle("MultiProjectionRunner", runner::start, runner::stop);
   }
 
+  /**
+   * Builds the framework's runner from the discovered projections (see the class javadoc).
+   *
+   * @hidden
+   */
   @Bean
   @ConditionalOnMissingBean
+  @org.streamrune.core.Internal
   public ScheduledProjectionRunner streamRuneScheduledProjectionRunner(
       ApplicationContext ctx,
       Environment env,
@@ -455,9 +467,11 @@ public class ProjectionAutoConfig {
    * @throws IllegalStateException if the store set is invalid, a registration cannot be routed or
    *     its routed processor lacks a capability it needs, or registrations exist and no
    *     subscription checkpoint bean does
+   * @hidden
    */
   @Bean
   @org.springframework.context.annotation.Lazy
+  @org.streamrune.core.Internal
   public ProjectionRoutes streamRuneProjectionRoutes(
       ApplicationContext ctx,
       Environment env,

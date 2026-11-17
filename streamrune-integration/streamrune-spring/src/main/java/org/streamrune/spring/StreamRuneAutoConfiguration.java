@@ -2048,11 +2048,13 @@ public class StreamRuneAutoConfiguration {
    * @throws IllegalStateException when the stores are invalid, or the application's read-model
    *     stores name none {@value #DEFAULT_READ_MODEL_STORE} and there is no default store (no
    *     {@code DataSource})
+   * @hidden
    */
   @Bean
   @org.springframework.context.annotation.Lazy
   @ConditionalOnBean(org.streamrune.core.projection.ReadModelStore.class)
   @ConditionalOnMissingBean(org.streamrune.core.projection.ProjectionRepository.class)
+  @org.streamrune.core.Internal
   public org.streamrune.core.projection.ProjectionRepository streamRuneProjectionRepository(
       org.streamrune.integration.ReadModelStores stores) {
     return stores.defaultRepository();
@@ -2113,8 +2115,10 @@ public class StreamRuneAutoConfiguration {
    * @param routes the routes of the projection runners' registrations, resolved only when index
    *     beans exist; absent when projection discovery is off
    * @return the declaring callback
+   * @hidden
    */
   @Bean
+  @org.streamrune.core.Internal
   public org.springframework.beans.factory.SmartInitializingSingleton
       streamRuneProjectionIndexDeclarer(
           ObjectProvider<org.streamrune.core.projection.ProjectionRepository> repositories,
