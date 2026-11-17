@@ -368,7 +368,7 @@ CheckpointTarget>` so one replayer serves projections of several stores:
 ```java
 Map<ProjectionName, CheckpointTarget> targets = Map.of(
     ProjectionName.of("orders"), store.checkpointTarget(),
-    ProjectionName.of("audit"), offsetStore.subscriptionCheckpoint());
+    ProjectionName.of("audit"), offsetStore.subscriptionCheckpoint()); // writes outside every store
 
 var replayer = new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 replayer.replay(ProjectionName.of("orders"), ordersProjection,
@@ -378,6 +378,20 @@ replayer.replay(ProjectionName.of("orders"), ordersProjection,
 A projection the function returns `null` for is refused before any entry is read. The dead-letter
 entries themselves stay in the event store whichever store the projection uses. Details are in
 [Projection dead-letter replay](advanced/retry-and-resilience.md#per-store-replay).
+
+**Build the map from the routes, not from the mode — a wrong map fails silently.** Nothing checks
+the function against the runner's routing (an integration keeps the routed targets to itself), so
+read each projection's target from the runner's startup INFO line (`… (checkpoint target
+'<target>') …`) or its `store` health detail. The trap is an `AT_LEAST_ONCE_IDEMPOTENT`
+`BaseProjection` over the injected `ProjectionRepository`: that repository is the `postgres`
+store's, so rule 2 routes the projection to the `postgres` store, and it checkpoints in
+`readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
+`offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches no longer
+exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
+exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
+subscription checkpoint. A transactional projection mapped to the wrong store has its range written
+into that store's database instead of its own.
 
 ## Health
 

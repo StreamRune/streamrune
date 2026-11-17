@@ -549,7 +549,7 @@ projections of several read-model stores and a replay never runs on another stor
 Map<ProjectionName, CheckpointTarget> targets =
     Map.of(
         ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
-        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint());
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint()); // writes elsewhere
 ProjectionDeadLetterReplayer replayer =
     new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
@@ -565,6 +565,21 @@ ProjectionDeadLetterReplayer.ReplayResult result =
 A projection the function returns `null` for is refused before any entry is read. For a runner
 whose projections all commit through one default pair, `new ProjectionDeadLetterReplayer(eventStore,
 projectionDeadLetterStore, atomicProcessor)` takes that one processor.
+
+**Build the map from the routes, not from the mode — a wrong map fails silently.** Nothing checks
+the function against the runner's routing (an integration keeps the routed targets to itself), so
+read each projection's target from the runner's startup INFO line (`… (checkpoint target
+'<target>') …`) or its `store` health detail. The trap is an `AT_LEAST_ONCE_IDEMPOTENT`
+`BaseProjection` over the injected `ProjectionRepository`: that repository is the `postgres`
+store's, so routing sends the projection to the `postgres` store by its `writeTarget()` (rule 2 of
+[How a projection finds its store](../read-model-stores.md#how-a-projection-finds-its-store)), and it checkpoints in
+`readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
+`offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches no longer
+exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
+exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
+subscription checkpoint. A transactional projection mapped to the wrong store has its range written
+into that store's database instead of its own.
 
 ### Saga dead-letter replay
 

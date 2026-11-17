@@ -1100,7 +1100,7 @@ Once a fix has shipped, drive recovery with `ProjectionDeadLetterReplayer` (no b
 Map<ProjectionName, CheckpointTarget> targets =
     Map.of(
         ProjectionName.of("order_summary"), readModelStore.checkpointTarget(),
-        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint());
+        ProjectionName.of("audit_feed"), offsetStore.subscriptionCheckpoint()); // writes elsewhere
 ProjectionDeadLetterReplayer replayer =
     new ProjectionDeadLetterReplayer(eventStore, projectionDeadLetterStore, targets::get);
 
@@ -1118,6 +1118,21 @@ int fenced = result.fenced();        // entries the projection applied nothing f
 ```
 
 A projection the function returns `null` for is refused before any entry is read. A runner whose projections all commit through one default pair can pass that one `AtomicBatchProcessor` instead of the function.
+
+**Build the map from the routes, not from the mode — a wrong map fails silently.** Nothing checks
+the function against the runner's routing (an integration keeps the routed targets to itself), so
+read each projection's target from the runner's startup INFO line (`… (checkpoint target
+'<target>') …`) or its `store` health detail. The trap is an `AT_LEAST_ONCE_IDEMPOTENT`
+`BaseProjection` over the injected `ProjectionRepository`: that repository is the `postgres`
+store's, so routing sends the projection to the `postgres` store by its `writeTarget()` (rule 2 of
+[How a projection finds its store](read-model-stores.md#how-a-projection-finds-its-store)), and it checkpoints in
+`readmodel_checkpoint`, not on the subscription checkpoint. Mapped to
+`offsetStore.subscriptionCheckpoint()`, its replay locks the `subscription_checkpoint` row (seeding
+a stray one) while its live batches lock `readmodel_checkpoint`: replay and live batches no longer
+exclude each other, and a read-modify-write update can be lost — exactly what the replayer's lock
+exists to prevent. Only an at-least-once projection that writes outside every store belongs on the
+subscription checkpoint. A transactional projection mapped to the wrong store has its range written
+into that store's database instead of its own.
 
 Each entry is re-read from the global stream and fed to the projection through `Projection.processDeadLetterReplay`; on success the entry is discarded. A still-failing entry is kept and logged, and the remaining entries are still attempted, so one poisoned batch does not block recovery of the others. A feed that returns normally but reports it applied **nothing** keeps the entry too and counts it as `fenced`: a self-fencing projection such as `WindowedProjection`, whose offset fence has already moved past the hole, reads the never-accumulated range as done — replay such an entry from a fresh process before the live runner advances again, or discard it deliberately. A `Projection` decorator must forward `processDeadLetterReplay` to its delegate (the shipped decorators do), or a wrapped self-fencing projection reports "applied" and the replayer discards the range's only record.
 
