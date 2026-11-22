@@ -9,6 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLTransientConnectionException;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -74,6 +77,27 @@ public abstract class SagaStoreContract {
 
     assertNotNull(identity);
     assertEquals(identity, store.storageIdentity());
+  }
+
+  /**
+   * What a store reports as "the backend is unreachable" ({@link
+   * SagaStore#connectionFailureClassifier()}) keeps the generic JDBC rules and counts no failure of
+   * a single saga: a statement timeout, a lock timeout and a serialization failure are not it.
+   */
+  @Test
+  public void connectionFailureClassifier_keepsTheGenericRules_andCountsNoSingleSagaFailure() {
+    var classifier = store.connectionFailureClassifier();
+
+    assertTrue(classifier.isConnectionFailure(new SQLException("x", "08006")));
+    assertTrue(
+        classifier.isConnectionFailure(
+            new RuntimeException(new SQLTransientConnectionException("x"))));
+    assertTrue(classifier.isConnectionFailure(new SQLNonTransientConnectionException("x")));
+    assertFalse(classifier.isConnectionFailure(new SQLException("statement timeout", "57014")));
+    assertFalse(classifier.isConnectionFailure(new SQLException("lock timeout", "55P03")));
+    assertFalse(classifier.isConnectionFailure(new SQLException("serialization", "40001")));
+    assertFalse(classifier.isConnectionFailure(new SQLException("deadlock", "40P01")));
+    assertFalse(classifier.isConnectionFailure(new IllegalStateException("x")));
   }
 
   @Test

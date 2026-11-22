@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
@@ -56,6 +57,11 @@ class ForwardingSagaStore implements SagaStore {
   @Override
   public Object storageIdentity() {
     return delegate.storageIdentity();
+  }
+
+  @Override
+  public ConnectionFailureClassifier connectionFailureClassifier() {
+    return delegate.connectionFailureClassifier();
   }
 
   @Override

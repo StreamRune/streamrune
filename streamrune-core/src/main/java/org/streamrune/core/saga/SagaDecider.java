@@ -24,6 +24,14 @@ import org.streamrune.core.EventEnvelope;
  * retried inside the method or designed out. See {@link SagaOrchestrator}'s class-level javadoc for
  * the full contract, which applies identically here.
  *
+ * <h2>Threads</h2>
+ *
+ * <p>The thread contract of {@link SagaOrchestrator} applies too. The builder's routing functions
+ * ({@code startWhen}, {@code extractSagaId}, {@code correlateByEventData}) are functions of the
+ * event, called on the delivering thread for the whole page before any step runs; {@link
+ * #initialState}, {@link #evolve}, {@link #handle} and {@link #compensate} of different sagas may
+ * run at the same time on different threads. A decider keeps no mutable state of its own.
+ *
  * @param <S> the saga state type
  */
 public interface SagaDecider<S extends SagaState> {

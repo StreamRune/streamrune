@@ -3,6 +3,7 @@ package org.streamrune.core.saga;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.GlobalOffset;
@@ -70,6 +71,30 @@ public interface SagaStore {
    */
   default Object storageIdentity() {
     return this;
+  }
+
+  /**
+   * What this store's backend reports when it is unreachable. The generic rules (SQLState class
+   * {@code 08} and the two JDBC connection exception types) always hold: a store over JDBC adds its
+   * backend's SQLStates to them ({@link ConnectionFailureClassifier#genericAndSqlStates}), a store
+   * over another backend adds a test of its own ({@link ConnectionFailureClassifier#or}). A store
+   * that wraps another forwards this method; one that keeps this default answers the generic rules
+   * only, whatever the wrapped store contributes.
+   *
+   * <p>A contribution adds what the backend reports when the database, or the connection to it, is
+   * gone — never the failure of one statement: a statement timeout, a lock timeout or a
+   * serialization failure says something about that saga's work, not about the backend.
+   *
+   * <p>The saga runner reads this method lazily, once, on whichever thread first needs it — a step
+   * of a page whose command failed, or the delivering thread deciding how a page ended — and never
+   * when it is built. It keeps the answer; a read that throws is not kept and is made again at the
+   * next use. The steps of a page run in parallel and ask the classifier at the same time, so the
+   * classifier is thread-safe and keeps no state.
+   *
+   * @return the classifier of this store's connection failures; never {@code null}
+   */
+  default ConnectionFailureClassifier connectionFailureClassifier() {
+    return ConnectionFailureClassifier.GENERIC;
   }
 
   /**

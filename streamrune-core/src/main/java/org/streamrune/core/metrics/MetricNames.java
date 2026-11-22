@@ -463,6 +463,50 @@ public final class MetricNames {
   public static final String SAGA_DELIVERY_RETRIED = "streamrune.saga.delivery_retried";
 
   /**
+   * Saga steps running right now in a saga type's pages of events (gauge), tagged by {@link
+   * #TAG_SAGA_TYPE}: the steps that have started and not yet finished, across the runner's pages.
+   * Reported by a runner with a parallelism above 1 only, each time a step starts or finishes,
+   * together with {@link #SAGA_PAGE_PENDING}. A runner bound to k subscriptions can have k pages in
+   * flight, so the gauge can read up to k times the parallelism; each page removes its own share
+   * when it ends, and the gauge is 0 once every page has ended.
+   */
+  public static final String SAGA_STEPS_IN_FLIGHT = "streamrune.saga.steps.in_flight";
+
+  /**
+   * Saga steps of the pages in hand that have not started yet (gauge), tagged by {@link
+   * #TAG_SAGA_TYPE}: the queue behind the running steps, across the runner's pages. Reported by a
+   * runner with a parallelism above 1 only, together with {@link #SAGA_STEPS_IN_FLIGHT}; each page
+   * removes its own share when it ends, also a page that stopped with steps not started.
+   */
+  public static final String SAGA_PAGE_PENDING = "streamrune.saga.page.pending";
+
+  /**
+   * For each page whose steps ran on more than one thread (distribution summary), tagged by {@link
+   * #TAG_SAGA_TYPE}: the sum of the page's step times divided by the page's wall time. Reported by
+   * a runner with a parallelism above 1, for a page with steps of at least two sagas; a page with
+   * steps of one saga has no sample. Near the runner's parallelism the workers are busy; near 1
+   * while the subscription lags, the page waits for one long saga. The median is published: as the
+   * {@code quantile="0.5"} series on Prometheus, and on a registry without native percentiles as
+   * the gauge {@code streamrune.saga.page.effective_parallelism.percentile} tagged {@code
+   * phi="0.5"}.
+   */
+  public static final String SAGA_PAGE_EFFECTIVE_PARALLELISM =
+      "streamrune.saga.page.effective_parallelism";
+
+  /**
+   * Pages of saga steps that ended with a failure, tagged by {@link #TAG_SAGA_TYPE} and {@link
+   * #TAG_STOP}: one sample per failed page of a runner with a parallelism above 1, also a page
+   * whose routing failed before any step started, such as a quarantine write that failed (none for
+   * an {@link Error} or an interrupted delivery). The page WARN beside it is written for the first
+   * failed page, then at most once per 5 minutes with the number of pages since. The stop tag is
+   * {@link #STOP_CONNECTION} when the failure the page stopped on (or, when it did not stop, the
+   * one it threw) is connection-class — a lost database connection, a pool that handed out none in
+   * time, too many connections — {@link #STOP_THIRD_FAILURE} when three or more steps of the page
+   * failed, and {@link #STOP_NONE} otherwise.
+   */
+  public static final String SAGA_PAGE_FAILED = "streamrune.saga.page.failed";
+
+  /**
    * Current {@code COMPENSATING} saga backlog — sagas whose compensation (refund / stock release)
    * has not yet completed. Reported as a gauge, sampled each cycle by the {@code
    * SagaCompensationRetrySweeper} (the saga analog of {@link #OUTBOX_PENDING}/{@link
@@ -729,6 +773,21 @@ public final class MetricNames {
    * across packages are two saga types, and a simple-name tag merged their series.
    */
   public static final String TAG_SAGA_TYPE = "saga.type";
+
+  /**
+   * Bounded: why a page of saga steps failed ({@link #STOP_CONNECTION}, {@link
+   * #STOP_THIRD_FAILURE}, {@link #STOP_NONE}).
+   */
+  public static final String TAG_STOP = "stop";
+
+  /** The {@link #TAG_STOP} value of a page whose deciding failure is connection-class. */
+  public static final String STOP_CONNECTION = "connection";
+
+  /** The {@link #TAG_STOP} value of a page of which three or more steps failed. */
+  public static final String STOP_THIRD_FAILURE = "third_failure";
+
+  /** The {@link #TAG_STOP} value of every other failed page. */
+  public static final String STOP_NONE = "none";
 
   /**
    * Bounded: the hold reason ({@code GENESIS_PENDING}, {@code BACKLOG_PENDING}, {@code

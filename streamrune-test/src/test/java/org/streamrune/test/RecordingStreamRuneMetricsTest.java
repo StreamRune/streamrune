@@ -89,6 +89,9 @@ class RecordingStreamRuneMetricsTest {
               MetricNames.SAGA_COMPENSATION_UNDER_FORWARD_STEP),
           entry("recordSagaForwardCommandFenced", MetricNames.SAGA_FORWARD_COMMANDS_FENCED),
           entry("recordSagaDeliveryRetried", MetricNames.SAGA_DELIVERY_RETRIED),
+          entry("recordSagaStepsInFlight", MetricNames.SAGA_STEPS_IN_FLIGHT),
+          entry("recordSagaPageEffectiveParallelism", MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM),
+          entry("recordSagaPageFailed", MetricNames.SAGA_PAGE_FAILED),
           entry("recordSagaCompensatingBacklog", MetricNames.SAGA_COMPENSATING),
           entry("recordSagaTimedOutBacklog", MetricNames.SAGA_TIMED_OUT),
           entry("recordSagaTimeoutClaimDeferred", MetricNames.SAGA_TIMEOUT_CLAIMS_DEFERRED),
@@ -119,13 +122,21 @@ class RecordingStreamRuneMetricsTest {
           entry("recordOutboxRelayDegradation", MetricNames.OUTBOX_RELAY_DEGRADED),
           entry("recordDlqRetryDegradation", MetricNames.DLQ_RETRY_DEGRADED));
 
+  /**
+   * A second meter a method reports besides its {@link #METER_OF} one, recorded as the second
+   * sample of the call.
+   */
+  private static final Map<String, String> ALSO_REPORTS =
+      Map.of("recordSagaStepsInFlight", MetricNames.SAGA_PAGE_PENDING);
+
   private static Set<String> metricNamesConstants(boolean meters) {
     Set<String> values = new TreeSet<>();
     for (Field field : MetricNames.class.getFields()) {
       if (Modifier.isStatic(field.getModifiers()) && field.getType() == String.class) {
         try {
           String value = (String) field.get(null);
-          if (value.startsWith("streamrune.") == meters) {
+          boolean tagKey = field.getName().startsWith("TAG_");
+          if (meters ? value.startsWith("streamrune.") : tagKey) {
             values.add(value);
           }
         } catch (IllegalAccessException e) {
@@ -139,13 +150,19 @@ class RecordingStreamRuneMetricsTest {
   /**
    * A meter is a constant named under {@code streamrune.}, a tag key one named {@code TAG_*} that
    * is not: {@link MetricNames} holds no constant of another kind, which the recording double reads
-   * as neither.
+   * as neither — but for the {@code STOP_*} values of the {@code stop} tag.
    */
   @Test
   void everyStringConstantOfMetricNames_isAMeterOrATagKey() throws Exception {
     for (Field field : MetricNames.class.getFields()) {
       if (Modifier.isStatic(field.getModifiers()) && field.getType() == String.class) {
         String value = (String) field.get(null);
+        if (field.getName().startsWith("STOP_")) {
+          var metrics = new RecordingStreamRuneMetrics();
+          metrics.recordSagaPageFailed("order", value);
+          assertEquals(1, metrics.sagaPageFailed(value), field.getName());
+          continue;
+        }
         assertEquals(
             !field.getName().startsWith("TAG_"),
             value.startsWith("streamrune."),
@@ -174,7 +191,7 @@ class RecordingStreamRuneMetricsTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 90);
+        StreamRuneMetrics.class, RecordingStreamRuneMetrics.class, 93);
   }
 
   @Test
@@ -184,7 +201,9 @@ class RecordingStreamRuneMetricsTest {
         .forEach(method -> methodNames.add(method.getName()));
 
     assertEquals(methodNames, new TreeSet<>(METER_OF.keySet()));
-    assertEquals(metricNamesConstants(true), new TreeSet<>(METER_OF.values()));
+    Set<String> reported = new TreeSet<>(METER_OF.values());
+    reported.addAll(ALSO_REPORTS.values());
+    assertEquals(metricNamesConstants(true), reported);
   }
 
   /**
@@ -209,6 +228,7 @@ class RecordingStreamRuneMetricsTest {
       String meter = METER_OF.get(method.getName());
       List<String> names = new ArrayList<>();
       Long amount = null;
+      List<Long> amounts = new ArrayList<>();
       LongSupplier supplier = null;
       for (Object arg : args) {
         switch (arg) {
@@ -217,6 +237,8 @@ class RecordingStreamRuneMetricsTest {
           case SubscriptionName s -> names.add(s.value());
           case ProjectionDeliveryMode mode -> names.add(mode.name());
           case Long l -> amount = l;
+          case Integer i -> amounts.add(i.longValue());
+          case Double d -> amounts.add(Math.round(d * 1000));
           case LongSupplier s -> supplier = s;
           default -> throw new AssertionError("no rule for " + arg + " of " + method);
         }
@@ -230,6 +252,21 @@ class RecordingStreamRuneMetricsTest {
             () -> method + " does not read its supplier: " + metrics);
         continue;
       }
+      String also = ALSO_REPORTS.get(method.getName());
+      if (also != null) {
+        assertEquals(2, metrics.samples().size(), () -> method + " recorded " + metrics.samples());
+        assertEquals(meter, metrics.samples().get(0).meterName());
+        assertEquals(also, metrics.samples().get(1).meterName());
+        assertEquals(amounts.get(0), metrics.samples().get(0).value());
+        assertEquals(amounts.get(1), metrics.samples().get(1).value());
+        for (RecordingStreamRuneMetrics.Sample each : metrics.samples()) {
+          assertTrue(
+              tagKeys.containsAll(each.tags().keySet()),
+              () -> method + " uses a tag key outside MetricNames: " + each.tags());
+          assertEquals(names, new ArrayList<>(each.tags().values()), () -> method + " tags");
+        }
+        continue;
+      }
       assertEquals(1, metrics.samples().size(), () -> method + " recorded " + metrics.samples());
       RecordingStreamRuneMetrics.Sample sample = metrics.samples().getFirst();
       assertEquals(meter, sample.meterName(), () -> method + " reports another meter");
@@ -240,7 +277,9 @@ class RecordingStreamRuneMetricsTest {
           names,
           new ArrayList<>(sample.tags().values()),
           () -> method + " does not carry its names as tags: " + sample.tags());
-      assertEquals(amount == null ? 1L : amount, sample.value(), () -> method + " value");
+      Long expected =
+          amount != null ? amount : amounts.isEmpty() ? Long.valueOf(1) : amounts.get(0);
+      assertEquals(expected, sample.value(), () -> method + " value");
     }
   }
 
@@ -408,6 +447,28 @@ class RecordingStreamRuneMetricsTest {
   }
 
   @Test
+  void reset_forgetsTheSagaPageAccessors() {
+    var metrics = new RecordingStreamRuneMetrics();
+    metrics.recordSagaStepsInFlight("order", 4, 1);
+    metrics.recordSagaPageEffectiveParallelism("order", 3.5);
+    metrics.recordSagaPageFailed("order", MetricNames.STOP_CONNECTION);
+
+    metrics.reset();
+
+    assertEquals(0, metrics.maxSagaStepsInFlight());
+    assertEquals(List.of(), metrics.sagaPageEffectiveParallelism());
+    assertEquals(0, metrics.sagaPageFailed(MetricNames.STOP_CONNECTION));
+  }
+
+  @Test
+  void sagaPageFailed_refusesAValueThatIsNoStopTag() {
+    var metrics = new RecordingStreamRuneMetrics();
+
+    assertThrows(IllegalArgumentException.class, () -> metrics.sagaPageFailed("third_falure"));
+    assertThrows(IllegalArgumentException.class, () -> metrics.sagaPageFailed(null));
+  }
+
+  @Test
   void toString_listsTheSamplesAndTheSuppliedGauges() {
     var metrics = new RecordingStreamRuneMetrics();
     metrics.recordSagaFaulted("order");
@@ -447,5 +508,34 @@ class RecordingStreamRuneMetricsTest {
     Set<String> values = new HashSet<>();
     metrics.samples().forEach(sample -> values.addAll(sample.tags().values()));
     return values;
+  }
+
+  @Test
+  void theSagaPageCallsAreRecorded_andReadByTheirAccessors() {
+    var metrics = new RecordingStreamRuneMetrics();
+    String type = "com.acme.OrderState";
+    assertEquals(0, metrics.maxSagaStepsInFlight());
+
+    metrics.recordSagaStepsInFlight(type, 3, 7);
+    metrics.recordSagaStepsInFlight(type, 1, 0);
+    metrics.recordSagaPageEffectiveParallelism(type, 3.5);
+    metrics.recordSagaPageFailed(type, MetricNames.STOP_CONNECTION);
+    metrics.recordSagaPageFailed(type, MetricNames.STOP_CONNECTION);
+    metrics.recordSagaPageFailed(type, MetricNames.STOP_NONE);
+
+    assertEquals(3, metrics.maxSagaStepsInFlight());
+    assertEquals(
+        OptionalLong.of(1),
+        metrics.lastGauge(MetricNames.SAGA_STEPS_IN_FLIGHT, MetricNames.TAG_SAGA_TYPE, type));
+    assertEquals(
+        OptionalLong.of(0),
+        metrics.lastGauge(MetricNames.SAGA_PAGE_PENDING, MetricNames.TAG_SAGA_TYPE, type));
+    assertEquals(List.of(3.5), metrics.sagaPageEffectiveParallelism());
+    assertEquals(2, metrics.sagaPageFailed(MetricNames.STOP_CONNECTION));
+    assertEquals(0, metrics.sagaPageFailed(MetricNames.STOP_THIRD_FAILURE));
+    assertEquals(
+        3500,
+        metrics.total(
+            MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM, MetricNames.TAG_SAGA_TYPE, type));
   }
 }

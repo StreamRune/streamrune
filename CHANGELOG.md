@@ -41,6 +41,15 @@ jars. In brief:
   has opened. A runner built with a `SubscriptionLeadership` (`SagaRunner.Builder.leadership`) has
   one replica per saga type deliver its events, claim its deadlines and retry its compensations, and
   another replica takes over within the lease TTL of a crash.
+- **Parallel saga steps.** `SagaRunner` steps the sagas of a page at the same time, 4 by default
+  (`SagaRunner.Builder.parallelism`, 1 to 64, `1` for serial), the events of one saga in offset
+  order. A failed saga ends its own part of the page, a connection-class failure
+  (`SagaStore.connectionFailureClassifier()`) or the third failure stops the page, and the page is
+  acknowledged only when every saga ran to its end. Four meters report it
+  (`streamrune.saga.steps.in_flight`, `streamrune.saga.page.pending`,
+  `streamrune.saga.page.effective_parallelism`, `streamrune.saga.page.failed`); the connection
+  budget and its threshold are in the [production guide](docs/guide/production.md#pool-sizing-for-saga-parallelism)
+  and the [saga guide](docs/guide/advanced/saga.md#parallel-steps).
 - **Command dead-letter queue with operator-confirmed replay.** A command that keeps failing on
   infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller
   receives `CommandDeadLetteredException`, whose `pendingOutcome()` says whether the retry schedule

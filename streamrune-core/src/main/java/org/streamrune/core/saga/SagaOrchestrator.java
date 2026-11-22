@@ -49,6 +49,17 @@ import org.streamrune.core.types.StreamId;
  * <p>A correlation id is tracing data: a client sets it with {@code X-Correlation-Id} in every
  * identity mode. Nothing routes by it, and no routing method may derive a saga id from it.
  *
+ * <h2>Threads</h2>
+ *
+ * <p>The routing methods — {@link #isStartEvent}, {@link #extractSagaId} and {@link
+ * #correlateByEventData} — are functions of the event: they read no saga row and no state of their
+ * own. The runner calls them on the delivering thread, once per delivery of an event, for the whole
+ * page before any step of the page runs. {@link #initialState}, {@link #evolve}, {@link #handle}
+ * and {@link #compensate} run in the steps of the page: those of one saga one after the other, in
+ * offset order, and those of <b>different</b> sagas possibly at the same time on different threads
+ * (the runner's {@code parallelism}). An implementation therefore keeps no mutable state of its
+ * own; a saga's state is the {@code S} the runner hands it.
+ *
  * <h2>Serialization</h2>
  *
  * <p>Saga state implementations ({@code S}) must be Jackson-serializable. Annotate constructors

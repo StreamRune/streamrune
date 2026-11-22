@@ -15,4 +15,12 @@ public final class SagaTimeoutRunnerTestAccess {
   public static <S extends SagaState> void pollOnce(SagaTimeoutRunner<S> runner) {
     runner.pollOnce();
   }
+
+  /**
+   * Sets the bounded wait of a claim for a step in flight, which the builder keeps package-private.
+   */
+  public static <S extends SagaState> SagaTimeoutRunner.Builder<S> claimWait(
+      SagaTimeoutRunner.Builder<S> builder, java.time.Duration wait) {
+    return builder.claimWait(wait);
+  }
 }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
@@ -22,7 +23,7 @@ class ForwardingSagaStoreTest {
   @Test
   void everyMethodOfTheInterfaceIsOverridden_theDefaultsIncluded() {
     ForwardingDecoratorChecks.assertEveryMethodOverridden(
-        SagaStore.class, ForwardingSagaStore.class, 19);
+        SagaStore.class, ForwardingSagaStore.class, 20);
   }
 
   @Test
@@ -68,6 +69,20 @@ class ForwardingSagaStoreTest {
     var rows = new InMemorySagaStore();
 
     assertSame(rows.storageIdentity(), new ForwardingSagaStore(rows).storageIdentity());
+  }
+
+  @Test
+  void theConnectionFailureClassifier_isTheDelegates() {
+    ConnectionFailureClassifier own = failure -> false;
+    var rows =
+        new ForwardingSagaStore(new InMemorySagaStore()) {
+          @Override
+          public ConnectionFailureClassifier connectionFailureClassifier() {
+            return own;
+          }
+        };
+
+    assertSame(own, new ForwardingSagaStore(rows).connectionFailureClassifier());
   }
 
   @Test

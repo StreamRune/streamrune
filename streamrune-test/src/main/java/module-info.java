@@ -6,6 +6,7 @@ open module org.streamrune.test {
   requires com.fasterxml.jackson.core;
   requires com.fasterxml.jackson.databind;
   requires com.fasterxml.jackson.datatype.jsr310;
+  requires java.sql;
   requires org.slf4j;
 
   exports org.streamrune.test;

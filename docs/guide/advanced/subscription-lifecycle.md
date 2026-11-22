@@ -35,6 +35,8 @@ stateDiagram-v2
 
 `resume()` starts a new virtual thread named `streamrune-poll-{subscriptionName}`.
 
+A saga subscription (built with `.sagaRunner(runner)`) ends a page when its slowest saga ends: the runner steps the sagas of a page in parallel (see [Parallel steps](saga.md#parallel-steps)) and returns only when every one of them ran to its end, so the checkpoint, `pause()` and `close()` wait for the page as they do for any listener. A `close()` called from inside a saga step at a parallelism above 1 runs on a worker thread, which the subscription does not recognise as its listener's thread; it waits for the page's join, up to its 30-second close timeout. Give the subscription a fetch size of at least four times the runner's parallelism.
+
 `close()` uses `AtomicReference.set()` (not CAS) — wins regardless of concurrent `pause()` calls. Transitions to `STOPPED` permanently.
 
 ## Failure handling

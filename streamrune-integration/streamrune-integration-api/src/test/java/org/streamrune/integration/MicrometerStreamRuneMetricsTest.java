@@ -527,6 +527,9 @@ class MicrometerStreamRuneMetricsTest {
     metrics.recordSagaCompensationUnderForwardStep("OrderSaga");
     metrics.recordSagaForwardCommandFenced("OrderSaga");
     metrics.recordSagaDeliveryRetried("OrderSaga");
+    metrics.recordSagaStepsInFlight("OrderSaga", 2, 1);
+    metrics.recordSagaPageEffectiveParallelism("OrderSaga", 2.0);
+    metrics.recordSagaPageFailed("OrderSaga", "none");
     metrics.recordSagaCompensatingBacklog("OrderSaga", 2);
     metrics.recordSagaTimedOutBacklog("OrderSaga", 1);
     metrics.recordSagaFaultedRows("OrderSaga", 1);
@@ -775,12 +778,14 @@ class MicrometerStreamRuneMetricsTest {
   private static List<String> documentedTagKeys() {
     List<String> keys = new ArrayList<>();
     for (Field field : MetricNames.class.getDeclaredFields()) {
-      if (!Modifier.isStatic(field.getModifiers()) || field.getType() != String.class) {
+      if (!Modifier.isStatic(field.getModifiers())
+          || field.getType() != String.class
+          || !field.getName().startsWith("TAG_")) {
         continue;
       }
       try {
         String value = (String) field.get(null);
-        if (value != null && !value.startsWith(MicrometerStreamRuneMetrics.DEFAULT_PREFIX + ".")) {
+        if (value != null) {
           keys.add(value);
         }
       } catch (IllegalAccessException e) {

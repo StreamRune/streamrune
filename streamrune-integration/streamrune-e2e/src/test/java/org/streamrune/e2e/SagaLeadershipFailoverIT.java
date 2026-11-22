@@ -6,7 +6,8 @@ import static org.awaitility.Awaitility.await;
 import java.time.Duration;
 import java.util.List;
 import java.util.stream.IntStream;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.LeaseRole;
 
@@ -24,8 +25,10 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
    */
   private static final Duration CLEAN_STOP_SLACK = Duration.ofSeconds(3);
 
-  @Test
-  void exactlyOneNodeDeliversTheSagaType() throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 8})
+  void exactlyOneNodeDeliversTheSagaType(int parallelism) throws Exception {
+    this.parallelism = parallelism;
     LeasedNode a = leased("node-a");
     a.start();
     await().atMost(Duration.ofSeconds(10)).until(() -> a.role() == LeaseRole.LEADING);
@@ -53,8 +56,10 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
     assertThat(SagaForwardFenceInvariant.lateForwardCommands(dataSource)).isEmpty();
   }
 
-  @Test
-  void aCleanStopHandsTheSagaTypeOverWithinOneAttemptInterval() throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 8})
+  void aCleanStopHandsTheSagaTypeOverWithinOneAttemptInterval(int parallelism) throws Exception {
+    this.parallelism = parallelism;
     LeasedNode a = leased("node-a");
     a.start();
     await().atMost(Duration.ofSeconds(10)).until(() -> a.role() == LeaseRole.LEADING);
@@ -98,9 +103,11 @@ class SagaLeadershipFailoverIT extends SagaLeadershipNodes {
     assertThat(SagaForwardFenceInvariant.lateForwardCommands(dataSource)).isEmpty();
   }
 
-  @Test
-  void aCrashedLeaderIsReplacedWithinTheLeaseTtl_andItsDeadlinesAreClaimedByTheNewLeader()
-      throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 8})
+  void aCrashedLeaderIsReplacedWithinTheLeaseTtl_andItsDeadlinesAreClaimedByTheNewLeader(
+      int parallelism) throws Exception {
+    this.parallelism = parallelism;
     LeasedNode a = leased("node-a");
     a.start();
     await().atMost(Duration.ofSeconds(10)).until(() -> a.role() == LeaseRole.LEADING);

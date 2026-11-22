@@ -12,7 +12,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.core.subscription.LeaseRole;
@@ -51,9 +52,11 @@ class SagaLeadershipOverlapIT extends SagaLeadershipNodes {
     pollLoopLog.detachAppender(pollLoopLines);
   }
 
-  @Test
-  void aDeposedLeadersHeldCommandIsRefused_afterTheNewLeaderClaimedTheSagaAtItsDeadline()
-      throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 8})
+  void aDeposedLeadersHeldCommandIsRefused_afterTheNewLeaderClaimedTheSagaAtItsDeadline(
+      int parallelism) throws Exception {
+    this.parallelism = parallelism;
     LeasedNode a = leased("node-a");
     LeasedNode b = leased("node-b");
     bothParkedOnTheSameEvent(a, b);
@@ -74,8 +77,11 @@ class SagaLeadershipOverlapIT extends SagaLeadershipNodes {
     assertNoPollLoopError();
   }
 
-  @Test
-  void theNewLeadersLostCompareAndSwapAgainstTheDeposedLeader_isRunAgainInPlace() throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 8})
+  void theNewLeadersLostCompareAndSwapAgainstTheDeposedLeader_isRunAgainInPlace(int parallelism)
+      throws Exception {
+    this.parallelism = parallelism;
     LeasedNode a = leased("node-a");
     LeasedNode b = leased("node-b");
     bothParkedOnTheSameEvent(a, b);

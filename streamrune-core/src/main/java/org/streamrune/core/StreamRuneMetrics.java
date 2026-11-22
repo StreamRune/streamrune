@@ -609,6 +609,47 @@ public interface StreamRuneMetrics {
   default void recordSagaDeliveryRetried(String sagaType) {}
 
   /**
+   * Reports the saga steps running now across a saga type's pages and the steps of those pages that
+   * have not started. See {@link org.streamrune.core.metrics.MetricNames#SAGA_STEPS_IN_FLIGHT} and
+   * {@link org.streamrune.core.metrics.MetricNames#SAGA_PAGE_PENDING}.
+   *
+   * <p>Called at every step start and end by a runner with a parallelism above 1, from the threads
+   * that run the steps, while the runner holds its gauge lock: an implementation must be cheap and
+   * thread-safe. The values count across the runner's pages: a runner whose listener several
+   * subscriptions deliver can have several pages in flight, and each call reports their sum. After
+   * each page the runner calls it once more, on the delivering thread, with the page's own share
+   * removed (so {@code 0} and {@code 0} when it was the only page), also after a page that stopped
+   * with steps not started.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()}
+   * @param inFlight steps that have started and not yet finished
+   * @param pending steps of the page that have not started
+   */
+  default void recordSagaStepsInFlight(String sagaType, int inFlight, int pending) {}
+
+  /**
+   * Records the effective parallelism of a page whose steps ran on more than one thread: the sum of
+   * its step times divided by its wall time. See {@link
+   * org.streamrune.core.metrics.MetricNames#SAGA_PAGE_EFFECTIVE_PARALLELISM}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()}
+   * @param effectiveParallelism the sum of the page's step times divided by its wall time
+   */
+  default void recordSagaPageEffectiveParallelism(String sagaType, double effectiveParallelism) {}
+
+  /**
+   * Records a page of saga steps that ended with a failure. See {@link
+   * org.streamrune.core.metrics.MetricNames#SAGA_PAGE_FAILED}.
+   *
+   * @param sagaType the saga type, {@link org.streamrune.core.types.SagaType#value()}
+   * @param stop why the page stopped: one of {@link
+   *     org.streamrune.core.metrics.MetricNames#STOP_CONNECTION}, {@link
+   *     org.streamrune.core.metrics.MetricNames#STOP_THIRD_FAILURE} or {@link
+   *     org.streamrune.core.metrics.MetricNames#STOP_NONE}
+   */
+  default void recordSagaPageFailed(String sagaType, String stop) {}
+
+  /**
    * Records the current {@code COMPENSATING} backlog for a saga type — sagas whose compensation has
    * not yet completed. Reported as the latest sampled value (the {@code
    * SagaCompensationRetrySweeper} samples it each cycle), so implementations should expose it as a
