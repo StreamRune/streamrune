@@ -18,10 +18,15 @@ import org.springframework.boot.context.annotation.UserConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.aws.AwsKmsCryptoEngine;
+import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 
 /** Tests for crypto engine auto-configuration beans. */
 class CryptoConfigurationTest {
+
+  /** The crypto backend the engine configurations take their stores and signals from. */
+  private static final CryptoBackend CRYPTO_BACKEND = new PostgresCryptoBackend();
 
   @Test
   void awsKmsCryptoEngineCreatedWhenDataSourcePresent_durableErasure() {
@@ -36,7 +41,7 @@ class CryptoConfigurationTest {
     var config = new AwsKmsCryptoEngineConfiguration();
     CryptoEngine engine =
         config.awsKmsCryptoEngine(
-            config.streamRuneKmsClient(props), mock(DataSource.class), props, null);
+            config.streamRuneKmsClient(props), mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertNotNull(engine);
   }
 
@@ -49,7 +54,7 @@ class CryptoConfigurationTest {
   private static CryptoEngine awsEngine(StreamRuneCryptoProperties props) {
     var config = new AwsKmsCryptoEngineConfiguration();
     return config.awsKmsCryptoEngine(
-        config.streamRuneKmsClient(props), mock(DataSource.class), props, null);
+        config.streamRuneKmsClient(props), mock(DataSource.class), props, null, CRYPTO_BACKEND);
   }
 
   @Test
@@ -124,7 +129,7 @@ class CryptoConfigurationTest {
     IllegalStateException e =
         assertThrows(
             IllegalStateException.class,
-            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null));
+            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("ForgottenSubjectStore"));
     assertTrue(e.getMessage().contains("durable GDPR erasure"));
   }
@@ -167,7 +172,7 @@ class CryptoConfigurationTest {
     IllegalStateException e =
         assertThrows(
             IllegalStateException.class,
-            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null));
+            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -180,7 +185,7 @@ class CryptoConfigurationTest {
     IllegalStateException e =
         assertThrows(
             IllegalStateException.class,
-            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null));
+            () -> config.awsKmsCryptoEngine(kmsClient, null, props, null, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -189,7 +194,8 @@ class CryptoConfigurationTest {
     var props = CryptoTestProps.builder().keyDirectory("/var/lib/streamrune/keys").build();
 
     var config = new FileSystemCryptoEngineConfiguration();
-    CryptoEngine engine = config.fileSystemCryptoEngine(mock(DataSource.class), props, null);
+    CryptoEngine engine =
+        config.fileSystemCryptoEngine(mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertNotNull(engine);
   }
 
@@ -200,7 +206,8 @@ class CryptoConfigurationTest {
     var config = new FileSystemCryptoEngineConfiguration();
     IllegalStateException e =
         assertThrows(
-            IllegalStateException.class, () -> config.fileSystemCryptoEngine(null, props, null));
+            IllegalStateException.class,
+            () -> config.fileSystemCryptoEngine(null, props, null, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.filesystem.key-directory"));
   }
 
@@ -211,7 +218,8 @@ class CryptoConfigurationTest {
     var config = new FileSystemCryptoEngineConfiguration();
     IllegalStateException e =
         assertThrows(
-            IllegalStateException.class, () -> config.fileSystemCryptoEngine(null, props, null));
+            IllegalStateException.class,
+            () -> config.fileSystemCryptoEngine(null, props, null, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.filesystem.key-directory"));
   }
 
@@ -229,7 +237,8 @@ class CryptoConfigurationTest {
 
     var config = new VaultCryptoEngineConfiguration();
     CryptoEngine engine =
-        config.vaultCryptoEngine(config.streamRuneVaultHttpClient(), mock(DataSource.class), props);
+        config.vaultCryptoEngine(
+            config.streamRuneVaultHttpClient(), mock(DataSource.class), props, CRYPTO_BACKEND);
     assertNotNull(engine);
   }
 
@@ -250,7 +259,8 @@ class CryptoConfigurationTest {
     var httpClient = config.streamRuneVaultHttpClient();
     IllegalStateException e =
         assertThrows(
-            IllegalStateException.class, () -> config.vaultCryptoEngine(httpClient, null, props));
+            IllegalStateException.class,
+            () -> config.vaultCryptoEngine(httpClient, null, props, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("ForgottenSubjectStore"));
   }
 
@@ -268,7 +278,9 @@ class CryptoConfigurationTest {
     IllegalStateException e =
         assertThrows(
             IllegalStateException.class,
-            () -> config.vaultCryptoEngine(httpClient, mock(DataSource.class), props));
+            () ->
+                config.vaultCryptoEngine(
+                    httpClient, mock(DataSource.class), props, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.vault.token"));
   }
 
@@ -286,7 +298,9 @@ class CryptoConfigurationTest {
     IllegalStateException e =
         assertThrows(
             IllegalStateException.class,
-            () -> config.vaultCryptoEngine(httpClient, mock(DataSource.class), props));
+            () ->
+                config.vaultCryptoEngine(
+                    httpClient, mock(DataSource.class), props, CRYPTO_BACKEND));
     assertTrue(e.getMessage().contains("streamrune.crypto.vault.token"));
   }
 
@@ -299,7 +313,8 @@ class CryptoConfigurationTest {
     assertTrue(props.cache().enabled(), "cache.enabled defaults to true");
 
     var config = new FileSystemCryptoEngineConfiguration();
-    CryptoEngine engine = config.fileSystemCryptoEngine(mock(DataSource.class), props, null);
+    CryptoEngine engine =
+        config.fileSystemCryptoEngine(mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertInstanceOf(
         org.streamrune.crypto.CachedCryptoEngine.class,
         engine,
@@ -315,7 +330,8 @@ class CryptoConfigurationTest {
             .build();
 
     var config = new FileSystemCryptoEngineConfiguration();
-    CryptoEngine engine = config.fileSystemCryptoEngine(mock(DataSource.class), props, null);
+    CryptoEngine engine =
+        config.fileSystemCryptoEngine(mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertFalse(
         engine instanceof org.streamrune.crypto.CachedCryptoEngine,
         "cache.enabled=false must NOT wrap in CachedCryptoEngine (no PII cached in heap)");
@@ -327,7 +343,8 @@ class CryptoConfigurationTest {
     var props = CryptoTestProps.builder().cacheEnabled(false).build();
 
     var config = new PostgresCryptoEngineConfiguration();
-    CryptoEngine engine = config.postgresCryptoEngine(mock(DataSource.class), props, null);
+    CryptoEngine engine =
+        config.postgresCryptoEngine(mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertFalse(
         engine instanceof org.streamrune.crypto.CachedCryptoEngine,
         "cache.enabled=false must NOT wrap the Postgres engine in CachedCryptoEngine");
@@ -345,7 +362,8 @@ class CryptoConfigurationTest {
 
     var config = new VaultCryptoEngineConfiguration();
     CryptoEngine engine =
-        config.vaultCryptoEngine(config.streamRuneVaultHttpClient(), mock(DataSource.class), props);
+        config.vaultCryptoEngine(
+            config.streamRuneVaultHttpClient(), mock(DataSource.class), props, CRYPTO_BACKEND);
     assertFalse(
         engine instanceof org.streamrune.crypto.CachedCryptoEngine,
         "cache.enabled=false must NOT wrap the Vault engine in CachedCryptoEngine");
@@ -363,7 +381,7 @@ class CryptoConfigurationTest {
     var config = new AwsKmsCryptoEngineConfiguration();
     CryptoEngine engine =
         config.awsKmsCryptoEngine(
-            config.streamRuneKmsClient(props), mock(DataSource.class), props, null);
+            config.streamRuneKmsClient(props), mock(DataSource.class), props, null, CRYPTO_BACKEND);
     assertFalse(
         engine instanceof org.streamrune.crypto.CachedCryptoEngine,
         "cache.enabled=false must NOT wrap the AWS-KMS engine in CachedCryptoEngine");
@@ -546,20 +564,26 @@ class CryptoConfigurationTest {
                         java.nio.file.Files.createTempDirectory("sr-keys-metrics").toString())
                     .cacheEnabled(false)
                     .build(),
-                metrics);
+                metrics,
+                CRYPTO_BACKEND);
     assertCountsRetriedDecryptions(fileSystem, metrics);
     CryptoEngine postgres =
         new PostgresCryptoEngineConfiguration()
             .postgresCryptoEngine(
                 mock(DataSource.class),
                 CryptoTestProps.builder().cacheEnabled(false).build(),
-                metrics);
+                metrics,
+                CRYPTO_BACKEND);
     assertSame(metrics, metricsOf(postgres));
     var awsConfig = new AwsKmsCryptoEngineConfiguration();
     var awsProps = awsProps().cacheEnabled(false).build();
     CryptoEngine aws =
         awsConfig.awsKmsCryptoEngine(
-            awsConfig.streamRuneKmsClient(awsProps), mock(DataSource.class), awsProps, metrics);
+            awsConfig.streamRuneKmsClient(awsProps),
+            mock(DataSource.class),
+            awsProps,
+            metrics,
+            CRYPTO_BACKEND);
     assertSame(metrics, metricsOf(aws));
   }
 
