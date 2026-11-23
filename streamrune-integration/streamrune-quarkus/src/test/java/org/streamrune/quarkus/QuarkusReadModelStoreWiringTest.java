@@ -124,12 +124,10 @@ class QuarkusReadModelStoreWiringTest {
     DataSource dataSource = freshDatabase();
     CryptoEngine engine = new InMemoryCryptoEngine();
 
-    ReadModelStore store =
-        PRODUCERS.postgresReadModelStore(
-            dataSource, TestProperties.defaults(), satisfied(engine), unsatisfied());
+    ReadModelStore store = defaultStore(dataSource, TestProperties.defaults(), satisfied(engine));
 
     assertThat(store).isInstanceOf(PostgresReadModelStore.class);
-    assertThat(store.name()).isEqualTo(StreamRuneProducers.DEFAULT_READ_MODEL_STORE);
+    assertThat(store.name()).isEqualTo("postgres");
     assertThat(tableExists(dataSource, "readmodel_checkpoint")).isTrue();
     assertThat(mapperOf(store.repository()).getRegisteredModuleIds())
         .contains("CryptoShreddingModule");
@@ -137,9 +135,7 @@ class QuarkusReadModelStoreWiringTest {
 
   @Test
   void withoutACryptoEngine_theRepositorysMapperIsCryptoBlind() throws Exception {
-    ReadModelStore store =
-        PRODUCERS.postgresReadModelStore(
-            freshDatabase(), TestProperties.defaults(), unsatisfied(), unsatisfied());
+    ReadModelStore store = defaultStore(freshDatabase(), TestProperties.defaults(), unsatisfied());
 
     assertThat(mapperOf(store.repository()).getRegisteredModuleIds())
         .doesNotContain("CryptoShreddingModule");
@@ -155,10 +151,7 @@ class QuarkusReadModelStoreWiringTest {
     var properties =
         TestProperties.of(Map.of("streamrune.read-model.schema.auto-initialize", "false"));
 
-    assertThatThrownBy(
-            () ->
-                PRODUCERS.postgresReadModelStore(
-                    dataSource, properties, unsatisfied(), unsatisfied()))
+    assertThatThrownBy(() -> defaultStore(dataSource, properties, unsatisfied()))
         .isInstanceOf(SchemaValidationException.class);
     assertThat(tableExists(dataSource, "readmodel_checkpoint")).isFalse();
   }
@@ -170,10 +163,7 @@ class QuarkusReadModelStoreWiringTest {
     var properties =
         TestProperties.of(Map.of("streamrune.event-store.schema.auto-initialize", "false"));
 
-    assertThatThrownBy(
-            () ->
-                PRODUCERS.postgresReadModelStore(
-                    dataSource, properties, unsatisfied(), unsatisfied()))
+    assertThatThrownBy(() -> defaultStore(dataSource, properties, unsatisfied()))
         .isInstanceOf(SchemaValidationException.class);
     assertThat(tableExists(dataSource, "readmodel_checkpoint")).isFalse();
 
@@ -182,8 +172,27 @@ class QuarkusReadModelStoreWiringTest {
             Map.of(
                 "streamrune.event-store.schema.auto-initialize", "false",
                 "streamrune.read-model.schema.auto-initialize", "true"));
-    PRODUCERS.postgresReadModelStore(dataSource, on, unsatisfied(), unsatisfied());
+    defaultStore(dataSource, on, unsatisfied());
     assertThat(tableExists(dataSource, "readmodel_checkpoint")).isTrue();
+  }
+
+  /**
+   * The default store as the producers build it: the bundle opened on {@code dataSource} with
+   * {@code properties} and the engine, then the read-model store producer.
+   */
+  private static ReadModelStore defaultStore(
+      DataSource dataSource,
+      StreamRuneQuarkusProperties properties,
+      jakarta.enterprise.inject.Instance<CryptoEngine> cryptoEngine) {
+    return PRODUCERS.postgresReadModelStore(
+        dataSource,
+        PRODUCERS.streamRuneBackendStores(
+            new org.streamrune.postgres.PostgresBackend(),
+            dataSource,
+            properties,
+            cryptoEngine,
+            unsatisfied(),
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   // ── in a real Arc container ─────────────────────────────────────────────────────
@@ -603,10 +612,7 @@ class QuarkusReadModelStoreWiringTest {
     DataSource unusable = Mockito.mock(DataSource.class);
     Mockito.when(unusable.getConnection()).thenThrow(new java.sql.SQLException("no database"));
 
-    assertThatThrownBy(
-            () ->
-                PRODUCERS.postgresReadModelStore(
-                    unusable, TestProperties.defaults(), unsatisfied(), unsatisfied()))
+    assertThatThrownBy(() -> defaultStore(unusable, TestProperties.defaults(), unsatisfied()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining(
             "an application without a database produces its own ReadModelStore bean")
@@ -628,10 +634,7 @@ class QuarkusReadModelStoreWiringTest {
     Mockito.when(meta.getDatabaseMajorVersion()).thenReturn(15);
     Mockito.when(meta.getDatabaseProductVersion()).thenReturn("15.4");
 
-    assertThatThrownBy(
-            () ->
-                PRODUCERS.postgresReadModelStore(
-                    old, TestProperties.defaults(), unsatisfied(), unsatisfied()))
+    assertThatThrownBy(() -> defaultStore(old, TestProperties.defaults(), unsatisfied()))
         .isInstanceOf(org.streamrune.postgres.UnsupportedServerVersionException.class)
         .hasMessageContaining("PostgreSQL 15.4 is older")
         .hasMessageNotContaining("without a database");

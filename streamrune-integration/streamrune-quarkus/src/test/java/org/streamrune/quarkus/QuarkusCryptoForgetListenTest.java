@@ -154,7 +154,7 @@ class QuarkusCryptoForgetListenTest {
 
     CryptoForgetSignal signal =
         StreamRuneCryptoProducers.resolveForgetSignal(
-            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
+            TestBackends.CRYPTO, pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     toClose.add(signal);
     signal.subscribe(received::add);
 
@@ -176,7 +176,7 @@ class QuarkusCryptoForgetListenTest {
 
     CryptoForgetSignal signal =
         StreamRuneCryptoProducers.resolveForgetSignal(
-            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "aws-kms");
+            TestBackends.CRYPTO, pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "aws-kms");
     toClose.add(signal);
     signal.subscribe(received::add);
 
@@ -193,7 +193,7 @@ class QuarkusCryptoForgetListenTest {
 
     CryptoForgetSignal signal =
         StreamRuneCryptoProducers.resolveForgetSignal(
-            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "filesystem");
+            TestBackends.CRYPTO, pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "filesystem");
     toClose.add(signal);
     signal.subscribe(token -> {});
     awaitListening(app);
@@ -216,7 +216,7 @@ class QuarkusCryptoForgetListenTest {
 
     CryptoForgetSignal signal =
         StreamRuneCryptoProducers.resolveForgetSignal(
-            pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
+            TestBackends.CRYPTO, pool, CachedCryptoEngine.DEFAULT_EXPIRE_AFTER_WRITE, "vault");
     toClose.add(signal);
     signal.subscribe(received::add);
     awaitListening(app);
@@ -524,6 +524,13 @@ class QuarkusCryptoForgetListenTest {
    */
   @ApplicationScoped
   public static class AgroalInfrastructure {
+
+    /** The storage backend the crypto backend follows (StreamRuneProducers' bean in a real app). */
+    @Produces
+    @Singleton
+    public org.streamrune.core.backend.StreamRuneBackend backend() {
+      return new org.streamrune.postgres.PostgresBackend();
+    }
 
     @Produces
     @ApplicationScoped

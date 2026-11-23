@@ -261,6 +261,13 @@ class QuarkusConditionalDisposerTest {
   @ApplicationScoped
   public static class CryptoInfrastructure {
 
+    /** The storage backend the crypto backend follows (StreamRuneProducers' bean in a real app). */
+    @Produces
+    @Singleton
+    public org.streamrune.core.backend.StreamRuneBackend backend() {
+      return new org.streamrune.postgres.PostgresBackend();
+    }
+
     @Produces
     @Singleton
     public DataSource dataSource() {

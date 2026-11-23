@@ -37,6 +37,7 @@ class CryptoClientBeanCollisionTest {
     try (var arc =
         RealArcTestContainer.boot(
             List.of(
+                StreamRuneCryptoProducers.CryptoBackendProducer.class,
                 StreamRuneCryptoProducers.VaultCryptoProducer.class,
                 StreamRuneCryptoProducers.AwsKmsCryptoProducer.class,
                 CryptoInfrastructure.class,
@@ -62,6 +63,7 @@ class CryptoClientBeanCollisionTest {
     try (var arc =
         RealArcTestContainer.boot(
             List.of(
+                StreamRuneCryptoProducers.CryptoBackendProducer.class,
                 StreamRuneCryptoProducers.VaultCryptoProducer.class,
                 StreamRuneCryptoProducers.AwsKmsCryptoProducer.class,
                 CryptoInfrastructure.class,
@@ -81,6 +83,7 @@ class CryptoClientBeanCollisionTest {
           try (var arc =
               RealArcTestContainer.boot(
                   List.of(
+                      StreamRuneCryptoProducers.CryptoBackendProducer.class,
                       StreamRuneCryptoProducers.VaultCryptoProducer.class,
                       StreamRuneCryptoProducers.AwsKmsCryptoProducer.class,
                       CryptoInfrastructure.class))) {
@@ -102,6 +105,13 @@ class CryptoClientBeanCollisionTest {
    */
   @ApplicationScoped
   public static class CryptoInfrastructure {
+
+    /** The storage backend the crypto backend follows (StreamRuneProducers' bean in a real app). */
+    @Produces
+    @Singleton
+    public org.streamrune.core.backend.StreamRuneBackend backend() {
+      return new org.streamrune.postgres.PostgresBackend();
+    }
 
     @Produces
     @Singleton

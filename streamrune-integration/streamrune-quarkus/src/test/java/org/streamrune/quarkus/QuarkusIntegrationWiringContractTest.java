@@ -122,6 +122,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           SseController.class,
           StreamRuneProducers.class,
           ProjectionProducer.class,
+          StreamRuneCryptoProducers.CryptoBackendProducer.class,
           StreamRuneCryptoProducers.FileSystemCryptoProducer.class,
           StreamRuneCryptoProducers.PostgresCryptoProducer.class,
           StreamRuneCryptoProducers.VaultCryptoProducer.class,

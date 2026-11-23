@@ -471,13 +471,12 @@ class SagaEventPathRetentionContainerWiringTest {
     Map<String, String> properties =
         Map.of("streamrune.subscription.single-active-consumer.enabled", value);
     @SuppressWarnings("unchecked")
-    Instance<DataSource> dataSource = mock(Instance.class);
-    when(dataSource.isUnsatisfied()).thenReturn(false);
-    when(dataSource.isResolvable()).thenReturn(true);
-    when(dataSource.get()).thenReturn(mock(DataSource.class));
+    Instance<org.streamrune.core.backend.BackendStores> stores = mock(Instance.class);
+    when(stores.isUnsatisfied()).thenReturn(false);
+    when(stores.isResolvable()).thenReturn(true);
+    when(stores.get()).thenReturn(TestBackends.stores(mock(DataSource.class)));
     try (SubscriptionLeadership leadership =
-        new StreamRuneProducers()
-            .subscriptionLeadership(dataSource, TestProperties.of(properties))) {
+        new StreamRuneProducers().subscriptionLeadership(stores, TestProperties.of(properties))) {
       assertEquals(
           on,
           leadership instanceof org.streamrune.postgres.LeaseBasedLeadership,
