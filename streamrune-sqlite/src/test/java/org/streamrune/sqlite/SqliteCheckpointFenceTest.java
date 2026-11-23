@@ -91,6 +91,18 @@ class SqliteCheckpointFenceTest {
     return conn;
   }
 
+  /**
+   * Opens a deferred transaction ({@code BEGIN}), which takes no lock: a write lock held after a
+   * fence call on it is the one the fence's own seed took.
+   */
+  private Connection beginDeferred() throws SQLException {
+    Connection conn = dataSource.getConnection();
+    try (Statement st = conn.createStatement()) {
+      st.execute("BEGIN");
+    }
+    return conn;
+  }
+
   private static void rollback(Connection conn) throws SQLException {
     try (Statement st = conn.createStatement()) {
       st.execute("ROLLBACK");
@@ -157,7 +169,8 @@ class SqliteCheckpointFenceTest {
     var name = freshName();
     fence.stampEpoch(dataSource, name, 5L);
 
-    try (Connection conn = begin()) {
+    try (Connection conn = beginDeferred()) {
+      assertThat(writeLockHeld()).as("a deferred BEGIN takes no lock").isFalse();
       assertThatThrownBy(() -> fence.lockForBatch(conn, name, 3L, GlobalOffset.of(1)))
           .isExactlyInstanceOf(ProjectionCommitFencedException.class)
           .hasMessageContaining("caller epoch 3 is below the stored epoch 5")
@@ -165,14 +178,14 @@ class SqliteCheckpointFenceTest {
               e ->
                   assertThat(((ProjectionCommitFencedException) e).guard())
                       .isSameAs(ProjectionCommitFencedException.Guard.EPOCH_FENCE));
-      // The check ran under the write lock, which the transaction still holds.
+      // The check ran under the write lock the seed took, which the transaction still holds.
       assertThat(writeLockHeld()).as("the stale-epoch check runs under the write lock").isTrue();
       rollback(conn);
     }
 
     // The current epoch, a newer one and the unfenced epoch 0 all pass, and hold the lock.
     for (long epoch : new long[] {5L, 6L, 0L}) {
-      try (Connection conn = begin()) {
+      try (Connection conn = beginDeferred()) {
         assertThat(fence.lockForBatch(conn, name, epoch, GlobalOffset.of(1))).isZero();
         assertThat(writeLockHeld()).isTrue();
         rollback(conn);
@@ -372,7 +385,7 @@ class SqliteCheckpointFenceTest {
     fence.stampEpoch(dataSource, name, 4L);
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(8));
 
-    try (Connection conn = begin()) {
+    try (Connection conn = beginDeferred()) {
       fence.lockForReplay(conn, name);
       assertThat(writeLockHeld()).as("a replay holds the lock a batch takes").isTrue();
       commit(conn);
@@ -394,6 +407,107 @@ class SqliteCheckpointFenceTest {
     assertThat(rowExists(table, unseen)).as("the replay's seed row is committed with it").isTrue();
     assertThat(fence.lastOffset(dataSource, unseen)).isEqualTo(GlobalOffset.initial());
     assertThat(fence.readEpoch(dataSource, unseen)).isZero();
+  }
+
+  /**
+   * The connection methods refuse a connection without an open transaction: there, the seed would
+   * commit on its own and the guards would read a row another writer can change before the advance.
+   * Each refusal writes no row and leaves no transaction open.
+   */
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void theConnectionMethodsRefuseAConnectionWithoutAnOpenTransaction(CheckpointTable table)
+      throws Exception {
+    var fence = fenceOver(table);
+    var name = freshName();
+    List<Executable> calls;
+    try (Connection conn = dataSource.getConnection();
+        Statement st = conn.createStatement()) {
+      calls =
+          List.of(
+              () -> fence.lockForBatch(conn, name, 0L, GlobalOffset.of(1)),
+              () -> fence.lockForReplay(conn, name),
+              () -> fence.saveLocked(conn, name, GlobalOffset.of(1), 0L));
+      for (Executable call : calls) {
+        assertThatThrownBy(call::execute)
+            .isExactlyInstanceOf(IllegalStateException.class)
+            .hasMessage(SqliteTransactions.NO_OPEN_TRANSACTION);
+        assertThat(writeLockHeld()).as("no lock is left held").isFalse();
+        // No transaction is left open: a BEGIN of the caller's starts one.
+        st.execute("BEGIN");
+        st.execute("ROLLBACK");
+      }
+    }
+    assertThat(rowExists(table, name)).as("a refused call writes no row").isFalse();
+  }
+
+  /**
+   * Inside the caller's transaction the check changes nothing: the caller's pending write and the
+   * fence's advance commit together.
+   */
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void theCallersPendingWriteSurvivesTheChecksAndCommitsWithTheAdvance(CheckpointTable table)
+      throws Exception {
+    var fence = fenceOver(table);
+    var name = freshName();
+    createView();
+    try (Connection conn = begin()) {
+      insertViewRow(conn, 1);
+      fence.lockForBatch(conn, name, 0L, GlobalOffset.of(1));
+      fence.saveLocked(conn, name, GlobalOffset.of(1), 0L);
+      assertThat(viewRows()).as("nothing is visible before the COMMIT").isZero();
+      commit(conn);
+    }
+    assertThat(viewRows()).isEqualTo(1);
+    assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(1));
+  }
+
+  /**
+   * The monotonic guard reads the advance's own change count, not the transaction's: a batch that
+   * wrote a read-model row and then advances to the stored offset is rejected.
+   */
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void theMonotonicGuardCountsOnlyTheAdvancesOwnChange(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
+    var name = freshName();
+    fence.saveUnlocked(dataSource, name, GlobalOffset.of(10));
+    createView();
+    try (Connection conn = begin()) {
+      assertThat(fence.lockForBatch(conn, name, 0L, null)).isEqualTo(10L);
+      insertViewRow(conn, 10);
+      assertGuard(
+          ProjectionCommitFencedException.Guard.MONOTONIC,
+          "offset advance to 10 was rejected",
+          () -> fence.saveLocked(conn, name, GlobalOffset.of(10), 0L));
+      rollback(conn);
+    }
+    assertThat(viewRows()).isZero();
+  }
+
+  private void createView() throws SQLException {
+    try (Connection conn = dataSource.getConnection();
+        Statement st = conn.createStatement()) {
+      st.execute("CREATE TABLE IF NOT EXISTS app_view (offset_applied INTEGER NOT NULL) STRICT");
+    }
+  }
+
+  private static void insertViewRow(Connection conn, long offset) throws SQLException {
+    try (PreparedStatement ps =
+        conn.prepareStatement("INSERT INTO app_view (offset_applied) VALUES (?)")) {
+      ps.setLong(1, offset);
+      assertThat(ps.executeUpdate()).isEqualTo(1);
+    }
+  }
+
+  private long viewRows() throws SQLException {
+    try (Connection conn = dataSource.getConnection();
+        Statement st = conn.createStatement();
+        ResultSet rs = st.executeQuery("SELECT count(*) FROM app_view")) {
+      rs.next();
+      return rs.getLong(1);
+    }
   }
 
   /**

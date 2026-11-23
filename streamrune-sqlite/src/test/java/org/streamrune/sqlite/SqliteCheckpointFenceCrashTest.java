@@ -36,7 +36,11 @@ import org.streamrune.sqlite.SqliteCrashPoints.Point;
  *   <li>a reset killed inside its statement or right after its {@code COMMIT}: the offset is the
  *       old one or {@code 0}, and the rerun leaves {@code 0};
  *   <li>a fencing stamp killed inside its statement: the stored epoch is unchanged, and the rerun
- *       stamps it.
+ *       stamps it; killed right after its {@code COMMIT}: the epoch is stamped, and the rerun is a
+ *       same-epoch no-op;
+ *   <li>an offset save killed inside its statement: the offset is unchanged, and the rerun saves
+ *       it; killed right after its {@code COMMIT}: the offset is saved, and the monotonic guard
+ *       makes the rerun a no-op.
  * </ul>
  */
 class SqliteCheckpointFenceCrashTest {
@@ -209,5 +213,45 @@ class SqliteCheckpointFenceCrashTest {
 
     fence.stampEpoch(crashing, P, 3L);
     assertThat(fence.readEpoch(clean, P)).isEqualTo(3L);
+  }
+
+  @Test
+  void aStampKilledRightAfterItsCommitIsDurableAndItsRerunChangesNothing() throws Exception {
+    fence.stampEpoch(clean, P, 2L);
+    crashPoints.arm(Point.AFTER_COMMIT);
+
+    assertThatThrownBy(() -> fence.stampEpoch(crashing, P, 3L))
+        .isExactlyInstanceOf(EventStoreException.class);
+    assertThat(fence.readEpoch(clean, P)).isEqualTo(3L);
+
+    fence.stampEpoch(crashing, P, 3L);
+    assertThat(fence.readEpoch(clean, P)).isEqualTo(3L);
+  }
+
+  @Test
+  void anOffsetSaveKilledInsideItsStatementKeepsTheOffsetAndItsRerunSaves() throws Exception {
+    fence.saveUnlocked(clean, P, GlobalOffset.of(10));
+    crashPoints.arm(CHECKPOINT_ROW_1);
+
+    assertThatThrownBy(() -> fence.saveUnlocked(crashing, P, GlobalOffset.of(12)))
+        .isExactlyInstanceOf(EventStoreException.class)
+        .hasMessage("Failed to save offset for projection: crash-projection");
+    assertThat(fence.lastOffset(clean, P)).isEqualTo(GlobalOffset.of(10));
+
+    fence.saveUnlocked(crashing, P, GlobalOffset.of(12));
+    assertThat(fence.lastOffset(clean, P)).isEqualTo(GlobalOffset.of(12));
+  }
+
+  @Test
+  void anOffsetSaveKilledRightAfterItsCommitIsDurableAndItsRerunChangesNothing() throws Exception {
+    fence.saveUnlocked(clean, P, GlobalOffset.of(10));
+    crashPoints.arm(Point.AFTER_COMMIT);
+
+    assertThatThrownBy(() -> fence.saveUnlocked(crashing, P, GlobalOffset.of(12)))
+        .isExactlyInstanceOf(EventStoreException.class);
+    assertThat(fence.lastOffset(clean, P)).isEqualTo(GlobalOffset.of(12));
+
+    fence.saveUnlocked(crashing, P, GlobalOffset.of(12));
+    assertThat(fence.lastOffset(clean, P)).isEqualTo(GlobalOffset.of(12));
   }
 }

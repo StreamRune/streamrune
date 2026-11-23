@@ -72,6 +72,14 @@ class SqliteReadModelCheckpointsContractTest extends OffsetStoreContract {
         .hasMessage("clock is required");
   }
 
+  /** The file the checkpoints live in, which the read-model store's processor must share. */
+  @Test
+  void knowsTheFileItsCheckpointsLiveIn() {
+    SqliteDatabase database = readModelDatabase();
+
+    assertThat(new SqliteReadModelCheckpoints(database).file()).isEqualTo(database.file());
+  }
+
   /** The fence the store's processor commits through is the one its reads and writes use. */
   @Test
   void theFenceIsBuiltOnTheStoresClock() {

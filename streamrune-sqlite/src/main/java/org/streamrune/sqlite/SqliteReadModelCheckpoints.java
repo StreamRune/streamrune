@@ -1,5 +1,6 @@
 package org.streamrune.sqlite;
 
+import java.nio.file.Path;
 import java.time.Clock;
 import javax.sql.DataSource;
 import org.streamrune.core.EventStoreException;
@@ -35,6 +36,9 @@ public final class SqliteReadModelCheckpoints implements OffsetStore {
 
   private final DataSource dataSource;
 
+  /** The database file the checkpoints live in. */
+  private final Path file;
+
   /** The fence over {@code readmodel_checkpoint}: the statements the store's processor commits. */
   private final SqliteCheckpointFence fence;
 
@@ -65,6 +69,7 @@ public final class SqliteReadModelCheckpoints implements OffsetStore {
       throw new IllegalArgumentException("clock is required");
     }
     this.dataSource = database.dataSource();
+    this.file = database.file();
     this.fence = new SqliteCheckpointFence(CheckpointTable.READ_MODEL, clock);
   }
 
@@ -139,5 +144,14 @@ public final class SqliteReadModelCheckpoints implements OffsetStore {
    */
   SqliteCheckpointFence fence() {
     return fence;
+  }
+
+  /**
+   * The database file the checkpoints live in. The read-model store's processor writes the
+   * checkpoint row in its own transaction, so it must run on this file: on another file it would
+   * advance a row these checkpoints never read.
+   */
+  Path file() {
+    return file;
   }
 }

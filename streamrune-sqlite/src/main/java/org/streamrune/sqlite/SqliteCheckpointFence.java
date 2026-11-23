@@ -58,15 +58,20 @@ import org.streamrune.core.types.ProjectionName;
  * <p><b>Connection discipline.</b> The {@link Connection} methods ({@link #lockForBatch}, {@link
  * #saveLocked}, {@link #lockForReplay}) run inside the caller's open write transaction: a
  * connection in driver autocommit on which the caller ran {@code BEGIN IMMEDIATE}, as {@link
- * SqliteTransactions#inTransaction} does. Run outside one, their statements commit one by one and
- * the guards check a row another writer can change in between. They leave committing and rolling
- * back to the caller, and their {@link SQLException}s propagate unwrapped for the caller to report.
- * The {@link DataSource} methods borrow one connection for one operation; a write runs in its own
- * {@code BEGIN IMMEDIATE} ... {@code COMMIT} through {@link SqliteTransactions#write}, so it is
- * durable when the method returns, refuses a connection with an open transaction of the
- * application's, and reports a failure as an {@link EventStoreException} naming the operation and
- * the (sanitized) projection; a connection in manual-commit mode is refused with {@link
- * IllegalStateException}.
+ * SqliteTransactions#inTransaction} does. Run outside one, their statements would commit one by one
+ * and the guards would check a row another writer can change in between, so each of them first
+ * checks that a transaction is open ({@link SqliteTransactions#requireOpenTransaction}) and refuses
+ * a connection without one with {@link IllegalStateException}, before it writes anything. The check
+ * cannot see {@link #lockForBatch} and {@link #saveLocked} split across two transactions: running
+ * the lock, the caller's writes and the advance in one transaction is the caller's contract. A
+ * deferred {@code BEGIN} is enough: the seed takes the write lock before the read. The methods
+ * leave committing and rolling back to the caller, and their {@link SQLException}s propagate
+ * unwrapped for the caller to report. The {@link DataSource} methods borrow one connection for one
+ * operation; a write runs in its own {@code BEGIN IMMEDIATE} ... {@code COMMIT} through {@link
+ * SqliteTransactions#write}, so it is durable when the method returns, refuses a connection with an
+ * open transaction of the application's, and reports a failure as an {@link EventStoreException}
+ * naming the operation and the (sanitized) projection; a connection in manual-commit mode is
+ * refused with {@link IllegalStateException}.
  *
  * <p><b>Timestamps.</b> {@code updated_at} is the application {@link Clock}'s instant in epoch
  * microseconds ({@link SqliteTimestamps}), bound where Postgres calls {@code NOW()}; a write the
@@ -205,11 +210,13 @@ final class SqliteCheckpointFence {
    * @throws ProjectionCommitFencedException with {@link
    *     ProjectionCommitFencedException.Guard#EPOCH_FENCE} on a superseded epoch, or {@link
    *     ProjectionCommitFencedException.Guard#OVERLAP} on an overlapping batch
+   * @throws IllegalStateException if {@code c} has no transaction open (nothing is written)
    * @throws SQLException if a statement fails
    */
   long lockForBatch(
       Connection c, ProjectionName name, long fencingEpoch, GlobalOffset firstOffsetOfBatch)
       throws SQLException {
+    SqliteTransactions.requireOpenTransaction(c);
     Checkpoint checkpoint = seedAndRead(c, name);
     rejectStaleEpoch(name, fencingEpoch, checkpoint.epoch());
     rejectOverlappingBatch(name, firstOffsetOfBatch, checkpoint.offset());
@@ -224,9 +231,11 @@ final class SqliteCheckpointFence {
    *
    * @param c the caller's open write transaction (see the class Javadoc)
    * @param name the projection
+   * @throws IllegalStateException if {@code c} has no transaction open (nothing is written)
    * @throws SQLException if a statement fails
    */
   void lockForReplay(Connection c, ProjectionName name) throws SQLException {
+    SqliteTransactions.requireOpenTransaction(c);
     seedAndRead(c, name);
   }
 
@@ -248,10 +257,12 @@ final class SqliteCheckpointFence {
    * @throws ProjectionCommitFencedException with {@link
    *     ProjectionCommitFencedException.Guard#MONOTONIC} if the advance does not move the offset
    *     forward
+   * @throws IllegalStateException if {@code c} has no transaction open (nothing is written)
    * @throws SQLException if the statement fails
    */
   void saveLocked(Connection c, ProjectionName name, GlobalOffset newOffset, long fencingEpoch)
       throws SQLException {
+    SqliteTransactions.requireOpenTransaction(c);
     try (PreparedStatement ps = c.prepareStatement(saveLockedSql)) {
       ps.setString(1, name.value());
       ps.setLong(2, newOffset.value());

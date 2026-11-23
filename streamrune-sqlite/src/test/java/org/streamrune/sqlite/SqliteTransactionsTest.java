@@ -543,6 +543,76 @@ class SqliteTransactionsTest {
     }
   }
 
+  /**
+   * The open-transaction probe outside any transaction: it refuses, leaves no transaction open on
+   * the connection and holds no lock.
+   */
+  @Test
+  void theOpenTransactionProbeRefusesAConnectionWithoutATransactionAndLeavesNoneOpen()
+      throws Exception {
+    Path file = dir.resolve("probe-none.db");
+    SqliteDatabase database = SqliteDatabase.open(TestDatabases.dataSource(file));
+    resources.add(database);
+    try (Connection conn = database.dataSource().getConnection();
+        Statement st = conn.createStatement()) {
+      assertThatThrownBy(() -> SqliteTransactions.requireOpenTransaction(conn))
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessage(SqliteTransactions.NO_OPEN_TRANSACTION);
+
+      // No transaction is left open: a BEGIN of the caller's starts one.
+      st.execute("BEGIN IMMEDIATE");
+      st.execute("ROLLBACK");
+      assertThat(conn.getAutoCommit()).isTrue();
+    }
+  }
+
+  /**
+   * Inside a write transaction with a pending write, the probe passes and changes nothing: the
+   * write stays pending (invisible elsewhere), the lock stays held, and the COMMIT is durable. A
+   * deferred BEGIN counts as open too.
+   */
+  @Test
+  void theOpenTransactionProbePassesInsideATransactionAndKeepsItsPendingWrite() throws Exception {
+    Path file = dir.resolve("probe-open.db");
+    SqliteDatabase database = SqliteDatabase.open(TestDatabases.dataSource(file));
+    resources.add(database);
+    try (Connection setup = database.dataSource().getConnection();
+        Statement st = setup.createStatement()) {
+      st.execute("CREATE TABLE probe_rows (x INTEGER NOT NULL) STRICT");
+    }
+    try (Connection conn = database.dataSource().getConnection();
+        Statement st = conn.createStatement()) {
+      st.execute("BEGIN");
+      SqliteTransactions.requireOpenTransaction(conn);
+      st.execute("ROLLBACK");
+
+      SqliteTransactions.begin(conn);
+      st.execute("INSERT INTO probe_rows (x) VALUES (1)");
+      SqliteTransactions.requireOpenTransaction(conn);
+
+      assertThat(countRows(file)).as("the write is still pending").isZero();
+      try (Connection other = TestDatabases.dataSource(file, "busy_timeout=1").getConnection();
+          Statement otherSt = other.createStatement()) {
+        assertThatThrownBy(() -> otherSt.execute("BEGIN IMMEDIATE"))
+            .as("the write lock is still held")
+            .isInstanceOfSatisfying(
+                SQLiteException.class,
+                e -> assertThat(e.getResultCode()).isEqualTo(SQLiteErrorCode.SQLITE_BUSY));
+      }
+      SqliteTransactions.commit(conn);
+    }
+    assertThat(countRows(file)).as("the COMMIT is durable").isEqualTo(1);
+  }
+
+  private static long countRows(Path file) throws SQLException {
+    try (Connection conn = TestDatabases.dataSource(file).getConnection();
+        Statement st = conn.createStatement();
+        var rs = st.executeQuery("SELECT count(*) FROM probe_rows")) {
+      rs.next();
+      return rs.getLong(1);
+    }
+  }
+
   @Test
   void aConnectionInManualCommitModeIsRefusedWithBothCauses() throws Exception {
     Path file = dir.resolve("manual.db");
