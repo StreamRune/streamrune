@@ -91,6 +91,25 @@ class SqliteSchemaValidatorTest {
   }
 
   @Test
+  void theReadModelSeriesRequiresItsCheckpointTableAndColumns() throws Exception {
+    db.migrate(SqliteSchemaSeries.READ_MODEL);
+    assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.READ_MODEL)).isEmpty();
+
+    execute(ds, "ALTER TABLE readmodel_checkpoint DROP COLUMN epoch");
+    assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.READ_MODEL))
+        .containsExactly(
+            new Issue(Severity.ERROR, "readmodel_checkpoint", "Missing column: epoch"));
+
+    execute(ds, "DROP TABLE readmodel_checkpoint");
+    assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.READ_MODEL))
+        .containsExactly(
+            new Issue(Severity.ERROR, "readmodel_checkpoint", "Required table missing"));
+    assertThatThrownBy(() -> db.validate(SqliteSchemaSeries.READ_MODEL))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("Schema validation failed:\n  - [readmodel_checkpoint] Required table missing");
+  }
+
+  @Test
   void namesMatchCaseInsensitivelyAsSqliteIdentifiersDo() throws Exception {
     db.migrate(SqliteSchemaSeries.EVENT_STORE);
     execute(

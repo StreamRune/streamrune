@@ -166,7 +166,16 @@ final class SqliteCrashPoints {
                       + " SELECT sr_crash_point('projection_dead_letters'); END",
                   "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_update AFTER UPDATE ON"
                       + " main.projection_dead_letters BEGIN"
-                      + " SELECT sr_crash_point('projection_dead_letters'); END")));
+                      + " SELECT sr_crash_point('projection_dead_letters'); END")),
+          Map.entry(
+              "readmodel_checkpoint",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_readmodel_checkpoint_insert AFTER"
+                      + " INSERT ON main.readmodel_checkpoint BEGIN"
+                      + " SELECT sr_crash_point('readmodel_checkpoint'); END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_readmodel_checkpoint_update AFTER"
+                      + " UPDATE ON main.readmodel_checkpoint BEGIN"
+                      + " SELECT sr_crash_point('readmodel_checkpoint'); END")));
 
   private final Kill kill;
   private volatile Point armed;

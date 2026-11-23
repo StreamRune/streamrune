@@ -49,8 +49,8 @@ final class SqliteSchemaValidator {
   /**
    * The tables of each series and the columns the runtime reads and writes: the Postgres lists,
    * without the lease table (leadership is a no-op on SQLite) and with {@code
-   * global_offset_counter} for {@code global_offset_sequence}. The read-model and crypto series
-   * ship no tables yet.
+   * global_offset_counter} for {@code global_offset_sequence}. The crypto series ships no tables
+   * yet.
    */
   private static final Map<SqliteSchemaSeries, SortedMap<String, SortedSet<String>>> REQUIRED =
       Map.of(
@@ -181,7 +181,7 @@ final class SqliteSchemaValidator {
                           "dlq_attempts",
                           "idempotency_key")))),
           SqliteSchemaSeries.READ_MODEL,
-          sorted(Map.of()),
+          sorted(Map.of("readmodel_checkpoint", Set.of("projection_name", "last_offset", "epoch"))),
           SqliteSchemaSeries.CRYPTO,
           sorted(Map.of()));
 

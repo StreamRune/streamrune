@@ -32,12 +32,14 @@ public enum SqliteSchemaSeries {
       "streamrune-sqlite",
       List.of("V001__baseline.sql")),
 
-  /** The read-model side: the checkpoint table of a read-model store. */
+  /**
+   * The read-model side: {@code readmodel_checkpoint}, the checkpoint table of a read-model store.
+   */
   READ_MODEL(
       "db/sqlite-readmodel-migration",
       "flyway_schema_history_readmodel",
       "streamrune-sqlite",
-      List.of()),
+      List.of("V001__readmodel_baseline.sql")),
 
   /**
    * The crypto key store and the GDPR erasure tables, shipped in {@code streamrune-sqlite-crypto}.
