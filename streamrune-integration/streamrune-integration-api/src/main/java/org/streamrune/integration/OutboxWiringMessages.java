@@ -20,9 +20,9 @@ public final class OutboxWiringMessages {
 
   private static final String EXTERNAL_RELAY =
       " If an external relay reads the outbox table, set streamrune.outbox.enabled=false: the"
-          + " event store still writes the entries when an OutboxEventMapper and a"
-          + " PostgresOutboxStore are declared, and the framework's relay, retention sweeper and"
-          + " failed-entry replayer stay off.";
+          + " event store still writes the entries when an OutboxEventMapper and an OutboxStore"
+          + " are declared, and the framework's relay, retention sweeper and failed-entry replayer"
+          + " stay off.";
 
   private OutboxWiringMessages() {}
 
@@ -32,9 +32,9 @@ public final class OutboxWiringMessages {
    * @return the message
    */
   public static String noStore() {
-    return "Outbox enabled but no OutboxStore found. Declare a PostgresOutboxStore bean"
-        + " (streamrune-postgres); streamrune-kafka-outbox and streamrune-rabbitmq-outbox"
-        + " provide only the OutboxPublisher.";
+    return "Outbox enabled but no OutboxStore found. Declare an OutboxStore bean built from the"
+        + " BackendStores bean (stores.outboxStore(new OutboxOptions(...))); streamrune-kafka-outbox"
+        + " and streamrune-rabbitmq-outbox provide only the OutboxPublisher.";
   }
 
   /**

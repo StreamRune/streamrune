@@ -897,6 +897,10 @@ public abstract class IntegrationWiringContract {
           List.of(),
           events.load(contractStream(refused)).events(),
           "an append whose outbox write failed must leave no event behind");
+      // On PostgreSQL this check cannot fail: the strict outbox refuses the whole batch before it
+      // writes any entry, so the ordered entry is never written, rolled back or not. The event
+      // check above is the one that proves the rollback there; this one stays as the portable
+      // contract for a backend that writes entries one by one.
       assertEquals(
           Optional.empty(),
           outbox.findById(ContractOutboxMapper.entryId(refused)),

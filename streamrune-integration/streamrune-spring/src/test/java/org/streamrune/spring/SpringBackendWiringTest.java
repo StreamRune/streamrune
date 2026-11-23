@@ -30,9 +30,12 @@ import org.streamrune.core.audit.EventAuditQuery;
 import org.streamrune.core.audit.EventAuditStore;
 import org.streamrune.core.backend.BackendContext;
 import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.backend.OutboxOptions;
 import org.streamrune.core.backend.StreamRuneBackend;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxOrderingMode;
+import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -49,8 +52,11 @@ import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
 import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.PostgresBackend;
+import org.streamrune.postgres.PostgresCommandInbox;
 import org.streamrune.postgres.PostgresOutboxStore;
+import org.streamrune.postgres.PostgresSagaDeadLetterStore;
 import org.streamrune.runtime.InboxRetentionSweeper;
+import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryOutboxStore;
@@ -238,10 +244,11 @@ class SpringBackendWiringTest {
 
   /**
    * An application's plain {@code @Bean SagaDeadLetterStore sagaDeadLetterStore()} carries the
-   * framework bean's name, but it is the application's store: the framework must not prune it.
+   * framework bean's name, but it is the application's store: the framework must not prune it. The
+   * sweeper sweeps the bundle's own store instead, which the framework built.
    */
   @Test
-  void anApplicationSagaDeadLetterStoreUnderTheFrameworkNameGetsNoSweeper() {
+  void anApplicationSagaDeadLetterStoreUnderTheFrameworkNameIsNotSwept() {
     runner
         .withUserConfiguration(ApplicationSagaDeadLetterStore.class)
         .run(
@@ -249,7 +256,9 @@ class SpringBackendWiringTest {
               assertThat(ctx).hasNotFailed();
               assertThat(ctx.getBean(SagaDeadLetterStore.class))
                   .isSameAs(ApplicationSagaDeadLetterStore.STORE);
-              assertThat(ctx).doesNotHaveBean(SagaDeadLetterRetentionSweeper.class);
+              assertThat(sweptBy(ctx.getBean(SagaDeadLetterRetentionSweeper.class)))
+                  .isNotSameAs(ApplicationSagaDeadLetterStore.STORE)
+                  .isSameAs(ctx.getBean(BackendStores.class).sagaDeadLetterStore());
             });
   }
 
@@ -258,7 +267,7 @@ class SpringBackendWiringTest {
    * own event store factory, so the backend's foreign-store refusal does not stop the start first.
    */
   @Test
-  void anApplicationCommandInboxUnderTheFrameworkNameGetsNoSweeper() {
+  void anApplicationCommandInboxUnderTheFrameworkNameIsNotSwept() {
     runner
         .withUserConfiguration(ApplicationCommandInbox.class)
         .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
@@ -266,8 +275,65 @@ class SpringBackendWiringTest {
             ctx -> {
               assertThat(ctx).hasNotFailed();
               assertThat(ctx.getBean(CommandInbox.class)).isSameAs(ApplicationCommandInbox.INBOX);
-              assertThat(ctx).doesNotHaveBean(InboxRetentionSweeper.class);
+              assertThat(sweptBy(ctx.getBean(InboxRetentionSweeper.class)))
+                  .isNotSameAs(ApplicationCommandInbox.INBOX)
+                  .isSameAs(ctx.getBean(BackendStores.class).commandInbox());
             });
+  }
+
+  /**
+   * An application bean that returns the bundle's own inbox, declared as {@code CommandInbox},
+   * replaces the framework's bean and keeps the inbox sweeper over that same instance.
+   */
+  @Test
+  void anApplicationBeanReturningTheBundlesInboxKeepsTheInboxSweeper() {
+    runner
+        .withUserConfiguration(BundleCommandInbox.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              CommandInbox inbox = ctx.getBean(CommandInbox.class);
+              assertThat(inbox).isSameAs(ctx.getBean(BackendStores.class).commandInbox());
+              assertThat(sweptBy(ctx.getBean(InboxRetentionSweeper.class))).isSameAs(inbox);
+            });
+  }
+
+  /** Stores the application declares with their PostgreSQL types are swept. */
+  @Test
+  void applicationDeclaredPostgresStoresAreSwept() {
+    runner
+        .withUserConfiguration(ApplicationPostgresStores.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(sweptBy(ctx.getBean(InboxRetentionSweeper.class)))
+                  .isSameAs(ctx.getBean(PostgresCommandInbox.class));
+              assertThat(sweptBy(ctx.getBean(SagaDeadLetterRetentionSweeper.class)))
+                  .isSameAs(ctx.getBean(PostgresSagaDeadLetterStore.class));
+            });
+  }
+
+  /**
+   * An outbox store the application builds from the bundle and declares as {@code OutboxStore} gets
+   * the outbox retention sweeper.
+   */
+  @Test
+  void anOutboxStoreBuiltFromTheBundleGetsTheRetentionSweeper() {
+    runner
+        .withPropertyValues("streamrune.outbox.enabled=true")
+        .withUserConfiguration(BundleOutboxStore.class)
+        .withBean(OutboxPublisher.class, () -> entry -> {})
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              OutboxStore store = ctx.getBean(OutboxStore.class);
+              assertThat(sweptBy(ctx.getBean(OutboxRetentionSweeper.class))).isSameAs(store);
+            });
+  }
+
+  private static Object sweptBy(Object sweeper) {
+    return ReflectionTestUtils.getField(
+        sweeper, sweeper instanceof InboxRetentionSweeper ? "inbox" : "store");
   }
 
   @Configuration(proxyBeanMethods = false)
@@ -290,10 +356,41 @@ class SpringBackendWiringTest {
     }
   }
 
+  @Configuration(proxyBeanMethods = false)
+  static class BundleCommandInbox {
+    @Bean
+    CommandInbox applicationCommandInbox(BackendStores stores) {
+      return stores.commandInbox();
+    }
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class ApplicationPostgresStores {
+    @Bean
+    PostgresCommandInbox applicationInbox() {
+      return new PostgresCommandInbox(mock(DataSource.class));
+    }
+
+    @Bean
+    PostgresSagaDeadLetterStore applicationSagaDeadLetterStore() {
+      return new PostgresSagaDeadLetterStore(mock(DataSource.class));
+    }
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class BundleOutboxStore {
+    @Bean
+    OutboxStore outboxStore(BackendStores stores) {
+      return stores.outboxStore(
+          new OutboxOptions(
+              OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+    }
+  }
+
   // ── an application store of a foreign type fails the start ────────────────────────────
 
   @Test
-  void aForeignOutboxStoreWithAMapperFailsTheStartWithTheR1Refusal() {
+  void aForeignOutboxStoreWithAMapperFailsTheStartWithTheForeignStoreRefusal() {
     runner
         .withBean(OutboxStore.class, InMemoryOutboxStore::new)
         .withBean(OutboxEventMapper.class, () -> event -> List.of())

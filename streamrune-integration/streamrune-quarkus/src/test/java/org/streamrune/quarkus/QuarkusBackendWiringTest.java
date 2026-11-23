@@ -37,9 +37,11 @@ import org.streamrune.core.audit.EventAuditQuery;
 import org.streamrune.core.audit.EventAuditStore;
 import org.streamrune.core.backend.BackendContext;
 import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.backend.OutboxOptions;
 import org.streamrune.core.backend.StreamRuneBackend;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -59,6 +61,7 @@ import org.streamrune.postgres.PostgresCommandInbox;
 import org.streamrune.postgres.PostgresOutboxStore;
 import org.streamrune.postgres.PostgresSagaDeadLetterStore;
 import org.streamrune.runtime.InboxRetentionSweeper;
+import org.streamrune.runtime.OutboxRetentionSweeper;
 import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryOutboxStore;
@@ -381,7 +384,7 @@ class QuarkusBackendWiringTest {
   }
 
   @Test
-  void aForeignOutboxStoreWithAMapperFailsWithTheR1Refusal() throws Exception {
+  void aForeignOutboxStoreWithAMapperFailsWithTheForeignStoreRefusal() throws Exception {
     try (var arc = bootFramework(ForeignOutbox.class)) {
       assertThatThrownBy(() -> arc.container().instance(EventStoreFactory.class).get())
           .isInstanceOf(IllegalArgumentException.class)
@@ -416,6 +419,37 @@ class QuarkusBackendWiringTest {
       Object factory = arc.container().instance(EventStoreFactory.class).get();
       assertThat(field(factory, "outboxStore")).isSameAs(ApplicationPostgresOutbox.STORE);
       assertThat(field(factory, "outboxEventMapper")).isSameAs(ApplicationPostgresOutbox.MAPPER);
+    }
+  }
+
+  /** An outbox store the application builds from the bundle and declares as the interface. */
+  @ApplicationScoped
+  public static class BundleOutboxStore {
+    @Produces
+    @Singleton
+    public OutboxStore outboxStore(BackendStores stores) {
+      return stores.outboxStore(
+          new OutboxOptions(
+              OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+    }
+  }
+
+  @Test
+  void anOutboxStoreBuiltFromTheBundleGetsTheRetentionSweeper() throws Exception {
+    Map<String, String> before = Infrastructure.values;
+    Infrastructure.values = Map.of("streamrune.outbox.enabled", "true");
+    try (var arc = bootFramework(BundleOutboxStore.class)) {
+      OutboxStore store = arc.container().instance(OutboxStore.class).get();
+      OutboxRetentionSweeper sweeper =
+          arc.container()
+              .instance(
+                  OutboxRetentionSweeper.class,
+                  NamedLiteral.of(StreamRuneProducers.FRAMEWORK_OUTBOX_RETENTION_SWEEPER))
+              .get();
+      assertThat(field(sweeper, "store")).isSameAs(store);
+      sweeper.close();
+    } finally {
+      Infrastructure.values = before;
     }
   }
 

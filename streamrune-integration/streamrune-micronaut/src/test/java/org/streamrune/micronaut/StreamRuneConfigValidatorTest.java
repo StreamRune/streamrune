@@ -471,7 +471,7 @@ class StreamRuneConfigValidatorTest {
         assertThrows(
             IllegalStateException.class,
             () -> validator.onApplicationEvent(mock(StartupEvent.class)));
-    assertTrue(ex.getMessage().contains("PostgresOutboxStore"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("BackendStores"), ex.getMessage());
     assertFalse(
         ex.getMessage().contains("to your classpath"),
         "the publisher modules provide no store, so adding one cannot fix this: "

@@ -63,7 +63,7 @@ class SpringGdprAutoConfigTest {
                     .getFailure()
                     .hasStackTraceContaining(
                         "The ForgetSubjectService StreamRune configures has no snapshot purger.")
-                    .hasStackTraceContaining("new PostgresSnapshotStorePurger(dataSource,")
+                    .hasStackTraceContaining("stores.snapshotPurger(subjectId ->")
                     .hasStackTraceContaining("or set streamrune.gdpr.snapshot-purge=none"));
   }
 

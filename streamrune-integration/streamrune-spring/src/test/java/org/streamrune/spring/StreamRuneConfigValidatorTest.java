@@ -102,7 +102,8 @@ class StreamRuneConfigValidatorTest {
               // The only OutboxStore is PostgresOutboxStore; the broker modules ship publishers.
               assertThat(ctx.getStartupFailure())
                   .hasMessageContaining("no OutboxStore found")
-                  .hasMessageContaining("Declare a PostgresOutboxStore bean (streamrune-postgres)")
+                  .hasMessageContaining(
+                      "Declare an OutboxStore bean built from the BackendStores bean")
                   .hasMessageContaining("provide only the OutboxPublisher");
             });
   }

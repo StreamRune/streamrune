@@ -1288,15 +1288,11 @@ public class StreamRuneAutoConfiguration {
    * (guarded on the interface type via {@link ConditionalOnMissingBean#value()} so a user-supplied
    * interface-typed bean still overrides it).
    *
-   * <p><strong>Interface return type, sweeper gated on this definition.</strong> Spring's
-   * {@code @ConditionalOnBean} predicts bean types from the factory method's declared return type
-   * <em>before</em> the bean is instantiated, so a gate on a concrete store class never sees this
-   * interface-typed bean. {@link #streamRuneSagaDeadLetterRetentionSweeper} is therefore gated on
-   * this very bean definition ({@link OwnSagaDeadLetterStoreDefinition}: the bean named {@value
-   * #SAGA_DEAD_LETTER_STORE_BEAN} that this class registered, not an application bean of that name)
-   * — or an application-declared {@code PostgresSagaDeadLetterStore} — and takes the interface:
-   * without the sweeper {@code saga_dead_letters} grows without bound (a GDPR storage-limitation
-   * violation). Same rule as {@link #commandInbox}.
+   * <p>The bean is declared with the interface type. {@link
+   * #streamRuneSagaDeadLetterRetentionSweeper} does not look this bean up: it sweeps the bundle's
+   * own store ({@link org.streamrune.core.backend.BackendStores#sagaDeadLetterStore}), the instance
+   * this method returns, or an application-declared {@code PostgresSagaDeadLetterStore}, so an
+   * application's store of another type under this bean's name is never swept.
    */
   @Bean
   @ConditionalOnMissingBean(SagaDeadLetterStore.class)
@@ -1309,9 +1305,6 @@ public class StreamRuneAutoConfiguration {
     return stores.sagaDeadLetterStore();
   }
 
-  /** The bean name of the auto-configured saga dead-letter store, {@value}. */
-  static final String SAGA_DEAD_LETTER_STORE_BEAN = "sagaDeadLetterStore";
-
   /**
    * Registers the backend's {@link CommandInbox} ({@link
    * org.streamrune.core.backend.BackendStores#commandInbox}) when DataSource is available.
@@ -1319,10 +1312,10 @@ public class StreamRuneAutoConfiguration {
    * (guarded on the interface type via {@link ConditionalOnMissingBean#value()} so a user-supplied
    * interface-typed bean still overrides it).
    *
-   * <p>The bean is declared with the interface type; {@link #streamRuneInboxRetentionSweeper} is
-   * gated on this very definition ({@link OwnCommandInboxDefinition}), or an application-declared
-   * {@code PostgresCommandInbox}, because Spring predicts bean types from the declared return type
-   * and a concrete-typed gate would never see this bean.
+   * <p>The bean is declared with the interface type. {@link #streamRuneInboxRetentionSweeper}
+   * sweeps the bundle's own inbox ({@link org.streamrune.core.backend.BackendStores#commandInbox}),
+   * the instance this method returns, or an application-declared {@code PostgresCommandInbox}; an
+   * application's inbox of another type is never swept.
    *
    * <p><strong>What overriding actually requires.</strong> Because the store must claim the
    * idempotency key in the SAME transaction as the append, the event store is built with this same
@@ -1338,9 +1331,6 @@ public class StreamRuneAutoConfiguration {
   public CommandInbox commandInbox(org.streamrune.core.backend.BackendStores stores) {
     return stores.commandInbox();
   }
-
-  /** The bean name of the auto-configured command inbox, {@value}. */
-  static final String COMMAND_INBOX_BEAN = "commandInbox";
 
   /** Registers the backend's audit store when DataSource is available. */
   @Bean
@@ -1649,18 +1639,19 @@ public class StreamRuneAutoConfiguration {
    * streamrune.outbox.skipped-retention-max-age} (default 30 days — the audit of the skip
    * decision). Zero or negative disables either window. {@code FAILED} entries are never pruned: an
    * operator resolves them through {@link org.streamrune.runtime.OutboxFailedReplayer}. Only
-   * created when the outbox is enabled and a {@link org.streamrune.postgres.PostgresOutboxStore}
-   * bean is present. The {@link org.streamrune.core.StreamRuneMetrics} bean is wired in when
-   * present so {@code streamrune.outbox.swept_rows} and {@code streamrune.outbox.skipped_swept} are
-   * recorded; falls back to {@link org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean
-   * exists.
+   * created when the outbox is enabled and an {@link org.streamrune.core.outbox.OutboxStore} bean
+   * is present: the framework declares none, so it is always the application's, typically built
+   * with {@link org.streamrune.core.backend.BackendStores#outboxStore}. The {@link
+   * org.streamrune.core.StreamRuneMetrics} bean is wired in when present so {@code
+   * streamrune.outbox.swept_rows} and {@code streamrune.outbox.skipped_swept} are recorded; falls
+   * back to {@link org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    */
   @Bean
   @ConditionalOnMissingBean(OutboxRetentionSweeper.class)
-  @ConditionalOnBean(org.streamrune.postgres.PostgresOutboxStore.class)
+  @ConditionalOnBean(org.streamrune.core.outbox.OutboxStore.class)
   @ConditionalOnProperty(name = "streamrune.outbox.enabled", havingValue = "true")
   public OutboxRetentionSweeper streamRuneOutboxRetentionSweeper(
-      org.streamrune.postgres.PostgresOutboxStore outboxStore,
+      org.streamrune.core.outbox.OutboxStore outboxStore,
       StreamRuneProperties properties,
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
       ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthProvider) {
@@ -1786,22 +1777,32 @@ public class StreamRuneAutoConfiguration {
 
   /**
    * Registers an {@link InboxRetentionSweeper} that prunes command-inbox rows older than {@code
-   * streamrune.inbox.retention-max-age} (default 7 days). Only created when the auto-configured
-   * {@link #commandInbox} or an application-declared {@code PostgresCommandInbox} is present: the
-   * framework never sweeps an inbox of a type it did not build. The retention window exceeds
-   * typical broker redelivery and subscription replay horizons so a pruned key cannot re-admit a
-   * duplicate. The {@link org.streamrune.core.StreamRuneMetrics} bean is wired in when present so
-   * {@code streamrune.inbox.swept_rows} is recorded; falls back to {@link
+   * streamrune.inbox.retention-max-age} (default 7 days). It sweeps an application-declared {@code
+   * PostgresCommandInbox} bean when there is one, and otherwise the bundle's own inbox, {@link
+   * org.streamrune.core.backend.BackendStores#commandInbox()} — never an application inbox of
+   * another type: the framework prunes only what it built or what is declared as its Postgres
+   * store. The {@link CommandInbox} bean is not consulted, since an application's inbox of another
+   * type wins that bean. The retention window exceeds typical broker redelivery and subscription
+   * replay horizons so a pruned key cannot re-admit a duplicate. The {@link
+   * org.streamrune.core.StreamRuneMetrics} bean is wired in when present so {@code
+   * streamrune.inbox.swept_rows} is recorded; falls back to {@link
    * org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    */
   @Bean
   @ConditionalOnMissingBean(InboxRetentionSweeper.class)
-  @org.springframework.context.annotation.Conditional(FrameworkOrPostgresCommandInbox.class)
+  @org.springframework.context.annotation.Conditional(BackendStoresOrPostgresCommandInbox.class)
   public InboxRetentionSweeper streamRuneInboxRetentionSweeper(
-      CommandInbox commandInbox,
+      ObjectProvider<org.streamrune.postgres.PostgresCommandInbox> applicationInboxProvider,
+      ObjectProvider<org.streamrune.core.backend.BackendStores> storesProvider,
       StreamRuneProperties properties,
       ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
       ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthProvider) {
+    // No framework bean is declared with the Postgres type, so this provider finds an application's
+    // own Postgres inbox (or, once created, the bundle's same instance); otherwise the bundle's.
+    CommandInbox commandInbox = applicationInboxProvider.getIfAvailable();
+    if (commandInbox == null) {
+      commandInbox = storesProvider.getObject().commandInbox();
+    }
     var sweeper =
         new InboxRetentionSweeper(
             commandInbox,
@@ -1816,102 +1817,39 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
-   * Matches when this auto-configuration's own {@link #commandInbox} bean is defined, or the
-   * application declares a {@code PostgresCommandInbox} bean: the inboxes {@link
-   * #streamRuneInboxRetentionSweeper} sweeps. A bean condition on a store class predicts types from
-   * declared return types, so it cannot see the interface-typed framework bean; and a bean name
-   * alone would also match an application's own {@code @Bean CommandInbox commandInbox()}, which
-   * the framework must never sweep. {@link OwnCommandInboxDefinition} therefore matches the
-   * definition this class's factory method registered, and nothing else.
+   * Matches when the backend's stores exist (with a {@code DataSource}) or the application declares
+   * a {@code PostgresCommandInbox} bean: the inboxes {@link #streamRuneInboxRetentionSweeper}
+   * sweeps.
    */
-  static final class FrameworkOrPostgresCommandInbox
+  static final class BackendStoresOrPostgresCommandInbox
       extends org.springframework.boot.autoconfigure.condition.AnyNestedCondition {
-    FrameworkOrPostgresCommandInbox() {
+    BackendStoresOrPostgresCommandInbox() {
       super(ConfigurationPhase.REGISTER_BEAN);
     }
 
-    @org.springframework.context.annotation.Conditional(OwnCommandInboxDefinition.class)
-    static final class Framework {}
+    @ConditionalOnBean(org.streamrune.core.backend.BackendStores.class)
+    static final class Backend {}
 
     @ConditionalOnBean(org.streamrune.postgres.PostgresCommandInbox.class)
     static final class ApplicationDeclared {}
   }
 
   /**
-   * Matches when the auto-configured {@link #sagaDeadLetterStore} bean is defined, or the
-   * application declares a {@code PostgresSagaDeadLetterStore} bean: the stores {@link
-   * #streamRuneSagaDeadLetterRetentionSweeper} sweeps. See {@link FrameworkOrPostgresCommandInbox};
-   * an application's own {@code @Bean SagaDeadLetterStore sagaDeadLetterStore()} does not match.
+   * Matches when the backend's stores exist (with a {@code DataSource}) or the application declares
+   * a {@code PostgresSagaDeadLetterStore} bean: the stores {@link
+   * #streamRuneSagaDeadLetterRetentionSweeper} sweeps.
    */
-  static final class FrameworkOrPostgresSagaDeadLetterStore
+  static final class BackendStoresOrPostgresSagaDeadLetterStore
       extends org.springframework.boot.autoconfigure.condition.AnyNestedCondition {
-    FrameworkOrPostgresSagaDeadLetterStore() {
+    BackendStoresOrPostgresSagaDeadLetterStore() {
       super(ConfigurationPhase.REGISTER_BEAN);
     }
 
-    @org.springframework.context.annotation.Conditional(OwnSagaDeadLetterStoreDefinition.class)
-    static final class Framework {}
+    @ConditionalOnBean(org.streamrune.core.backend.BackendStores.class)
+    static final class Backend {}
 
     @ConditionalOnBean(org.streamrune.postgres.PostgresSagaDeadLetterStore.class)
     static final class ApplicationDeclared {}
-  }
-
-  /**
-   * Matches when the bean definition named {@code beanName} is the one a factory method of {@link
-   * StreamRuneAutoConfiguration} registered: the framework's own store, not an application bean
-   * that happens to carry the same name (the name Spring gives a plain {@code @Bean} method of that
-   * name). Evaluated at bean registration, after the store's own bean method, which is declared
-   * earlier in this class.
-   */
-  abstract static class OwnBeanDefinitionCondition
-      extends org.springframework.boot.autoconfigure.condition.SpringBootCondition
-      implements org.springframework.context.annotation.ConfigurationCondition {
-
-    private final String beanName;
-
-    OwnBeanDefinitionCondition(String beanName) {
-      this.beanName = beanName;
-    }
-
-    @Override
-    public ConfigurationPhase getConfigurationPhase() {
-      return ConfigurationPhase.REGISTER_BEAN;
-    }
-
-    @Override
-    public org.springframework.boot.autoconfigure.condition.ConditionOutcome getMatchOutcome(
-        org.springframework.context.annotation.ConditionContext context,
-        org.springframework.core.type.AnnotatedTypeMetadata metadata) {
-      var registry = context.getRegistry();
-      boolean own =
-          registry.containsBeanDefinition(beanName)
-              && registry.getBeanDefinition(beanName)
-                  instanceof
-                  org.springframework.beans.factory.annotation.AnnotatedBeanDefinition definition
-              && definition.getFactoryMethodMetadata() != null
-              && StreamRuneAutoConfiguration.class
-                  .getName()
-                  .equals(definition.getFactoryMethodMetadata().getDeclaringClassName());
-      return own
-          ? org.springframework.boot.autoconfigure.condition.ConditionOutcome.match(
-              "bean '" + beanName + "' is StreamRuneAutoConfiguration's own")
-          : org.springframework.boot.autoconfigure.condition.ConditionOutcome.noMatch(
-              "no bean '" + beanName + "' defined by StreamRuneAutoConfiguration");
-    }
-  }
-
-  /** Matches this auto-configuration's own {@link #commandInbox} definition. */
-  static final class OwnCommandInboxDefinition extends OwnBeanDefinitionCondition {
-    OwnCommandInboxDefinition() {
-      super(COMMAND_INBOX_BEAN);
-    }
-  }
-
-  /** Matches this auto-configuration's own {@link #sagaDeadLetterStore} definition. */
-  static final class OwnSagaDeadLetterStoreDefinition extends OwnBeanDefinitionCondition {
-    OwnSagaDeadLetterStoreDefinition() {
-      super(SAGA_DEAD_LETTER_STORE_BEAN);
-    }
   }
 
   /**
@@ -1929,27 +1867,37 @@ public class StreamRuneAutoConfiguration {
    * quarantined saga dead-letter entries older than {@code
    * streamrune.saga.dead-letter-retention-max-age} (default 7 days, and must not exceed {@code
    * streamrune.inbox.retention-max-age} — see {@link
-   * org.streamrune.integration.SagaRetentionValidator}). Only created when sagas are enabled and
-   * the auto-configured {@link #sagaDeadLetterStore} or an application-declared {@code
-   * PostgresSagaDeadLetterStore} is present: the framework never sweeps a store of a type it did
-   * not build. The {@link org.streamrune.core.StreamRuneMetrics} bean is wired in when present so
-   * {@code streamrune.saga.dead_letters_swept} is recorded; falls back to {@link
+   * org.streamrune.integration.SagaRetentionValidator}). Only created when sagas are enabled. It
+   * sweeps an application-declared {@code PostgresSagaDeadLetterStore} bean when there is one, and
+   * otherwise the bundle's own store, {@link
+   * org.streamrune.core.backend.BackendStores#sagaDeadLetterStore()} — never an application store
+   * of another type, which wins the {@link SagaDeadLetterStore} bean and so is not consulted. The
+   * {@link org.streamrune.core.StreamRuneMetrics} bean is wired in when present so {@code
+   * streamrune.saga.dead_letters_swept} is recorded; falls back to {@link
    * org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    */
   @Bean
   @ConditionalOnMissingBean(org.streamrune.runtime.SagaDeadLetterRetentionSweeper.class)
-  @org.springframework.context.annotation.Conditional(FrameworkOrPostgresSagaDeadLetterStore.class)
+  @org.springframework.context.annotation.Conditional(
+      BackendStoresOrPostgresSagaDeadLetterStore.class)
   @ConditionalOnProperty(
       name = "streamrune.saga.enabled",
       havingValue = "true",
       matchIfMissing = true)
   public org.streamrune.runtime.SagaDeadLetterRetentionSweeper
       streamRuneSagaDeadLetterRetentionSweeper(
-          SagaDeadLetterStore sagaDeadLetterStore,
+          ObjectProvider<org.streamrune.postgres.PostgresSagaDeadLetterStore>
+              applicationStoreProvider,
+          ObjectProvider<org.streamrune.core.backend.BackendStores> storesProvider,
           StreamRuneProperties properties,
           ObjectProvider<org.streamrune.core.StreamRuneMetrics> metricsProvider,
           ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>
               relayHealthProvider) {
+    // As for the inbox sweeper: an application's own Postgres store, otherwise the bundle's.
+    SagaDeadLetterStore sagaDeadLetterStore = applicationStoreProvider.getIfAvailable();
+    if (sagaDeadLetterStore == null) {
+      sagaDeadLetterStore = storesProvider.getObject().sagaDeadLetterStore();
+    }
     var sweeper =
         new org.streamrune.runtime.SagaDeadLetterRetentionSweeper(
             sagaDeadLetterStore,

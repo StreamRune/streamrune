@@ -72,7 +72,7 @@ class MicronautGdprFactoryTest {
         causeChainContains(
             failure,
             "The ForgetSubjectService StreamRune configures has no snapshot purger.",
-            "new PostgresSnapshotStorePurger(dataSource,",
+            "stores.snapshotPurger(subjectId ->",
             "or set streamrune.gdpr.snapshot-purge=none"),
         () -> "the startup failure says what to add: " + failure);
   }

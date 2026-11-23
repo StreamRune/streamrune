@@ -79,11 +79,10 @@ class SagaDeadLetterSweeperWiringAutoConfigurationTest {
   void userSuppliedStoreOverridesTheDefaultAndOwnsItsOwnRetention() {
     // Override semantics are deliberately declared on the INTERFACE
     // (@ConditionalOnMissingBean(SagaDeadLetterStore.class)), so a user-supplied interface-typed
-    // bean still replaces the concrete-typed default. The framework then registers no sweeper: it
-    // sweeps only the store its own bean definition created (or an application-declared
-    // PostgresSagaDeadLetterStore), never a store it does not own — the same rule the inbox sweeper
-    // follows (StreamRuneAutoConfiguration.FrameworkOrPostgresCommandInbox). A user who brings
-    // their own store owns its retention.
+    // bean still replaces the concrete-typed default. The sweeper then sweeps only the bundle's own
+    // store (or an application-declared PostgresSagaDeadLetterStore), never a store it does not
+    // own — the same rule the inbox sweeper follows. A user who brings their own store owns its
+    // retention.
     runner
         .withUserConfiguration(UserStoreConfig.class)
         .run(
@@ -94,9 +93,11 @@ class SagaDeadLetterSweeperWiringAutoConfigurationTest {
                   .doesNotHaveBean(PostgresSagaDeadLetterStore.class);
               assertThat(ctx.getBean(SagaDeadLetterStore.class))
                   .isSameAs(UserStoreConfig.USER_STORE);
-              assertThat(ctx)
+              assertThat(
+                      org.springframework.test.util.ReflectionTestUtils.getField(
+                          ctx.getBean(SagaDeadLetterRetentionSweeper.class), "store"))
                   .as("the framework must not sweep a store it did not create")
-                  .doesNotHaveBean(SagaDeadLetterRetentionSweeper.class);
+                  .isNotSameAs(UserStoreConfig.USER_STORE);
             });
   }
 

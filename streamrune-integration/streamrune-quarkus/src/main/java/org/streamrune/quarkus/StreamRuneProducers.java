@@ -1700,14 +1700,15 @@ public class StreamRuneProducers {
    * decision). Zero or negative disables either window. {@code FAILED} entries are never pruned: an
    * operator resolves them through {@link org.streamrune.runtime.OutboxFailedReplayer}.
    * Dependent-scoped optional bean: returns {@code null} when outbox is disabled or no {@link
-   * org.streamrune.postgres.PostgresOutboxStore} bean exists. Started and stopped by {@link
-   * StreamRuneLifecycle}. The {@link org.streamrune.core.StreamRuneMetrics} bean is wired in when
-   * present so {@code streamrune.outbox.swept_rows} and {@code streamrune.outbox.skipped_swept} are
-   * recorded; falls back to {@link org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean
-   * exists.
+   * org.streamrune.core.outbox.OutboxStore} bean exists. The framework produces none, so the store
+   * is always the application's, typically built with {@link BackendStores#outboxStore}. Started
+   * and stopped by {@link StreamRuneLifecycle}. The {@link org.streamrune.core.StreamRuneMetrics}
+   * bean is wired in when present so {@code streamrune.outbox.swept_rows} and {@code
+   * streamrune.outbox.skipped_swept} are recorded; falls back to {@link
+   * org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    *
    * <p>Intentionally dependent-scoped (no {@code @Singleton}): this producer may return {@code
-   * null} when the outbox is disabled or no {@link org.streamrune.postgres.PostgresOutboxStore} is
+   * null} when the outbox is disabled or no {@link org.streamrune.core.outbox.OutboxStore} is
    * present; {@code @Singleton} + null-return would NPE at injection. {@link StreamRuneLifecycle}
    * owns the single instance via {@link Instance#get()}.
    */
@@ -1715,7 +1716,7 @@ public class StreamRuneProducers {
   @DefaultBean
   @jakarta.inject.Named(FRAMEWORK_OUTBOX_RETENTION_SWEEPER)
   public OutboxRetentionSweeper outboxRetentionSweeper(
-      Instance<org.streamrune.postgres.PostgresOutboxStore> store,
+      Instance<org.streamrune.core.outbox.OutboxStore> store,
       StreamRuneQuarkusProperties properties,
       Instance<org.streamrune.core.StreamRuneMetrics> metrics,
       Instance<org.streamrune.runtime.BackgroundRelayHealthContributor> relayHealthInstance) {
