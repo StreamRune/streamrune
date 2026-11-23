@@ -27,6 +27,7 @@ import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
+import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
@@ -42,8 +43,11 @@ import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
+import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
@@ -52,6 +56,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
@@ -103,9 +108,18 @@ import org.streamrune.runtime.GuardedTracing;
  * <p><b>Timestamps.</b> The store stamps {@code created_at} of the event and snapshot rows with the
  * application {@link Clock} it was built with, as epoch microseconds; there is no database clock.
  *
- * <p><b>Not yet here.</b> This store has no command inbox, outbox or event audit, and does not
- * fence a saga's forward command: {@code appendWithKey} throws {@link
- * UnsupportedOperationException}.
+ * <p><b>Outbox and command inbox, in the append transaction.</b> With a {@link SqliteOutboxStore}
+ * and an {@link OutboxEventMapper} the append writes the entries the mapper derives from its events
+ * (and those given to {@link #append(StreamId, List, Version, List)}) on its own connection, inside
+ * its own write transaction, after the events; with a {@link SqliteCommandInbox}, {@link
+ * #appendWithKey} claims the key first in that transaction and records the events' offsets in the
+ * key's row after inserting them. Claim, events, offsets and entries commit together or not at all:
+ * a version conflict, a failure or a crash before the commit leaves none of them. A key recorded
+ * before is answered from its row, verified against the command type and the stream ({@link
+ * CommandInbox.InboxResult#requireBoundTo}). The write lock serializes the claims, so of two
+ * executions of one key the first to get the lock records it and the other finds the record. Each
+ * entry carries the trace link of the event it was derived from (given entries: of the first
+ * event), as on Postgres. There is no event audit yet.
  *
  * <p><b>Tracing.</b> With a {@link StreamRuneTracing} whose {@link TracingArea#EVENT_STORE} area is
  * on, the store starts the spans {@code PostgresEventStore} starts: {@value
@@ -198,6 +212,9 @@ public final class SqliteEventStore implements EventStore {
   private final StreamRuneTracing tracing;
   private final boolean traced;
   private final Clock clock;
+  private final SqliteOutboxStore outboxStore;
+  private final OutboxEventMapper outboxEventMapper;
+  private final SqliteCommandInbox commandInbox;
 
   // The legacy-snapshot probe of an IGNORE_SNAPSHOT load runs at most once per store instance.
   private final AtomicBoolean legacySnapshotProbed = new AtomicBoolean(false);
@@ -217,6 +234,10 @@ public final class SqliteEventStore implements EventStore {
    * @param metrics records discarded snapshots
    * @param tracing the tracing the spans start through
    * @param clock stamps {@code created_at}
+   * @param outboxStore the outbox the append writes its entries to, or {@code null} for none; set
+   *     together with {@code outboxEventMapper}
+   * @param outboxEventMapper derives the outbox entries of each event, or {@code null} for none
+   * @param commandInbox the inbox a keyed append claims its key in, or {@code null} for none
    */
   SqliteEventStore(
       SqliteDatabase database,
@@ -226,7 +247,10 @@ public final class SqliteEventStore implements EventStore {
       SnapshotMigrationChain snapshotMigrations,
       StreamRuneMetrics metrics,
       StreamRuneTracing tracing,
-      Clock clock) {
+      Clock clock,
+      SqliteOutboxStore outboxStore,
+      OutboxEventMapper outboxEventMapper,
+      SqliteCommandInbox commandInbox) {
     this.dataSource = Objects.requireNonNull(database, "database is required").dataSource();
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
     this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
@@ -238,6 +262,9 @@ public final class SqliteEventStore implements EventStore {
         GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), this.metrics);
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
     this.clock = Objects.requireNonNull(clock, "clock is required");
+    this.outboxStore = outboxStore;
+    this.outboxEventMapper = outboxEventMapper;
+    this.commandInbox = commandInbox;
   }
 
   /**
@@ -721,17 +748,66 @@ public final class SqliteEventStore implements EventStore {
   @Override
   public AppendResult append(
       StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+    // The arguments are checked before the outbox mapper, application code, sees the events.
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    if (!traced || events.isEmpty()) {
-      return appendEvents(streamId, events, expectedVersion, false);
+    return appendWithOutbox(streamId, events, expectedVersion, outboxEntriesOf(events));
+  }
+
+  /**
+   * Appends {@code events} and {@code outboxEntries} in one write transaction, with the entries the
+   * configured mapper derives from the events: all of them commit, or none does. The entries given
+   * here all take the trace link of the first event (one append's events come from one command),
+   * replacing any link they carry.
+   *
+   * <p>Entries given with an empty {@code events} list are refused: they commit with the events,
+   * and there are none to commit them with. An entry with no events to accompany it is saved alone
+   * with {@link SqliteOutboxStore#save}, which commits on its own.
+   *
+   * @param streamId the stream to append to (required)
+   * @param events the events to append (required)
+   * @param expectedVersion the stream's version the append expects (required)
+   * @param outboxEntries the entries to store with the events (required; may be empty); non-empty
+   *     entries need an outbox store and at least one event
+   * @return the events' offsets and the stream's new version
+   * @throws IllegalStateException if {@code outboxEntries} is not empty and the store has no outbox
+   *     store
+   * @throws IllegalArgumentException if {@code outboxEntries} is not empty and {@code events} is
+   * @throws NullPointerException if an argument is {@code null}
+   */
+  public AppendResult append(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      List<OutboxEntry> outboxEntries) {
+    List<OutboxEntry> linked =
+        outboxEntries == null || outboxEntries.isEmpty() || events == null || events.isEmpty()
+            ? outboxEntries
+            : withTraceLink(outboxEntries, traceLinkOf(events.getFirst()));
+    return appendWithOutbox(streamId, events, expectedVersion, linked);
+  }
+
+  /** The append of {@code events} with {@code outboxEntries}, inside its span when traced. */
+  private AppendResult appendWithOutbox(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      List<OutboxEntry> outboxEntries) {
+    if (!traced
+        || streamId == null
+        || events == null
+        || events.isEmpty()
+        || expectedVersion == null
+        || outboxEntries == null) {
+      return appendEvents(streamId, events, expectedVersion, outboxEntries, false);
     }
     return tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
-        () -> appendEvents(streamId, events, expectedVersion, true),
+        outboxEntries.size(),
+        () -> appendEvents(streamId, events, expectedVersion, outboxEntries, true),
         result -> "APPENDED");
   }
 
@@ -743,6 +819,7 @@ public final class SqliteEventStore implements EventStore {
       StreamId streamId,
       int eventCount,
       Version expectedVersion,
+      int outboxEntryCount,
       Supplier<R> append,
       Function<R, String> outcome) {
     TraceScope scope =
@@ -755,7 +832,7 @@ public final class SqliteEventStore implements EventStore {
                 .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
                 .put(TraceAttributes.EVENT_COUNT, (long) eventCount)
                 .put(TraceAttributes.EXPECTED_VERSION, expectedVersion.value())
-                .put(TraceAttributes.OUTBOX_ENTRY_COUNT, 0L)
+                .put(TraceAttributes.OUTBOX_ENTRY_COUNT, (long) outboxEntryCount)
                 .build());
     try {
       R result = append.get();
@@ -801,14 +878,37 @@ public final class SqliteEventStore implements EventStore {
 
   /**
    * The append: serialize (any {@code @Encrypted} field encrypted) before a connection is borrowed,
-   * then one write transaction that reserves the offsets, checks the head, inserts the rows and
-   * commits.
+   * then one write transaction that reserves the offsets, checks the head, inserts the rows, writes
+   * the outbox entries and commits.
    *
    * @param traced whether the append runs inside its span, so its serialization starts a child
    */
   private AppendResult appendEvents(
-      StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced) {
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      List<OutboxEntry> outboxEntries,
+      boolean traced) {
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
+    Objects.requireNonNull(outboxEntries, "outboxEntries is required");
+    if (!outboxEntries.isEmpty() && outboxStore == null) {
+      throw new IllegalStateException(
+          "Outbox entries were passed but no SqliteOutboxStore is configured on this event store."
+              + " Configure a SqliteOutboxStore together with an OutboxEventMapper on the"
+              + " factory.");
+    }
     if (events.isEmpty()) {
+      // The no-op returns before any transaction opens; entries in hand would be lost silently.
+      if (!outboxEntries.isEmpty()) {
+        throw new IllegalArgumentException(
+            "outboxEntries were passed with an empty events list — outbox entries are persisted"
+                + " atomically with the events of this append and cannot be appended alone. To"
+                + " emit an outbox entry that has no accompanying domain event, persist it"
+                + " directly with OutboxStore.save(entry), one entry per call — that write commits"
+                + " on its own connection and is atomic with nothing else.");
+      }
       return new AppendResult(List.of(), expectedVersion);
     }
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
@@ -828,6 +928,9 @@ public final class SqliteEventStore implements EventStore {
       SqliteTransactions.begin(conn);
       try {
         List<GlobalOffset> offsets = insertEvents(conn, streamId, rows, expectedVersion);
+        if (!outboxEntries.isEmpty()) {
+          outboxStore.saveAll(outboxEntries, conn);
+        }
         SqliteTransactions.commit(conn);
         committed = true;
         result =
@@ -836,7 +939,7 @@ public final class SqliteEventStore implements EventStore {
         return result;
       } finally {
         // The single rollback point of every exit without a commit: a SQLException, the head
-        // check's OptimisticLockException, any other Throwable.
+        // check's OptimisticLockException, a failed outbox write, any other Throwable.
         if (!committed) {
           SqliteTransactions.rollback(conn, "append");
         }
@@ -847,6 +950,197 @@ public final class SqliteEventStore implements EventStore {
       }
       throw appendFailure(e, shownStream, expectedVersion);
     }
+  }
+
+  // ── Keyed append ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Here the claim, the events, the backfill of their offsets into the key's row and the outbox
+   * entries are one write transaction on one connection (see the class javadoc). A key recorded
+   * before is answered from its row after the transaction is rolled back and its connection
+   * returned, so a claim loser never holds one connection while it borrows another.
+   */
+  @Override
+  public IdempotentAppendResult appendWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType) {
+    if (!traced
+        || commandInbox == null
+        || streamId == null
+        || events == null
+        || events.isEmpty()
+        || expectedVersion == null) {
+      return appendEventsWithKey(
+          streamId, events, expectedVersion, idempotencyKey, commandType, null, false);
+    }
+    // The rest of the arguments are checked before the outbox mapper, application code, sees the
+    // events.
+    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
+    CommandInbox.requireCommandType(commandType);
+    List<OutboxEntry> outboxEntries = outboxEntriesOf(events);
+    return tracedAppend(
+        streamId,
+        events.size(),
+        expectedVersion,
+        outboxEntries.size(),
+        () ->
+            appendEventsWithKey(
+                streamId,
+                events,
+                expectedVersion,
+                idempotencyKey,
+                commandType,
+                outboxEntries,
+                true),
+        result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
+  }
+
+  /**
+   * The outbox entries the configured mapper derives from {@code events}, each with the trace link
+   * of the event it was derived from; none without an outbox store.
+   */
+  private List<OutboxEntry> outboxEntriesOf(List<EventEnvelope> events) {
+    return outboxStore != null && outboxEventMapper != null
+        ? events.stream()
+            .flatMap(e -> withTraceLink(outboxEventMapper.toOutbox(e), traceLinkOf(e)).stream())
+            .toList()
+        : List.of();
+  }
+
+  /**
+   * The link to the span of the command that wrote {@code event}: its {@code spanContext}, via
+   * {@link SpanLink#of}; {@link SpanLink#NONE} when the command was not traced.
+   */
+  private static SpanLink traceLinkOf(EventEnvelope event) {
+    return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
+  }
+
+  /** {@code entries}, each with {@code link} as its trace link, replacing any link set before. */
+  private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
+    List<OutboxEntry> linked = null;
+    for (int i = 0; i < entries.size(); i++) {
+      OutboxEntry entry = entries.get(i);
+      if (!entry.traceLink().equals(link)) {
+        if (linked == null) {
+          linked = new ArrayList<>(entries);
+        }
+        linked.set(i, entry.withTraceLink(link));
+      }
+    }
+    return linked == null ? entries : linked;
+  }
+
+  /**
+   * The keyed append: claim, events, backfill, outbox entries, commit, in one write transaction.
+   *
+   * @param mappedOutboxEntries the outbox entries of {@code events}, or {@code null} to derive them
+   *     here
+   * @param traced whether the append runs inside its span, so its serialization starts a child
+   */
+  private IdempotentAppendResult appendEventsWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType,
+      List<OutboxEntry> mappedOutboxEntries,
+      boolean traced) {
+    if (commandInbox == null) {
+      throw new UnsupportedOperationException(
+          "This SqliteEventStore was built without a command inbox");
+    }
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(events, "events is required");
+    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
+    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
+    CommandInbox.requireCommandType(commandType);
+    String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
+    List<OutboxEntry> outboxEntries =
+        mappedOutboxEntries != null ? mappedOutboxEntries : outboxEntriesOf(events);
+    List<EventRow> rows;
+    try {
+      rows = serialize(streamId, events, expectedVersion, traced);
+    } catch (JsonProcessingException e) {
+      throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
+    }
+
+    Version finalVersion = new Version(expectedVersion.value() + events.size());
+    // Set when the claim finds the key recorded: the transaction is rolled back and the connection
+    // returned before the recorded row is read.
+    boolean claimLost = false;
+    boolean committed = false;
+    IdempotentAppendResult result = null;
+    try (Connection conn = dataSource.getConnection()) {
+      SqliteTransactions.begin(conn);
+      try {
+        if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
+          claimLost = true;
+        } else {
+          // An empty command claims its key and appends nothing: like an empty append it does not
+          // consult the stream's head.
+          List<GlobalOffset> offsets =
+              rows.isEmpty() ? List.of() : insertEvents(conn, streamId, rows, expectedVersion);
+          commandInbox.backfillOffsets(idempotencyKey, offsets, conn);
+          if (!outboxEntries.isEmpty()) {
+            outboxStore.saveAll(outboxEntries, conn);
+          }
+          SqliteTransactions.commit(conn);
+          committed = true;
+          result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
+        }
+      } finally {
+        // The single rollback point of every exit without a commit, the lost claim included.
+        if (!committed) {
+          SqliteTransactions.rollback(conn, "keyed append");
+        }
+      }
+    } catch (SQLException e) {
+      if (committed) {
+        return result;
+      }
+      throw keyedAppendFailure(e, shownStream);
+    }
+    if (claimLost) {
+      CommandInbox.InboxResult prior =
+          commandInbox
+              .find(idempotencyKey)
+              .orElseThrow(() -> inboxConflictWithoutRow(idempotencyKey));
+      // Fails closed unless the recorded row is this command's on this stream (see the interface).
+      prior.requireBoundTo(commandType, streamId);
+      return new IdempotentAppendResult(prior.globalOffsets(), prior.finalVersion(), true);
+    }
+    return result;
+  }
+
+  /**
+   * The claim-lost dead end: the key was found recorded, yet its row is gone (retention pruned it
+   * in between). A retry claims the key anew.
+   */
+  static EventStoreException inboxConflictWithoutRow(IdempotencyKey idempotencyKey) {
+    return new EventStoreException(
+        "Inbox conflict but no row found for key: "
+            + LogSanitizer.sanitizeForLog(idempotencyKey.value()));
+  }
+
+  /** The exception of a keyed append that did not commit, classified as Postgres classifies it. */
+  private static RuntimeException keyedAppendFailure(SQLException e, String shownStream) {
+    if (isGlobalOffsetCollision(e)) {
+      return new EventStoreException(globalOffsetDesyncMessage(shownStream), e);
+    }
+    if (isRetryableConflict(e)) {
+      return new OptimisticLockException("Concurrent modification of stream: " + shownStream, e);
+    }
+    EventStoreException lockFailure =
+        lockFailure(e, "idempotent append to stream '" + shownStream + "'");
+    if (lockFailure != null) {
+      return lockFailure;
+    }
+    return new EventStoreException("Failed idempotent append to stream: " + shownStream, e);
   }
 
   /** One event's serialized row, ready for the insert. */

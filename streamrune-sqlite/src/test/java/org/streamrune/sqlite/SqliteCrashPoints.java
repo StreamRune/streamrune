@@ -64,6 +64,12 @@ final class SqliteCrashPoints {
     /** Inside the write of the second snapshot_store row of the statement: a purge half done. */
     static final Point SECOND_SNAPSHOT_ROW = new Point("snapshot_store", 2);
 
+    /** Inside the write of the command_inbox row: the key is claimed, nothing else written. */
+    static final Point KEY_CLAIM = new Point("command_inbox", 1);
+
+    /** Inside the write of the first outbox_events row: the events are written, not durable. */
+    static final Point FIRST_OUTBOX_ROW = new Point("outbox_events", 1);
+
     /** Right after the write's COMMIT returned. */
     static final Point AFTER_COMMIT = new Point(null, 0);
 
@@ -74,8 +80,8 @@ final class SqliteCrashPoints {
         case AFTER_FIRST_EVENT_WRITE -> SECOND_EVENT;
         case DURING_SNAPSHOT_SAVE -> FIRST_SNAPSHOT_ROW;
         case AFTER_COMMIT, AFTER_SNAPSHOT_COMMIT -> AFTER_COMMIT;
-        case AFTER_KEY_CLAIM, AFTER_FIRST_OUTBOX_WRITE ->
-            throw new IllegalArgumentException("the store has no " + point + " yet");
+        case AFTER_KEY_CLAIM -> KEY_CLAIM;
+        case AFTER_FIRST_OUTBOX_WRITE -> FIRST_OUTBOX_ROW;
       };
     }
   }
@@ -101,6 +107,14 @@ final class SqliteCrashPoints {
                   + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END",
               "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_update AFTER UPDATE ON"
                   + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END"),
+          "command_inbox",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_inbox AFTER INSERT ON main.command_inbox"
+                  + " BEGIN SELECT sr_crash_point('command_inbox'); END"),
+          "outbox_events",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_outbox AFTER INSERT ON"
+                  + " main.outbox_events BEGIN SELECT sr_crash_point('outbox_events'); END"),
           "saga_state",
           List.of(
               "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_insert AFTER INSERT ON"

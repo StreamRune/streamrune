@@ -1,5 +1,6 @@
 package org.streamrune.sqlite;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -209,6 +210,7 @@ public final class SqliteOutboxStore implements OutboxStore {
           + " (SELECT count(*) FROM outbox_events WHERE status = 'FAILED' AND aggregate_id IS NULL)";
 
   private final DataSource dataSource;
+  private final Path file;
   private final Duration claimLease;
   private final OutboxOrderingMode orderingMode;
   private final String claimPending;
@@ -280,11 +282,17 @@ public final class SqliteOutboxStore implements OutboxStore {
       throw new IllegalArgumentException("clock is required");
     }
     this.dataSource = database.dataSource();
+    this.file = database.file();
     this.claimLease = claimLease;
     this.orderingMode = orderingMode;
     this.claimPending = claimPendingSql(orderingMode);
     this.claimedBy = "outbox-" + UUID.randomUUID();
     this.clock = clock;
+  }
+
+  /** The database file the store keeps its entries in. */
+  Path file() {
+    return file;
   }
 
   @Override

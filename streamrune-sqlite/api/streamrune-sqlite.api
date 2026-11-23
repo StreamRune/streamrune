@@ -1,5 +1,11 @@
 # The public API of :streamrune-sqlite. verifyApiSurface (part of check) compares the build with this file;
 # after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.sqlite.SqliteCommandInbox implements org.streamrune.core.CommandInbox
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.time.Clock)
+  public int deleteProcessedBefore(java.time.Instant)
+  public java.util.Optional<org.streamrune.core.CommandInbox$InboxResult> find(org.streamrune.core.types.IdempotencyKey)
+
 public final class org.streamrune.sqlite.SqliteDatabase implements java.lang.AutoCloseable
   public java.lang.String toString()
   public java.nio.file.Path file()
@@ -16,6 +22,8 @@ public final class org.streamrune.sqlite.SqliteEventStore implements org.streamr
   public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
   public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
   public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, java.util.List<org.streamrune.core.outbox.OutboxEntry>)
+  public org.streamrune.core.EventStore$IdempotentAppendResult appendWithKey(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version, org.streamrune.core.types.IdempotencyKey, java.lang.String)
   public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
 
 public final class org.streamrune.sqlite.SqliteEventStoreFactory implements org.streamrune.core.EventStoreFactory
@@ -23,8 +31,11 @@ public final class org.streamrune.sqlite.SqliteEventStoreFactory implements org.
   public org.streamrune.core.EventStore create()
   public org.streamrune.sqlite.SqliteEventStoreFactory autoInitializeSchema(boolean)
   public org.streamrune.sqlite.SqliteEventStoreFactory clock(java.time.Clock)
+  public org.streamrune.sqlite.SqliteEventStoreFactory commandInbox(org.streamrune.sqlite.SqliteCommandInbox)
   public org.streamrune.sqlite.SqliteEventStoreFactory cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
   public org.streamrune.sqlite.SqliteEventStoreFactory metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.sqlite.SqliteEventStoreFactory outboxEventMapper(org.streamrune.core.outbox.OutboxEventMapper)
+  public org.streamrune.sqlite.SqliteEventStoreFactory outboxStore(org.streamrune.sqlite.SqliteOutboxStore)
   public org.streamrune.sqlite.SqliteEventStoreFactory snapshotMigrations(java.util.List<org.streamrune.core.SnapshotMigration>)
   public org.streamrune.sqlite.SqliteEventStoreFactory tracing(org.streamrune.core.tracing.StreamRuneTracing)
   public org.streamrune.sqlite.SqliteEventStoreFactory upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)

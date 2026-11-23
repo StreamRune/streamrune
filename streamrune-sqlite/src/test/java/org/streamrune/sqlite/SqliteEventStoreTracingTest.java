@@ -28,6 +28,7 @@ import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.GlobalOffset;
+import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
@@ -350,5 +351,40 @@ class SqliteEventStoreTracingTest {
     assertThat(tracing.names())
         .containsExactly(
             TraceAttributes.EVENT_STORE_APPEND, TraceAttributes.EVENT_STORE_APPEND_SERIALIZE);
+  }
+
+  /**
+   * A keyed append is the outcome APPENDED, its replay DUPLICATE; the span counts the outbox
+   * entries the mapper derived.
+   */
+  @Test
+  void aKeyedAppend_isAppendedThenDuplicate_andCountsItsOutboxEntries() {
+    var tracing = new RecordingTracing();
+    EventStore store =
+        new SqliteEventStoreFactory(database, EventStoreContract.Setup.defaults().registry())
+            .tracing(tracing)
+            .outboxStore(new SqliteOutboxStore(database))
+            .outboxEventMapper(EventStoreContract.OUTBOX_MAPPER)
+            .commandInbox(new SqliteCommandInbox(database))
+            .create();
+    List<EventEnvelope> events = List.of(event("a"), event("b"));
+    IdempotencyKey key = IdempotencyKey.of("traced-key");
+
+    store.appendWithKey(STREAM, events, Version.initial(), key, "Cmd");
+    var first = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
+    assertThat(first.attribute(TraceAttributes.APPEND_OUTCOME)).isEqualTo("APPENDED");
+    assertThat(first.attribute(TraceAttributes.OUTBOX_ENTRY_COUNT)).isEqualTo(2L);
+    tracing.clear();
+
+    store.appendWithKey(STREAM, events, Version.initial(), key, "Cmd");
+    var replay = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
+    assertThat(replay.attribute(TraceAttributes.APPEND_OUTCOME)).isEqualTo("DUPLICATE");
+    assertThat(replay.ok).isTrue();
+    tracing.clear();
+
+    assertThatThrownBy(() -> store.appendWithKey(STREAM, events, Version.initial(), null, "Cmd"))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("idempotencyKey is required");
+    assertThat(tracing.names()).as("no span for refused arguments").isEmpty();
   }
 }

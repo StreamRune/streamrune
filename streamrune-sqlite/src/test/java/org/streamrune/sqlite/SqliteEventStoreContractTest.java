@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.streamrune.core.EventStore;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
@@ -26,8 +29,9 @@ import org.streamrune.test.EventStoreContract;
  * store over the same storage, not a second process: {@link #reopen} opens a second {@link
  * SqliteDatabase} handle and a data source of its own on the same file, as a second store of the
  * one process the instance guard admits does, and the two race on SQLite's write lock. Leases and
- * leadership are not part of this contract. The store has no command inbox and writes no outbox
- * entries yet, so the contract's own capability hooks skip those cases.
+ * leadership are not part of this contract. Every store has a {@link SqliteCommandInbox} and a
+ * {@link SqliteOutboxStore} with the contract's outbox mapper, built over the same handle, so the
+ * keyed-append, transactional-outbox and their crash cases run too.
  */
 class SqliteEventStoreContractTest extends EventStoreContract {
 
@@ -35,6 +39,7 @@ class SqliteEventStoreContractTest extends EventStoreContract {
 
   private final SqliteCrashPoints crashPoints = new SqliteCrashPoints(Kill.CLOSE_CONNECTION);
   private final List<SqliteDatabase> handles = new ArrayList<>();
+  private final Map<EventStore, SqliteDatabase> databases = new IdentityHashMap<>();
   private SqliteDatabase database;
   private int files;
 
@@ -67,17 +72,29 @@ class SqliteEventStoreContractTest extends EventStoreContract {
     return handle;
   }
 
-  private static EventStore build(SqliteDatabase database, Setup setup) {
-    return new SqliteEventStoreFactory(database, setup.registry())
-        .cryptoEngine(setup.crypto())
-        .upcasters(setup.upcasters())
-        .snapshotMigrations(setup.migrations())
-        .create();
+  private EventStore build(SqliteDatabase database, Setup setup) {
+    EventStore store =
+        new SqliteEventStoreFactory(database, setup.registry())
+            .cryptoEngine(setup.crypto())
+            .upcasters(setup.upcasters())
+            .snapshotMigrations(setup.migrations())
+            .commandInbox(new SqliteCommandInbox(database))
+            .outboxStore(new SqliteOutboxStore(database))
+            .outboxEventMapper(OUTBOX_MAPPER)
+            .create();
+    databases.put(store, database);
+    return store;
   }
 
   @Override
-  protected boolean supportsIdempotentAppend() {
-    return false;
+  protected boolean supportsTransactionalOutbox() {
+    return true;
+  }
+
+  /** A relay's store over the handle {@code store} was built on. */
+  @Override
+  protected OutboxStore outboxOf(EventStore store) {
+    return new SqliteOutboxStore(databases.get(store));
   }
 
   @Override

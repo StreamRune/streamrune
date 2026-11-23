@@ -1,5 +1,6 @@
 package org.streamrune.sqlite;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -16,6 +17,7 @@ import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.upcasting.EventUpcaster;
@@ -36,6 +38,11 @@ import org.streamrune.runtime.GuardedTracing;
  * connection's {@code busy_timeout}. And {@link #clock(Clock)} sets the clock that stamps {@code
  * created_at}, which on Postgres the database's clock stamps.
  *
+ * <p>The outbox and the command inbox are this backend's own stores ({@link SqliteOutboxStore},
+ * {@link SqliteCommandInbox}), built over the same database file: the store writes their rows on
+ * its own append connection, inside its append transaction, so a store of another type could not
+ * join it, and one over another file would keep rows the relay or the inbox never reads.
+ *
  * <p>The database handle is used as given and not closed by the factory or the stores: close it
  * after every store built over it has stopped.
  *
@@ -54,6 +61,9 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   private boolean validateSchema = true;
   private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
   private Clock clock = Clock.systemUTC();
+  private SqliteOutboxStore outboxStore;
+  private OutboxEventMapper outboxEventMapper;
+  private SqliteCommandInbox commandInbox;
 
   /**
    * Creates a new factory.
@@ -169,19 +179,72 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   }
 
   /**
+   * Sets the outbox the store writes the entries of each append to, in the append's transaction.
+   * Optional; set together with {@link #outboxEventMapper}, or neither.
+   *
+   * @param outboxStore the outbox, over the same database file, or {@code null} for none
+   * @return this factory for method chaining
+   */
+  public SqliteEventStoreFactory outboxStore(SqliteOutboxStore outboxStore) {
+    this.outboxStore = outboxStore;
+    return this;
+  }
+
+  /**
+   * Sets the mapper that derives the outbox entries of each appended event. Optional; set together
+   * with {@link #outboxStore}, or neither. To write only the entries passed to {@link
+   * SqliteEventStore#append(org.streamrune.core.types.StreamId, List,
+   * org.streamrune.core.types.Version, List)}, set a mapper that returns no entries.
+   *
+   * @param outboxEventMapper the mapper, or {@code null} for none
+   * @return this factory for method chaining
+   */
+  public SqliteEventStoreFactory outboxEventMapper(OutboxEventMapper outboxEventMapper) {
+    this.outboxEventMapper = outboxEventMapper;
+    return this;
+  }
+
+  /**
+   * Sets the command inbox {@code appendWithKey} claims its key in, in the append's transaction.
+   * Optional; without one {@code appendWithKey} throws {@link UnsupportedOperationException}.
+   *
+   * @param commandInbox the inbox, over the same database file, or {@code null} for none
+   * @return this factory for method chaining
+   */
+  public SqliteEventStoreFactory commandInbox(SqliteCommandInbox commandInbox) {
+    this.commandInbox = commandInbox;
+    return this;
+  }
+
+  /**
    * Creates a new event store: refuses an {@code @Encrypted} type without a crypto engine before it
    * touches the database, applies the schema series and validates them (each unless switched off),
    * and builds the store. Every call builds a new store over the same database.
    *
-   * @throws IllegalStateException if no crypto engine is set and a registered event or state type
-   *     carries {@code @Encrypted}, or if schema validation finds an error (a missing table or
-   *     column, a missing crypto table the engine needs)
+   * @throws IllegalStateException if exactly one of the outbox store and the outbox mapper is set,
+   *     if no crypto engine is set and a registered event or state type carries {@code @Encrypted},
+   *     or if schema validation finds an error (a missing table or column, a missing crypto table
+   *     the engine needs)
    * @throws UnsupportedOperationException if no crypto engine is set and the registry does not
    *     implement {@link EventTypeRegistry#registeredTypes()}
-   * @throws IllegalArgumentException if the snapshot migrations are inconsistent
+   * @throws IllegalArgumentException if the snapshot migrations are inconsistent, or the outbox
+   *     store or the command inbox is built over another database file
    */
   @Override
   public EventStore create() {
+    // Configuration errors, refused before the database is touched.
+    if ((outboxStore == null) != (outboxEventMapper == null)) {
+      throw new IllegalStateException(
+          "outboxStore and outboxEventMapper must be set together (or neither). To write only"
+              + " the entries passed to append(..., outboxEntries), set a mapper that returns no"
+              + " entries.");
+    }
+    if (outboxStore != null) {
+      requireSameFile("outboxStore", outboxStore.file());
+    }
+    if (commandInbox != null) {
+      requireSameFile("commandInbox", commandInbox.file());
+    }
     SqliteEventStore.validateCryptoConfig(typeRegistry, cryptoEngine);
     // Validated before anything is migrated: a bad migration set is a configuration error.
     SnapshotMigrationChain migrationChain = SnapshotMigrationChain.of(snapshotMigrations);
@@ -208,7 +271,27 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
         migrationChain,
         metrics,
         GuardedTracing.of(tracing, metrics),
-        clock);
+        clock,
+        outboxStore,
+        outboxEventMapper,
+        commandInbox);
+  }
+
+  /**
+   * Refuses a store over another file than the event store's: its rows would be written into the
+   * event store's file, inside the append, and read from the other one.
+   */
+  private void requireSameFile(String role, Path file) {
+    if (!file.equals(database.file())) {
+      throw new IllegalArgumentException(
+          role
+              + " is built over "
+              + file
+              + ", but the event store over "
+              + database.file()
+              + ": the store writes it inside its append transaction, so both must be built over"
+              + " the same database file.");
+    }
   }
 
   /**
