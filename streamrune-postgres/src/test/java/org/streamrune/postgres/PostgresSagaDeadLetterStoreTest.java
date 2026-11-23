@@ -2004,4 +2004,56 @@ class PostgresSagaDeadLetterStoreTest {
     assertTrue(store.clearShieldIfDrained(a, type), "the rerun clears the drained saga");
     assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
   }
+
+  /**
+   * The discard and the anchor write are index probes in both shapes: the saga id, or its absence,
+   * is an index condition of each statement. The statements are read from the store itself.
+   */
+  @Test
+  void discardAndAnchorStatements_haveTheSagaIdAsAnIndexCondition() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      // 20 000 rows over two types, one in twenty without a saga; then fresh statistics, and the
+      // scans that would hide the index on a small table switched off.
+      stmt.execute(
+          "INSERT INTO saga_dead_letters (saga_id, saga_type, event_offset, event_type, error_type)"
+              + " SELECT CASE WHEN g % 20 = 0 THEN NULL ELSE 'saga-' || g END,"
+              + " CASE WHEN g % 2 = 0 THEN 'T' ELSE 'Other' END, g, 'E', 'x'"
+              + " FROM generate_series(1, 20000) g");
+      stmt.execute("VACUUM ANALYZE saga_dead_letters");
+      stmt.execute("SET enable_seqscan = off");
+      stmt.execute("SET enable_bitmapscan = off");
+      assertThat(sagaIdIndexCondition(conn, "DISCARD_NAMED", "'saga-7'", "'Other'", "7"))
+          .contains("saga_id");
+      assertThat(
+              sagaIdIndexCondition(
+                  conn, "ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED", "NOW()", "'saga-7'", "'Other'", "7"))
+          .contains("saga_id");
+      assertThat(sagaIdIndexCondition(conn, "DISCARD_NULL_SAGA", "'T'", "20"))
+          .contains("saga_id IS NULL");
+      assertThat(
+              sagaIdIndexCondition(
+                  conn, "ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA", "NOW()", "'T'", "20"))
+          .contains("saga_id IS NULL");
+    }
+  }
+
+  /** The index condition of the scan the store's statement {@code constant} is planned with. */
+  private static String sagaIdIndexCondition(Connection conn, String constant, String... literals)
+      throws Exception {
+    var field = PostgresSagaDeadLetterStore.class.getDeclaredField(constant);
+    field.setAccessible(true);
+    String sql = (String) field.get(null);
+    for (String literal : literals) {
+      sql = sql.replaceFirst("\\?", java.util.regex.Matcher.quoteReplacement(literal));
+    }
+    var plan = ExplainPlans.explainJson(conn, sql);
+    for (String index : java.util.List.of("saga_dead_letters_uniq", "idx_saga_dead_letters_saga")) {
+      var scan = ExplainPlans.findIndexScan(plan, index);
+      if (scan != null) {
+        return scan.path("Index Cond").asText();
+      }
+    }
+    return "no scan of either index: " + plan;
+  }
 }

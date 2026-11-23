@@ -202,7 +202,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   // A null sagaId matches ONLY null-saga rows (DISCARD_NULL_SAGA, every row of the duplicate
   // set); a non-null sagaId matches only rows with that exact saga_id (DISCARD_NAMED). One
-  // statement per shape, so each is an index probe on the full key, as for the anchor write.
+  // statement per shape, so an index serves each, as for the anchor write.
   // Type-scoped — a cross-type SagaId collision must never let one type's replayer delete another
   // type's quarantine record. There is no unscoped form: discard rejects a null type before either
   // statement runs.

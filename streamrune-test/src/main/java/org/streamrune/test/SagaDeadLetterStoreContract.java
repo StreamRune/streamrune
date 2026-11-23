@@ -547,6 +547,49 @@ public abstract class SagaDeadLetterStoreContract {
   }
 
   /**
+   * The discard and the anchor write address one entry by its key: a named entry by saga id, type
+   * and offset, a null-saga entry by type and offset. Neither reaches another saga's entry, another
+   * offset's, another type's, or the entry of the other shape at the same type and offset.
+   */
+  @Test
+  public void discardAndAnchor_reachOnlyTheEntryAtTheirKey_namedAndNullSaga() {
+    SagaId b = SagaId.of("dl-saga-b");
+    GlobalOffset ten = GlobalOffset.of(10L);
+    GlobalOffset eleven = GlobalOffset.of(11L);
+    store.publish(entry(A, 10L, T0));
+    store.publish(entry(b, 10L, T0)); // another saga, same type and offset
+    store.publish(entry(A, 11L, T0)); // the same saga, another offset
+    store.publish(entry(null, 10L, T0)); // no saga, same type and offset
+    store.publish(entry(null, 11L, T0)); // no saga, another offset
+    store.publish(foreignEntry(null, 10L)); // no saga, another type, same offset
+
+    store.establishFirstReplayAnchor(A, TYPE, ten, T0.plusSeconds(1));
+    assertEquals(T0.plusSeconds(1), entryOf(A, TYPE, 10L).firstReplayStartedAt());
+    assertNull(entryOf(b, TYPE, 10L).firstReplayStartedAt());
+    assertNull(entryOf(A, TYPE, 11L).firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(TYPE, ten).orElseThrow().firstReplayStartedAt());
+
+    store.establishFirstReplayAnchor(null, TYPE, ten, T0.plusSeconds(2));
+    assertEquals(
+        T0.plusSeconds(2), store.findNullSagaEntry(TYPE, ten).orElseThrow().firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(TYPE, eleven).orElseThrow().firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(OTHER, ten).orElseThrow().firstReplayStartedAt());
+    assertNull(entryOf(b, TYPE, 10L).firstReplayStartedAt());
+
+    assertTrue(store.discard(A, TYPE, ten));
+    assertEquals(1, store.findBySaga(b).size());
+    assertEquals(11L, store.findBySaga(A).getFirst().eventOffset().value());
+    assertEquals(1, store.findBySaga(A).size());
+    assertTrue(store.findNullSagaEntry(TYPE, ten).isPresent());
+
+    assertTrue(store.discard(null, TYPE, ten));
+    assertTrue(store.findNullSagaEntry(TYPE, ten).isEmpty());
+    assertTrue(store.findNullSagaEntry(TYPE, eleven).isPresent());
+    assertTrue(store.findNullSagaEntry(OTHER, ten).isPresent());
+    assertEquals(1, store.findBySaga(b).size());
+  }
+
+  /**
    * Retention judges each of two types' entries at one saga id and offset by its own type's row:
    * this type's entry under a healthy unshielded row is pruned, the other type's entry, whose type
    * has no row, is the row-less residual and stays.

@@ -1100,6 +1100,7 @@ public abstract class org.streamrune.test.SagaDeadLetterStoreContract
   public void deleteOlderThan_prunesEntriesOfAHealthyUnshieldedOwner_andUnroutableNullEntries()
   public void deleteOlderThan_twoTypesAtTheSameSagaAndOffset_judgesEachByItsOwnRow()
   public void discardAnchorAndClear_atASagaAndOffsetBothTypesHold_reachOnlyTheirOwnType()
+  public void discardAndAnchor_reachOnlyTheEntryAtTheirKey_namedAndNullSaga()
   public void discard_rejectsANullSagaType()
   public void discard_typed_removesOnlyTheMatchingType()
   public void entry_convenienceConstructors_defaultFirstFaultedAtToFaultedAt()
