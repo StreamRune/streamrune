@@ -344,6 +344,172 @@ class SqliteTransactionsTest {
     }
   }
 
+  /**
+   * The statements the helper issues, recorded: a rollback is never followed by a statement of the
+   * helper's (a re-BEGIN after the ROLLBACK would take the write lock again and could hold it).
+   */
+  @Test
+  void aRollbackIsNeverFollowedByAStatementOfTheHelper() throws Exception {
+    Path file = dir.resolve("recorded.db");
+    HikariDataSource pool = pool(file, "");
+    open(pool);
+    execute(pool, "CREATE TABLE scratch (x INTEGER NOT NULL) STRICT");
+
+    try (Connection real = pool.getConnection()) {
+      List<String> statements = new ArrayList<>();
+      Connection conn = recording(real, statements);
+
+      assertThatThrownBy(
+              () ->
+                  SqliteTransactions.inTransaction(
+                      conn,
+                      "test",
+                      c -> {
+                        execute(c, "INSERT INTO scratch VALUES (1)");
+                        throw new SQLException("work failed");
+                      }))
+          .hasMessage("work failed");
+
+      assertThat(statements)
+          .containsExactly("BEGIN IMMEDIATE", "INSERT INTO scratch VALUES (1)", "ROLLBACK");
+      assertThat(count(real, "SELECT count(*) FROM scratch")).isZero();
+      assertWriteLockFree(file);
+
+      statements.clear();
+      assertThatThrownBy(
+              () ->
+                  SqliteTransactions.inTransaction(
+                      conn, "test", c -> execute(c, "INSERT INTO scratch VALUES (NULL)")))
+          .isInstanceOf(SQLiteException.class);
+      assertThat(statements)
+          .containsExactly("BEGIN IMMEDIATE", "INSERT INTO scratch VALUES (NULL)", "ROLLBACK");
+
+      statements.clear();
+      assertThat(SqliteTransactions.rollback(conn, "test"))
+          .as("nothing open: SQLite reports no transaction, which counts as rolled back")
+          .isTrue();
+      assertThat(statements).containsExactly("ROLLBACK");
+    }
+  }
+
+  /**
+   * A failed BEGIN (the application's own transaction is open on the connection) is outside the
+   * helper's try: no ROLLBACK follows it, so the application's transaction is neither rolled back
+   * nor otherwise touched, and the work does not run.
+   */
+  @Test
+  void aFailedBeginIsNotFollowedByARollbackOrACommit() throws Exception {
+    Path file = dir.resolve("failed-begin.db");
+    HikariDataSource pool = pool(file, "");
+    open(pool);
+    execute(pool, "CREATE TABLE scratch (x INTEGER) STRICT");
+
+    try (Connection real = pool.getConnection()) {
+      List<String> statements = new ArrayList<>();
+      Connection conn = recording(real, statements);
+      execute(real, "BEGIN");
+      execute(real, "INSERT INTO scratch VALUES (1)");
+      boolean[] ran = {false};
+
+      assertThatThrownBy(
+              () ->
+                  SqliteTransactions.inTransaction(
+                      conn,
+                      "test",
+                      c -> {
+                        ran[0] = true;
+                        return null;
+                      }))
+          .isInstanceOf(SQLException.class)
+          .hasMessageContaining("within a transaction");
+
+      assertThat(statements).containsExactly("BEGIN IMMEDIATE");
+      assertThat(ran[0]).isFalse();
+      assertThat(count(real, "SELECT count(*) FROM scratch"))
+          .as("the application's transaction still holds its row")
+          .isEqualTo(1);
+      execute(real, "ROLLBACK");
+    }
+  }
+
+  /**
+   * Only SQLite's own SQLITE_ERROR "no transaction is active" counts as rolled back: the same words
+   * in any other exception are a failed rollback, and the connection is closed.
+   */
+  @Test
+  void onlyASqliteErrorSayingNoTransactionIsActiveCountsAsRolledBack() throws Exception {
+    Path file = dir.resolve("no-tx.db");
+    HikariDataSource pool = pool(file, "");
+    open(pool);
+
+    Connection first = pool.getConnection();
+    SQLiteConnection physicalFirst = first.unwrap(SQLiteConnection.class);
+    assertThat(
+            SqliteTransactions.rollback(
+                failingRollback(
+                    first, new SQLException("cannot rollback - no transaction is active")),
+                "test"))
+        .as("a plain SQLException is not SQLite's answer")
+        .isFalse();
+    assertThat(physicalFirst.isClosed()).isTrue();
+    try {
+      first.close();
+    } catch (SQLException expected) {
+      // the physical connection is closed
+    }
+
+    Thread.sleep(700); // past the pool's alive-bypass window: it replaces the closed connection
+    Connection second = pool.getConnection();
+    SQLiteConnection physicalSecond = second.unwrap(SQLiteConnection.class);
+    assertThat(
+            SqliteTransactions.rollback(
+                failingRollback(
+                    second,
+                    new SQLiteException(
+                        "[SQLITE_IOERR] cannot rollback - no transaction is active",
+                        SQLiteErrorCode.SQLITE_IOERR)),
+                "test"))
+        .as("another result code is not SQLITE_ERROR")
+        .isFalse();
+    assertThat(physicalSecond.isClosed()).isTrue();
+    try {
+      second.close();
+    } catch (SQLException expected) {
+      // the physical connection is closed
+    }
+  }
+
+  /** {@code conn} whose statements' SQL is appended to {@code statements}, as executed. */
+  private static Connection recording(Connection conn, List<String> statements) {
+    return (Connection)
+        Proxy.newProxyInstance(
+            Connection.class.getClassLoader(),
+            new Class<?>[] {Connection.class},
+            (proxy, method, args) -> {
+              try {
+                Object result = method.invoke(conn, args);
+                if (method.getName().equals("createStatement") && result instanceof Statement st) {
+                  return Proxy.newProxyInstance(
+                      Statement.class.getClassLoader(),
+                      new Class<?>[] {Statement.class},
+                      (p, m, a) -> {
+                        if (m.getName().equals("execute") && a != null && a[0] instanceof String) {
+                          statements.add((String) a[0]);
+                        }
+                        try {
+                          return m.invoke(st, a);
+                        } catch (InvocationTargetException e) {
+                          throw e.getCause();
+                        }
+                      });
+                }
+                return result;
+              } catch (InvocationTargetException e) {
+                throw e.getCause();
+              }
+            });
+  }
+
   @Test
   void aConnectionInManualCommitModeIsRefusedWithBothCauses() throws Exception {
     Path file = dir.resolve("manual.db");
@@ -362,13 +528,18 @@ class SqliteTransactionsTest {
 
   /** {@code conn}, whose next ROLLBACK statement fails as an I/O error would. */
   private static Connection failingRollback(Connection conn) {
+    return failingRollback(conn, new SQLException("[SQLITE_IOERR] disk I/O error (injected)"));
+  }
+
+  /** {@code conn}, whose next statement creation fails with {@code failure}. */
+  private static Connection failingRollback(Connection conn, SQLException failure) {
     return (Connection)
         Proxy.newProxyInstance(
             Connection.class.getClassLoader(),
             new Class<?>[] {Connection.class},
             (proxy, method, args) -> {
               if (method.getName().equals("createStatement")) {
-                throw new SQLException("[SQLITE_IOERR] disk I/O error (injected)");
+                throw failure;
               }
               try {
                 return method.invoke(conn, args);

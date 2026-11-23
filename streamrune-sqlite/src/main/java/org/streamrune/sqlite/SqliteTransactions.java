@@ -6,6 +6,8 @@ import java.sql.Statement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.sqlite.SQLiteConnection;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 
 /**
  * How the SQLite stores run a write transaction on a borrowed connection: with SQL statements, on a
@@ -35,8 +37,12 @@ import org.sqlite.SQLiteConnection;
  * SQLITE_FULL}, for one), the statement reports that no transaction is active, and the transaction
  * is taken as rolled back. When the statement fails for any other reason, the physical connection
  * is closed: SQLite rolls back the open transaction and releases the lock as it does for a
- * connection that closes, or a process that dies, inside one, and the pool replaces the connection
- * when the caller returns its wrapper.
+ * connection that closes, or a process that dies, inside one. A connection pool does not learn of
+ * the close when the caller returns its wrapper: HikariCP, for one, keeps handing the closed
+ * connection out until its alive-bypass window (500 ms since the connection was last used), its
+ * keepalive check or {@code maxLifetime} makes it validate the connection and replace it. Until
+ * then every call on that connection fails cleanly with an exception, and the connection holds no
+ * lock.
  *
  * <p><b>Autocommit connections only.</b> A connection that arrives in manual-commit mode is refused
  * with {@link IllegalStateException}: such a connection holds the write lock while it is not in
@@ -139,8 +145,7 @@ final class SqliteTransactions {
       execute(conn, "ROLLBACK");
       rolledBack = true;
     } catch (SQLException rollbackFailure) {
-      String message = rollbackFailure.getMessage();
-      if (message != null && message.contains(NO_TRANSACTION_ACTIVE)) {
+      if (isNoTransactionActive(rollbackFailure)) {
         // SQLite rolled the transaction back by itself (SQLITE_FULL, SQLITE_IOERR, ...).
         rolledBack = true;
       } else {
@@ -156,6 +161,15 @@ final class SqliteTransactions {
     return rolledBack;
   }
 
+  /** Whether {@code e} is SQLite's SQLITE_ERROR "cannot rollback - no transaction is active". */
+  private static boolean isNoTransactionActive(SQLException e) {
+    String message = e.getMessage();
+    return e instanceof SQLiteException sqlite
+        && sqlite.getResultCode() == SQLiteErrorCode.SQLITE_ERROR
+        && message != null
+        && message.contains(NO_TRANSACTION_ACTIVE);
+  }
+
   private static void logRollbackFailure(String transaction, Exception rollbackFailure) {
     log.warn(
         "Rollback of an uncommitted {} transaction failed; closing the SQLite connection so that"
@@ -166,8 +180,11 @@ final class SqliteTransactions {
 
   /**
    * Closes the physical SQLite connection under {@code conn}: SQLite rolls back its open
-   * transaction and releases the write lock, and the pool replaces the connection when the caller
-   * returns its wrapper. Never throws a {@code SQLException} or {@code RuntimeException}.
+   * transaction and releases the write lock. The pool does not learn of it when the caller returns
+   * its wrapper: HikariCP keeps handing the closed connection out until its alive-bypass window
+   * (500 ms idle), its keepalive check or {@code maxLifetime} replaces it, and every call on it
+   * fails cleanly meanwhile; it holds no lock. Never throws a {@code SQLException} or {@code
+   * RuntimeException}.
    */
   static void closePhysicalQuietly(Connection conn) {
     try {
