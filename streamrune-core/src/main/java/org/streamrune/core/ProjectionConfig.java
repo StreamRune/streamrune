@@ -72,6 +72,11 @@ public @interface ProjectionConfig {
    * transactional store for a transactional mode, otherwise the event store's subscription
    * checkpoint for an at-least-once one.
    *
+   * <p>{@link org.streamrune.core.projection.ReadModelStore#DEFAULT} ({@code "default"}) is the
+   * alias of the default store, the selected backend's: it routes the projection there whatever the
+   * backend names that store ({@code "postgres"} on PostgreSQL). No store may carry the alias as
+   * its name.
+   *
    * <p>A name no store carries is a startup error, and so is a declaration that disagrees with the
    * projection's own {@code writeTarget()}. Declare it when routing cannot decide alone — several
    * transactional stores. A {@code writeTarget()} that no store owns is refused even with a

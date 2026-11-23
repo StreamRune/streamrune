@@ -12,11 +12,43 @@ Do **not** use the outbox if you can tolerate eventual delivery failures without
 
 ## How it works
 
-Outbox entries are written in the **same database transaction as the event append**. You supply an `OutboxEventMapper` (`org.streamrune.core.outbox`, `List<OutboxEntry> toOutbox(EventEnvelope event)`) together with a `PostgresOutboxStore`; `PostgresEventStore` calls the mapper for every event it appends and saves the returned entries on the append's own connection, so a command's events and its outbox entries commit — or roll back — together. An empty list publishes nothing for that event. The mapper runs on the append path, before the append's transaction opens, and its entries are saved inside that transaction: it must be fast, side-effect-free and total — a thrown exception fails the append (no event and no entry are persisted) — and it is where you select integration events, choose the wire format and keep personal data out of the payload.
+Outbox entries are written in the **same database transaction as the event append**. You supply an `OutboxEventMapper` (`org.streamrune.core.outbox`, `List<OutboxEntry> toOutbox(EventEnvelope event)`) together with the backend's outbox store (`BackendStores.outboxStore(OutboxOptions)`, a `PostgresOutboxStore` on PostgreSQL); the event store calls the mapper for every event it appends and saves the returned entries on the append's own connection, so a command's events and its outbox entries commit — or roll back — together. An empty list publishes nothing for that event. The mapper runs on the append path, before the append's transaction opens, and its entries are saved inside that transaction: it must be fast, side-effect-free and total — a thrown exception fails the append (no event and no entry are persisted) — and it is where you select integration events, choose the wire format and keep personal data out of the payload.
 
-With Spring, Quarkus or Micronaut, define **both** an `OutboxEventMapper` bean and a `PostgresOutboxStore` bean; with only one of the two, transactional emission is disabled and the integration logs a WARN saying which is missing. Spring and Quarkus look the store up by its `PostgresOutboxStore` type, so declare the bean method with that return type there. Micronaut looks it up by the `OutboxStore` interface, so either return type works, and startup fails when the mapper is paired with an `OutboxStore` that is not a `PostgresOutboxStore` — only a `PostgresOutboxStore` can write the entries inside the append transaction; for any other store, supply your own `EventStoreFactory`. Without an integration, set both on the factory: `new PostgresEventStoreFactory(dataSource, typeRegistry).outboxStore(outboxStore).outboxEventMapper(mapper)`. Only one of the two is refused when the store is built. To write only the entries an application passes to `PostgresEventStore.append(streamId, events, expectedVersion, outboxEntries)`, set a mapper that returns no entries (`event -> List.of()`). A direct `OutboxStore.save(OutboxEntry)` call uses its own connection — it is **not** part of any event append's transaction.
+### With an integration
 
-With `streamrune.outbox.enabled=true`, startup fails on all three integrations when no `OutboxStore` bean exists, or when neither an `OutboxPublisher` bean nor an application `OutboxPoller` bean exists: the framework's poller needs a publisher, and without one the entries the event store writes would stay `PENDING` while health reads `UP`. `streamrune-kafka-outbox` and `streamrune-rabbitmq-outbox` provide publishers only; the store is the `PostgresOutboxStore` of `streamrune-postgres`. `streamrune.outbox.enabled` switches the framework's relay — the poller, the retention sweeper and the failed-entry replayer — not the write: the event store writes the entries whenever an `OutboxEventMapper` and a `PostgresOutboxStore` are declared. An application whose entries an external relay reads (change data capture on `outbox_events`) therefore sets `streamrune.outbox.enabled=false`.
+With Spring, Quarkus or Micronaut, declare **both** an `OutboxEventMapper` bean and an `OutboxStore` bean built from the integration's `BackendStores` bean (`org.streamrune.core.backend`); with only one of the two, transactional emission is disabled and the integration logs a WARN saying which is missing.
+
+```java
+// Spring: a @Bean method
+@Bean
+OutboxStore outboxStore(BackendStores stores) {
+    return stores.outboxStore(
+        new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+}
+
+// Quarkus: a producer method
+@Produces
+@Singleton
+OutboxStore outboxStore(BackendStores stores) {
+    return stores.outboxStore(
+        new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+}
+
+// Micronaut: a method of a @Factory class
+@Singleton
+OutboxStore outboxStore(BackendStores stores) {
+    return stores.outboxStore(
+        new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+}
+```
+
+The bundle builds one store per `OutboxOptions` value and hands every caller that instance. The event store writes the entries inside its append transaction, which only a store of its own backend can do: on all three integrations, an `OutboxStore` of another type paired with a mapper fails the start with `outbox store of backend '…' cannot share the 'postgres' event store's transaction; build it from this backend's BackendStores`. For such a store, supply your own `EventStoreFactory`. On Spring and Quarkus the [retention sweeper](#retention) is registered only for a bean declared with the type `PostgresOutboxStore`: a bean declared as `OutboxStore`, as above, gets none, so declare the method as `PostgresOutboxStore` (casting what `stores.outboxStore` returns) or run an `OutboxRetentionSweeper` of your own.
+
+Without an integration, give both to the event store factory of the backend's stores, as the [full example](#full-example) does: `stores.eventStoreFactory(new EventStoreOptions(typeRegistry, List.of(), List.of(), outboxStore, mapper, null, null, null))`. To write only the entries an application passes to `PostgresEventStore.append(streamId, events, expectedVersion, outboxEntries)`, set a mapper that returns no entries (`event -> List.of()`). A direct `OutboxStore.save(OutboxEntry)` call uses its own connection — it is **not** part of any event append's transaction.
+
+With `streamrune.outbox.enabled=true`, startup fails on all three integrations when no `OutboxStore` bean exists, or when neither an `OutboxPublisher` bean nor an application `OutboxPoller` bean exists: the framework's poller needs a publisher, and without one the entries the event store writes would stay `PENDING` while health reads `UP`. `streamrune-kafka-outbox` and `streamrune-rabbitmq-outbox` provide publishers only; the store is the backend's (`BackendStores.outboxStore`, a `PostgresOutboxStore` of `streamrune-postgres`). `streamrune.outbox.enabled` switches the framework's relay — the poller, the retention sweeper and the failed-entry replayer — not the write: the event store writes the entries whenever an `OutboxEventMapper` and an `OutboxStore` are declared. An application whose entries an external relay reads (change data capture on `outbox_events`) therefore sets `streamrune.outbox.enabled=false`.
+
+### The relay
 
 `OutboxPoller` runs on a virtual thread and periodically calls `OutboxStore.loadPending(batchSize)`, which atomically claims a batch of due `PENDING` entries (`FOR UPDATE SKIP LOCKED`, a competing-consumer lease that moves each claimed row to `IN_PROGRESS`) in oldest-first order. Entries whose `next_retry_at` is in the future are skipped.
 
@@ -72,11 +104,11 @@ sequenceDiagram
 
 ## Ordering modes
 
-Per-aggregate ordering is a **typed, per-channel choice**: `OutboxOrderingMode` (`org.streamrune.core.outbox`) is a constructor argument of the store, and the relay logs it at start (`Outbox relay started: orderingMode=…`). A *channel* is one `OutboxStore` instance polled by one `OutboxPoller` (any number of replicas) into one `OutboxPublisher`; every shipped integration wires exactly one channel per application, and there is no configuration property for the mode — the store is where the choice lives, so it cannot disagree with itself.
+Per-aggregate ordering is a **typed, per-channel choice**: `OutboxOrderingMode` (`org.streamrune.core.outbox`) is one of the `OutboxOptions` the store is built with, and the relay logs it at start (`Outbox relay started: orderingMode=…`). A *channel* is one `OutboxStore` instance polled by one `OutboxPoller` (any number of replicas) into one `OutboxPublisher`; every shipped integration wires exactly one channel per application, and there is no configuration property for the mode — the store is where the choice lives, so it cannot disagree with itself.
 
 ```java
-// Strict is the default; the three-argument form makes the choice visible where the channel is built.
-new PostgresOutboxStore(dataSource, Duration.ofMinutes(2), OutboxOrderingMode.STRICT_PER_AGGREGATE);
+// The options name the choice where the channel is built; stores is the application's BackendStores.
+stores.outboxStore(new OutboxOptions(Duration.ofMinutes(2), OutboxOrderingMode.STRICT_PER_AGGREGATE));
 ```
 
 | mode | a terminal `FAILED` head… | `streamId` | choose it for |
@@ -113,14 +145,21 @@ The ordering key is the `StreamId` whose delivery order the consumer depends on 
 ## Full example
 
 ```java
-// 1. Emit outbox entries in the append transaction (mapper from the quick example)
-PostgresOutboxStore outboxStore = new PostgresOutboxStore(dataSource); // STRICT_PER_AGGREGATE
-EventStore eventStore = new PostgresEventStoreFactory(dataSource, typeRegistry)
-    .outboxStore(outboxStore)
-    .outboxEventMapper(orderEventsMapper)
+// 1. Open the backend's stores once (an integration does this for you and exposes the bean).
+//    Close the bundle at shutdown; the DataSource stays yours.
+BackendStores stores = new PostgresBackend().open(new BackendContext(
+    dataSource, null, Clock.systemUTC(), StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP,
+    true, true, true)); // migrate the event-store and read-model schemas, validate them
+
+// 2. Emit outbox entries in the append transaction (mapper from the quick example)
+OutboxStore outboxStore = stores.outboxStore(
+    new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+EventStore eventStore = stores
+    .eventStoreFactory(new EventStoreOptions(
+        typeRegistry, List.of(), List.of(), outboxStore, orderEventsMapper, null, null, null))
     .create();
 
-// 2. Wire the poller with HttpOutboxPublisher
+// 3. Wire the poller with HttpOutboxPublisher
 OutboxPublisher publisher = HttpOutboxPublisher.of(
     URI.create("https://notifications.example.com/webhooks/orders"));
 
@@ -270,7 +309,7 @@ Because an in-flight failure **holds the claim**, a sustained post-hand-off outa
 
 ### Sizing the claim lease
 
-`loadPending` **claims** each batch under a lease (`PostgresOutboxStore`'s second constructor argument, default **4 minutes**; `new PostgresOutboxStore(dataSource, Duration.ofMinutes(5))`). A relay that crashes mid-delivery leaves its rows `IN_PROGRESS`; once the lease expires another relay reclaims them (`RECLAIM_EXPIRED`) — this is what makes delivery crash-safe. The lease is therefore also your **crash-reclaim latency**: a dead relay's claimed batch waits up to one full lease before another relay takes it over. Shortening it is safe only after you shorten the publisher's in-flight horizon (below).
+`loadPending` **claims** each batch under a lease (`OutboxOptions.claimLease()`, default `OutboxOptions.DEFAULT_CLAIM_LEASE`, **4 minutes**; `stores.outboxStore(new OutboxOptions(Duration.ofMinutes(5), OutboxOrderingMode.STRICT_PER_AGGREGATE))`). A relay that crashes mid-delivery leaves its rows `IN_PROGRESS`; once the lease expires another relay reclaims them (`RECLAIM_EXPIRED`) — this is what makes delivery crash-safe. The lease is therefore also your **crash-reclaim latency**: a dead relay's claimed batch waits up to one full lease before another relay takes it over. Shortening it is safe only after you shorten the publisher's in-flight horizon (below).
 
 The lease is also the ceiling on how long a **live** relay may keep publishing one batch. The `OutboxPoller` bounds each publish cycle to a deadline of **`min(80% of the lease, lease − the wired publisher's in-flight horizon)`**: once the deadline passes it stops publishing, rather than delivering the rest past the point where a second relay would reclaim and re-deliver them. Delivering past the lease would produce a **duplicate _and_ an out-of-order same-aggregate delivery** — the one thing the strict per-aggregate ordering contract forbids. The horizon term guarantees any entry allowed to *start* publishing still has enough of the lease left for its worst-case in-flight duration to resolve before a reclaim could fire — without it, a batch-tail entry could legally start late enough under the flat 80% cap alone that its in-flight completion still lands past lease expiry. When a cycle hits the deadline the poller logs a loud `WARN` naming the actual computed budget (not a fixed 80%) and how many entries it released.
 
@@ -360,7 +399,7 @@ A `FAILED` entry is **unresolved**, not a dead end: the relay never writes to it
 
 ### Retention
 
-Delivered and skipped outbox entries are pruned by a background `OutboxRetentionSweeper`, auto-configured across Spring, Quarkus, and Micronaut whenever the outbox is enabled (`streamrune.outbox.enabled=true`) and the outbox store bean is present (a `PostgresOutboxStore` bean on Spring and Quarkus, any `OutboxStore` bean on Micronaut). It runs hourly and calls `OutboxStore.deleteDelivered(cutoff)` and, independently, `OutboxStore.deleteSkipped(cutoff)` (see [FAILED lifecycle](#failed-lifecycle) above) — the constructor takes both windows: `new OutboxRetentionSweeper(store, deliveredMaxAge, skippedMaxAge, interval, clock, metrics)`; pass `Duration.ZERO` as `skippedMaxAge` to disable SKIPPED retention. There is no FAILED retention and no way to configure one: the framework never deletes an unresolved FAILED row. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
+Delivered and skipped outbox entries are pruned by a background `OutboxRetentionSweeper`, auto-configured across Spring, Quarkus, and Micronaut whenever the outbox is enabled (`streamrune.outbox.enabled=true`) and the outbox store bean is present (on Spring and Quarkus a bean declared with the type `PostgresOutboxStore`, on Micronaut any `OutboxStore` bean; see [With an integration](#with-an-integration)). It runs hourly and calls `OutboxStore.deleteDelivered(cutoff)` and, independently, `OutboxStore.deleteSkipped(cutoff)` (see [FAILED lifecycle](#failed-lifecycle) above) — the constructor takes both windows: `new OutboxRetentionSweeper(store, deliveredMaxAge, skippedMaxAge, interval, clock, metrics)`; pass `Duration.ZERO` as `skippedMaxAge` to disable SKIPPED retention. There is no FAILED retention and no way to configure one: the framework never deletes an unresolved FAILED row. Defaults are written as the [configuration reference](../configuration.md#how-defaults-are-written) describes.
 
 | Framework | Property | Default |
 |---|---|---|

@@ -44,13 +44,16 @@ import org.streamrune.core.types.SubjectId;
  * </ul>
  *
  * <p>The interface holds no state; the memoization is each implementation's. The bundle has no
- * aggregate locker and no crypto ports.
+ * aggregate locker and no crypto ports. Memoization covers the factory, not what it creates: every
+ * {@link EventStoreFactory#create()} of the factory builds a new event store and migrates and
+ * validates the schema again, as the context says.
  *
  * <p>The bundle owns what it memoized: {@link #close()} closes every {@link AutoCloseable} it built
  * and memoized, the {@link SubscriptionLeadership} included, and releases what the bundle itself
  * holds, for example a backend's guard on its database file. A consumer never closes a memoized
  * instance itself, since every later call of the accessor would hand back the closed one. It does
- * not close the {@code DataSource}, which belongs to the application.
+ * not close the {@code DataSource}, which belongs to the application. A leadership requested after
+ * {@code close()} is returned already closed.
  */
 public interface BackendStores extends AutoCloseable {
 
