@@ -151,23 +151,17 @@ public final class SqliteOffsetStore implements OffsetStore {
   }
 
   private void write(ProjectionName projectionName, String what, String sql, Binder binder) {
-    String failure = "Failed to " + what + " offset for projection: " + shown(projectionName);
-    try (Connection conn = dataSource.getConnection()) {
-      SqliteTransactions.inTransaction(
-          conn,
-          "projection offset " + what,
-          c -> {
-            try (PreparedStatement ps = c.prepareStatement(sql)) {
-              binder.bind(ps);
-              return ps.executeUpdate();
-            }
-          });
-    } catch (SQLException e) {
-      EventStoreException lockFailure =
-          SqliteEventStore.lockFailure(
-              e, "offset " + what + " of projection " + shown(projectionName));
-      throw lockFailure != null ? lockFailure : new EventStoreException(failure, e);
-    }
+    SqliteTransactions.write(
+        dataSource,
+        "projection offset " + what,
+        "offset " + what + " of projection " + shown(projectionName),
+        "Failed to " + what + " offset for projection: " + shown(projectionName),
+        c -> {
+          try (PreparedStatement ps = c.prepareStatement(sql)) {
+            binder.bind(ps);
+            return ps.executeUpdate();
+          }
+        });
   }
 
   /** A projection name rendered for an exception message: caller text, so sanitized. */

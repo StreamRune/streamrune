@@ -226,16 +226,14 @@ class SqliteSagaStoreTest {
         long waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
         assertThat(waited).as(write.getKey() + " waited").isLessThan(BUSY_MILLIS + SLACK_MILLIS);
       }
-      // Reads run in autocommit and, under WAL, never wait for the writer.
-      long started = System.nanoTime();
+      // Reads run in autocommit and, under WAL, never take the write lock the holder keeps: one
+      // that did would fail with SQLITE_BUSY here, not merely be slow.
       assertThat(store.load(ID, TYPE, StepState.class)).isPresent();
       assertThat(store.loadRowFacts(ID, TYPE)).isPresent();
       assertThat(store.findTimedOut(TYPE, Instant.now().plusSeconds(60), 10)).containsExactly(ID);
       assertThat(store.findByStatus(TYPE, SagaStatus.RUNNING, 10)).containsExactly(ID);
       assertThat(store.countByStatus(TYPE, SagaStatus.RUNNING)).isEqualTo(1);
       assertThat(store.findCompensating(TYPE, Instant.now().plusSeconds(60), 10)).isEmpty();
-      assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
-          .isLessThan(BUSY_MILLIS);
       st.execute("ROLLBACK");
     }
 
@@ -284,11 +282,11 @@ class SqliteSagaStoreTest {
 
   /**
    * A connection handed out in manual-commit mode would hold the write lock while idle and its
-   * transaction is not the store's to commit: the write is refused as a storage failure whose cause
-   * names the mode, and writes nothing.
+   * transaction is not the store's to commit: the write is refused with the configuration error
+   * every SQLite store raises for it, and writes nothing.
    */
   @Test
-  void aConnectionInManualCommitModeIsRefusedAsAStorageFailure() {
+  void aConnectionInManualCommitModeIsRefusedBeforeAnythingIsWritten() {
     SqliteDatabase database = migrated("manual.db", "");
     var source = new SwitchableDataSource(TestDatabases.dataSource(database.file()));
     SqliteSagaStore store = new SqliteSagaStore(open(source), mapper());
@@ -296,13 +294,11 @@ class SqliteSagaStoreTest {
     source.manualCommit();
 
     assertThatThrownBy(() -> store.update(ID, TYPE, RUNNING, SagaStatus.RUNNING, 1L))
-        .isExactlyInstanceOf(EventStoreException.class)
-        .hasCauseInstanceOf(IllegalStateException.class)
-        .cause()
-        .hasMessageContaining("autoCommit=false");
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessage(SqliteTransactions.MANUAL_COMMIT_CONNECTION);
     assertThatThrownBy(() -> store.delete(ID, TYPE))
-        .isExactlyInstanceOf(EventStoreException.class)
-        .hasCauseInstanceOf(IllegalStateException.class);
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("autoCommit=false");
 
     var row = new SqliteSagaStore(database, mapper()).load(ID, TYPE, StepState.class);
     assertThat(row.orElseThrow().version()).isEqualTo(1L);

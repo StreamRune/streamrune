@@ -84,8 +84,10 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * writes) and then fails with an {@link EventStoreException} naming {@code busy_timeout}, having
  * written nothing; the caller retries, as it does after a Postgres write past its bound. Reads run
  * in autocommit and, under WAL, never wait for a writer. SQLite has no statement timeout; a write
- * holds the lock only for its own statements, which this store runs back to back with no caller
- * code in between.
+ * holds the lock only for its own statements, which this store runs back to back. The one call out
+ * of the store made while the lock is held is the injected {@link Clock}, read once per write for
+ * its timestamps: it must return at once and never block, or every writer of the database waits for
+ * it.
  *
  * <p><b>Durable when it returns.</b> A write returns after its {@code COMMIT}. The explicit
  * transaction also guards a single-statement write: on a connection where the application left a
@@ -102,8 +104,10 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * behind this store's own write lock or pool. A conversion failure is a {@link
  * SagaStateSerializationException} (deliberately not an {@link EventStoreException}, so a
  * deterministic failure is not retried forever as infrastructure); a storage failure — a lost
- * connection, the write lock not granted in time, a constraint, a connection handed out in
- * manual-commit mode (an {@link IllegalStateException} cause) — is an {@link EventStoreException}.
+ * connection, the write lock not granted in time, a constraint — is an {@link EventStoreException}.
+ * A connection handed out in manual-commit mode is refused with an {@link IllegalStateException},
+ * before anything is written, as every SQLite store refuses it: a configuration error of the pool
+ * or of an application transaction, which no retry can fix (see {@code SqliteTransactions#write}).
  *
  * <p><b>No untyped mode, no {@code null} argument.</b> Every operation rejects a {@code null} saga
  * type, saga id, state, status, applied event, state class or query bound with {@link
@@ -347,6 +351,8 @@ public final class SqliteSagaStore implements SagaStore {
    * @throws SagaTypeCollisionException if a saga of another type owns {@code sagaId}
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void create(
@@ -363,6 +369,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void createGenesisPending(
@@ -382,6 +390,8 @@ public final class SqliteSagaStore implements SagaStore {
    * @throws SagaTypeCollisionException if a saga of another type owns {@code sagaId}
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState) {
@@ -474,6 +484,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void update(
@@ -490,6 +502,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void claimCompensating(
@@ -551,6 +565,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void applyEvent(
@@ -607,6 +623,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public boolean markFaulted(SagaId sagaId, SagaType sagaType, long expectedVersion) {
@@ -647,6 +665,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void setDeadLetterPending(SagaId sagaId, SagaType sagaType, boolean pending) {
@@ -670,6 +690,8 @@ public final class SqliteSagaStore implements SagaStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
@@ -916,27 +938,15 @@ public final class SqliteSagaStore implements SagaStore {
     }
   }
 
-  /**
-   * Runs {@code work} as one write transaction ({@code BEGIN IMMEDIATE} … {@code COMMIT}) on a
-   * borrowed connection and returns its result. Every failure, the work's own and a refused
-   * connection's alike, rolls the transaction back and becomes an {@link EventStoreException}: one
-   * that names {@code busy_timeout} when the write lock was not granted in time. The work throws no
-   * outcome of its own (a stale view, a conflict); it returns it, and the caller throws it after
-   * the transaction has ended.
-   */
+  /** Runs {@code work} as one write transaction, through {@link SqliteTransactions#write}. */
   private <T> T write(
       SagaId sagaId, String transaction, String failureMessage, SqliteTransactions.Work<T> work) {
-    try (Connection conn = dataSource.getConnection()) {
-      return SqliteTransactions.inTransaction(conn, transaction, work);
-    } catch (SQLException e) {
-      EventStoreException lockFailure =
-          SqliteEventStore.lockFailure(e, transaction + " of saga " + forLog(sagaId));
-      throw lockFailure != null
-          ? lockFailure
-          : new EventStoreException(failureMessage + forLog(sagaId), e);
-    } catch (RuntimeException e) {
-      throw new EventStoreException(failureMessage + forLog(sagaId), e);
-    }
+    return SqliteTransactions.write(
+        dataSource,
+        transaction,
+        transaction + " of saga " + forLog(sagaId),
+        failureMessage + forLog(sagaId),
+        work);
   }
 
   /** The write's instant, read once the write lock is granted. */

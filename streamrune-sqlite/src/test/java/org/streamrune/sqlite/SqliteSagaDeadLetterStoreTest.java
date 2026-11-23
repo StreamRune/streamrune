@@ -156,9 +156,12 @@ class SqliteSagaDeadLetterStoreTest {
     assertThat(sagas.loadRowFacts(A, TYPE).orElseThrow().deadLetterPending()).isTrue();
   }
 
-  /** A hold killed inside its shield write leaves nothing; its rerun writes the entry once. */
+  /**
+   * A hold killed inside its shield write leaves nothing; killed right after its COMMIT it left the
+   * entry and the shield, and its rerun keeps that entry: the event is held once either way.
+   */
   @Test
-  void aHoldKilledInsideItsShieldWriteLeavesNothing_andItsRerunWritesItOnce() {
+  void aHoldKilledInsideItsShieldWriteLeavesNothing_afterItsCommitBoth_andItsRerunHoldsItOnce() {
     Path file = dir.resolve("crash-hold.db");
     SqliteDatabase plain = migrated("crash-hold.db", "");
     SqliteCrashPoints crash = new SqliteCrashPoints(Kill.CLOSE_CONNECTION);
@@ -173,9 +176,16 @@ class SqliteSagaDeadLetterStoreTest {
     assertThat(store.findBySaga(A)).isEmpty();
     assertThat(sagas.loadRowFacts(A, TYPE).orElseThrow().deadLetterPending()).isFalse();
 
-    assertThat(store.publishShieldedIfAbsent(held(A, 9, T0)))
-        .isInstanceOf(HoldResult.Written.class);
+    crash.arm(Point.AFTER_COMMIT);
+    assertThatThrownBy(() -> store.publishShieldedIfAbsent(held(A, 9, T0)))
+        .isExactlyInstanceOf(EventStoreException.class);
+    assertThat(store.findBySaga(A)).as("killed after its COMMIT: the entry is durable").hasSize(1);
+    assertThat(sagas.loadRowFacts(A, TYPE).orElseThrow().deadLetterPending())
+        .as("and so is its shield")
+        .isTrue();
+
     assertThat(store.publishShieldedIfAbsent(held(A, 9, T0.plusSeconds(5))))
+        .as("the rerun keeps the entry the committed hold wrote")
         .isInstanceOf(HoldResult.Kept.class);
     assertThat(store.findBySaga(A))
         .singleElement()
@@ -299,14 +309,12 @@ class SqliteSagaDeadLetterStoreTest {
             .as(write.getKey() + " waited")
             .isLessThan(BUSY_MILLIS + SLACK_MILLIS);
       }
-      long started = System.nanoTime();
+      // Reads never take the write lock the holder keeps: one that did would fail as SQLITE_BUSY.
       assertThat(store.findAll(10)).hasSize(1);
       assertThat(store.findBySaga(A)).isEmpty();
       assertThat(store.findNullSagaEntry(TYPE, GlobalOffset.of(3))).isPresent();
       assertThat(store.findNullSagaEntriesByResolvedTarget(TYPE, A)).isEmpty();
       assertThat(store.countFaultedBacklog()).isZero();
-      assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
-          .isLessThan(BUSY_MILLIS);
       st.execute("ROLLBACK");
     }
 
@@ -345,12 +353,13 @@ class SqliteSagaDeadLetterStoreTest {
     SqliteSagaDeadLetterStore store = new SqliteSagaDeadLetterStore(database);
     int prunable = 2_500;
     try (Connection conn = database.dataSource().getConnection();
+        Statement st = conn.createStatement();
         PreparedStatement ps =
             conn.prepareStatement(
                 "INSERT INTO saga_dead_letters (saga_id, saga_type, event_offset, event_type,"
                     + " error_type, faulted_at, first_faulted_at) VALUES (NULL, ?, ?, 'Evt',"
                     + " 'E', ?, ?)")) {
-      conn.createStatement().execute("BEGIN IMMEDIATE");
+      st.execute("BEGIN IMMEDIATE");
       for (int i = 0; i < prunable; i++) {
         ps.setString(1, TYPE.value());
         ps.setLong(2, i);
@@ -359,7 +368,7 @@ class SqliteSagaDeadLetterStoreTest {
         ps.addBatch();
       }
       ps.executeBatch();
-      conn.createStatement().execute("COMMIT");
+      st.execute("COMMIT");
     }
     sagas.create(A, TYPE, RUNNING, SagaStatus.RUNNING);
     store.publishShielded(entry(A, 1, T0));
@@ -413,15 +422,17 @@ class SqliteSagaDeadLetterStoreTest {
   }
 
   @Test
-  void aConnectionInManualCommitModeIsRefusedAsAStorageFailure() {
+  void aConnectionInManualCommitModeIsRefusedBeforeAnythingIsWritten() {
     SqliteDatabase database = migrated("manual.db", "");
     var source = new SwitchableDataSource(TestDatabases.dataSource(database.file()));
     SqliteSagaDeadLetterStore store = new SqliteSagaDeadLetterStore(open(source));
     source.manualCommit();
 
     assertThatThrownBy(() -> store.publishShielded(entry(A, 1, T0)))
-        .isExactlyInstanceOf(EventStoreException.class)
-        .hasCauseInstanceOf(IllegalStateException.class);
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessage(SqliteTransactions.MANUAL_COMMIT_CONNECTION);
+    assertThatThrownBy(() -> store.publishShieldedIfAbsent(held(A, 1, T0)))
+        .isExactlyInstanceOf(IllegalStateException.class);
     assertThat(new SqliteSagaDeadLetterStore(database).findAll(10)).isEmpty();
   }
 }

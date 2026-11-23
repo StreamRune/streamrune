@@ -64,9 +64,11 @@ import org.streamrune.core.types.SagaType;
  * never deleted, and {@link #countFaultedBacklog} counts exactly those.
  *
  * <p><b>Failures.</b> A storage failure — a lost connection, the write lock not granted in time, a
- * connection handed out in manual-commit mode (an {@link IllegalStateException} cause) — is an
- * {@link EventStoreException}. A {@code null} argument the interface requires, and a negative
- * {@code limit}, are refused with {@link IllegalArgumentException} before any I/O.
+ * constraint — is an {@link EventStoreException}. A connection handed out in manual-commit mode is
+ * refused with an {@link IllegalStateException} before anything is written, as every SQLite store
+ * refuses it (see {@code SqliteTransactions#write}). A {@code null} argument the interface
+ * requires, and a negative {@code limit}, are refused with {@link IllegalArgumentException} before
+ * any I/O.
  */
 public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
 
@@ -220,6 +222,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void publish(SagaDeadLetterEntry entry) {
@@ -250,6 +254,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void publishShielded(SagaDeadLetterEntry entry) {
@@ -273,6 +279,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
@@ -373,6 +381,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void establishFirstReplayAnchor(
@@ -401,6 +411,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void setResolvedTarget(SagaType sagaType, GlobalOffset eventOffset, SagaId targetSagaId) {
@@ -481,6 +493,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public boolean discard(SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset) {
@@ -508,6 +522,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public boolean clearShieldIfDrained(SagaId sagaId, SagaType sagaType) {
@@ -539,6 +555,8 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    *
    * @throws EventStoreException if a batch fails, including when the write lock is not granted
    *     within {@code busy_timeout}; the batches before it stay deleted
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public int deleteOlderThan(Instant cutoff) {
@@ -597,20 +615,9 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
     }
   }
 
-  /**
-   * Runs {@code work} as one write transaction ({@code BEGIN IMMEDIATE} … {@code COMMIT}) on a
-   * borrowed connection. Every failure rolls it back and becomes an {@link EventStoreException},
-   * one naming {@code busy_timeout} when the write lock was not granted in time.
-   */
+  /** Runs {@code work} as one write transaction, through {@link SqliteTransactions#write}. */
   private <T> T write(String transaction, String failureMessage, SqliteTransactions.Work<T> work) {
-    try (Connection conn = dataSource.getConnection()) {
-      return SqliteTransactions.inTransaction(conn, transaction, work);
-    } catch (SQLException e) {
-      EventStoreException lockFailure = SqliteEventStore.lockFailure(e, transaction);
-      throw lockFailure != null ? lockFailure : new EventStoreException(failureMessage, e);
-    } catch (RuntimeException e) {
-      throw new EventStoreException(failureMessage, e);
-    }
+    return SqliteTransactions.write(dataSource, transaction, transaction, failureMessage, work);
   }
 
   private static SagaDeadLetterEntry fromRow(ResultSet rs) throws SQLException {

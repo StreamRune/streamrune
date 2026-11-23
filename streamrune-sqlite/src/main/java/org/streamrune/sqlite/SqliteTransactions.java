@@ -3,11 +3,13 @@ package org.streamrune.sqlite;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.sqlite.SQLiteConnection;
 import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
+import org.streamrune.core.EventStoreException;
 
 /**
  * How the SQLite stores run a write transaction on a borrowed connection: with SQL statements, on a
@@ -74,6 +76,55 @@ final class SqliteTransactions {
   @FunctionalInterface
   interface Work<T> {
     T run(Connection conn) throws SQLException;
+  }
+
+  /**
+   * The one way a SQLite store runs a write: borrows a connection from {@code dataSource}, runs
+   * {@code work} in one write transaction on it ({@link #inTransaction}) and returns it. The work
+   * reports its outcome (a row count, a stale view) as its result, never as an exception.
+   *
+   * <p>Failures, the same for every store that calls it:
+   *
+   * <ul>
+   *   <li>a connection handed out in manual-commit mode: {@link IllegalStateException} ({@link
+   *       #MANUAL_COMMIT_CONNECTION}), unwrapped and before anything is written. It is a
+   *       configuration error, not a storage failure (the pool or an application transaction must
+   *       change, a retry cannot succeed), and every SQLite store refuses it the same way, the
+   *       event store, the snapshot purger and the offset store included;
+   *   <li>SQLite's write lock not granted within {@code busy_timeout}, or a same-connection lock
+   *       ({@code SQLITE_LOCKED}): an {@link EventStoreException} whose message names {@code what}
+   *       and the cause ({@link SqliteEventStore#lockFailure});
+   *   <li>any other {@link SQLException} or {@link RuntimeException}, from borrowing the
+   *       connection, the work or closing it: an {@link EventStoreException} with {@code
+   *       failureMessage}.
+   * </ul>
+   *
+   * Every failure before the commit rolls the transaction back (see {@link #inTransaction}).
+   *
+   * @param dataSource the pool to borrow from
+   * @param transaction what the work is, for the log record of a failed rollback (a constant, never
+   *     an id)
+   * @param what what the write is, for the message of a lock failure (may name an id, sanitized)
+   * @param failureMessage the message of any other failure (may name an id, sanitized)
+   * @param work the work to run in the transaction
+   * @param <T> the work's result
+   * @return the work's result
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode
+   * @throws EventStoreException if the write fails
+   */
+  static <T> T write(
+      DataSource dataSource, String transaction, String what, String failureMessage, Work<T> work) {
+    try (Connection conn = dataSource.getConnection()) {
+      if (conn.getAutoCommit()) {
+        return inTransaction(conn, transaction, work);
+      }
+    } catch (SQLException e) {
+      EventStoreException lockFailure = SqliteEventStore.lockFailure(e, what);
+      throw lockFailure != null ? lockFailure : new EventStoreException(failureMessage, e);
+    } catch (RuntimeException e) {
+      throw new EventStoreException(failureMessage, e);
+    }
+    throw new IllegalStateException(MANUAL_COMMIT_CONNECTION);
   }
 
   /**
