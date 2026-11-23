@@ -148,7 +148,8 @@ class MicronautOutboxMetricsWiringTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   @Test
@@ -238,7 +239,8 @@ class MicronautOutboxMetricsWiringTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   private static StreamRuneMetrics metricsOf(OutboxPoller poller) throws Exception {

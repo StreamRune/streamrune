@@ -162,7 +162,8 @@ class ProjectionFactoryTest {
             true,
             true,
             null,
-            "4");
+            "4",
+            "postgres");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

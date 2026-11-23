@@ -19,6 +19,9 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
+import org.streamrune.core.backend.BackendContext;
+import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.backend.StreamRuneBackend;
 import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.types.EventType;
@@ -484,19 +487,15 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     EventStoreFactory factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
             List.of(),
             List.of(),
-            List.of(),
             null,
             null,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -535,7 +534,7 @@ class StreamRuneMicronautModuleTest {
   @Test
   void auditStoreCreated_whenDataSourceProvided() {
     var module = new StreamRuneMicronautModule();
-    var store = module.auditStore(mock(DataSource.class));
+    var store = module.auditStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(store);
     assertInstanceOf(org.streamrune.postgres.PostgresAuditStore.class, store);
   }
@@ -651,19 +650,15 @@ class StreamRuneMicronautModuleTest {
     var auditStore = new org.streamrune.postgres.PostgresEventAuditStore(mock(DataSource.class));
     EventStoreFactory factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(),
             auditStore,
             null,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -765,21 +760,22 @@ class StreamRuneMicronautModuleTest {
   @Test
   void postgresEventAuditStoreBuilt() {
     var module = new StreamRuneMicronautModule();
-    var store = module.postgresEventAuditStore(mock(DataSource.class));
+    var store = module.postgresEventAuditStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(store);
   }
 
   @Test
   void postgresEventAuditQueryBuilt() {
     var module = new StreamRuneMicronautModule();
-    var query = module.postgresEventAuditQuery(mock(DataSource.class));
+    var query = module.postgresEventAuditQuery(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(query);
   }
 
   @Test
   void postgresProjectionDeadLetterStoreBuilt() {
     var module = new StreamRuneMicronautModule();
-    var store = module.postgresProjectionDeadLetterStore(mock(DataSource.class));
+    var store =
+        module.postgresProjectionDeadLetterStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(store);
   }
 
@@ -795,7 +791,7 @@ class StreamRuneMicronautModuleTest {
     // restores that parity on Micronaut.
     var m =
         StreamRuneMicronautModule.class.getDeclaredMethod(
-            "postgresProjectionDeadLetterStore", DataSource.class);
+            "postgresProjectionDeadLetterStore", BackendStores.class);
     boolean guarded =
         java.util.Arrays.stream(
                 m.getAnnotationsByType(io.micronaut.context.annotation.Requires.class))
@@ -812,7 +808,7 @@ class StreamRuneMicronautModuleTest {
   @Test
   void sagaStoreBuilt() {
     var module = new StreamRuneMicronautModule();
-    var store = module.sagaStore(mock(DataSource.class), List.of(), null);
+    var store = module.sagaStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(store);
   }
 
@@ -821,7 +817,7 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     var crypto = new InMemoryCryptoEngine();
 
-    var store = module.sagaStore(mock(DataSource.class), List.of(crypto), null);
+    var store = module.sagaStore(TestBackends.stores(mock(DataSource.class), crypto));
 
     assertNotNull(store);
     var field = store.getClass().getDeclaredField("objectMapper");
@@ -834,7 +830,7 @@ class StreamRuneMicronautModuleTest {
   void sagaStoreMapperIsCryptoBlind_whenNoCryptoEngine() throws Exception {
     var module = new StreamRuneMicronautModule();
 
-    var store = module.sagaStore(mock(DataSource.class), List.of(), null);
+    var store = module.sagaStore(TestBackends.stores(mock(DataSource.class)));
 
     assertNotNull(store);
     var field = store.getClass().getDeclaredField("objectMapper");
@@ -843,42 +839,9 @@ class StreamRuneMicronautModuleTest {
     assertFalse(mapper.getRegisteredModuleIds().contains("CryptoShreddingModule"));
   }
 
-  @Test
-  void sagaStoreThrows_whenCryptoEngineAmbiguous() {
-    var module = new StreamRuneMicronautModule();
-    var crypto1 = new InMemoryCryptoEngine();
-    var crypto2 = new InMemoryCryptoEngine();
-
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () -> module.sagaStore(mock(DataSource.class), List.of(crypto1, crypto2), null));
-    assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"));
-  }
-
   // The default read-model store's mapper wiring (CryptoShreddingModule with a CryptoEngine,
   // crypto-blind without) needs a real database to create the store on:
   // MicronautReadModelStoreWiringTest.
-
-  @Test
-  void postgresReadModelStoreThrows_whenCryptoEngineAmbiguous_beforeTouchingTheDatabase() {
-    var module = new StreamRuneMicronautModule();
-    var crypto1 = new InMemoryCryptoEngine();
-    var crypto2 = new InMemoryCryptoEngine();
-    var dataSource = mock(DataSource.class);
-
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                module.postgresReadModelStore(
-                    dataSource,
-                    StreamRuneMicronautProperties.withDefaults(),
-                    List.of(crypto1, crypto2),
-                    null));
-    assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"));
-    org.mockito.Mockito.verifyNoInteractions(dataSource);
-  }
 
   @Test
   void projectionRepository_isTheRepositoryOfTheStoreNamedPostgres() {
@@ -887,7 +850,10 @@ class StreamRuneMicronautModuleTest {
     var other = new org.streamrune.test.InMemoryProjectionRepository();
     var context = storesContext(memoryStore("other", other), memoryStore("postgres", postgres));
 
-    assertSame(postgres, module.projectionRepository(module.readModelStores(context)));
+    assertSame(
+        postgres,
+        module.projectionRepository(
+            module.readModelStores(context, new org.streamrune.postgres.PostgresBackend())));
   }
 
   @Test
@@ -900,7 +866,10 @@ class StreamRuneMicronautModuleTest {
     var ex =
         assertThrows(
             IllegalStateException.class,
-            () -> module.projectionRepository(module.readModelStores(context)));
+            () ->
+                module.projectionRepository(
+                    module.readModelStores(
+                        context, new org.streamrune.postgres.PostgresBackend())));
     assertTrue(
         ex.getMessage().contains("No read-model store is named 'postgres'"), ex.getMessage());
     assertTrue(ex.getMessage().contains("'memory'"), ex.getMessage());
@@ -970,14 +939,14 @@ class StreamRuneMicronautModuleTest {
   @Test
   void complianceReportQueryBuilt() {
     var module = new StreamRuneMicronautModule();
-    var query = module.complianceReportQuery(mock(DataSource.class));
+    var query = module.complianceReportQuery(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(query);
   }
 
   @Test
   void commandAuditQueryBuilt() {
     var module = new StreamRuneMicronautModule();
-    var query = module.commandAuditQuery(mock(DataSource.class));
+    var query = module.commandAuditQuery(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(query);
     assertInstanceOf(org.streamrune.postgres.PostgresCommandAuditQuery.class, query);
   }
@@ -985,7 +954,7 @@ class StreamRuneMicronautModuleTest {
   @Test
   void offsetStoreDefaultsToPostgres_whenDataSourceProvided() {
     var module = new StreamRuneMicronautModule();
-    var offsetStore = module.offsetStore(mock(DataSource.class));
+    var offsetStore = module.offsetStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(offsetStore);
     assertInstanceOf(org.streamrune.postgres.PostgresOffsetStore.class, offsetStore);
   }
@@ -1393,48 +1362,16 @@ class StreamRuneMicronautModuleTest {
     var crypto = new InMemoryCryptoEngine();
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class), crypto),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(crypto),
             List.of(),
             List.of(),
             null,
             null,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
-  }
-
-  @Test
-  void postgresEventStoreFactory_throwsOnAmbiguousCryptoEngine() {
-    var module = new StreamRuneMicronautModule();
-    var crypto1 = new InMemoryCryptoEngine();
-    var crypto2 = new InMemoryCryptoEngine();
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                module.postgresEventStoreFactory(
-                    mock(DataSource.class),
-                    module.eventTypeRegistry(),
-                    StreamRuneMicronautProperties.withDefaults(),
-                    List.of(crypto1, crypto2),
-                    List.of(),
-                    List.of(),
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
-    assertTrue(
-        ex.getMessage().contains("Multiple CryptoEngine beans found"),
-        "exception message must identify the ambiguity");
   }
 
   @Test
@@ -1445,19 +1382,15 @@ class StreamRuneMicronautModuleTest {
     when(upcaster.currentVersion()).thenReturn(2);
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(upcaster),
             List.of(),
             null,
             null,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -1467,22 +1400,133 @@ class StreamRuneMicronautModuleTest {
     var migration = mock(org.streamrune.core.SnapshotMigration.class);
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(migration),
             null,
             null,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     var field = factory.getClass().getDeclaredField("snapshotMigrations");
     field.setAccessible(true);
     assertEquals(List.of(migration), field.get(factory));
+  }
+
+  @Test
+  void backendStoresThrow_whenCryptoEngineAmbiguous_beforeTouchingTheDatabase() {
+    // The event store, the saga store and the default read-model store take their engine from the
+    // bundle, so the bundle refuses two engines once for all three.
+    var module = new StreamRuneMicronautModule();
+    var dataSource = mock(DataSource.class);
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                module.streamRuneBackendStores(
+                    new org.streamrune.postgres.PostgresBackend(),
+                    dataSource,
+                    StreamRuneMicronautProperties.withDefaults(),
+                    List.of(new InMemoryCryptoEngine(), new InMemoryCryptoEngine()),
+                    null,
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
+    assertTrue(ex.getMessage().contains("Multiple CryptoEngine beans found"), ex.getMessage());
+    assertTrue(
+        ex.getMessage()
+            .contains("the event store, the saga store and the default read-model store"),
+        ex.getMessage());
+    org.mockito.Mockito.verifyNoInteractions(dataSource);
+  }
+
+  @Test
+  void backendStoresCarryTheEngineAndTheSchemaSwitches() {
+    var module = new StreamRuneMicronautModule();
+    var dataSource = mock(DataSource.class);
+    var crypto = new InMemoryCryptoEngine();
+    var metrics = mock(org.streamrune.core.StreamRuneMetrics.class);
+    var tracing = mock(org.streamrune.core.tracing.StreamRuneTracing.class);
+    var properties = mock(StreamRuneMicronautProperties.class);
+    when(properties.autoInitializeSchema()).thenReturn(false);
+    when(properties.readModelAutoInitialize()).thenReturn(true);
+    var opened = new java.util.concurrent.atomic.AtomicReference<BackendContext>();
+    StreamRuneBackend backend =
+        new StreamRuneBackend() {
+          @Override
+          public String name() {
+            return "postgres";
+          }
+
+          @Override
+          public void verify(DataSource ds) {}
+
+          @Override
+          public BackendStores open(BackendContext context) {
+            opened.set(context);
+            return mock(BackendStores.class);
+          }
+        };
+
+    module.streamRuneBackendStores(
+        backend, dataSource, properties, List.of(crypto), metrics, tracing);
+
+    BackendContext context = opened.get();
+    assertSame(dataSource, context.dataSource());
+    assertSame(crypto, context.cryptoEngine());
+    assertSame(metrics, context.metrics());
+    assertSame(tracing, context.tracing());
+    assertFalse(context.migrateSchema());
+    assertTrue(context.migrateReadModelSchema());
+    assertTrue(context.validateSchema());
+
+    module.streamRuneBackendStores(
+        backend,
+        dataSource,
+        StreamRuneMicronautProperties.withDefaults(),
+        List.of(),
+        null,
+        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+    assertNull(opened.get().cryptoEngine());
+    assertSame(org.streamrune.core.StreamRuneMetrics.NOOP, opened.get().metrics());
+    assertTrue(opened.get().migrateSchema());
+  }
+
+  @Test
+  void theBackendIsTheOneStreamruneBackendNames() {
+    var module = new StreamRuneMicronautModule();
+    assertInstanceOf(
+        org.streamrune.postgres.PostgresBackend.class,
+        module.streamRuneBackend(StreamRuneMicronautProperties.withDefaults()));
+    var properties = mock(StreamRuneMicronautProperties.class);
+    when(properties.backend()).thenReturn("oracle");
+    var ex = assertThrows(IllegalStateException.class, () -> module.streamRuneBackend(properties));
+    assertEquals(
+        "streamrune.backend='oracle' is not a backend; valid values: postgres, sqlite",
+        ex.getMessage());
+  }
+
+  @Test
+  void anotherOptionRefusalIsRethrownAsIs() {
+    var module = new StreamRuneMicronautModule();
+    var stores = mock(BackendStores.class);
+    var refusal =
+        new org.streamrune.core.backend.BackendOptionException("upcasters", "not supported", null);
+    when(stores.eventStoreFactory(org.mockito.ArgumentMatchers.any())).thenThrow(refusal);
+    var ex =
+        assertThrows(
+            org.streamrune.core.backend.BackendOptionException.class,
+            () ->
+                module.postgresEventStoreFactory(
+                    stores,
+                    module.eventTypeRegistry(),
+                    StreamRuneMicronautProperties.withDefaults(),
+                    List.of(),
+                    List.of(),
+                    null,
+                    null,
+                    null,
+                    null));
+    assertSame(refusal, ex);
   }
 
   @Test
@@ -1492,19 +1536,15 @@ class StreamRuneMicronautModuleTest {
     var outboxStore = mock(PostgresOutboxStore.class);
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(),
             null,
             outboxMapper,
             outboxStore,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -1515,19 +1555,15 @@ class StreamRuneMicronautModuleTest {
     // mapper-only: should warn but still return a non-null factory (both-or-neither warn path)
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(),
             null,
             outboxMapper,
             null,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -1538,19 +1574,15 @@ class StreamRuneMicronautModuleTest {
     // store-only: should warn but still return a non-null factory (both-or-neither warn path)
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(),
             null,
             null,
             outboxStore,
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
   }
 
@@ -1584,19 +1616,15 @@ class StreamRuneMicronautModuleTest {
   private static EventStoreFactory eventStoreFactoryWith(
       StreamRuneMicronautModule module, StreamRuneMicronautProperties properties) {
     return module.postgresEventStoreFactory(
-        mock(DataSource.class),
+        TestBackends.stores(mock(DataSource.class)),
         module.eventTypeRegistry(),
         properties,
         List.of(),
         List.of(),
-        List.of(),
         null,
         null,
         null,
-        null,
-        null,
-        null,
-        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+        null);
   }
 
   private static Object statementTimeoutOf(EventStoreFactory factory) throws Exception {
@@ -1610,24 +1638,23 @@ class StreamRuneMicronautModuleTest {
     var module = new StreamRuneMicronautModule();
     var ex =
         assertThrows(
-            IllegalStateException.class,
+            IllegalArgumentException.class,
             () ->
                 module.postgresEventStoreFactory(
-                    mock(DataSource.class),
+                    TestBackends.stores(mock(DataSource.class)),
                     module.eventTypeRegistry(),
                     StreamRuneMicronautProperties.withDefaults(),
-                    List.of(),
                     List.of(),
                     List.of(),
                     null,
                     mock(OutboxEventMapper.class),
                     new org.streamrune.test.InMemoryOutboxStore(),
-                    null,
-                    null,
-                    null,
-                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
-    assertTrue(ex.getMessage().contains("InMemoryOutboxStore"), ex.getMessage());
-    assertTrue(ex.getMessage().contains("PostgresOutboxStore"), ex.getMessage());
+                    null));
+    // The backend's R1 refusal (ruling T7-b), as in the Spring and Quarkus integrations.
+    assertEquals(
+        "outbox store of backend 'InMemoryOutboxStore' cannot share the 'postgres' event store's"
+            + " transaction; build it from this backend's BackendStores",
+        ex.getMessage());
   }
 
   @Test
@@ -1636,31 +1663,16 @@ class StreamRuneMicronautModuleTest {
     // No mapper, so nothing is emitted and the store's type does not matter: warn, still build.
     var factory =
         module.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             module.eventTypeRegistry(),
             StreamRuneMicronautProperties.withDefaults(),
-            List.of(),
             List.of(),
             List.of(),
             null,
             null,
             new org.streamrune.test.InMemoryOutboxStore(),
-            null,
-            null,
-            null,
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            null);
     assertNotNull(factory);
-  }
-
-  @Test
-  void transactionalOutboxStore_bindsAPostgresStoreDeclaredThroughTheInterface() {
-    org.streamrune.core.outbox.OutboxStore store = mock(PostgresOutboxStore.class);
-    assertSame(
-        store,
-        StreamRuneMicronautModule.transactionalOutboxStore(mock(OutboxEventMapper.class), store));
-    assertNull(StreamRuneMicronautModule.transactionalOutboxStore(null, store));
-    assertNull(
-        StreamRuneMicronautModule.transactionalOutboxStore(mock(OutboxEventMapper.class), null));
   }
 
   @Test
@@ -1690,7 +1702,7 @@ class StreamRuneMicronautModuleTest {
     var commandInbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
     var sweeper =
         module.inboxRetentionSweeper(
-            commandInbox, StreamRuneMicronautProperties.withDefaults(), null, null);
+            commandInbox, null, StreamRuneMicronautProperties.withDefaults(), null, null);
     assertNotNull(sweeper);
   }
 
@@ -1701,7 +1713,7 @@ class StreamRuneMicronautModuleTest {
     var metrics = mock(org.streamrune.core.StreamRuneMetrics.class);
     var sweeper =
         module.inboxRetentionSweeper(
-            commandInbox, StreamRuneMicronautProperties.withDefaults(), metrics, null);
+            commandInbox, null, StreamRuneMicronautProperties.withDefaults(), metrics, null);
     assertNotNull(sweeper);
   }
 
@@ -1711,7 +1723,7 @@ class StreamRuneMicronautModuleTest {
     var store = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
     var sweeper =
         module.sagaDeadLetterRetentionSweeper(
-            store, StreamRuneMicronautProperties.withDefaults(), null, null);
+            store, null, StreamRuneMicronautProperties.withDefaults(), null, null);
     assertNotNull(sweeper);
   }
 
@@ -1722,8 +1734,89 @@ class StreamRuneMicronautModuleTest {
     var metrics = mock(org.streamrune.core.StreamRuneMetrics.class);
     var sweeper =
         module.sagaDeadLetterRetentionSweeper(
-            store, StreamRuneMicronautProperties.withDefaults(), metrics, null);
+            store, null, StreamRuneMicronautProperties.withDefaults(), metrics, null);
     assertNotNull(sweeper);
+  }
+
+  @Test
+  void theRetentionSweepersSweepTheBundlesStoresWithoutAnApplicationPostgresStore()
+      throws Exception {
+    var module = new StreamRuneMicronautModule();
+    var stores = TestBackends.stores(mock(DataSource.class));
+    var inboxSweeper =
+        module.inboxRetentionSweeper(
+            null, stores, StreamRuneMicronautProperties.withDefaults(), null, null);
+    assertSame(stores.commandInbox(), field(inboxSweeper, "inbox"));
+    var sagaSweeper =
+        module.sagaDeadLetterRetentionSweeper(
+            null, stores, StreamRuneMicronautProperties.withDefaults(), null, null);
+    assertSame(stores.sagaDeadLetterStore(), field(sagaSweeper, "store"));
+  }
+
+  @Test
+  void theRetentionSweepersPreferAnApplicationPostgresStoreToTheBundles() throws Exception {
+    var module = new StreamRuneMicronautModule();
+    var stores = TestBackends.stores(mock(DataSource.class));
+    var inbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
+    var store = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
+    assertSame(
+        inbox,
+        field(
+            module.inboxRetentionSweeper(
+                inbox, stores, StreamRuneMicronautProperties.withDefaults(), null, null),
+            "inbox"));
+    assertSame(
+        store,
+        field(
+            module.sagaDeadLetterRetentionSweeper(
+                store, stores, StreamRuneMicronautProperties.withDefaults(), null, null),
+            "store"));
+  }
+
+  @Test
+  void theSweeperConditionsMatchTheFrameworksStoreOrAnApplicationPostgresStore() {
+    var inboxCondition = new StreamRuneMicronautModule.FrameworkOrPostgresCommandInbox();
+    var sagaCondition = new StreamRuneMicronautModule.FrameworkOrPostgresSagaDeadLetterStore();
+
+    var beans = mock(io.micronaut.context.BeanContext.class);
+    var context = mock(io.micronaut.context.condition.ConditionContext.class);
+    when(context.getBeanContext()).thenReturn(beans);
+    assertFalse(inboxCondition.matches(context), "no bundle, no application Postgres store");
+    assertFalse(sagaCondition.matches(context), "no bundle, no application Postgres store");
+
+    when(beans.containsBean(org.streamrune.postgres.PostgresCommandInbox.class)).thenReturn(true);
+    when(beans.containsBean(org.streamrune.postgres.PostgresSagaDeadLetterStore.class))
+        .thenReturn(true);
+    assertTrue(inboxCondition.matches(context), "an application PostgresCommandInbox");
+    assertTrue(sagaCondition.matches(context), "an application PostgresSagaDeadLetterStore");
+
+    var withBundle = mock(io.micronaut.context.BeanContext.class);
+    when(withBundle.containsBean(BackendStores.class)).thenReturn(true);
+    when(context.getBeanContext()).thenReturn(withBundle);
+    assertTrue(inboxCondition.matches(context), "the framework's own inbox");
+    assertTrue(sagaCondition.matches(context), "the framework's own saga dead-letter store");
+  }
+
+  @Test
+  void theLeadershipIsTheBundlesForTheLeaseTtl_15sForAnExplicitNull() {
+    var module = new StreamRuneMicronautModule();
+    var stores = TestBackends.stores(mock(DataSource.class));
+    try {
+      assertSame(
+          stores.leadership(java.time.Duration.ofSeconds(15)),
+          module.subscriptionLeadership(stores, StreamRuneMicronautProperties.withDefaults()));
+      var properties = mock(StreamRuneMicronautProperties.class);
+      when(properties.subscriptionLeaseTtl()).thenReturn(java.time.Duration.ofSeconds(9));
+      assertSame(
+          stores.leadership(java.time.Duration.ofSeconds(9)),
+          module.subscriptionLeadership(stores, properties));
+      when(properties.subscriptionLeaseTtl()).thenReturn(null);
+      assertSame(
+          stores.leadership(java.time.Duration.ofSeconds(15)),
+          module.subscriptionLeadership(stores, properties));
+    } finally {
+      stores.close();
+    }
   }
 
   @Test
@@ -1802,5 +1895,19 @@ class StreamRuneMicronautModuleTest {
     } catch (ReflectiveOperationException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  /** A private field of {@code target}, searched up its class hierarchy. */
+  private static Object field(Object target, String name) throws Exception {
+    for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
+      try {
+        var field = type.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
+      } catch (NoSuchFieldException e) {
+        // up the hierarchy
+      }
+    }
+    throw new NoSuchFieldException(target.getClass().getName() + "." + name);
   }
 }

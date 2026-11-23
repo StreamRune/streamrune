@@ -49,6 +49,8 @@ the ones most applications set:
 
 ```yaml
 streamrune:
+  # the storage backend every store is built on: postgres or sqlite (streamrune.backend)
+  backend: postgres
   snapshot-every-n-events: 100
   retry-max-attempts: 3
   lock-timeout: 5s

@@ -796,7 +796,8 @@ class StreamRuneContextFilterTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   @Test

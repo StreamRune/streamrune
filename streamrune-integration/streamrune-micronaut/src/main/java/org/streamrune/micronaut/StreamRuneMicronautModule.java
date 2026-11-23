@@ -24,6 +24,11 @@ import org.streamrune.core.SnapshotPolicy;
 import org.streamrune.core.UserRoleResolver;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.audit.ComplianceReportQuery;
+import org.streamrune.core.backend.BackendContext;
+import org.streamrune.core.backend.BackendOptionException;
+import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.backend.EventStoreOptions;
+import org.streamrune.core.backend.StreamRuneBackend;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.gdpr.SubjectDataCollector;
 import org.streamrune.core.gdpr.SubjectDataPurger;
@@ -33,12 +38,11 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.integration.AuthenticatedUserResolver;
+import org.streamrune.integration.BackendSelection;
 import org.streamrune.integration.MicrometerStreamRuneMetrics;
 import org.streamrune.integration.RequestIdentityPolicy;
-import org.streamrune.postgres.PostgresAuditStore;
+import org.streamrune.postgres.PostgresBackend;
 import org.streamrune.postgres.PostgresCommandInbox;
-import org.streamrune.postgres.PostgresEventStoreFactory;
-import org.streamrune.postgres.PostgresOffsetStore;
 import org.streamrune.runtime.AnnotationAuthorizationInterceptor;
 import org.streamrune.runtime.AuditCommandInterceptor;
 import org.streamrune.runtime.AuditingQueryBus;
@@ -75,10 +79,12 @@ import org.streamrune.runtime.gdpr.ForgetSubjectService;
  * table, two sweepers under different retention windows). Passive component defaults (stores,
  * query/audit adapters, health contributors, the SSE publisher) rely on {@code @Secondary}
  * precedence alone: they perform no background work, so the demoted framework bean is inert and
- * every consumer resolves the application's. Two of those carry a deliberately documented
- * divergence — see {@link #commandInbox} and {@link #sagaDeadLetterStore}. {@link
- * StreamRuneMicronautProperties} is bound directly by Micronaut as a
- * {@code @ConfigurationProperties} bean and is intentionally not produced here.
+ * every consumer resolves the application's. Every store comes from the one {@link BackendStores}
+ * bundle of the backend {@code streamrune.backend} names ({@link #streamRuneBackendStores}); the
+ * two stores the framework prunes are pruned only when it built them or the application declared
+ * them with their Postgres types — see {@link #inboxRetentionSweeper} and {@link
+ * #sagaDeadLetterRetentionSweeper}. {@link StreamRuneMicronautProperties} is bound directly by
+ * Micronaut as a {@code @ConfigurationProperties} bean and is intentionally not produced here.
  */
 @Factory
 public class StreamRuneMicronautModule {
@@ -111,13 +117,6 @@ public class StreamRuneMicronautModule {
   static final String FRAMEWORK_SSE_EVENT_FEED = "streamRuneSseEventFeed";
 
   /**
-   * The {@link org.streamrune.core.projection.ReadModelStore#name()} of the default read-model
-   * store, {@value}. A projection declares {@code readModelStore = "postgres"} to route to it
-   * explicitly; an application store of this name replaces it.
-   */
-  static final String DEFAULT_READ_MODEL_STORE = "postgres";
-
-  /**
    * The bean name ({@code @Named}) of the default read-model store, {@value}: a framework name, so
    * an application store {@code @Named("postgres")} never collides with it.
    */
@@ -147,168 +146,159 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates an EventStoreFactory for PostgreSQL when DataSource is available and the application
-   * does not define its own {@link EventStoreFactory}.
+   * The storage backend {@code streamrune.backend} names ({@code postgres} by default), resolved
+   * through {@link BackendSelection}: every store this factory builds comes from it. It needs no
+   * {@code DataSource}; an unknown name fails when the bean is created, naming the property.
    *
-   * <p>Wires the {@link CryptoEngine} bean (if exactly one is present) so {@code @Encrypted} fields
-   * are persisted as ciphertext. Explicitly guards against ambiguity: if more than one {@link
-   * CryptoEngine} bean is registered, an {@link IllegalStateException} is thrown at startup —
-   * matching the behaviour of the Spring integration ({@code ObjectProvider.getIfAvailable}) and
-   * the Quarkus integration ({@code Instance.isAmbiguous()}). Micronaut injects all beans of the
-   * interface type as a {@link List}; an empty list means no crypto, a single-element list means
-   * the engine is wired, and a list with more than one element triggers the guard.
+   * @param properties the StreamRune configuration properties
+   * @return the selected backend
+   */
+  @Singleton
+  public StreamRuneBackend streamRuneBackend(StreamRuneMicronautProperties properties) {
+    return BackendSelection.resolve(
+        BackendSelection.parse(properties.backend()), PostgresBackend::new);
+  }
+
+  /**
+   * The stores of the selected backend on the application's {@code DataSource}: one bundle per
+   * context, which every store bean below takes its store from, closed with the context ({@code
+   * preDestroy}). Opening it touches no database; each store is built when first asked for.
+   *
+   * <p>The {@link CryptoEngine} bean (if exactly one is present) is the engine the event store, the
+   * saga store and the default read-model store encrypt {@code @Encrypted} fields with. Micronaut
+   * injects all beans of the interface type as a {@link List}: an empty list means no crypto, a
+   * single-element list means the engine is wired, and a list with more than one element is
+   * refused, since skipping encryption would persist {@code @Encrypted} fields as PLAINTEXT —
+   * matching the Spring integration ({@code ObjectProvider.getIfAvailable}) and the Quarkus
+   * integration ({@code Instance.isAmbiguous()}). The schema switches are {@code
+   * streamrune.event-store.schema.auto-initialize} for the event store and {@link
+   * StreamRuneMicronautProperties#readModelAutoInitialize()} for the default read-model store; both
+   * schemas are validated.
+   *
+   * @param backend the selected backend
+   * @param dataSource the JDBC data source
+   * @param properties the StreamRune configuration properties
+   * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
+   *     more than one triggers an {@link IllegalStateException})
+   * @param metrics optional metrics collector; {@code StreamRuneMetrics.NOOP} when absent
+   * @param tracing the tracing the stores start their spans through
+   * @return the backend's stores
+   * @throws IllegalStateException if multiple CryptoEngine beans exist
+   */
+  @Singleton
+  @Requires(beans = DataSource.class)
+  @Bean(preDestroy = "close")
+  public BackendStores streamRuneBackendStores(
+      StreamRuneBackend backend,
+      DataSource dataSource,
+      StreamRuneMicronautProperties properties,
+      List<CryptoEngine> cryptoEngines,
+      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
+      StreamRuneTracing tracing) {
+    // Checked before the database is touched.
+    if (cryptoEngines.size() > 1) {
+      throw new IllegalStateException(
+          "Multiple CryptoEngine beans found ("
+              + cryptoEngines.size()
+              + "); register exactly one or qualify them, so StreamRune can wire it into the event"
+              + " store, the saga store and the default read-model store. Found: "
+              + cryptoEngines);
+    }
+    return backend.open(
+        new BackendContext(
+            dataSource,
+            cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst(),
+            java.time.Clock.systemUTC(),
+            metricsOrNoop(metrics),
+            tracing,
+            properties.autoInitializeSchema(),
+            properties.readModelAutoInitialize(),
+            true));
+  }
+
+  /**
+   * Creates the backend's EventStoreFactory when a DataSource is available and the application does
+   * not define its own {@link EventStoreFactory}: {@link BackendStores#eventStoreFactory}, which
+   * touches no database until {@link EventStoreFactory#create()}.
    *
    * <p>Passes all {@link org.streamrune.core.upcasting.EventUpcaster} beans so stored events are
    * upcast on read, and all {@link org.streamrune.core.SnapshotMigration} beans so stored snapshots
    * are upgraded on read (Micronaut injects an empty {@link List} when none are registered). When
    * both an {@link org.streamrune.core.outbox.OutboxEventMapper} and an {@link
    * org.streamrune.core.outbox.OutboxStore} bean are present, outbox entries are written
-   * transactionally with each event append; if exactly one is present a warning is logged. The
-   * store is injected by the {@code OutboxStore} interface, like every other outbox consumer in
-   * this module, so its factory method may declare either return type; paired with a mapper it must
-   * be a {@link org.streamrune.postgres.PostgresOutboxStore} instance, which alone can write the
-   * entries inside the append transaction.
+   * transactionally with each event append; if exactly one is present a warning is logged.
    *
-   * @param dataSource the JDBC data source
+   * <p>The outbox store, the {@link CommandInbox} and the {@link
+   * org.streamrune.core.audit.EventAuditStore} arrive through their interfaces, the types every
+   * other consumer in this module uses: Micronaut exposes a factory bean only under its declared
+   * return type and that type's supertypes. The inbox is the bean the command bus takes, so the bus
+   * and the event store share one inbox. The event store writes the outbox entry, claims the
+   * idempotency key and records the audit row in the append's own transaction, so a store of
+   * another backend than the event store's is refused when this bean is created.
+   *
+   * @param stores the backend's stores
    * @param typeRegistry the event type registry
    * @param properties the StreamRune configuration properties
-   * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
-   *     more than one triggers an {@link IllegalStateException})
    * @param upcasters all registered event upcasters (empty list when none)
    * @param snapshotMigrations all registered snapshot migrations (empty list when none)
    * @param eventAuditStore optional audit store for event-level auditing
    * @param outboxEventMapper optional outbox event mapper for transactional outbox emit
    * @param outboxStore optional outbox store for transactional outbox emit
-   * @param tracing the tracing it starts its spans through
-   * @return a new {@link PostgresEventStoreFactory}
-   * @throws IllegalStateException when an {@code OutboxEventMapper} bean is paired with an {@code
-   *     OutboxStore} that is not a {@code PostgresOutboxStore}
+   * @param commandInbox optional command inbox, the one the command bus takes
+   * @return the backend's event store factory
+   * @throws IllegalArgumentException when the outbox store (paired with a mapper), the command
+   *     inbox or the event audit store is not the backend's own type
+   * @throws IllegalStateException when {@code streamrune.event-store.statement-timeout} is refused
    */
   @Singleton
   @Requires(beans = DataSource.class)
   @Requires(missingBeans = EventStoreFactory.class)
   // The factory builds the store on the DataSource as given and owns nothing that needs closing,
-  // so the bean declares no preDestroy. Micronaut still exposes it under EventStoreFactory for
-  // every interface-typed injection point (see #eventStore below).
-  public PostgresEventStoreFactory postgresEventStoreFactory(
-      DataSource dataSource,
+  // so the bean declares no preDestroy.
+  public EventStoreFactory postgresEventStoreFactory(
+      BackendStores stores,
       EventTypeRegistry typeRegistry,
       StreamRuneMicronautProperties properties,
-      List<CryptoEngine> cryptoEngines,
       List<org.streamrune.core.upcasting.EventUpcaster> upcasters,
       List<org.streamrune.core.SnapshotMigration> snapshotMigrations,
-      @jakarta.annotation.Nullable org.streamrune.postgres.PostgresEventAuditStore eventAuditStore,
+      @jakarta.annotation.Nullable org.streamrune.core.audit.EventAuditStore eventAuditStore,
       @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxEventMapper outboxEventMapper,
       @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxStore outboxStore,
-      @jakarta.annotation.Nullable PostgresCommandInbox commandInbox,
-      @jakarta.annotation.Nullable CommandInbox busCommandInbox,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
-      StreamRuneTracing tracing) {
-    if (cryptoEngines.size() > 1) {
-      throw new IllegalStateException(
-          "Multiple CryptoEngine beans found ("
-              + cryptoEngines.size()
-              + "); register exactly one or qualify them. Found: "
-              + cryptoEngines);
-    }
-    var factory =
-        new PostgresEventStoreFactory(dataSource, typeRegistry)
-            .autoInitializeSchema(properties.autoInitializeSchema())
-            // The tracing meets the metrics bean here: its guard counts its failures there.
-            .tracing(org.streamrune.runtime.GuardedTracing.of(tracing, metricsOrNoop(metrics)))
-            // Thread the metrics bean into the event store's CryptoShreddingModule so a
-            // mass redaction on the replay/projection decrypt path emits subject_redacted; NOOP
-            // when absent, behavior unchanged.
-            .metrics(metricsOrNoop(metrics));
-    // The store borrows from the application DataSource as given and bounds its own statements
-    // per transaction or per statement; the bound is the one knob it needs from configuration.
-    // An explicit null keeps the factory's default.
-    if (properties.eventStoreStatementTimeout() != null) {
-      try {
-        factory.statementTimeout(properties.eventStoreStatementTimeout());
-      } catch (IllegalArgumentException e) {
-        throw new IllegalStateException(
-            "streamrune.event-store.statement-timeout: "
-                + LogSanitizer.sanitizeFreeText(e.getMessage()),
-            e);
-      }
-    }
-    if (!cryptoEngines.isEmpty()) {
-      factory.cryptoEngine(cryptoEngines.getFirst());
-    }
-    if (!upcasters.isEmpty()) {
-      factory.upcasters(upcasters);
-    }
-    // Collect all SnapshotMigration beans (mirrors the EventUpcaster List injection above) so a
-    // user's standard SnapshotMigration bean is threaded into the store's snapshot-upgrade
-    // pipeline. Micronaut injects an empty list when none are registered (unchanged behavior).
-    if (!snapshotMigrations.isEmpty()) {
-      factory.snapshotMigrations(snapshotMigrations);
-    }
-    if (eventAuditStore != null) {
-      factory.eventAuditStore(eventAuditStore);
-    }
-    var emittingStore = transactionalOutboxStore(outboxEventMapper, outboxStore);
-    if (emittingStore != null) {
-      factory.outboxStore(emittingStore).outboxEventMapper(outboxEventMapper);
-    } else if (outboxEventMapper != null || outboxStore != null) {
+      @jakarta.annotation.Nullable CommandInbox commandInbox) {
+    boolean outboxPaired = outboxEventMapper != null && outboxStore != null;
+    if (!outboxPaired && (outboxEventMapper != null || outboxStore != null)) {
       LOG.warn(
           "Transactional outbox emission is DISABLED: found {} but not the other. "
-              + "Define BOTH an OutboxEventMapper and a PostgresOutboxStore bean to enable it.",
+              + "Define BOTH an OutboxEventMapper and an OutboxStore bean to enable it.",
           outboxEventMapper != null ? "an OutboxEventMapper" : "an OutboxStore");
     }
-    if (commandInbox != null) {
-      factory.commandInbox(commandInbox);
+    var options =
+        new EventStoreOptions(
+            typeRegistry,
+            upcasters,
+            // Collect all SnapshotMigration beans (mirrors the EventUpcaster List injection) so a
+            // user's standard SnapshotMigration bean is threaded into the store's snapshot-upgrade
+            // pipeline. Micronaut injects an empty list when none are registered.
+            snapshotMigrations,
+            outboxPaired ? outboxStore : null,
+            outboxPaired ? outboxEventMapper : null,
+            commandInbox,
+            eventAuditStore,
+            // The store borrows from the application DataSource as given and bounds its own
+            // statements per transaction or per statement; the bound is the one knob it needs from
+            // configuration. An explicit null keeps the factory's default.
+            properties.eventStoreStatementTimeout());
+    try {
+      return stores.eventStoreFactory(options);
+    } catch (BackendOptionException e) {
+      if (!"statementTimeout".equals(e.option())) {
+        throw e;
+      }
+      throw new IllegalStateException(
+          "streamrune.event-store.statement-timeout: "
+              + LogSanitizer.sanitizeFreeText(e.getMessage()),
+          e);
     }
-    // The bus takes the CommandInbox INTERFACE while this factory takes the concrete
-    // PostgresCommandInbox (the concrete type is deliberate), so a user-supplied CommandInbox wins
-    // the bus's injection point while the framework's @Secondary default still satisfies this one:
-    // the store would keep claiming keys in the framework's own command_inbox table while the bus
-    // pre-checks the user's, silently ignoring the override on the authoritative dedup path. Fail
-    // fast at wiring instead. This factory only exists when the application did not supply its own
-    // EventStoreFactory (@Requires(missingBeans)), so a fully-custom factory + inbox pairing — the
-    // one composition that can honour a custom inbox atomically — is untouched.
-    org.streamrune.integration.CommandInboxWiringValidator.validateFrameworkEventStoreWiring(
-        busCommandInbox, commandInbox);
-    return factory;
-  }
-
-  /**
-   * The outbox store the framework's event store writes into, or {@code null} when the mapper or
-   * the store is absent (the caller then logs which one is missing).
-   *
-   * <p>The store arrives through the {@link org.streamrune.core.outbox.OutboxStore} interface, the
-   * type the outbox poller, retention sweeper, failed-entry replayer and {@link
-   * StreamRuneConfigValidator} also use: Micronaut exposes a factory bean only under its declared
-   * return type and that type's supertypes, so a store declared as {@code OutboxStore} is invisible
-   * to an injection point typed {@code PostgresOutboxStore}. The event store writes the outbox
-   * entries on the append's own connection, inside its transaction, which only a {@link
-   * org.streamrune.postgres.PostgresOutboxStore} can do; paired with a mapper, any other store is
-   * refused, because the event store would append every event without its outbox entry while the
-   * poller relayed an empty table.
-   *
-   * @param mapper the outbox event mapper bean, or {@code null}
-   * @param store the outbox store bean, or {@code null}
-   * @return the store to bind, or {@code null} when either bean is absent
-   * @throws IllegalStateException when both are present and the store is not a {@code
-   *     PostgresOutboxStore}
-   */
-  static org.streamrune.postgres.PostgresOutboxStore transactionalOutboxStore(
-      @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxEventMapper mapper,
-      @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxStore store) {
-    if (mapper == null || store == null) {
-      return null;
-    }
-    if (store instanceof org.streamrune.postgres.PostgresOutboxStore postgresStore) {
-      return postgresStore;
-    }
-    throw new IllegalStateException(
-        "An OutboxEventMapper bean is present, but the OutboxStore bean is a "
-            + store.getClass().getName()
-            + ", not a PostgresOutboxStore. The framework's event store writes outbox entries in"
-            + " the append's own transaction, which only a PostgresOutboxStore supports, so every"
-            + " event would be appended without its outbox entry. Declare a PostgresOutboxStore"
-            + " bean, or supply your own EventStoreFactory bean that writes into this store.");
   }
 
   /**
@@ -1057,40 +1047,39 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates a PostgresEventAuditStore when event audit is enabled.
+   * The backend's {@link org.streamrune.core.audit.EventAuditStore} when event audit is enabled.
    *
-   * @param dataSource the JDBC data source
-   * @return a new PostgresEventAuditStore
+   * @param stores the backend's stores
+   * @return the backend's event audit store
    */
   @Singleton
   @Secondary
   @Requires(property = "streamrune.event-audit-enabled", value = "true")
   @Requires(beans = DataSource.class)
-  public org.streamrune.postgres.PostgresEventAuditStore postgresEventAuditStore(
-      DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresEventAuditStore(dataSource);
+  public org.streamrune.core.audit.EventAuditStore postgresEventAuditStore(BackendStores stores) {
+    return stores.eventAuditStore();
   }
 
   /**
-   * Creates a PostgresEventAuditQuery when event audit is enabled.
+   * The backend's {@link org.streamrune.core.audit.EventAuditQuery} when event audit is enabled.
    *
-   * @param dataSource the JDBC data source
-   * @return a new PostgresEventAuditQuery
+   * @param stores the backend's stores
+   * @return the backend's event audit query
    */
   @Singleton
   @Secondary
   @Requires(property = "streamrune.event-audit-enabled", value = "true")
   @Requires(beans = DataSource.class)
-  public org.streamrune.postgres.PostgresEventAuditQuery postgresEventAuditQuery(
-      DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresEventAuditQuery(dataSource);
+  public org.streamrune.core.audit.EventAuditQuery postgresEventAuditQuery(BackendStores stores) {
+    return stores.eventAuditQuery();
   }
 
   /**
-   * Creates a PostgresProjectionDeadLetterStore when projection DLQ is enabled.
+   * The backend's {@link org.streamrune.core.projection.ProjectionDeadLetterStore} when projection
+   * DLQ is enabled.
    *
-   * @param dataSource the JDBC data source
-   * @return a new PostgresProjectionDeadLetterStore
+   * @param stores the backend's stores
+   * @return the backend's projection dead-letter store
    */
   @Singleton
   @Secondary
@@ -1104,183 +1093,143 @@ public class StreamRuneMicronautModule {
   // @Primary remediation cannot reduce a collection). Parity with Spring's
   // @ConditionalOnMissingBean and Quarkus's @DefaultBean.
   @Requires(missingBeans = org.streamrune.core.projection.ProjectionDeadLetterStore.class)
-  public org.streamrune.postgres.PostgresProjectionDeadLetterStore
-      postgresProjectionDeadLetterStore(DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresProjectionDeadLetterStore(dataSource);
+  public org.streamrune.core.projection.ProjectionDeadLetterStore postgresProjectionDeadLetterStore(
+      BackendStores stores) {
+    return stores.projectionDeadLetterStore();
   }
 
   /**
-   * Creates a {@link org.streamrune.postgres.PostgresSagaStore} as the default {@link SagaStore}.
+   * The backend's {@link SagaStore} as the default saga store.
    *
-   * <p>Wires the {@link CryptoEngine} bean (if exactly one is present) into the saga store's
-   * ObjectMapper via {@code CryptoShreddingModule}, the same way {@link #postgresEventStoreFactory}
-   * wires the event store — so {@code @Encrypted} saga-state fields are persisted as ciphertext
-   * instead of plaintext PII, and fall within GDPR forget scope.
+   * <p>Its ObjectMapper wires the {@link CryptoEngine} bean (if exactly one is present) through
+   * {@code CryptoShreddingModule}, the same engine {@link #postgresEventStoreFactory} wires into
+   * the event store ({@link #streamRuneBackendStores} refuses more than one) — so
+   * {@code @Encrypted} saga-state fields are persisted as ciphertext instead of plaintext PII, and
+   * fall within GDPR forget scope.
    *
-   * @param dataSource the JDBC data source
-   * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
-   *     more than one triggers an {@link IllegalStateException})
-   * @return a new {@link org.streamrune.postgres.PostgresSagaStore}
-   * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
-   *     encryption would persist {@code @Encrypted} saga-state fields as PLAINTEXT
+   * @param stores the backend's stores
+   * @return the backend's saga store
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
   @Requires(property = "streamrune.saga.enabled", value = "true", defaultValue = "true")
-  public SagaStore sagaStore(
-      DataSource dataSource,
-      List<CryptoEngine> cryptoEngines,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
-    if (cryptoEngines.size() > 1) {
-      throw new IllegalStateException(
-          "Multiple CryptoEngine beans found ("
-              + cryptoEngines.size()
-              + "); register exactly one or qualify them. Found: "
-              + cryptoEngines);
-    }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
-    // Thread the metrics bean into the saga store's CryptoShreddingModule so a redaction
-    // on the saga-state decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    return new org.streamrune.postgres.PostgresSagaStore(
-        dataSource,
-        org.streamrune.postgres.PostgresSagaStore.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics)));
+  public SagaStore sagaStore(BackendStores stores) {
+    return stores.sagaStore();
   }
 
   /**
-   * Creates a {@link org.streamrune.postgres.PostgresSagaDeadLetterStore} as the default {@link
-   * SagaDeadLetterStore}. Applications that supply their own {@link SagaDeadLetterStore} bean take
-   * precedence over this default via Micronaut's {@code @Secondary} ordering.
+   * The backend's {@link SagaDeadLetterStore} as the default saga dead-letter store. Applications
+   * that supply their own {@link SagaDeadLetterStore} bean take precedence over this default via
+   * Micronaut's {@code @Secondary} ordering.
    *
-   * <p><strong>Concrete return type:</strong> the declared return type is deliberately the concrete
-   * {@link org.streamrune.postgres.PostgresSagaDeadLetterStore}, not the {@link
-   * SagaDeadLetterStore} interface. Micronaut derives a factory bean's types from the method's
-   * declared return type, so an interface-typed factory leaves concrete-typed gates and injection
-   * points — {@link #sagaDeadLetterRetentionSweeper} declares {@code @Requires(beans =
-   * PostgresSagaDeadLetterStore.class)} and takes a concrete parameter — permanently unsatisfied
-   * even though a bean exists. That silently dropped the retention sweeper from every default
-   * deployment and let {@code saga_dead_letters} grow without bound (a GDPR storage-limitation
-   * violation), while the boot validators, which check this store by interface type, still passed.
-   * Same defect class as {@link #commandInbox}. The concrete class still implements {@link
-   * SagaDeadLetterStore}, so interface-typed consumers keep resolving this bean.
+   * <p>Declared with the {@link SagaDeadLetterStore} interface: Micronaut derives a factory bean's
+   * types from the method's declared return type, so no gate or injection point may ask for a
+   * backend's concrete store type to find this bean. {@link #sagaDeadLetterRetentionSweeper} takes
+   * this store from {@link BackendStores} instead, and asks for a {@link
+   * org.streamrune.postgres.PostgresSagaDeadLetterStore} only to find one the application declares.
    *
-   * @param dataSource the JDBC data source
-   * @return a new {@link org.streamrune.postgres.PostgresSagaDeadLetterStore}
+   * @param stores the backend's stores
+   * @return the backend's saga dead-letter store
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
   @Requires(property = "streamrune.saga.enabled", value = "true", defaultValue = "true")
-  public org.streamrune.postgres.PostgresSagaDeadLetterStore sagaDeadLetterStore(
-      DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresSagaDeadLetterStore(dataSource);
+  public SagaDeadLetterStore sagaDeadLetterStore(BackendStores stores) {
+    return stores.sagaDeadLetterStore();
   }
 
   /**
-   * Creates a {@link PostgresCommandInbox} as the default {@link CommandInbox} when a DataSource is
-   * available. Applications that supply their own {@link CommandInbox} bean will suppress this
-   * default via Micronaut's {@code @Secondary} precedence.
+   * The backend's {@link CommandInbox} as the default command inbox when a DataSource is available.
+   * Applications that supply their own {@link CommandInbox} bean will suppress this default via
+   * Micronaut's {@code @Secondary} precedence.
    *
-   * <p>The declared return type is deliberately the concrete {@link PostgresCommandInbox}, not the
-   * {@link CommandInbox} interface: Micronaut resolves {@code @Nullable PostgresCommandInbox} /
-   * {@code @Requires(beans = PostgresCommandInbox.class)} injection points (e.g. {@link
-   * #postgresEventStoreFactory} and {@link #inboxRetentionSweeper}) from the factory method's
-   * declared return type, so an interface-typed factory leaves those concrete-typed points
-   * permanently unsatisfied even though a bean exists. The concrete class still implements {@link
-   * CommandInbox}, so interface-typed consumers (e.g. {@link VirtualThreadCommandBus}'s
-   * {@code @Nullable CommandInbox} parameter) continue to resolve this bean too.
+   * <p>The command bus and {@link #postgresEventStoreFactory} both take the {@code CommandInbox}
+   * interface, so they resolve the same bean: an application inbox reaches both. Because the event
+   * store claims the idempotency key in the SAME transaction as the append, it must be the event
+   * store's own backend's inbox; any other is refused when the event store factory is created, so a
+   * custom inbox of another type also requires a custom {@code EventStoreFactory}/{@code
+   * EventStore} whose {@code appendWithKey} claims the key atomically. {@link
+   * #inboxRetentionSweeper} takes this inbox from {@link BackendStores}, never by type.
    *
-   * <p><strong>What overriding actually requires.</strong> {@code @Secondary} makes a user bean win
-   * the INTERFACE-typed points (the bus) while this default still satisfies the CONCRETE-typed ones
-   * (the event-store factory), so a half-override leaves the store claiming keys in the framework's
-   * own {@code command_inbox} while the bus pre-checks the user's — the override silently ignored
-   * on the authoritative dedup path. Because the store must claim the idempotency key in the SAME
-   * transaction as the append, a custom inbox is only honoured end-to-end when the event store
-   * knows about it: supplying a {@code CommandInbox} that is not a {@link PostgresCommandInbox}
-   * therefore also requires supplying your own {@code EventStoreFactory}/{@code EventStore} whose
-   * {@code appendWithKey} claims the key atomically. {@link
-   * org.streamrune.integration.CommandInboxWiringValidator} fails startup on the mismatch rather
-   * than letting the guarantee break silently in production.
-   *
-   * @param dataSource the JDBC data source
-   * @return a new {@link PostgresCommandInbox}
+   * @param stores the backend's stores
+   * @return the backend's command inbox
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
-  public PostgresCommandInbox commandInbox(DataSource dataSource) {
-    return new PostgresCommandInbox(dataSource);
+  public CommandInbox commandInbox(BackendStores stores) {
+    return stores.commandInbox();
   }
 
   /**
-   * Creates a {@link PostgresAuditStore} as the default {@link AuditStore}.
+   * The backend's {@link AuditStore} as the default audit store.
    *
-   * @param dataSource the JDBC data source
-   * @return a new {@link PostgresAuditStore}
+   * @param stores the backend's stores
+   * @return the backend's audit store
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
-  public AuditStore auditStore(DataSource dataSource) {
-    return new PostgresAuditStore(dataSource);
+  public AuditStore auditStore(BackendStores stores) {
+    return stores.auditStore();
   }
 
   /**
-   * Creates a PostgresComplianceReportQuery when DataSource is available.
+   * The backend's {@link ComplianceReportQuery} when DataSource is available.
    *
-   * @param dataSource the JDBC data source
-   * @return a new PostgresComplianceReportQuery
+   * @param stores the backend's stores
+   * @return the backend's compliance report query
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
-  public ComplianceReportQuery complianceReportQuery(DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresComplianceReportQuery(dataSource);
+  public ComplianceReportQuery complianceReportQuery(BackendStores stores) {
+    return stores.complianceReportQuery();
   }
 
   /**
-   * Creates a {@link org.streamrune.postgres.PostgresCommandAuditQuery} as the default {@link
-   * org.streamrune.core.audit.CommandAuditQuery} when DataSource is available.
+   * The backend's {@link org.streamrune.core.audit.CommandAuditQuery} when DataSource is available.
    *
-   * @param dataSource the JDBC data source
-   * @return a new PostgresCommandAuditQuery
+   * @param stores the backend's stores
+   * @return the backend's command audit query
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
-  public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(DataSource dataSource) {
-    return new org.streamrune.postgres.PostgresCommandAuditQuery(dataSource);
+  public org.streamrune.core.audit.CommandAuditQuery commandAuditQuery(BackendStores stores) {
+    return stores.commandAuditQuery();
   }
 
   /**
-   * Creates a {@link PostgresOffsetStore} as the default {@link
-   * org.streamrune.core.projection.OffsetStore} when a DataSource is present and the application
-   * does not define its own. Brings Micronaut to parity with Quarkus, which defaults the same way —
-   * without this a Micronaut application must hand-define an {@code OffsetStore} for projections to
-   * run.
+   * The backend's {@link org.streamrune.core.projection.OffsetStore} as the default offset store
+   * when a DataSource is present and the application does not define its own. Brings Micronaut to
+   * parity with Quarkus, which defaults the same way — without this a Micronaut application must
+   * hand-define an {@code OffsetStore} for projections to run.
    *
-   * @param dataSource the JDBC data source
-   * @return a new {@link PostgresOffsetStore}
+   * @param stores the backend's stores
+   * @return the backend's offset store
    */
   @Singleton
   @Secondary
   @Requires(beans = DataSource.class)
   @Requires(missingBeans = org.streamrune.core.projection.OffsetStore.class)
-  public org.streamrune.core.projection.OffsetStore offsetStore(DataSource dataSource) {
-    return new PostgresOffsetStore(dataSource);
+  public org.streamrune.core.projection.OffsetStore offsetStore(BackendStores stores) {
+    return stores.offsetStore();
   }
 
   /**
-   * Creates the default read-model store, {@value #DEFAULT_READ_MODEL_STORE}, on the application's
-   * {@code DataSource}: a {@link org.streamrune.postgres.PostgresReadModelStore} whose read models
-   * live in {@code <name>_view} tables and whose checkpoints live beside them in {@code
-   * readmodel_checkpoint}, so a routed {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT}
-   * registration's read-model writes and its checkpoint commit in one transaction, under the
-   * checkpoint row's lock that runs the epoch fence, the overlap guard and the monotonic guard.
-   * {@link ProjectionFactory} routes to it every registration that names it, writes to its
-   * repository, or (transactional, with no write target of its own) has no other transactional
-   * store to go to.
+   * Creates the default read-model store, named after the backend ({@link
+   * BackendStores#backendName()}, {@code postgres} by default), on the application's {@code
+   * DataSource}: the backend's {@link BackendStores#defaultReadModelStore()} — on PostgreSQL a
+   * {@link org.streamrune.postgres.PostgresReadModelStore} whose read models live in {@code
+   * <name>_view} tables and whose checkpoints live beside them in {@code readmodel_checkpoint}, so
+   * a routed {@code TRANSACTIONAL_LOCAL} / {@code EXTERNAL_EFFECT} registration's read-model writes
+   * and its checkpoint commit in one transaction, under the checkpoint row's lock that runs the
+   * epoch fence, the overlap guard and the monotonic guard. {@link ProjectionFactory} routes to it
+   * every registration that names it, writes to its repository, or (transactional, with no write
+   * target of its own) has no other transactional store to go to.
    *
    * <p>Creating the store checks the server version, applies the read-model migration series
    * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
@@ -1289,73 +1238,47 @@ public class StreamRuneMicronautModule {
    * creates the store it keeps, as Spring and Quarkus do — or earlier if a part of the bean is used
    * first ({@link DeferredReadModelStore}), never when the bean is created: Micronaut has no lazy
    * singleton, and a context started with {@code eagerInitSingletons(true)} creates every
-   * singleton, so a replaced default store never touches its database. In an application with
-   * projections the stores are selected while the context starts, on the starting thread — {@link
-   * StreamRuneLifecycle} resolves the framework's runners on the startup event, and the runners'
-   * routes select the stores (as does a {@code BaseProjection} that injects the {@link
-   * #projectionRepository ProjectionRepository}, and the {@link ProjectionIndexDeclarer} when index
-   * beans exist).
+   * singleton, so a replaced default store never touches its database (the bundle, which this bean
+   * takes, opens nothing either). In an application with projections the stores are selected while
+   * the context starts, on the starting thread — {@link StreamRuneLifecycle} resolves the
+   * framework's runners on the startup event, and the runners' routes select the stores (as does a
+   * {@code BaseProjection} that injects the {@link #projectionRepository ProjectionRepository}, and
+   * the {@link ProjectionIndexDeclarer} when index beans exist).
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if exactly one is
-   * present) through {@code CryptoShreddingModule}, the same way {@link #sagaStore} wires the saga
-   * store — so {@code @Encrypted} read-model fields are ciphertext at rest and within GDPR forget
-   * scope.
+   * present) through {@code CryptoShreddingModule}, the same engine as the saga store's ({@link
+   * #streamRuneBackendStores}) — so {@code @Encrypted} read-model fields are ciphertext at rest and
+   * within GDPR forget scope.
    *
    * <p>Replaced only by name: an application {@link org.streamrune.core.projection.ReadModelStore}
-   * bean whose {@code name()} is {@value #DEFAULT_READ_MODEL_STORE} takes its place, and the
-   * Postgres store behind this bean is then never created; a store of any other name is added
-   * beside it ({@link #readModelStores}). {@code @Secondary} only keeps an unqualified {@code
-   * ReadModelStore} injection point of the application resolving to the application's store.
+   * bean whose {@code name()} is the backend's name takes its place, and the store behind this bean
+   * is then never created; a store of any other name is added beside it ({@link #readModelStores}).
+   * {@code @Secondary} only keeps an unqualified {@code ReadModelStore} injection point of the
+   * application resolving to the application's store.
    *
-   * @param dataSource the JDBC data source
-   * @param properties the StreamRune configuration properties
-   * @param cryptoEngines all registered {@link CryptoEngine} beans (empty if none, one if present,
-   *     more than one triggers an {@link IllegalStateException})
-   * @param metrics optional metrics collector the read-model decrypt path reports redactions to
+   * @param stores the backend's stores
    * @return the default read-model store, created on first use
-   * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
-   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT
    */
   @Singleton
   @Secondary
   @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE_BEAN)
   @Requires(beans = DataSource.class)
   public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(
-      DataSource dataSource,
-      StreamRuneMicronautProperties properties,
-      List<CryptoEngine> cryptoEngines,
-      @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics) {
-    // Checked before the database is touched.
-    if (cryptoEngines.size() > 1) {
-      throw new IllegalStateException(
-          "Multiple CryptoEngine beans found ("
-              + cryptoEngines.size()
-              + "); register exactly one or qualify them. Found: "
-              + cryptoEngines);
-    }
-    CryptoEngine cryptoEngine = cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst();
-    // Thread the metrics bean into the repository's CryptoShreddingModule so a redaction
-    // on the read-model decrypt path emits subject_redacted; NOOP when absent (behavior unchanged).
-    var objectMapper =
-        org.streamrune.postgres.JdbcProjectionRepository.createObjectMapper(
-            cryptoEngine, metricsOrNoop(metrics));
-    boolean migrate = properties.readModelAutoInitialize();
+      BackendStores stores) {
     // Creating the bean touches nothing: a context with eagerInitSingletons creates every
     // singleton, and a replaced default store must never reach its database.
-    return new DeferredReadModelStore(
-        DEFAULT_READ_MODEL_STORE,
-        () ->
-            org.streamrune.postgres.PostgresReadModelStore.create(
-                DEFAULT_READ_MODEL_STORE, dataSource, objectMapper, migrate, true));
+    return new DeferredReadModelStore(stores.backendName(), stores::defaultReadModelStore);
   }
 
   /**
    * Creates the application's read-model stores in one bean: every {@link
    * org.streamrune.core.projection.ReadModelStore} bean the application defines — compiled, or
    * registered as a runtime singleton before the context starts — and the default store ({@link
-   * #postgresReadModelStore}) unless one of them is named {@value #DEFAULT_READ_MODEL_STORE}
-   * ({@link org.streamrune.integration.ProjectionStoreRouting#selectStores}). Selected and
-   * validated once, when first asked for: creating this bean creates no store.
+   * #postgresReadModelStore}) unless one of them is named after the backend ({@link
+   * StreamRuneBackend#name()}, {@code postgres} by default; {@link
+   * org.streamrune.integration.ProjectionStoreRouting#selectStores}). Selected and validated once,
+   * when first asked for: creating this bean creates no store, and it takes the backend, not its
+   * stores, so it opens nothing.
    *
    * <p>Replacing the default store is by name, which no bean condition can see: a store's name is
    * known only once the store exists. The application's stores are collected with {@link
@@ -1369,13 +1292,14 @@ public class StreamRuneMicronautModule {
    * health name the store's own class.
    *
    * @param beanContext the context the read-model stores are collected from
+   * @param backend the selected backend, whose name the default store has
    * @return the stores
    * @hidden
    */
   @Singleton
   @Internal
   public org.streamrune.integration.ReadModelStores readModelStores(
-      io.micronaut.context.BeanContext beanContext) {
+      io.micronaut.context.BeanContext beanContext, StreamRuneBackend backend) {
     io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore> defaultStore =
         io.micronaut.inject.qualifiers.Qualifiers.byName(DEFAULT_READ_MODEL_STORE_BEAN);
     io.micronaut.context.Qualifier<org.streamrune.core.projection.ReadModelStore>
@@ -1398,7 +1322,7 @@ public class StreamRuneMicronautModule {
               }
             };
     return new org.streamrune.integration.ReadModelStores(
-        DEFAULT_READ_MODEL_STORE,
+        backend.name(),
         () ->
             beanContext
                 .findBean(org.streamrune.core.projection.ReadModelStore.class, defaultStore)
@@ -1416,21 +1340,19 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates the repository of the store named {@value #DEFAULT_READ_MODEL_STORE} — the default
-   * store's, or the application store's that replaced it — as the injectable {@link
+   * Creates the repository of the store named after the backend ({@code postgres} by default) — the
+   * default store's, or the application store's that replaced it — as the injectable {@link
    * org.streamrune.core.projection.ProjectionRepository}, so query handlers and {@code
    * BaseProjection} constructors that take a {@code ProjectionRepository} read and write it; other
    * stores' repositories are reached through their {@code ReadModelStore} beans. It backs off when
    * the application defines a {@code ProjectionRepository} bean.
    *
-   * <p>Finding the store named {@value #DEFAULT_READ_MODEL_STORE} creates the application's store
-   * beans (a store's name is known only once it exists) and the default store only when none of
-   * them replaced it.
+   * <p>Finding the store named after the backend creates the application's store beans (a store's
+   * name is known only once it exists) and the default store only when none of them replaced it.
    *
    * @param stores the read-model stores
-   * @return the repository of the store named {@value #DEFAULT_READ_MODEL_STORE}
-   * @throws IllegalStateException when the stores are invalid, or none is named {@value
-   *     #DEFAULT_READ_MODEL_STORE}
+   * @return the repository of the store named after the backend
+   * @throws IllegalStateException when the stores are invalid, or none is named after the backend
    * @hidden
    */
   @Singleton
@@ -1451,8 +1373,8 @@ public class StreamRuneMicronautModule {
    * org.streamrune.core.projection.OffsetStore#subscriptionCheckpoint()}.
    *
    * <ul>
-   *   <li>A {@link PostgresOffsetStore} (the default one, or one the application defines on any
-   *       {@code DataSource}) pairs itself with a {@link
+   *   <li>A {@link org.streamrune.postgres.PostgresOffsetStore} (the default one, or one the
+   *       application defines on any {@code DataSource}) pairs itself with a {@link
    *       org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor} on the {@code
    *       DataSource} it reads — it fences the checkpoint under its row lock and hands the
    *       projection no repository, so the projection writes where it writes (at least once).
@@ -1825,13 +1747,14 @@ public class StreamRuneMicronautModule {
   }
 
   /**
-   * Creates a per-instance {@link org.streamrune.postgres.LeaseBasedLeadership} — a DB-clocked,
-   * persisted lease with a monotonic fencing {@code epoch} — so that, with more than one replica of
-   * the same projection/subscription running, at most one replica is the active consumer and the
-   * others sit in standby. Leadership is a single atomic upsert over {@code subscription_leases}
-   * decided by the database clock (no session state, no dedicated connection held across calls), so
-   * it is correct under any connection pooling; the leader's monotonic epoch fences a superseded
-   * leader out at the projection commit. Requires a {@link DataSource} and {@code
+   * The backend's per-instance leadership ({@link BackendStores#leadership}; on PostgreSQL a {@link
+   * org.streamrune.postgres.LeaseBasedLeadership}) — a DB-clocked, persisted lease with a monotonic
+   * fencing {@code epoch} — so that, with more than one replica of the same projection/subscription
+   * running, at most one replica is the active consumer and the others sit in standby. Leadership
+   * is a single atomic upsert over {@code subscription_leases} decided by the database clock (no
+   * session state, no dedicated connection held across calls), so it is correct under any
+   * connection pooling; the leader's monotonic epoch fences a superseded leader out at the
+   * projection commit. Requires a {@link DataSource} and {@code
    * streamrune.subscription.single-active-consumer.enabled} reading as on (default on) — through
    * {@code SingleActiveConsumerEnabled}, the reading the saga forward fence's {@code auto} follows
    * too. The lease TTL is {@code streamrune.subscription.single-active-consumer.lease-ttl} (default
@@ -1843,10 +1766,12 @@ public class StreamRuneMicronautModule {
    * held leases on context shutdown even when the runner lifecycle is disabled ({@code
    * streamrune.runner-lifecycle-enabled=false}) and no {@link StreamRuneLifecycle} bean exists —
    * Micronaut does not auto-close {@code @Factory}-produced {@link AutoCloseable} beans without it.
+   * The bundle hands out one leadership per TTL and closes it too when it is closed; closing it
+   * more than once is harmless.
    *
-   * @param dataSource the JDBC data source
+   * @param stores the backend's stores
    * @param properties the StreamRune configuration (supplies the lease TTL)
-   * @return a new {@link org.streamrune.postgres.LeaseBasedLeadership}
+   * @return the backend's leadership for the lease TTL
    */
   @Singleton
   @Secondary
@@ -1860,10 +1785,10 @@ public class StreamRuneMicronautModule {
   @Requires(missingBeans = org.streamrune.core.subscription.SubscriptionLeadership.class)
   @Bean(preDestroy = "close")
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(
-      DataSource dataSource, StreamRuneMicronautProperties properties) {
+      BackendStores stores, StreamRuneMicronautProperties properties) {
     Duration leaseTtl = properties.subscriptionLeaseTtl();
-    return new org.streamrune.postgres.LeaseBasedLeadership(
-        dataSource, leaseTtl != null ? leaseTtl : Duration.ofSeconds(15));
+    // An explicit null keeps the documented 15s default; the backend refuses a null TTL.
+    return stores.leadership(leaseTtl != null ? leaseTtl : Duration.ofSeconds(15));
   }
 
   /**
@@ -1894,27 +1819,32 @@ public class StreamRuneMicronautModule {
 
   /**
    * Creates an {@link InboxRetentionSweeper} that prunes command-inbox rows older than {@code
-   * streamrune.inbox.retention-max-age} (default 7 days). Only created when a {@link
-   * PostgresCommandInbox} bean is present. The retention window exceeds typical broker redelivery
-   * and subscription replay horizons so a pruned key cannot re-admit a duplicate. Started and
-   * stopped by {@link StreamRuneLifecycle}. The {@link org.streamrune.core.StreamRuneMetrics} bean
-   * is wired in when present so {@code streamrune.inbox.swept_rows} is recorded; falls back to
-   * {@link org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
+   * streamrune.inbox.retention-max-age} (default 7 days). Only created for a store the framework
+   * built — the backend's {@link BackendStores#commandInbox()}, present with a DataSource — or one
+   * the application declares as a {@link PostgresCommandInbox}, which then is the one it prunes
+   * ({@link FrameworkOrPostgresCommandInbox}); an application inbox of any other type is never
+   * pruned, whatever its bean name. The retention window exceeds typical broker redelivery and
+   * subscription replay horizons so a pruned key cannot re-admit a duplicate. Started and stopped
+   * by {@link StreamRuneLifecycle}. The {@link org.streamrune.core.StreamRuneMetrics} bean is wired
+   * in when present so {@code streamrune.inbox.swept_rows} is recorded; falls back to {@link
+   * org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    *
-   * @param commandInbox the command inbox to prune
+   * @param applicationInbox the application's {@link PostgresCommandInbox} bean, or {@code null}
+   * @param stores the backend's stores, or {@code null} without a DataSource
    * @param properties the StreamRune configuration properties
    * @param metrics the optional metrics collector
    * @return a new {@link InboxRetentionSweeper}
    */
   @Singleton
   @Secondary
-  @Requires(beans = PostgresCommandInbox.class)
+  @Requires(condition = FrameworkOrPostgresCommandInbox.class)
   // Back off entirely when the application defines its own sweeper.
   @Requires(missingBeans = InboxRetentionSweeper.class)
   @Bean(preDestroy = "close")
   @jakarta.inject.Named(FRAMEWORK_INBOX_RETENTION_SWEEPER)
   public InboxRetentionSweeper inboxRetentionSweeper(
-      PostgresCommandInbox commandInbox,
+      @jakarta.annotation.Nullable PostgresCommandInbox applicationInbox,
+      @jakarta.annotation.Nullable BackendStores stores,
       StreamRuneMicronautProperties properties,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
       @jakarta.annotation.Nullable
@@ -1922,7 +1852,7 @@ public class StreamRuneMicronautModule {
     return registerRetentionSweeperHealth(
         relayHealth,
         new InboxRetentionSweeper(
-            commandInbox,
+            applicationInbox != null ? applicationInbox : stores.commandInbox(),
             properties.inboxRetentionMaxAge(),
             java.time.Duration.ofHours(1),
             java.time.Clock.systemUTC(),
@@ -1933,27 +1863,35 @@ public class StreamRuneMicronautModule {
    * Creates a {@link org.streamrune.runtime.SagaDeadLetterRetentionSweeper} that prunes quarantined
    * saga dead-letter entries older than {@code streamrune.saga.dead-letter-retention-max-age}
    * (default 7 days, and must not exceed {@code streamrune.inbox.retention-max-age} — see {@link
-   * org.streamrune.integration.SagaRetentionValidator}). Only created when sagas are enabled and a
-   * {@link org.streamrune.postgres.PostgresSagaDeadLetterStore} bean is present. Started and
-   * stopped by {@link StreamRuneLifecycle}. The {@link org.streamrune.core.StreamRuneMetrics} bean
-   * is wired in when present so {@code streamrune.saga.dead_letters_swept} is recorded; falls back
-   * to {@link org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
+   * org.streamrune.integration.SagaRetentionValidator}). Only created when sagas are enabled, for a
+   * store the framework built — the backend's {@link BackendStores#sagaDeadLetterStore()}, present
+   * with a DataSource — or one the application declares as a {@link
+   * org.streamrune.postgres.PostgresSagaDeadLetterStore}, which then is the one it prunes ({@link
+   * FrameworkOrPostgresSagaDeadLetterStore}); an application store of any other type is never
+   * pruned, whatever its bean name. Started and stopped by {@link StreamRuneLifecycle}. The {@link
+   * org.streamrune.core.StreamRuneMetrics} bean is wired in when present so {@code
+   * streamrune.saga.dead_letters_swept} is recorded; falls back to {@link
+   * org.streamrune.core.StreamRuneMetrics#NOOP} when no metrics bean exists.
    *
-   * @param sagaDeadLetterStore the saga dead-letter store to prune
+   * @param applicationStore the application's {@link
+   *     org.streamrune.postgres.PostgresSagaDeadLetterStore} bean, or {@code null}
+   * @param stores the backend's stores, or {@code null} without a DataSource
    * @param properties the StreamRune configuration properties
    * @param metrics the optional metrics collector
    * @return a new {@link org.streamrune.runtime.SagaDeadLetterRetentionSweeper}
    */
   @Singleton
   @Secondary
-  @Requires(beans = org.streamrune.postgres.PostgresSagaDeadLetterStore.class)
+  @Requires(condition = FrameworkOrPostgresSagaDeadLetterStore.class)
   @Requires(property = "streamrune.saga.enabled", value = "true", defaultValue = "true")
   // Back off entirely when the application defines its own sweeper.
   @Requires(missingBeans = org.streamrune.runtime.SagaDeadLetterRetentionSweeper.class)
   @Bean(preDestroy = "close")
   @jakarta.inject.Named(FRAMEWORK_SAGA_DEAD_LETTER_RETENTION_SWEEPER)
   public org.streamrune.runtime.SagaDeadLetterRetentionSweeper sagaDeadLetterRetentionSweeper(
-      org.streamrune.postgres.PostgresSagaDeadLetterStore sagaDeadLetterStore,
+      @jakarta.annotation.Nullable
+          org.streamrune.postgres.PostgresSagaDeadLetterStore applicationStore,
+      @jakarta.annotation.Nullable BackendStores stores,
       StreamRuneMicronautProperties properties,
       @jakarta.annotation.Nullable org.streamrune.core.StreamRuneMetrics metrics,
       @jakarta.annotation.Nullable
@@ -1961,11 +1899,54 @@ public class StreamRuneMicronautModule {
     return registerRetentionSweeperHealth(
         relayHealth,
         new org.streamrune.runtime.SagaDeadLetterRetentionSweeper(
-            sagaDeadLetterStore,
+            applicationStore != null ? applicationStore : stores.sagaDeadLetterStore(),
             properties.sagaDeadLetterRetentionMaxAge(),
             java.time.Duration.ofHours(1),
             java.time.Clock.systemUTC(),
             metrics != null ? metrics : org.streamrune.core.StreamRuneMetrics.NOOP));
+  }
+
+  /**
+   * Matches when the framework built a command inbox — a {@link BackendStores} bean exists, which
+   * {@link #commandInbox} takes its store from — or the application declares a {@link
+   * PostgresCommandInbox} bean: exactly the cases {@code @Requires(beans =
+   * PostgresCommandInbox.class)} matched while the framework's inbox bean carried that type. A bean
+   * condition on the {@code CommandInbox} interface would also match an application store of
+   * another type, which the framework must never prune. Public only because Micronaut instantiates
+   * it for {@code @Requires(condition = ...)}.
+   *
+   * @hidden
+   */
+  @Internal
+  public static final class FrameworkOrPostgresCommandInbox
+      implements io.micronaut.context.condition.Condition {
+    @Override
+    public boolean matches(io.micronaut.context.condition.ConditionContext context) {
+      io.micronaut.context.BeanContext beans = context.getBeanContext();
+      return beans.containsBean(BackendStores.class)
+          || beans.containsBean(PostgresCommandInbox.class);
+    }
+  }
+
+  /**
+   * Matches when the framework built a saga dead-letter store — a {@link BackendStores} bean
+   * exists, which {@link #sagaDeadLetterStore} takes its store from — or the application declares a
+   * {@link org.streamrune.postgres.PostgresSagaDeadLetterStore} bean: exactly the cases
+   * {@code @Requires(beans = PostgresSagaDeadLetterStore.class)} matched while the framework's
+   * store bean carried that type. Public only because Micronaut instantiates it for
+   * {@code @Requires(condition = ...)}.
+   *
+   * @hidden
+   */
+  @Internal
+  public static final class FrameworkOrPostgresSagaDeadLetterStore
+      implements io.micronaut.context.condition.Condition {
+    @Override
+    public boolean matches(io.micronaut.context.condition.ConditionContext context) {
+      io.micronaut.context.BeanContext beans = context.getBeanContext();
+      return beans.containsBean(BackendStores.class)
+          || beans.containsBean(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
+    }
   }
 
   /**
