@@ -54,4 +54,15 @@ class ReadModelStoreDefaultAliasTest {
 
     assertThat(store.name()).isEqualTo("default-search");
   }
+
+  @Test
+  void theRefusalIsExactAndCaseSensitive() {
+    // Only the exact word is reserved; routing's alias lookup compares the same way.
+    assertThat(ReadModelStore.of("Default", REPOSITORY, CHECKPOINTS, PROCESSOR).name())
+        .isEqualTo("Default");
+    assertThat(ReadModelStore.of(" default", REPOSITORY, CHECKPOINTS, PROCESSOR).name())
+        .isEqualTo(" default");
+    assertThatThrownBy(() -> ReadModelStore.of("default", REPOSITORY, CHECKPOINTS, PROCESSOR))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 }

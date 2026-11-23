@@ -5,7 +5,7 @@ import java.util.Collection;
 import java.util.function.Function;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DeadLetterQueue;
-import org.streamrune.core.EventStore;
+import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.audit.AuditStore;
 import org.streamrune.core.audit.CommandAuditQuery;
 import org.streamrune.core.audit.ComplianceReportQuery;
@@ -31,11 +31,14 @@ import org.streamrune.core.types.SubjectId;
  * <ul>
  *   <li><b>Lazy.</b> Opening the bundle touches no table. A store is built, and reaches the
  *       database (schema migration and validation included), only when its accessor is first
- *       called, so a store the application never asks for never touches the database.
+ *       called, so a store the application never asks for never touches the database. The event
+ *       store is one step later still: {@link #eventStoreFactory(EventStoreOptions)} touches no
+ *       table, and only the factory's {@link EventStoreFactory#create()} does.
  *   <li><b>Memoized.</b> Repeated calls return the same instance: an accessor without parameters
- *       always returns the instance it built first, and an accessor with parameters returns the
- *       instance it built for an equal argument ({@code equals}; a {@link Function} is equal only
- *       to itself).
+ *       always returns the instance it built first, and {@link
+ *       #eventStoreFactory(EventStoreOptions)}, {@link #outboxStore(OutboxOptions)} and {@link
+ *       #leadership(Duration)} return the instance they built for an equal argument. {@link
+ *       #snapshotPurger(Function)} is the one exception: it builds a new purger on every call.
  *   <li><b>Complete.</b> Every accessor is supported. An accessor may refuse only where its own
  *       documentation says so.
  * </ul>
@@ -43,8 +46,11 @@ import org.streamrune.core.types.SubjectId;
  * <p>The interface holds no state; the memoization is each implementation's. The bundle has no
  * aggregate locker and no crypto ports.
  *
- * <p>{@link #close()} releases what the bundle itself holds, for example a backend's guard on its
- * database file. It does not close the {@code DataSource}, which belongs to the application.
+ * <p>The bundle owns what it memoized: {@link #close()} closes every {@link AutoCloseable} it built
+ * and memoized, the {@link SubscriptionLeadership} included, and releases what the bundle itself
+ * holds, for example a backend's guard on its database file. A consumer never closes a memoized
+ * instance itself, since every later call of the accessor would hand back the closed one. It does
+ * not close the {@code DataSource}, which belongs to the application.
  */
 public interface BackendStores extends AutoCloseable {
 
@@ -56,14 +62,28 @@ public interface BackendStores extends AutoCloseable {
   String backendName();
 
   /**
-   * The event store built with {@code options}.
+   * The factory of the event store configured with {@code options}.
    *
-   * @param options what the event store is built with; not {@code null}
-   * @return the event store; the same instance for equal options
-   * @throws IllegalArgumentException if {@code options} carries an outbox, command inbox or event
-   *     audit store that this bundle did not build
+   * <p>The call validates the options against this backend and narrows the outbox, command inbox
+   * and event audit store to the backend's own types, without touching the database, so a
+   * misconfiguration fails when the factory is configured even if {@link
+   * EventStoreFactory#create()} never runs. Only {@code create()} touches the database: it migrates
+   * and validates the schema (as {@link BackendContext#migrateSchema()} and {@link
+   * BackendContext#validateSchema()} say) and builds the store, with {@link
+   * BackendContext#cryptoEngine()}.
+   *
+   * @param options what the event store is configured with; not {@code null}
+   * @return the event store factory; the same instance for equal options
+   * @throws BackendOptionException if an option value is one this backend cannot honour, for
+   *     example a statement timeout it cannot apply; {@link BackendOptionException#option()} names
+   *     the {@link EventStoreOptions} component
+   * @throws IllegalArgumentException (not a {@code BackendOptionException}) if {@code outboxStore},
+   *     {@code commandInbox} or {@code eventAuditStore} is a store that is not this backend's own
+   *     type, since the event store writes it in the transaction of its own append. The message
+   *     names the role, the store's backend (or its class when no backend owns it) and this
+   *     backend, and advises building the store from this backend's {@code BackendStores}
    */
-  EventStore eventStore(EventStoreOptions options);
+  EventStoreFactory eventStoreFactory(EventStoreOptions options);
 
   /**
    * The event store's subscription checkpoints.
@@ -164,7 +184,7 @@ public interface BackendStores extends AutoCloseable {
    *
    * @param streamsForSubject maps a subject to every stream whose snapshot may carry its data; not
    *     {@code null}
-   * @return the snapshot purger; the same instance for the same function
+   * @return a new snapshot purger on every call; the bundle does not memoize it
    */
   SnapshotPurger snapshotPurger(
       Function<SubjectId, ? extends Collection<StreamId>> streamsForSubject);
@@ -173,11 +193,16 @@ public interface BackendStores extends AutoCloseable {
    * Subscription leadership through leases of {@code leaseTtl}.
    *
    * @param leaseTtl how long a lease lasts without renewal; positive
-   * @return the leadership; the same instance for an equal duration
+   * @return the leadership; the same instance for an equal duration, closed by {@link #close()} and
+   *     never by its consumers
    */
   SubscriptionLeadership leadership(Duration leaseTtl);
 
-  /** Releases what the bundle holds; does nothing by default. Throws no checked exception. */
+  /**
+   * Closes every {@link AutoCloseable} the bundle built and memoized, the leadership included, and
+   * releases what the bundle itself holds. Does nothing by default. Throws no checked exception, so
+   * a try-with-resources over the bundle needs no handler.
+   */
   @Override
   default void close() {}
 }

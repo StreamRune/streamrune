@@ -15,6 +15,13 @@ import org.streamrune.core.outbox.OutboxStore;
 public record OutboxOptions(Duration claimLease, OutboxOrderingMode orderingMode) {
 
   /**
+   * The claim lease an application uses when it sets none: four minutes, strictly longer than the
+   * longest in-flight horizon of the shipped publishers (Kafka's {@code max.block.ms} 60s plus
+   * {@code delivery.timeout.ms} 120s).
+   */
+  public static final Duration DEFAULT_CLAIM_LEASE = Duration.ofMinutes(4);
+
+  /**
    * Validates the options.
    *
    * @throws IllegalArgumentException if {@code claimLease} is {@code null}, zero or negative, or

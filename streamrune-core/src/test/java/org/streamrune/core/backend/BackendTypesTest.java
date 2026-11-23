@@ -1,10 +1,9 @@
 package org.streamrune.core.backend;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Duration;
@@ -28,7 +27,7 @@ import org.streamrune.core.upcasting.EventUpcaster;
 class BackendTypesTest {
 
   private static final DataSource DATA_SOURCE = stub(DataSource.class);
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final CryptoEngine CRYPTO = stub(CryptoEngine.class);
   private static final Clock CLOCK = Clock.systemUTC();
   private static final EventTypeRegistry REGISTRY = stub(EventTypeRegistry.class);
   private static final EventUpcaster UPCASTER = stub(EventUpcaster.class);
@@ -51,11 +50,19 @@ class BackendTypesTest {
 
   private static BackendContext context(
       DataSource dataSource,
-      ObjectMapper mapper,
+      CryptoEngine cryptoEngine,
       Clock clock,
       StreamRuneMetrics metrics,
       StreamRuneTracing tracing) {
-    return new BackendContext(dataSource, mapper, clock, metrics, tracing, true, false, true);
+    return new BackendContext(dataSource, cryptoEngine, clock, metrics, tracing, true, false, true);
+  }
+
+  private static EventStoreOptions options(
+      List<EventUpcaster> upcasters,
+      List<SnapshotMigration> migrations,
+      Duration statementTimeout) {
+    return new EventStoreOptions(
+        REGISTRY, upcasters, migrations, null, null, null, null, statementTimeout);
   }
 
   // ── BackendContext ──────────────────────────────────────────────────────────
@@ -65,7 +72,7 @@ class BackendTypesTest {
     BackendContext context =
         new BackendContext(
             DATA_SOURCE,
-            MAPPER,
+            CRYPTO,
             CLOCK,
             StreamRuneMetrics.NOOP,
             StreamRuneTracing.NOOP,
@@ -74,7 +81,7 @@ class BackendTypesTest {
             true);
 
     assertThat(context.dataSource()).isSameAs(DATA_SOURCE);
-    assertThat(context.objectMapper()).isSameAs(MAPPER);
+    assertThat(context.cryptoEngine()).isSameAs(CRYPTO);
     assertThat(context.clock()).isSameAs(CLOCK);
     assertThat(context.metrics()).isSameAs(StreamRuneMetrics.NOOP);
     assertThat(context.tracing()).isSameAs(StreamRuneTracing.NOOP);
@@ -84,40 +91,40 @@ class BackendTypesTest {
   }
 
   @Test
-  void backendContextRejectsNullDataSource() {
-    assertThatThrownBy(
-            () -> context(null, MAPPER, CLOCK, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("dataSource");
+  void backendContextAcceptsNoCryptoEngine() {
+    BackendContext context =
+        context(DATA_SOURCE, null, CLOCK, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP);
+
+    assertThat(context.cryptoEngine()).isNull();
   }
 
   @Test
-  void backendContextRejectsNullObjectMapper() {
+  void backendContextRejectsNullDataSource() {
     assertThatThrownBy(
-            () -> context(DATA_SOURCE, null, CLOCK, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP))
+            () -> context(null, CRYPTO, CLOCK, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("objectMapper");
+        .hasMessageContaining("dataSource");
   }
 
   @Test
   void backendContextRejectsNullClock() {
     assertThatThrownBy(
             () ->
-                context(DATA_SOURCE, MAPPER, null, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP))
+                context(DATA_SOURCE, CRYPTO, null, StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("clock");
   }
 
   @Test
   void backendContextRejectsNullMetrics() {
-    assertThatThrownBy(() -> context(DATA_SOURCE, MAPPER, CLOCK, null, StreamRuneTracing.NOOP))
+    assertThatThrownBy(() -> context(DATA_SOURCE, CRYPTO, CLOCK, null, StreamRuneTracing.NOOP))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("metrics");
   }
 
   @Test
   void backendContextRejectsNullTracing() {
-    assertThatThrownBy(() -> context(DATA_SOURCE, MAPPER, CLOCK, StreamRuneMetrics.NOOP, null))
+    assertThatThrownBy(() -> context(DATA_SOURCE, CRYPTO, CLOCK, StreamRuneMetrics.NOOP, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("tracing");
   }
@@ -127,10 +134,9 @@ class BackendTypesTest {
   @Test
   void eventStoreOptionsAcceptsNullForEveryNullableComponent() {
     EventStoreOptions options =
-        new EventStoreOptions(REGISTRY, null, List.of(), List.of(), null, null, null, null, null);
+        new EventStoreOptions(REGISTRY, List.of(), List.of(), null, null, null, null, null);
 
     assertThat(options.typeRegistry()).isSameAs(REGISTRY);
-    assertThat(options.cryptoEngine()).isNull();
     assertThat(options.upcasters()).isEmpty();
     assertThat(options.snapshotMigrations()).isEmpty();
     assertThat(options.outboxStore()).isNull();
@@ -142,7 +148,6 @@ class BackendTypesTest {
 
   @Test
   void eventStoreOptionsKeepsEveryComponent() {
-    CryptoEngine crypto = stub(CryptoEngine.class);
     OutboxStore outbox = stub(OutboxStore.class);
     OutboxEventMapper mapper = stub(OutboxEventMapper.class);
     CommandInbox inbox = stub(CommandInbox.class);
@@ -151,7 +156,6 @@ class BackendTypesTest {
     EventStoreOptions options =
         new EventStoreOptions(
             REGISTRY,
-            crypto,
             List.of(UPCASTER),
             List.of(MIGRATION),
             outbox,
@@ -160,7 +164,6 @@ class BackendTypesTest {
             audit,
             Duration.ofSeconds(5));
 
-    assertThat(options.cryptoEngine()).isSameAs(crypto);
     assertThat(options.upcasters()).containsExactly(UPCASTER);
     assertThat(options.snapshotMigrations()).containsExactly(MIGRATION);
     assertThat(options.outboxStore()).isSameAs(outbox);
@@ -171,12 +174,13 @@ class BackendTypesTest {
   }
 
   @Test
-  void eventStoreOptionsAcceptsAZeroStatementTimeout() {
-    EventStoreOptions options =
-        new EventStoreOptions(
-            REGISTRY, null, List.of(), List.of(), null, null, null, null, Duration.ZERO);
-
-    assertThat(options.statementTimeout()).isEqualTo(Duration.ZERO);
+  void eventStoreOptionsLeavesTheStatementTimeoutRuleToTheBackend() {
+    // Core keeps any value, a negative one included: the backend refuses what it cannot honour
+    // with a BackendOptionException naming "statementTimeout".
+    assertThat(options(List.of(), List.of(), Duration.ZERO).statementTimeout())
+        .isEqualTo(Duration.ZERO);
+    assertThat(options(List.of(), List.of(), Duration.ofMillis(-1)).statementTimeout())
+        .isEqualTo(Duration.ofMillis(-1));
   }
 
   @Test
@@ -184,8 +188,7 @@ class BackendTypesTest {
     List<EventUpcaster> upcasters = new ArrayList<>(List.of(UPCASTER));
     List<SnapshotMigration> migrations = new ArrayList<>(List.of(MIGRATION));
 
-    EventStoreOptions options =
-        new EventStoreOptions(REGISTRY, null, upcasters, migrations, null, null, null, null, null);
+    EventStoreOptions options = options(upcasters, migrations, null);
     upcasters.clear();
     migrations.clear();
 
@@ -197,20 +200,8 @@ class BackendTypesTest {
 
   @Test
   void eventStoreOptionsWithEqualComponentsAreEqual() {
-    EventStoreOptions first =
-        new EventStoreOptions(
-            REGISTRY,
-            null,
-            new ArrayList<>(List.of(UPCASTER)),
-            List.of(),
-            null,
-            null,
-            null,
-            null,
-            null);
-    EventStoreOptions second =
-        new EventStoreOptions(
-            REGISTRY, null, List.of(UPCASTER), List.of(), null, null, null, null, null);
+    EventStoreOptions first = options(new ArrayList<>(List.of(UPCASTER)), List.of(), null);
+    EventStoreOptions second = options(List.of(UPCASTER), List.of(), null);
 
     assertThat(first).isEqualTo(second).hasSameHashCodeAs(second);
   }
@@ -218,19 +209,14 @@ class BackendTypesTest {
   @Test
   void eventStoreOptionsRejectsNullTypeRegistry() {
     assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    null, null, List.of(), List.of(), null, null, null, null, null))
+            () -> new EventStoreOptions(null, List.of(), List.of(), null, null, null, null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("typeRegistry");
   }
 
   @Test
   void eventStoreOptionsRejectsNullUpcasters() {
-    assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    REGISTRY, null, null, List.of(), null, null, null, null, null))
+    assertThatThrownBy(() -> options(null, List.of(), null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("upcasters");
   }
@@ -239,20 +225,14 @@ class BackendTypesTest {
   void eventStoreOptionsRejectsANullUpcaster() {
     List<EventUpcaster> upcasters = Arrays.asList(UPCASTER, null);
 
-    assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    REGISTRY, null, upcasters, List.of(), null, null, null, null, null))
+    assertThatThrownBy(() -> options(upcasters, List.of(), null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("upcasters");
   }
 
   @Test
   void eventStoreOptionsRejectsNullSnapshotMigrations() {
-    assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    REGISTRY, null, List.of(), null, null, null, null, null, null))
+    assertThatThrownBy(() -> options(List.of(), null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("snapshotMigrations");
   }
@@ -261,30 +241,46 @@ class BackendTypesTest {
   void eventStoreOptionsRejectsANullSnapshotMigration() {
     List<SnapshotMigration> migrations = Arrays.asList(null, MIGRATION);
 
-    assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    REGISTRY, null, List.of(), migrations, null, null, null, null, null))
+    assertThatThrownBy(() -> options(List.of(), migrations, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("snapshotMigrations");
   }
 
+  // ── BackendOptionException ──────────────────────────────────────────────────
+
   @Test
-  void eventStoreOptionsRejectsANegativeStatementTimeout() {
-    assertThatThrownBy(
-            () ->
-                new EventStoreOptions(
-                    REGISTRY,
-                    null,
-                    List.of(),
-                    List.of(),
-                    null,
-                    null,
-                    null,
-                    null,
-                    Duration.ofMillis(-1)))
+  void backendOptionExceptionNamesTheOption() {
+    BackendOptionException exception =
+        new BackendOptionException("statementTimeout", "must be at least 1ms, got: PT0.0005S");
+
+    assertThat(exception)
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("statementTimeout");
+        .hasMessage("must be at least 1ms, got: PT0.0005S")
+        .hasNoCause();
+    assertThat(exception.option()).isEqualTo("statementTimeout");
+  }
+
+  @Test
+  void backendOptionExceptionKeepsItsCause() {
+    IllegalArgumentException cause = new IllegalArgumentException("too short");
+
+    BackendOptionException exception =
+        new BackendOptionException("statementTimeout", "too short", cause);
+
+    assertThat(exception.option()).isEqualTo("statementTimeout");
+    assertThat(exception).hasMessage("too short").hasCause(cause);
+  }
+
+  @Test
+  void backendOptionExceptionRejectsAMissingOption() {
+    assertThatThrownBy(() -> new BackendOptionException(null, "message"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .isNotInstanceOf(BackendOptionException.class)
+        .hasMessageContaining("option");
+    assertThatThrownBy(() -> new BackendOptionException(" ", "message", null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .isNotInstanceOf(BackendOptionException.class)
+        .hasMessageContaining("option");
   }
 
   // ── OutboxOptions ───────────────────────────────────────────────────────────
@@ -292,10 +288,15 @@ class BackendTypesTest {
   @Test
   void outboxOptionsKeepsItsComponents() {
     OutboxOptions options =
-        new OutboxOptions(Duration.ofMinutes(4), OutboxOrderingMode.AVAILABILITY_FIRST);
+        new OutboxOptions(Duration.ofMinutes(2), OutboxOrderingMode.AVAILABILITY_FIRST);
 
-    assertThat(options.claimLease()).isEqualTo(Duration.ofMinutes(4));
+    assertThat(options.claimLease()).isEqualTo(Duration.ofMinutes(2));
     assertThat(options.orderingMode()).isEqualTo(OutboxOrderingMode.AVAILABILITY_FIRST);
+  }
+
+  @Test
+  void outboxOptionsDefaultClaimLeaseIsFourMinutes() {
+    assertThat(OutboxOptions.DEFAULT_CLAIM_LEASE).isEqualTo(Duration.ofMinutes(4));
   }
 
   @Test
@@ -324,7 +325,7 @@ class BackendTypesTest {
 
   @Test
   void outboxOptionsRejectsNullOrderingMode() {
-    assertThatThrownBy(() -> new OutboxOptions(Duration.ofMinutes(4), null))
+    assertThatThrownBy(() -> new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("orderingMode");
   }
@@ -332,19 +333,27 @@ class BackendTypesTest {
   // ── BackendStores ───────────────────────────────────────────────────────────
 
   @Test
-  void backendStoresDefaultCloseDoesNothing() {
-    BackendStores stores =
-        (BackendStores)
-            Proxy.newProxyInstance(
-                BackendTypesTest.class.getClassLoader(),
-                new Class<?>[] {BackendStores.class},
-                (proxy, method, args) -> {
-                  if (method.isDefault()) {
-                    return java.lang.reflect.InvocationHandler.invokeDefault(proxy, method, args);
-                  }
-                  throw new UnsupportedOperationException(method.getName());
-                });
+  void backendStoresCloseThrowsNoCheckedException() {
+    boolean[] reached = {false};
+    // No catch clause: this compiles only while BackendStores.close() declares no checked
+    // exception, so a try-with-resources over the bundle needs no handler.
+    try (BackendStores stores = defaultMethodsOnly()) {
+      reached[0] = stores != null;
+    }
 
-    assertThatCode(stores::close).doesNotThrowAnyException();
+    assertThat(reached[0]).isTrue();
+  }
+
+  private static BackendStores defaultMethodsOnly() {
+    return (BackendStores)
+        Proxy.newProxyInstance(
+            BackendTypesTest.class.getClassLoader(),
+            new Class<?>[] {BackendStores.class},
+            (proxy, method, args) -> {
+              if (method.isDefault()) {
+                return InvocationHandler.invokeDefault(proxy, method, args);
+              }
+              throw new UnsupportedOperationException(method.getName());
+            });
   }
 }
