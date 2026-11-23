@@ -75,18 +75,19 @@ dependencies {
     // the same Testcontainers dependency and PostgresTestImage as the tests.
 }
 
-// ── The saga_state write ratchet must RUN on the build that breaks it ───────
+// ── The saga_state write ratchet, in a test task of its own ─────────────────
 //
 // SagaStateWriteRatchetTest reads every module's main Java sources and main SQL resources at
-// runtime, but Gradle knew only about THIS module's sources, classes and classpath. A saga_state
-// write planted in streamrune-sqlite (which this module does not depend on) changed none of
-// :streamrune-postgres:test's declared inputs, so with `org.gradle.caching=true` the task came
-// FROM-CACHE and the ratchet never ran (reproduced; the same tree with `--rerun` failed it). The
-// same failure, and the same fix, as streamrune-core's log-sink ratchet (see
-// streamrune-core/build.gradle.kts): the scanned tree is declared as an input of the test task, and
-// a manifest of the declared files is handed to the test, which fails when what it scans and what
-// Gradle declared differ in either direction. The cost: a main-source edit in any module re-runs
-// this module's tests.
+// runtime, but Gradle knows only what a task declares. A saga_state write planted in
+// streamrune-sqlite (which this module does not depend on) changed none of :streamrune-postgres:test's
+// declared inputs, so with `org.gradle.caching=true` the task came FROM-CACHE and the ratchet never
+// ran. The scanned tree is therefore declared as the input of the task that runs the ratchet, and a
+// manifest of the declared files is handed to the test, which fails when what it scans and what
+// Gradle declared differ in either direction (the same fix as streamrune-core's log-sink ratchet).
+//
+// The ratchet runs in `sagaStateWriteRatchetTest`, not in `test`: declared on `test`, the tree made a
+// main-source edit anywhere in the repository re-run this module's whole Testcontainers suite. The
+// task needs no Docker; `check` (and so `build` and CI) and the root `quickCheck` run it.
 val sagaStateWriteSources =
     fileTree(rootDir) {
         // Mirrors SagaStateWriteRatchetTest#mainJavaSources and #sqlResources: every .java under a
@@ -123,17 +124,38 @@ val sagaStateWriteSourceManifest =
         }
     }
 
-tasks.named<Test>("test") {
-    inputs
-        .files(sagaStateWriteSources)
-        .withPropertyName("sagaStateWriteSources")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
-    dependsOn(sagaStateWriteSourceManifest)
-    val manifest = sagaStateWriteSourceManifest.map { it.outputs.files.singleFile }
-    // An argument provider, not `systemProperty`, so the absolute path stays out of the cache key.
-    jvmArgumentProviders.add(
-        org.gradle.process.CommandLineArgumentProvider {
-            listOf("-Dstreamrune.sagastate.declared-sources=${manifest.get().absolutePath}")
-        },
-    )
-}
+val sagaStateWriteRatchetClass = "org.streamrune.postgres.SagaStateWriteRatchetTest"
+val ratchetTestSourceSet = the<SourceSetContainer>()["test"]
+
+val sagaStateWriteRatchetTest =
+    tasks.register<Test>("sagaStateWriteRatchetTest") {
+        group = "verification"
+        description =
+            "Runs SagaStateWriteRatchetTest: every saga_state write of every module's main sources " +
+                "is classified."
+        testClassesDirs = ratchetTestSourceSet.output.classesDirs
+        classpath = ratchetTestSourceSet.runtimeClasspath
+        // Jupiter only: the ArchUnit engine does not apply the class filter and would run the
+        // module's architecture rules here a second time.
+        useJUnitPlatform { includeEngines("junit-jupiter") }
+        filter { includeTestsMatching(sagaStateWriteRatchetClass) }
+        inputs
+            .files(sagaStateWriteSources)
+            .withPropertyName("sagaStateWriteSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        dependsOn(sagaStateWriteSourceManifest)
+        val manifest = sagaStateWriteSourceManifest.map { it.outputs.files.singleFile }
+        // An argument provider, not `systemProperty`, so the absolute path stays out of the cache key.
+        jvmArgumentProviders.add(
+            org.gradle.process.CommandLineArgumentProvider {
+                listOf("-Dstreamrune.sagastate.declared-sources=${manifest.get().absolutePath}")
+            },
+        )
+        // The module's JaCoCo report depends on `test`; as a finalizer it would drag the whole
+        // Testcontainers suite into a standalone ratchet run. The ratchet covers no main code, so
+        // only the summary finalizer stays (the docLintTest choice).
+        setFinalizedBy(listOf(":testSummary"))
+    }
+
+tasks.named<Test>("test") { filter { excludeTestsMatching(sagaStateWriteRatchetClass) } }
+tasks.named("check") { dependsOn(sagaStateWriteRatchetTest) }

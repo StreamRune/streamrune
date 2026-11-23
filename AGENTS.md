@@ -243,8 +243,10 @@ repository-wide ratchets:
   or `java.util.logging`.
 - `SagaProvenanceWriterRatchetTest` (`streamrune-core`): only the listed files bind a dispatch cause
   or create a saga origin.
-- `SagaStateWriteRatchetTest` (`streamrune-postgres`): every statement that writes `saga_state` is
-  classified, and a write that can end a saga's forward phase takes the saga's fence lock.
+- `SagaStateWriteRatchetTest` (`streamrune-postgres`, in its own task
+  `:streamrune-postgres:sagaStateWriteRatchetTest`, which `check` and `quickCheck` run): every
+  statement of any module that writes `saga_state` is classified, and a write that can end a saga's
+  forward phase belongs to its backend's saga store (on Postgres it takes the saga's fence lock).
 
 Prose that mirrors code changes in the same commit as the code; the doc-lint tests (`*DocLintTest`,
 run by `./gradlew docLintTest`, `check` and `quickCheck`) fail when it does not:

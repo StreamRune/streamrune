@@ -73,9 +73,12 @@ import org.junit.jupiter.api.Test;
  * store has none.
  *
  * <p><b>It runs on every build that changes what it scans.</b> The scan reads every module's main
- * sources, not only this module's, so {@code streamrune-postgres/build.gradle.kts} declares them as
- * inputs of the test task, and {@link #everyScannedFileIsDeclaredAsAGradleInputOfTheTestTask} fails
- * when the declaration and the scan differ.
+ * sources, not only this module's, so it runs in a test task of its own, {@code
+ * sagaStateWriteRatchetTest}, whose inputs {@code streamrune-postgres/build.gradle.kts} declares
+ * them to be; {@link #everyScannedFileIsDeclaredAsAGradleInputOfTheTestTask} fails when the
+ * declaration and the scan differ. The module's {@code test} task leaves the ratchet out, so a
+ * main-source edit elsewhere does not re-run the module's whole suite; {@code check} and {@code
+ * quickCheck} run the ratchet's task.
  *
  * <p><b>A table the text does not name.</b> The classification reads the table from the statement's
  * text. A write that composes its table from a value the code supplies ({@code "UPDATE " + TABLE},
@@ -320,9 +323,10 @@ class SagaStateWriteRatchetTest {
 
   /**
    * An identifier quote around a table or schema name: a double quote (escaped or not in the Java
-   * literal), a backtick or a bracket.
+   * literal), a backtick, a bracket, or a single quote (SQLite takes a string literal where it
+   * expects a name: {@code DELETE FROM 'saga_state'} deletes from the table).
    */
-  private static final String QUOTE_CHAR = "(?:\\\\?\"|`|\\[|\\])";
+  private static final String QUOTE_CHAR = "(?:\\\\?\"|`|\\[|\\]|\\\\?')";
 
   /** {@link #QUOTE_CHAR}, or none. */
   private static final String QUOTE = QUOTE_CHAR + "?";
@@ -342,7 +346,17 @@ class SagaStateWriteRatchetTest {
               + SUPPLIED
               + "])\\s*"
               + WRITE_VERB
-              + "(?:\\s+(?:\\\\?\")?|\\\\?\")\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?\\.(?:\\\\?\")?)?(?:"
+              + "(?:\\s+"
+              + QUOTE
+              + "|"
+              + QUOTE_CHAR
+              + ")\\s*(?:"
+              + QUOTE
+              + "\\w+"
+              + QUOTE
+              + "\\s*\\.\\s*"
+              + QUOTE
+              + ")?(?:"
               + SUPPLIED
               + "|%(?:\\d+\\$)?s|\\{\\d*\\})");
 
@@ -353,7 +367,15 @@ class SagaStateWriteRatchetTest {
    */
   private static final Pattern NAMES_SAGA_STATE_ALONE =
       Pattern.compile(
-          "(?i)\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?)?\\.?(?:\\\\?\")?saga_state(?:\\\\?\")?\\s*");
+          "(?i)\\s*(?:"
+              + QUOTE
+              + "\\w+"
+              + QUOTE
+              + ")?\\s*\\.?\\s*"
+              + QUOTE
+              + "saga_state"
+              + QUOTE
+              + "\\s*");
 
   /**
    * A write of {@code saga_state}: a {@link #WRITE_VERB}, then the table, bare, quoted, or
@@ -588,6 +610,9 @@ class SagaStateWriteRatchetTest {
     writes.put("UPDATE \\\"public\\\".\\\"saga_state\\\" SET x = 1", Verb.UPDATE);
     writes.put("UPDATE`saga_state` SET x = 1", Verb.UPDATE);
     writes.put("UPDATE [saga_state] SET x = 1", Verb.UPDATE);
+    writes.put("DELETE FROM 'saga_state' WHERE x = 1", Verb.DELETE);
+    writes.put("UPDATE 'main'.'saga_state' SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE `main`.[saga_state] SET x = 1", Verb.UPDATE);
     writes.put("DELETE FROM main.saga_state WHERE x = 1", Verb.DELETE);
     writes.put("MERGE INTO saga_state s USING t ON s.x = t.x", Verb.MERGE);
     writes.put("TRUNCATE TABLE saga_state", Verb.TRUNCATE);
@@ -622,17 +647,108 @@ class SagaStateWriteRatchetTest {
             "UPDATE OR REPLACE ",
             "UPDATE ",
             "DELETE FROM ",
-            "UPDATE main.")) {
+            "UPDATE main.",
+            "UPDATE '",
+            "UPDATE `",
+            "UPDATE [",
+            "UPDATE 'main'.'",
+            "UPDATE `main`.`",
+            "UPDATE [main].[")) {
       String shape = verb + SUPPLIED + " SET x = 1";
       assertTrue(COMPOSED_TARGET.matcher(shape).find(), "a composed write: " + verb);
     }
   }
 
   /**
-   * The test task re-runs when a file this ratchet scans changes: every scanned file is declared as
-   * a Gradle input of the task ({@code streamrune-postgres/build.gradle.kts}, which hands the
-   * declared list over as a manifest), and every declared file is scanned. Fails rather than skips
-   * when the manifest is missing: the wiring disappearing silently is the defect this guards.
+   * A literal is read as the database receives it: escapes decoded and SQL comments removed before
+   * any pattern is matched, so a line break written as an escape, a Unicode escape or a comment
+   * between verb and table hides no write, no composed target and no bare table name.
+   */
+  @Test
+  void literalsAreNormalisedBeforeTheyAreMatched() {
+    for (String literal :
+        List.of(
+            "UPDATE\\nsaga_state SET x = 1",
+            "UPDATE\\tsaga_state SET x = 1",
+            "UPDATE\\ssaga_state SET x = 1",
+            "UPDATE\\012saga_state SET x = 1",
+            "UPDATE \\u0073aga_state SET x = 1",
+            "UPDATE \\uuu0073aga_state SET x = 1",
+            "UPDATE/* a comment */saga_state SET x = 1",
+            "UPDATE -- a comment\\n saga_state SET x = 1",
+            "DELETE FROM /* x */ main /* y */ . /* z */ saga_state")) {
+      Statement statement = only(Source.of("String A = \"" + literal + "\";").statements());
+      assertTrue(SAGA_STATE_WRITE.matcher(statement.literals()).find(), "a write: " + literal);
+    }
+    Statement split =
+        only(Source.of("String A = \"UPDATE /* a \" + \" b */ saga_state\";").statements());
+    assertTrue(SAGA_STATE_WRITE.matcher(split.literals()).find(), "a comment split over literals");
+
+    for (String composed :
+        List.of(
+            "String A = \"UPDATE /* c */ \" + table + \" SET x = 1\";",
+            "String A = \"UPDATE -- c\\n\" + table + \" SET x = 1\";",
+            "String A = \"UPDATE\\n'\" + table + \"' SET x = 1\";")) {
+      Statement statement = only(Source.of(composed).statements());
+      assertTrue(COMPOSED_TARGET.matcher(statement.shape()).find(), "composed: " + composed);
+    }
+
+    for (String alone :
+        List.of(
+            "'saga_state'",
+            "`saga_state`",
+            "[saga_state]",
+            "main.'saga_state'",
+            "/* c */saga_state",
+            "saga\\u005fstate",
+            "saga_state -- the table")) {
+      Statement statement = only(Source.of("String A = \"" + alone + "\";").statements());
+      assertTrue(
+          NAMES_SAGA_STATE_ALONE.matcher(statement.literalList().getFirst()).matches(),
+          "names the table alone: " + alone);
+    }
+
+    // Decoding follows the compiler: an escaped backslash is not the start of an escape.
+    assertEquals("a\\u0073", decodeEscapes("a\\\\u0073"));
+    assertEquals("a\\qb\"'", decodeEscapes("a\\qb\\\"\\'"));
+    assertEquals("ab", decodeEscapes("a\\\nb"), "a text block's line continuation");
+    assertEquals("a b", stripSqlComments("a/* x\n y */b").replace("  ", " "));
+  }
+
+  /**
+   * {@code SagaFence} of {@code streamrune-sqlite} reads {@code saga_state} inside the append's
+   * transaction and writes nothing: the ratchet sees its read and does not classify it as a write.
+   */
+  @Test
+  void theSqliteFenceReadIsAReadAndNotAWrite() {
+    Path fence = only("SagaFence.java");
+    assertEquals("streamrune-sqlite", moduleOf(fence));
+    List<Statement> statements = Source.of(read(fence)).statements();
+    assertTrue(
+        statements.stream()
+            .anyMatch(s -> s.literals().matches("(?is).*\\bfrom\\s+saga_state\\b.*")),
+        "SagaFence reads saga_state");
+    assertTrue(
+        statements.stream().noneMatch(s -> SAGA_STATE_WRITE.matcher(s.literals()).find()),
+        "SagaFence writes no saga_state row");
+    assertTrue(
+        statements.stream().noneMatch(s -> COMPOSED_TARGET.matcher(s.shape()).find()),
+        "SagaFence composes no write");
+  }
+
+  private static Statement only(List<Statement> statements) {
+    List<Statement> withLiterals =
+        statements.stream().filter(s -> !s.literalList().isEmpty()).toList();
+    assertEquals(1, withLiterals.size(), "one statement with literals: " + statements);
+    return withLiterals.getFirst();
+  }
+
+  /**
+   * The ratchet's task ({@code sagaStateWriteRatchetTest}) re-runs when a file this ratchet scans
+   * changes: every scanned file is declared as a Gradle input of the task ({@code
+   * streamrune-postgres/build.gradle.kts}, which hands the declared list over as a manifest), and
+   * every declared file is scanned. Fails rather than skips when the manifest is missing: the
+   * wiring disappearing silently is the defect this guards.
    */
   @Test
   void everyScannedFileIsDeclaredAsAGradleInputOfTheTestTask() {
@@ -641,11 +757,11 @@ class SagaStateWriteRatchetTest {
       fail(
           "-D"
               + DECLARED_SOURCES_PROPERTY
-              + " is not set, so the declared-inputs check cannot run. Gradle's test task supplies"
-              + " it (streamrune-postgres/build.gradle.kts); run `./gradlew"
-              + " :streamrune-postgres:test`. If that wiring was removed, the ratchet stops"
-              + " re-running when another module changes; restore it rather than deleting this"
-              + " test.");
+              + " is not set, so the declared-inputs check cannot run. The ratchet's Gradle task"
+              + " supplies it (streamrune-postgres/build.gradle.kts); run `./gradlew"
+              + " :streamrune-postgres:sagaStateWriteRatchetTest`. If that wiring was removed, the"
+              + " ratchet stops re-running when another module changes; restore it rather than"
+              + " deleting this test.");
     }
     Path root = repositoryRoot();
     Set<String> scanned = new TreeSet<>();
@@ -839,9 +955,102 @@ class SagaStateWriteRatchetTest {
   /**
    * One statement: its code (literals blanked), its literals joined, its shape — the literals
    * joined with a {@link #SUPPLIED} mark wherever code supplies a value between them — and each
-   * literal.
+   * literal. Each literal's escapes are decoded when it is read ({@link #decodeEscapes}); the
+   * joined text, the shape and each literal have their SQL comments removed ({@link
+   * #stripSqlComments}), so that neither an escaped line break between verb and table nor a comment
+   * between them hides a write.
    */
-  private record Statement(String code, String literals, String shape, List<String> literalList) {}
+  private record Statement(String code, String literals, String shape, List<String> literalList) {
+
+    static Statement of(String code, String literals, String shape, List<String> literalList) {
+      return new Statement(
+          code,
+          stripSqlComments(literals),
+          stripSqlComments(shape),
+          literalList.stream().map(SagaStateWriteRatchetTest::stripSqlComments).toList());
+    }
+  }
+
+  /**
+   * Replaces each {@code /* ... *}{@code /} comment and each {@code --} comment with a space. A
+   * line comment ends at a line break or at a {@link #SUPPLIED} mark: the value the code supplies
+   * there may hold the line break.
+   */
+  static String stripSqlComments(String sql) {
+    return sql.replaceAll("(?s)/\\*.*?\\*/", " ").replaceAll("--[^\n" + SUPPLIED + "]*", " ");
+  }
+
+  /**
+   * Decodes the escapes of a Java string literal or text block, as the compiler does: Unicode
+   * escapes first (a backslash that is not itself escaped, one or more {@code u}, four hex digits),
+   * then the character escapes ({@code b t n f r s " ' } and the backslash), octal escapes and a
+   * text block's line continuation. An unknown escape is kept as written.
+   */
+  static String decodeEscapes(String text) {
+    StringBuilder unicode = new StringBuilder(text.length());
+    for (int i = 0; i < text.length(); i++) {
+      char c = text.charAt(i);
+      if (c == '\\' && i + 1 < text.length() && text.charAt(i + 1) == '\\') {
+        // An escaped backslash: neither it nor the one after it starts a Unicode escape.
+        unicode.append(c).append(c);
+        i++;
+        continue;
+      }
+      if (c == '\\' && i + 1 < text.length() && text.charAt(i + 1) == 'u') {
+        int j = i + 1;
+        while (j < text.length() && text.charAt(j) == 'u') {
+          j++;
+        }
+        if (j + 4 <= text.length() && text.substring(j, j + 4).matches("[0-9a-fA-F]{4}")) {
+          unicode.append((char) Integer.parseInt(text.substring(j, j + 4), 16));
+          i = j + 3;
+          continue;
+        }
+      }
+      unicode.append(c);
+    }
+    String raw = unicode.toString();
+    StringBuilder out = new StringBuilder(raw.length());
+    for (int i = 0; i < raw.length(); i++) {
+      char c = raw.charAt(i);
+      if (c != '\\' || i + 1 >= raw.length()) {
+        out.append(c);
+        continue;
+      }
+      char next = raw.charAt(++i);
+      switch (next) {
+        case 'b' -> out.append('\b');
+        case 't' -> out.append('\t');
+        case 'n' -> out.append('\n');
+        case 'f' -> out.append('\f');
+        case 'r' -> out.append('\r');
+        case 's' -> out.append(' ');
+        case '"', '\'', '\\' -> out.append(next);
+        case '\n' -> {} // a text block's line continuation
+        case '\r' -> {
+          if (i + 1 < raw.length() && raw.charAt(i + 1) == '\n') {
+            i++;
+          }
+        }
+        default -> {
+          if (next >= '0' && next <= '7') {
+            int end = i + 1;
+            int max = next <= '3' ? i + 3 : i + 2;
+            while (end < Math.min(max, raw.length())
+                && raw.charAt(end) >= '0'
+                && raw.charAt(end) <= '7') {
+              end++;
+            }
+            out.append((char) Integer.parseInt(raw.substring(i, end), 8));
+            i = end - 1;
+          } else {
+            out.append('\\').append(next);
+          }
+        }
+      }
+    }
+    return out.toString();
+  }
 
   /**
    * A Java source split into statements at {@code ;}, {@code {} and {@code }} outside literals and
@@ -874,7 +1083,7 @@ class SagaStateWriteRatchetTest {
         if (c == '"' && text.startsWith("\"\"\"", i)) {
           int end = text.indexOf("\"\"\"", i + 3);
           int stop = end < 0 ? n : end + 3;
-          String literal = text.substring(i + 3, Math.max(i + 3, stop - 3));
+          String literal = decodeEscapes(text.substring(i + 3, Math.max(i + 3, stop - 3)));
           stmtLiterals.append(literal);
           stmtShape.append(literal);
           stmtLiteralList.add(literal);
@@ -889,7 +1098,7 @@ class SagaStateWriteRatchetTest {
             j += text.charAt(j) == '\\' ? 2 : 1;
           }
           if (c == '"') {
-            String literal = text.substring(i + 1, Math.min(j, n));
+            String literal = decodeEscapes(text.substring(i + 1, Math.min(j, n)));
             stmtLiterals.append(literal);
             stmtShape.append(literal);
             stmtLiteralList.add(literal);
@@ -904,7 +1113,7 @@ class SagaStateWriteRatchetTest {
         code.append(c);
         if (c == ';' || c == '{' || c == '}') {
           statements.add(
-              new Statement(
+              Statement.of(
                   stmtCode.toString(),
                   stmtLiterals.toString(),
                   stmtShape.toString(),
@@ -920,7 +1129,7 @@ class SagaStateWriteRatchetTest {
         i++;
       }
       statements.add(
-          new Statement(
+          Statement.of(
               stmtCode.toString(),
               stmtLiterals.toString(),
               stmtShape.toString(),

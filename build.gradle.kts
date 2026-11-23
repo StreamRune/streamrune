@@ -2314,6 +2314,9 @@ tasks.register("quickCheck") {
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
     dependsOn(docLintModules.map { "$it:docLintTest" })
+    // The saga_state write ratchet reads source text only and needs no Docker, though its module's
+    // other tests do.
+    dependsOn(":streamrune-postgres:sagaStateWriteRatchetTest")
     dependsOn(subprojects.map { p -> p.tasks.matching { it.name == "verifyApiSurface" } })
     dependsOn(testApiSurfaceCheck)
     dependsOn(verifyReleaseChecksRule)
