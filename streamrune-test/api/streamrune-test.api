@@ -950,10 +950,16 @@ public abstract class org.streamrune.test.ProjectionRepositoryQueryContract
   public void anEncryptedComponentCannotBeFilteredOrSorted()
   public void anEncryptedComponentOfAnUnwrappedRecordCannotBeFilteredOrSorted()
   public void anUnsortedReadOrdersByIdInCodePointOrder()
+  public void booleansCompareAsTrueFalseText()
   public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem()
   public void declaringAnIndexTwiceIsAccepted()
+  public void missingAndNullFieldsNeverMatchAValue()
+  public void mixedTypesSortAsText()
+  public void nonAsciiIdsAndValuesSortBytewise()
+  public void numericStringFieldMatchesTextFilter()
   public void theRowsOfOneTransactionTieOnUpdatedAt()
   public void theVersionAndUpdatedAtColumnsSortByTheirValues()
+  public void trailingZeroDecimalKeepsItsSpelling()
 
 public static final record org.streamrune.test.ProjectionRepositoryQueryContract$Contact
   public <init>(java.lang.String, java.lang.String)
