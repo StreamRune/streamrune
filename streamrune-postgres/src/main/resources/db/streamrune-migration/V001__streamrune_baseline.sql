@@ -197,7 +197,7 @@ CREATE TABLE audit_log (
 CREATE INDEX idx_audit_command_id     ON audit_log (command_id);
 CREATE INDEX idx_audit_aggregate      ON audit_log (aggregate_type, aggregate_id) WHERE aggregate_id IS NOT NULL;
 CREATE INDEX idx_audit_user_id        ON audit_log (user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_audit_occurred_at    ON audit_log (occurred_at DESC);
+CREATE INDEX idx_audit_occurred_at    ON audit_log (occurred_at, id);
 CREATE INDEX idx_audit_correlation_id ON audit_log (correlation_id) WHERE correlation_id IS NOT NULL;
 
 
