@@ -23,9 +23,18 @@ public interface StreamRuneBackend {
    * Fails fast when {@code dataSource} is not this backend's database: the product, its version, or
    * the connection setup this backend needs.
    *
+   * <p>A database of another product is refused with an {@link IllegalStateException}. A backend
+   * may report an unsupported version of its own product, and a database it cannot reach, with its
+   * own exceptions, which an integration may tell apart: Postgres throws its {@code
+   * UnsupportedServerVersionException} for a server that is too old, and an {@link
+   * org.streamrune.core.EventStoreException} when it cannot read the server's version because the
+   * database is unreachable.
+   *
    * @param dataSource the application's {@code DataSource}; not {@code null}
    * @throws IllegalStateException if the database is not one this backend runs on; the message
    *     names what the backend expects and what the database is
+   * @throws RuntimeException a backend's own exception for an unsupported version of its product,
+   *     or for a database it cannot reach, as the backend documents
    */
   void verify(DataSource dataSource);
 
