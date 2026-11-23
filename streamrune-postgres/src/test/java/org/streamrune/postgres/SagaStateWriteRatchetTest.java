@@ -269,10 +269,19 @@ class SagaStateWriteRatchetTest {
                   Kind.KEEPS_FORWARD_PHASE,
                   "the shield flag; the fence does not read it")));
 
-  /** Why a write of {@code PostgresCheckpointFence} never targets {@code saga_state}. */
+  /** Why a write of a checkpoint fence (Postgres or SQLite) never targets {@code saga_state}. */
   private static final String CHECKPOINT_TABLE =
       "a checkpoint table, named only by the CheckpointTable enum: subscription_checkpoint or"
           + " readmodel_checkpoint";
+
+  /** Why a write of a projection repository never targets {@code saga_state}. */
+  private static final String READ_MODEL_TABLE =
+      "a projection's read-model table: the projection's name plus _view";
+
+  /** Why a write of {@code PostgresCryptoEngine} never targets {@code saga_state}. */
+  private static final String CRYPTO_KEY_TABLE =
+      "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
+          + " encryption_keys)";
 
   /**
    * Every write whose table the statement's text does not name, with the reason its table is never
@@ -280,29 +289,25 @@ class SagaStateWriteRatchetTest {
    * VERB #n}, the n-th such write with that verb in the file.
    */
   private static final Map<String, String> COMPOSED_TARGETS =
-      Map.of(
-          "JdbcProjectionRepository.UPSERT",
-          "a projection's read-model table: the projection's name plus _view",
-          "JdbcProjectionRepository.VERSIONED_UPDATE",
-          "a projection's read-model table: the projection's name plus _view",
-          "JdbcProjectionRepository.DELETE",
-          "a projection's read-model table: the projection's name plus _view",
-          "PostgresCryptoEngine.java: DELETE FROM #1",
-          "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
-              + " encryption_keys)",
-          "PostgresCryptoEngine.java: INSERT INTO #1",
-          "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
-              + " encryption_keys)",
-          "PostgresCheckpointFence.SEED",
-          CHECKPOINT_TABLE,
-          "PostgresCheckpointFence.SAVE_LOCKED",
-          CHECKPOINT_TABLE,
-          "PostgresCheckpointFence.STAMP",
-          CHECKPOINT_TABLE,
-          "PostgresCheckpointFence.RESET",
-          CHECKPOINT_TABLE,
-          "PostgresCheckpointFence.SAVE_UNLOCKED",
-          CHECKPOINT_TABLE);
+      Map.ofEntries(
+          Map.entry("JdbcProjectionRepository.UPSERT", READ_MODEL_TABLE),
+          Map.entry("JdbcProjectionRepository.VERSIONED_UPDATE", READ_MODEL_TABLE),
+          Map.entry("JdbcProjectionRepository.DELETE", READ_MODEL_TABLE),
+          Map.entry("SqliteProjectionRepository.UPSERT", READ_MODEL_TABLE),
+          Map.entry("SqliteProjectionRepository.VERSIONED_UPDATE", READ_MODEL_TABLE),
+          Map.entry("SqliteProjectionRepository.DELETE", READ_MODEL_TABLE),
+          Map.entry("PostgresCryptoEngine.java: DELETE FROM #1", CRYPTO_KEY_TABLE),
+          Map.entry("PostgresCryptoEngine.java: INSERT INTO #1", CRYPTO_KEY_TABLE),
+          Map.entry("PostgresCheckpointFence.SEED", CHECKPOINT_TABLE),
+          Map.entry("PostgresCheckpointFence.SAVE_LOCKED", CHECKPOINT_TABLE),
+          Map.entry("PostgresCheckpointFence.STAMP", CHECKPOINT_TABLE),
+          Map.entry("PostgresCheckpointFence.RESET", CHECKPOINT_TABLE),
+          Map.entry("PostgresCheckpointFence.SAVE_UNLOCKED", CHECKPOINT_TABLE),
+          Map.entry("SqliteCheckpointFence.SEED", CHECKPOINT_TABLE),
+          Map.entry("SqliteCheckpointFence.SAVE_LOCKED", CHECKPOINT_TABLE),
+          Map.entry("SqliteCheckpointFence.STAMP", CHECKPOINT_TABLE),
+          Map.entry("SqliteCheckpointFence.RESET", CHECKPOINT_TABLE),
+          Map.entry("SqliteCheckpointFence.SAVE_UNLOCKED", CHECKPOINT_TABLE));
 
   /** The files whose literals may name {@code saga_state} alone, with the reason. */
   private static final Map<String, String> LITERAL_TABLE_NAMES =
