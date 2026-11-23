@@ -1650,7 +1650,7 @@ class StreamRuneMicronautModuleTest {
                     mock(OutboxEventMapper.class),
                     new org.streamrune.test.InMemoryOutboxStore(),
                     null));
-    // The backend's R1 refusal (ruling T7-b), as in the Spring and Quarkus integrations.
+    // The backend's foreign-store refusal, as in the Spring and Quarkus integrations.
     assertEquals(
         "outbox store of backend 'InMemoryOutboxStore' cannot share the 'postgres' event store's"
             + " transaction; build it from this backend's BackendStores",

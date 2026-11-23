@@ -255,7 +255,7 @@ class SpringBackendWiringTest {
 
   /**
    * The same for an application's plain {@code @Bean CommandInbox commandInbox()}; it brings its
-   * own event store factory, so the backend's R1 refusal does not stop the start first.
+   * own event store factory, so the backend's foreign-store refusal does not stop the start first.
    */
   @Test
   void anApplicationCommandInboxUnderTheFrameworkNameGetsNoSweeper() {
@@ -290,7 +290,7 @@ class SpringBackendWiringTest {
     }
   }
 
-  // ── T7-b: an application store of a foreign type fails the start (R1) ─────────────────
+  // ── an application store of a foreign type fails the start ────────────────────────────
 
   @Test
   void aForeignOutboxStoreWithAMapperFailsTheStartWithTheR1Refusal() {

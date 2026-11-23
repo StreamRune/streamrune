@@ -494,8 +494,8 @@ class QuarkusBeanWiringTest {
    * The command bus and the event-store factory both inject {@code Instance<CommandInbox>}, so a
    * user-supplied {@code CommandInbox} reaches both. The store must claim the idempotency key in
    * the append's own transaction, which an inbox of another backend (here an in-memory one) cannot
-   * join: the backend refuses it (R1) when the factory is built, instead of the override being
-   * silently ignored on the authoritative dedup path or every keyed execution dying inside {@code
+   * join: the backend refuses it when the factory is built, instead of the override being silently
+   * ignored on the authoritative dedup path or every keyed execution dying inside {@code
    * appendWithKey}. Only a real container reproduces the resolution.
    */
   @Test
@@ -516,7 +516,7 @@ class QuarkusBeanWiringTest {
           message.contains(
               "command inbox store of backend 'InMemoryCommandInbox' cannot share the 'postgres'"
                   + " event store's transaction; build it from this backend's BackendStores"),
-          "the failure must be the backend's foreign-store refusal (R1), got: " + message);
+          "the failure must be the backend's foreign-store refusal, got: " + message);
     }
   }
 

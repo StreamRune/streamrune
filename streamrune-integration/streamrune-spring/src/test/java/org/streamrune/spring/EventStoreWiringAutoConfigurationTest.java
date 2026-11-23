@@ -252,9 +252,9 @@ class EventStoreWiringAutoConfigurationTest {
    * A user-supplied {@link org.streamrune.core.CommandInbox} suppresses the framework's default
    * (the bean javadoc advertises exactly that). The event store is handed that same inbox bean, the
    * one the command bus takes; an inbox of a foreign type cannot be written in the append's
-   * transaction, so the backend refuses it and the start fails (ruling T7-b, the R1 refusal) —
-   * rather than booting green and then failing every keyed execution, including the saga executor's
-   * idempotency-keyed dispatch, at runtime inside {@code appendWithKey}.
+   * transaction, so the backend refuses it and the start fails — rather than booting green and then
+   * failing every keyed execution, including the saga executor's idempotency-keyed dispatch, at
+   * runtime inside {@code appendWithKey}.
    */
   @Test
   void customCommandInboxWithTheFrameworkEventStoreFactoryFailsFast() {

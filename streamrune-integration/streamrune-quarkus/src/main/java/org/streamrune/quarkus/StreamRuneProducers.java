@@ -261,7 +261,7 @@ public class StreamRuneProducers {
             outboxPaired ? outboxStoreInstance.get() : null,
             outboxPaired ? outboxEventMapperInstance.get() : null,
             // The bus resolves this same CommandInbox bean, so the bus and the store share one
-            // inbox; one the backend cannot write in the append's transaction fails here (R1).
+            // inbox; one the backend cannot write in the append's transaction fails here.
             commandInboxInstance.isResolvable() ? commandInboxInstance.get() : null,
             // null when event audit is off: the framework's producer then declines.
             eventAuditStoreInstance.isUnsatisfied() ? null : eventAuditStoreInstance.get(),

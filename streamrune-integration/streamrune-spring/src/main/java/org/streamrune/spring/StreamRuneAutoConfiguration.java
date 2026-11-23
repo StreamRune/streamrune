@@ -366,7 +366,7 @@ public class StreamRuneAutoConfiguration {
             outboxPaired ? outboxStore : null,
             outboxPaired ? outboxMapper : null,
             // The bus resolves this same CommandInbox bean, so the bus and the store share one
-            // inbox; one the backend cannot write in the append's transaction fails here (R1).
+            // inbox; one the backend cannot write in the append's transaction fails here.
             commandInboxProvider.getIfAvailable(),
             eventAuditStoreProvider.getIfAvailable(),
             // The store borrows from the application DataSource as given and bounds its own

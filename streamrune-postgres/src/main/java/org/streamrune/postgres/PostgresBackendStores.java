@@ -164,8 +164,8 @@ final class PostgresBackendStores implements BackendStores {
   }
 
   /**
-   * {@code store} as this backend's own type, or the R1 refusal: the event store writes it on its
-   * own append connection, which only a Postgres store can join.
+   * {@code store} as this backend's own type, or the foreign-store refusal: the event store writes
+   * it on its own append connection, which only a Postgres store can join.
    */
   private static <T> T narrow(Object store, Class<T> own, String role) {
     if (store == null || own.isInstance(store)) {

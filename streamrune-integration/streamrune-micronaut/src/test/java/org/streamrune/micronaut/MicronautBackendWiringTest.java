@@ -402,7 +402,7 @@ class MicronautBackendWiringTest {
         Qualifiers.byName(StreamRuneMicronautModule.FRAMEWORK_SAGA_DEAD_LETTER_RETENTION_SWEEPER));
   }
 
-  // ── T7-b: an application store of a foreign type fails with R1 ────────────────────────────
+  // ── an application store of a foreign type fails the start ──────────────────────────────
 
   /** An outbox store of no backend, with a mapper. */
   @Factory

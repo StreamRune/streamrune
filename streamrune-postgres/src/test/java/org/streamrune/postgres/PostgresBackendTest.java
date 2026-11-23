@@ -247,7 +247,7 @@ class PostgresBackendTest {
         .isEqualTo(OutboxOptions.DEFAULT_CLAIM_LEASE);
   }
 
-  // ---------------------------------------------------------------- the two mappers (T5-b)
+  // ---------------------------------------------------------------- the two mappers
 
   @Test
   void theSagaAndReadModelMappersAreBuiltAsTheIntegrationsBuildThem() throws Exception {

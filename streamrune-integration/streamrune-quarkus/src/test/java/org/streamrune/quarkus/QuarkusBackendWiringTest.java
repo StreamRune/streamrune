@@ -362,7 +362,7 @@ class QuarkusBackendWiringTest {
         .get();
   }
 
-  // ── T7-b: an application store of a foreign type fails with R1 ────────────────────────────
+  // ── an application store of a foreign type fails the start ──────────────────────────────
 
   /** An outbox store of no backend, with a mapper. */
   @ApplicationScoped

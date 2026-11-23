@@ -1122,7 +1122,7 @@ class MicronautBeanWiringTest {
       messages.append(t.getMessage()).append('\n');
     }
     // The bus and the event store share the one inbox bean; the backend refuses an inbox it
-    // cannot claim keys in inside the append's transaction (ruling T7-b, the R1 refusal).
+    // cannot claim keys in inside the append's transaction (its foreign-store refusal).
     assertTrue(
         messages
             .toString()
@@ -1189,7 +1189,7 @@ class MicronautBeanWiringTest {
     for (Throwable t = failure; t != null; t = t.getCause()) {
       messages.append(t.getMessage()).append('\n');
     }
-    // The backend's R1 refusal (ruling T7-b), as in the Spring and Quarkus integrations: it names
+    // The backend's foreign-store refusal, as in the Spring and Quarkus integrations: it names
     // the store it was given and the remedy, a store built from the backend's BackendStores.
     assertTrue(
         messages
