@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794992645570,
+  "lastUpdate": 1795426853672,
   "repoUrl": "https://github.com/StreamRune/streamrune",
   "entries": {
     "StreamRune JMH": [
@@ -1508,6 +1508,214 @@ window.BENCHMARK_DATA = {
           {
             "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
             "value": 86.1592262613693,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Martin Bednář",
+            "username": "xxBedy",
+            "email": "martin.bednar@streamrune.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "cf1db4f330a4aec8980b1b6c302f5f711b45a86e",
+          "message": "feat(saga): the runner executes the sagas of a page in parallel (#134)\n\nA `SagaRunner` now executes the sagas of one delivered page in parallel: steps of different sagas run at once, at most `parallelism` of them (default **4**, range 1–64), while each saga's own events stay in offset order, one step at a time. A saga type is no longer capped at one step at a time.\n\n## How a page runs\n\n- The runner routes the page on the delivering thread, groups the items by saga and hands them to a package-private `KeyedPageExecutor`: the items of one saga run in order on one virtual thread, at most `parallelism` sagas at once, and the page is acknowledged only when every item ended. Checkpoint, lease, stores and schema are unchanged; nothing durable is added.\n- A failed item ends its own saga's group. The page stops starting items on a connection-class failure, on its third failed item, or on an `Error`; the other sagas' steps that already started finish. The page then throws, is not acknowledged, and its redelivery is answered from the saga rows. At `parallelism(1)` the runner behaves as before, apart from routing the whole page before its first step.\n- Connection-class is portable (SQLState class `08`, `SQLTransientConnectionException`, `SQLNonTransientConnectionException`); a store adds its own codes through the new `SagaStore.connectionFailureClassifier()` — PostgreSQL contributes `57P01`, `57P02`, `57P03`, `53300`.\n- A page whose workers end without running their items, or a worker that dies while recording a failure, fails the page; nothing is acknowledged that did not run.\n- Orchestrators are now called from several threads at once; the `SagaDecider` contract says so. `SagaFixture` keeps parallelism 1 unless its customizer sets it.\n\n## Configuration\n\nParallelism comes from a per-subscription setting, the builder (`SagaRunner.Builder.parallelism`), a global setting, or the default 4, in that order; a subscription binds the runner's value when it is built, an unknown subscription name is refused, and a new value applies from the next page. A runner bound to several subscriptions can have one page per subscription in flight. A startup line states the value, where it came from and the connection budget.\n\n## Metrics\n\n`streamrune.saga.steps.in_flight` and `streamrune.saga.page.pending` (gauges, across the runner's pages), `streamrune.saga.page.effective_parallelism` (distribution summary, median published) and `streamrune.saga.page.failed` (counter, tag `stop` = `connection`, `third_failure` or `none`), all tagged by `saga.type` and recorded at parallelism above 1. The page WARN is rate-limited.\n\n## Tests\n\n- The executor, the stop rule, the classifier, the accounting and the parallelism sources each have their own tests.\n- A seeded equivalence test: parallel runs end in exactly the state of serial runs (rows, commands in order, inbox keys, dead letters with their error types).\n- One crash-point test per point where a parallel page can be cut (in memory and on PostgreSQL): the rerun converges to the uninterrupted run.\n- PostgreSQL and two-node tests: 200 sagas at parallelism 8, 50 sagas on one aggregate, a deadline claim while workers step (the forward fence holds), a pool smaller than the budget, a lease lost mid-page, an `Error` on a worker; the leadership ITs run at parallelism 1 and 8.\n\n## Docs\n\n`docs/guide/advanced/saga.md` (parallel steps, failure rule, connection budget per locker, pool threshold), `production.md` (pool sizing), `subscription-lifecycle.md`, `testing.md`, the 1.0.0 release notes and the CHANGELOG.\n\n\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-23T07:59:05Z",
+          "url": "https://github.com/StreamRune/streamrune/commit/cf1db4f330a4aec8980b1b6c302f5f711b45a86e"
+        },
+        "date": 1795426852714,
+        "tool": "jmh",
+        "benches": [
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"0\"} )",
+            "value": 97.99090930007772,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 154.79261044699234,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 156.21371722159634,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapPublishedEvent",
+            "value": 0.176198627568539,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"10\"} )",
+            "value": 16.65209650274495,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"100\"} )",
+            "value": 149.2996005914239,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.commandBusThroughput",
+            "value": 10.95878157265861,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"1\"} )",
+            "value": 9.820572210062837,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"10\"} )",
+            "value": 48.39497100953297,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"100\"} )",
+            "value": 326.80226046763966,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"1\"} )",
+            "value": 0.983324839899207,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"10\"} )",
+            "value": 8.227043513838371,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"100\"} )",
+            "value": 78.62459205649097,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"1\"} )",
+            "value": 4.512709936558317,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"10\"} )",
+            "value": 4.4504268715060125,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"100\"} )",
+            "value": 4.865387663185179,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"NOOP\"} )",
+            "value": 10.945770664298248,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_OFF\"} )",
+            "value": 13.020775235960935,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_ON\"} )",
+            "value": 13.46654577224121,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"1\"} )",
+            "value": 636.2657717201978,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"10\"} )",
+            "value": 802.4175249497346,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"1\"} )",
+            "value": 638.0127361620841,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"10\"} )",
+            "value": 785.2640516050511,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"10\"} )",
+            "value": 331.98719802782205,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"100\"} )",
+            "value": 770.9963932971007,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 799.4132507654624,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 825.4187445380039,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 10.528244217999907,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 50.32601492966393,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 14.483187924249895,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 70.3530755922069,
             "unit": "us/op",
             "extra": "iterations: 5\nforks: 2\nthreads: 1"
           }
