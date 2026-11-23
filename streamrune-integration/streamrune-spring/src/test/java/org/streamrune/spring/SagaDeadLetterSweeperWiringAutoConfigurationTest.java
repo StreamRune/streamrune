@@ -80,9 +80,10 @@ class SagaDeadLetterSweeperWiringAutoConfigurationTest {
     // Override semantics are deliberately declared on the INTERFACE
     // (@ConditionalOnMissingBean(SagaDeadLetterStore.class)), so a user-supplied interface-typed
     // bean still replaces the concrete-typed default. The framework then registers no sweeper: it
-    // sweeps only the Postgres store it created itself, never a store it does not own (the same
-    // rule the inbox sweeper follows via @ConditionalOnBean(PostgresCommandInbox.class)). A user
-    // who brings their own store owns its retention.
+    // sweeps only the store its own bean definition created (or an application-declared
+    // PostgresSagaDeadLetterStore), never a store it does not own — the same rule the inbox sweeper
+    // follows (StreamRuneAutoConfiguration.FrameworkOrPostgresCommandInbox). A user who brings
+    // their own store owns its retention.
     runner
         .withUserConfiguration(UserStoreConfig.class)
         .run(

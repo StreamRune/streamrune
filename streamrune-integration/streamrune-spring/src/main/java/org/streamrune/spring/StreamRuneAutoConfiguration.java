@@ -1288,14 +1288,15 @@ public class StreamRuneAutoConfiguration {
    * (guarded on the interface type via {@link ConditionalOnMissingBean#value()} so a user-supplied
    * interface-typed bean still overrides it).
    *
-   * <p><strong>Interface return type, sweeper gated by bean name.</strong> Spring's
+   * <p><strong>Interface return type, sweeper gated on this definition.</strong> Spring's
    * {@code @ConditionalOnBean} predicts bean types from the factory method's declared return type
    * <em>before</em> the bean is instantiated, so a gate on a concrete store class never sees this
    * interface-typed bean. {@link #streamRuneSagaDeadLetterRetentionSweeper} is therefore gated on
-   * this bean's name, {@value #SAGA_DEAD_LETTER_STORE_BEAN} — or an application-declared {@code
-   * PostgresSagaDeadLetterStore} — and takes the interface: without the sweeper {@code
-   * saga_dead_letters} grows without bound (a GDPR storage-limitation violation). Same rule as
-   * {@link #commandInbox}.
+   * this very bean definition ({@link OwnSagaDeadLetterStoreDefinition}: the bean named {@value
+   * #SAGA_DEAD_LETTER_STORE_BEAN} that this class registered, not an application bean of that name)
+   * — or an application-declared {@code PostgresSagaDeadLetterStore} — and takes the interface:
+   * without the sweeper {@code saga_dead_letters} grows without bound (a GDPR storage-limitation
+   * violation). Same rule as {@link #commandInbox}.
    */
   @Bean
   @ConditionalOnMissingBean(SagaDeadLetterStore.class)
@@ -1319,9 +1320,9 @@ public class StreamRuneAutoConfiguration {
    * interface-typed bean still overrides it).
    *
    * <p>The bean is declared with the interface type; {@link #streamRuneInboxRetentionSweeper} is
-   * gated on its name, {@value #COMMAND_INBOX_BEAN}, or an application-declared {@code
-   * PostgresCommandInbox}, because Spring predicts bean types from the declared return type and a
-   * concrete-typed gate would never see this bean.
+   * gated on this very definition ({@link OwnCommandInboxDefinition}), or an application-declared
+   * {@code PostgresCommandInbox}, because Spring predicts bean types from the declared return type
+   * and a concrete-typed gate would never see this bean.
    *
    * <p><strong>What overriding actually requires.</strong> Because the store must claim the
    * idempotency key in the SAME transaction as the append, the event store is built with this same
@@ -1815,10 +1816,13 @@ public class StreamRuneAutoConfiguration {
   }
 
   /**
-   * Matches when the auto-configured {@link #commandInbox} bean is defined, or the application
-   * declares a {@code PostgresCommandInbox} bean: the inboxes {@link
+   * Matches when this auto-configuration's own {@link #commandInbox} bean is defined, or the
+   * application declares a {@code PostgresCommandInbox} bean: the inboxes {@link
    * #streamRuneInboxRetentionSweeper} sweeps. A bean condition on a store class predicts types from
-   * declared return types, so it cannot see the interface-typed framework bean; its name can.
+   * declared return types, so it cannot see the interface-typed framework bean; and a bean name
+   * alone would also match an application's own {@code @Bean CommandInbox commandInbox()}, which
+   * the framework must never sweep. {@link OwnCommandInboxDefinition} therefore matches the
+   * definition this class's factory method registered, and nothing else.
    */
   static final class FrameworkOrPostgresCommandInbox
       extends org.springframework.boot.autoconfigure.condition.AnyNestedCondition {
@@ -1826,7 +1830,7 @@ public class StreamRuneAutoConfiguration {
       super(ConfigurationPhase.REGISTER_BEAN);
     }
 
-    @ConditionalOnBean(name = COMMAND_INBOX_BEAN)
+    @org.springframework.context.annotation.Conditional(OwnCommandInboxDefinition.class)
     static final class Framework {}
 
     @ConditionalOnBean(org.streamrune.postgres.PostgresCommandInbox.class)
@@ -1836,7 +1840,8 @@ public class StreamRuneAutoConfiguration {
   /**
    * Matches when the auto-configured {@link #sagaDeadLetterStore} bean is defined, or the
    * application declares a {@code PostgresSagaDeadLetterStore} bean: the stores {@link
-   * #streamRuneSagaDeadLetterRetentionSweeper} sweeps. See {@link FrameworkOrPostgresCommandInbox}.
+   * #streamRuneSagaDeadLetterRetentionSweeper} sweeps. See {@link FrameworkOrPostgresCommandInbox};
+   * an application's own {@code @Bean SagaDeadLetterStore sagaDeadLetterStore()} does not match.
    */
   static final class FrameworkOrPostgresSagaDeadLetterStore
       extends org.springframework.boot.autoconfigure.condition.AnyNestedCondition {
@@ -1844,11 +1849,69 @@ public class StreamRuneAutoConfiguration {
       super(ConfigurationPhase.REGISTER_BEAN);
     }
 
-    @ConditionalOnBean(name = SAGA_DEAD_LETTER_STORE_BEAN)
+    @org.springframework.context.annotation.Conditional(OwnSagaDeadLetterStoreDefinition.class)
     static final class Framework {}
 
     @ConditionalOnBean(org.streamrune.postgres.PostgresSagaDeadLetterStore.class)
     static final class ApplicationDeclared {}
+  }
+
+  /**
+   * Matches when the bean definition named {@code beanName} is the one a factory method of {@link
+   * StreamRuneAutoConfiguration} registered: the framework's own store, not an application bean
+   * that happens to carry the same name (the name Spring gives a plain {@code @Bean} method of that
+   * name). Evaluated at bean registration, after the store's own bean method, which is declared
+   * earlier in this class.
+   */
+  abstract static class OwnBeanDefinitionCondition
+      extends org.springframework.boot.autoconfigure.condition.SpringBootCondition
+      implements org.springframework.context.annotation.ConfigurationCondition {
+
+    private final String beanName;
+
+    OwnBeanDefinitionCondition(String beanName) {
+      this.beanName = beanName;
+    }
+
+    @Override
+    public ConfigurationPhase getConfigurationPhase() {
+      return ConfigurationPhase.REGISTER_BEAN;
+    }
+
+    @Override
+    public org.springframework.boot.autoconfigure.condition.ConditionOutcome getMatchOutcome(
+        org.springframework.context.annotation.ConditionContext context,
+        org.springframework.core.type.AnnotatedTypeMetadata metadata) {
+      var registry = context.getRegistry();
+      boolean own =
+          registry.containsBeanDefinition(beanName)
+              && registry.getBeanDefinition(beanName)
+                  instanceof
+                  org.springframework.beans.factory.annotation.AnnotatedBeanDefinition definition
+              && definition.getFactoryMethodMetadata() != null
+              && StreamRuneAutoConfiguration.class
+                  .getName()
+                  .equals(definition.getFactoryMethodMetadata().getDeclaringClassName());
+      return own
+          ? org.springframework.boot.autoconfigure.condition.ConditionOutcome.match(
+              "bean '" + beanName + "' is StreamRuneAutoConfiguration's own")
+          : org.springframework.boot.autoconfigure.condition.ConditionOutcome.noMatch(
+              "no bean '" + beanName + "' defined by StreamRuneAutoConfiguration");
+    }
+  }
+
+  /** Matches this auto-configuration's own {@link #commandInbox} definition. */
+  static final class OwnCommandInboxDefinition extends OwnBeanDefinitionCondition {
+    OwnCommandInboxDefinition() {
+      super(COMMAND_INBOX_BEAN);
+    }
+  }
+
+  /** Matches this auto-configuration's own {@link #sagaDeadLetterStore} definition. */
+  static final class OwnSagaDeadLetterStoreDefinition extends OwnBeanDefinitionCondition {
+    OwnSagaDeadLetterStoreDefinition() {
+      super(SAGA_DEAD_LETTER_STORE_BEAN);
+    }
   }
 
   /**

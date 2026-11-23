@@ -17,6 +17,8 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.EventStore;
@@ -48,6 +50,9 @@ import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.integration.ReadModelStores;
 import org.streamrune.postgres.PostgresBackend;
 import org.streamrune.postgres.PostgresOutboxStore;
+import org.streamrune.runtime.InboxRetentionSweeper;
+import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
+import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryOutboxStore;
 
 /**
@@ -215,6 +220,74 @@ class SpringBackendWiringTest {
               verify(opened.get(), never()).close();
             });
     verify(opened.get(), times(1)).close();
+  }
+
+  // ── the retention sweepers sweep only the framework's own stores ──────────────────────
+
+  @Test
+  void theDefaultContextHasBothRetentionSweepers() {
+    runner.run(
+        ctx -> {
+          assertThat(ctx).hasNotFailed();
+          assertThat(ctx).hasBean("streamRuneInboxRetentionSweeper");
+          assertThat(ctx).hasBean("streamRuneSagaDeadLetterRetentionSweeper");
+          assertThat(ctx.getBean(InboxRetentionSweeper.class)).isNotNull();
+          assertThat(ctx.getBean(SagaDeadLetterRetentionSweeper.class)).isNotNull();
+        });
+  }
+
+  /**
+   * An application's plain {@code @Bean SagaDeadLetterStore sagaDeadLetterStore()} carries the
+   * framework bean's name, but it is the application's store: the framework must not prune it.
+   */
+  @Test
+  void anApplicationSagaDeadLetterStoreUnderTheFrameworkNameGetsNoSweeper() {
+    runner
+        .withUserConfiguration(ApplicationSagaDeadLetterStore.class)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(SagaDeadLetterStore.class))
+                  .isSameAs(ApplicationSagaDeadLetterStore.STORE);
+              assertThat(ctx).doesNotHaveBean(SagaDeadLetterRetentionSweeper.class);
+            });
+  }
+
+  /**
+   * The same for an application's plain {@code @Bean CommandInbox commandInbox()}; it brings its
+   * own event store factory, so the backend's R1 refusal does not stop the start first.
+   */
+  @Test
+  void anApplicationCommandInboxUnderTheFrameworkNameGetsNoSweeper() {
+    runner
+        .withUserConfiguration(ApplicationCommandInbox.class)
+        .withBean(EventStoreFactory.class, SpringTestMocks::eventStoreFactoryReturningMockStore)
+        .run(
+            ctx -> {
+              assertThat(ctx).hasNotFailed();
+              assertThat(ctx.getBean(CommandInbox.class)).isSameAs(ApplicationCommandInbox.INBOX);
+              assertThat(ctx).doesNotHaveBean(InboxRetentionSweeper.class);
+            });
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class ApplicationSagaDeadLetterStore {
+    static final SagaDeadLetterStore STORE = mock(SagaDeadLetterStore.class);
+
+    @Bean
+    SagaDeadLetterStore sagaDeadLetterStore() {
+      return STORE;
+    }
+  }
+
+  @Configuration(proxyBeanMethods = false)
+  static class ApplicationCommandInbox {
+    static final CommandInbox INBOX = new InMemoryCommandInbox();
+
+    @Bean
+    CommandInbox commandInbox() {
+      return INBOX;
+    }
   }
 
   // ── T7-b: an application store of a foreign type fails the start (R1) ─────────────────
