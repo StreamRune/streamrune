@@ -13,15 +13,17 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.backend.StreamRuneBackend;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.CryptoForgetSignal;
 import org.streamrune.crypto.aws.AwsKmsCryptoEngine;
 import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
-import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
-import org.streamrune.crypto.postgres.PostgresCryptoEngine;
-import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
+import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.crypto.vault.VaultCryptoEngine;
+import org.streamrune.integration.BackendSelection;
+import org.streamrune.postgres.PostgresBackend;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kms.KmsClient;
 
@@ -86,6 +88,54 @@ public class StreamRuneCryptoProducers {
   }
 
   /**
+   * The crypto half of the storage backend: the {@link CryptoBackend} the crypto engines take their
+   * forgotten-subject store, forget signal and key-store engine from. It follows the {@link
+   * StreamRuneBackend} bean ({@code streamrune.backend}): {@link PostgresCryptoBackend} for {@code
+   * postgres}.
+   *
+   * <p>Not gated: CDI has no build-time condition for "any of the four engines is enabled". Only
+   * the engine producers inject it, so a Quarkus application (which removes unused beans, {@code
+   * quarkus.arc.remove-unused-beans=all} by default) has the bean only when a crypto engine is
+   * enabled; elsewhere it is an inert factory that nothing creates.
+   */
+  @ApplicationScoped
+  public static class CryptoBackendProducer {
+
+    /** Creates the producer. */
+    public CryptoBackendProducer() {}
+
+    /**
+     * The crypto backend of {@code backend}.
+     *
+     * @param backend the storage backend
+     * @return its crypto backend
+     * @throws IllegalStateException if the backend has no crypto backend in this integration
+     */
+    @Produces
+    @Singleton
+    public CryptoBackend streamRuneCryptoBackend(StreamRuneBackend backend) {
+      return cryptoBackendOf(backend);
+    }
+  }
+
+  /**
+   * The crypto backend of {@code backend}: {@link PostgresCryptoBackend} for the {@link
+   * PostgresBackend}. Package-private for direct testing.
+   *
+   * @throws IllegalStateException for any other backend, which has no crypto backend here yet
+   */
+  static CryptoBackend cryptoBackendOf(StreamRuneBackend backend) {
+    if (backend instanceof PostgresBackend) {
+      return new PostgresCryptoBackend();
+    }
+    throw new IllegalStateException(
+        BackendSelection.PROPERTY
+            + "="
+            + backend.name()
+            + " has no crypto backend in the Quarkus integration; only postgres has one");
+  }
+
+  /**
    * File-system backend: its {@link CryptoEngine} producer and that engine's disposer, gated
    * together on {@code streamrune.crypto.filesystem.enabled}.
    */
@@ -102,11 +152,15 @@ public class StreamRuneCryptoProducers {
     @Produces
     @Singleton
     public CryptoEngine fileSystemCryptoEngine(
+        CryptoBackend cryptoBackend,
         Instance<DataSource> dataSource,
         StreamRuneQuarkusCryptoProperties props,
         Instance<StreamRuneMetrics> metrics) {
       return build.buildFileSystemCryptoEngine(
-          dataSource.isResolvable() ? dataSource.get() : null, props, resolvedOrNoop(metrics));
+          cryptoBackend,
+          dataSource.isResolvable() ? dataSource.get() : null,
+          props,
+          resolvedOrNoop(metrics));
     }
 
     /** Disposer for {@link #fileSystemCryptoEngine}. */
@@ -132,10 +186,12 @@ public class StreamRuneCryptoProducers {
     @Produces
     @Singleton
     public CryptoEngine postgresCryptoEngine(
+        CryptoBackend cryptoBackend,
         DataSource dataSource,
         StreamRuneQuarkusCryptoProperties props,
         Instance<StreamRuneMetrics> metrics) {
-      return build.buildPostgresCryptoEngine(dataSource, props, resolvedOrNoop(metrics));
+      return build.buildPostgresCryptoEngine(
+          cryptoBackend, dataSource, props, resolvedOrNoop(metrics));
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
@@ -193,11 +249,15 @@ public class StreamRuneCryptoProducers {
     @Produces
     @Singleton
     public CryptoEngine vaultCryptoEngine(
+        CryptoBackend cryptoBackend,
         StreamRuneVaultHttpClient httpClient,
         Instance<DataSource> dataSource,
         StreamRuneQuarkusCryptoProperties props) {
       return build.buildVaultCryptoEngine(
-          httpClient.client(), dataSource.isResolvable() ? dataSource.get() : null, props);
+          cryptoBackend,
+          httpClient.client(),
+          dataSource.isResolvable() ? dataSource.get() : null,
+          props);
     }
 
     /** Disposer for {@link #vaultCryptoEngine}. */
@@ -247,19 +307,22 @@ public class StreamRuneCryptoProducers {
      * Creates an AWS KMS-backed {@link CryptoEngine}. Fails fast when no region or KMS key id is
      * configured.
      *
-     * <p>When a {@link DataSource} is present, a durable {@link JdbcForgottenSubjectStore} is
-     * auto-wired so AWS-KMS GDPR erasure survives restarts out of the box; without one the engine
-     * fails closed rather than recording in-memory tombstones that vanish on restart. {@code
-     * Instance<DataSource>} makes the dependency optional (KMS does not otherwise need a database).
+     * <p>When a {@link DataSource} is present, the crypto backend's durable forgotten-subject store
+     * ({@link CryptoBackend#forgottenSubjects}) is auto-wired so AWS-KMS GDPR erasure survives
+     * restarts out of the box; without one the engine fails closed rather than recording in-memory
+     * tombstones that vanish on restart. {@code Instance<DataSource>} makes the dependency optional
+     * (KMS does not otherwise need a database).
      */
     @Produces
     @Singleton
     public CryptoEngine awsKmsCryptoEngine(
+        CryptoBackend cryptoBackend,
         StreamRuneKmsClient kmsClient,
         Instance<DataSource> dataSource,
         StreamRuneQuarkusCryptoProperties props,
         Instance<StreamRuneMetrics> metrics) {
       return build.buildAwsKmsCryptoEngine(
+          cryptoBackend,
           kmsClient.client(),
           dataSource.isResolvable() ? dataSource.get() : null,
           props,
@@ -279,7 +342,10 @@ public class StreamRuneCryptoProducers {
    * #resolveForgetSignal}).
    */
   CryptoEngine buildFileSystemCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props,
+      StreamRuneMetrics metrics) {
     var filesystem = props.filesystem();
     requireRuntimeEnabled(filesystem.enabled(), "streamrune.crypto.filesystem.enabled");
     CryptoEngine delegate;
@@ -297,35 +363,37 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "filesystem"));
+        resolveForgetSignal(
+            cryptoBackend, dataSource, props.cache().expireAfterWrite(), "filesystem"));
   }
 
   /**
    * Build logic for {@link PostgresCryptoProducer#postgresCryptoEngine}, package-private so unit
    * tests can drive it with a mock {@link DataSource} without an Arc container.
    *
-   * <p>A Postgres DataSource is present by construction, so the LISTEN/NOTIFY forget channel is
-   * wired for prompt cross-replica cache invalidation on deleteKey ({@link #postgresForgetSignal}).
-   * The cached engine is AutoCloseable and is disposed by {@link
-   * PostgresCryptoProducer#disposeCryptoEngine} on context shutdown, which stops the listener and
-   * closes its dedicated LISTEN pool.
+   * <p>The key-store engine is the crypto backend's ({@link CryptoBackend#keyStoreEngine}). A
+   * DataSource is present by construction, so the backend's forget channel is wired for prompt
+   * cross-replica cache invalidation on deleteKey ({@link #forgetSignal}). The cached engine is
+   * AutoCloseable and is disposed by {@link PostgresCryptoProducer#disposeCryptoEngine} on context
+   * shutdown, which stops the listener and closes its dedicated LISTEN pool.
    */
   CryptoEngine buildPostgresCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props,
+      StreamRuneMetrics metrics) {
     requireRuntimeEnabled(props.postgres().enabled(), "streamrune.crypto.postgres.enabled");
     CryptoEngine delegate;
     try {
       delegate =
-          PostgresCryptoEngine.builder()
-              .dataSource(dataSource)
-              .tableName(props.postgres().tableName())
-              .metrics(metrics)
-              .build();
+          cryptoBackend.keyStoreEngine(
+              dataSource,
+              new CryptoBackend.KeyStoreEngineSettings(props.postgres().tableName(), metrics));
     } catch (Exception e) {
       throw new IllegalStateException(
           "Failed to build PostgresCryptoEngine. Check streamrune.crypto.postgres config.", e);
     }
-    return wrapWithCache(delegate, props.cache(), postgresForgetSignal(dataSource));
+    return wrapWithCache(delegate, props.cache(), forgetSignal(cryptoBackend, dataSource));
   }
 
   /**
@@ -359,8 +427,8 @@ public class StreamRuneCryptoProducers {
    * closed on shutdown.
    */
   CryptoEngine buildVaultCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
-    return buildVaultCryptoEngine(HttpClient.newHttpClient(), dataSource, props);
+      CryptoBackend cryptoBackend, DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+    return buildVaultCryptoEngine(cryptoBackend, HttpClient.newHttpClient(), dataSource, props);
   }
 
   /**
@@ -368,13 +436,16 @@ public class StreamRuneCryptoProducers {
    * can drive it with a {@code null}/mock {@link DataSource} without an Arc container. Not a
    * producer (no {@code @Produces}), so Arc ignores it.
    *
-   * <p>When a {@link DataSource} is present a durable {@link JdbcForgottenSubjectStore} is
-   * auto-wired so Vault erasure is terminal (a forgotten subject cannot be re-encrypted); without
-   * one the engine fails closed rather than shipping non-terminal erasure. {@code
-   * Instance<DataSource>} makes the dependency optional.
+   * <p>When a {@link DataSource} is present the crypto backend's durable forgotten-subject store
+   * ({@link CryptoBackend#forgottenSubjects}) is auto-wired so Vault erasure is terminal (a
+   * forgotten subject cannot be re-encrypted); without one the engine fails closed rather than
+   * shipping non-terminal erasure. {@code Instance<DataSource>} makes the dependency optional.
    */
   CryptoEngine buildVaultCryptoEngine(
-      HttpClient httpClient, DataSource dataSource, StreamRuneQuarkusCryptoProperties props) {
+      CryptoBackend cryptoBackend,
+      HttpClient httpClient,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props) {
     var vault = props.vault();
     requireRuntimeEnabled(vault.enabled(), "streamrune.crypto.vault.enabled");
     String token =
@@ -389,7 +460,7 @@ public class StreamRuneCryptoProducers {
               .token(token)
               .engineMount(vault.engineMount());
       if (dataSource != null) {
-        builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
+        builder.forgottenSubjectStore(cryptoBackend.forgottenSubjects(dataSource));
       }
       // No DataSource → build() fails closed; rethrown below.
       delegate = builder.build();
@@ -404,7 +475,7 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "vault"));
+        resolveForgetSignal(cryptoBackend, dataSource, props.cache().expireAfterWrite(), "vault"));
   }
 
   /**
@@ -417,7 +488,10 @@ public class StreamRuneCryptoProducers {
    * build's fail-fast order.
    */
   CryptoEngine buildAwsKmsCryptoEngine(
-      DataSource dataSource, StreamRuneQuarkusCryptoProperties props, StreamRuneMetrics metrics) {
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props,
+      StreamRuneMetrics metrics) {
     var aws = props.aws();
     requireRuntimeEnabled(aws.enabled(), "streamrune.crypto.aws.enabled");
     String region =
@@ -426,7 +500,11 @@ public class StreamRuneCryptoProducers {
     requirePresent(
         aws.kmsKeyId(), "streamrune.crypto.aws.kms-key-id", "the ARN or id of a KMS symmetric key");
     return buildAwsKmsCryptoEngine(
-        KmsClient.builder().region(Region.of(region)).build(), dataSource, props, metrics);
+        cryptoBackend,
+        KmsClient.builder().region(Region.of(region)).build(),
+        dataSource,
+        props,
+        metrics);
   }
 
   /**
@@ -435,6 +513,7 @@ public class StreamRuneCryptoProducers {
    * Instance} is impractical to stub). Not a producer (no {@code @Produces}), so Arc ignores it.
    */
   CryptoEngine buildAwsKmsCryptoEngine(
+      CryptoBackend cryptoBackend,
       KmsClient kmsClient,
       DataSource dataSource,
       StreamRuneQuarkusCryptoProperties props,
@@ -475,7 +554,7 @@ public class StreamRuneCryptoProducers {
               .dataKeyCacheMaximumSize(props.cache().enabled() ? dataKeyCacheMaximumSize : 0)
               .dataKeyCacheExpireAfterWrite(dataKeyCacheExpireAfterWrite);
       if (dataSource != null) {
-        builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
+        builder.forgottenSubjectStore(cryptoBackend.forgottenSubjects(dataSource));
       }
       // No DataSource → build() fails closed; rethrown below with actionable guidance.
       delegate = builder.build();
@@ -491,7 +570,8 @@ public class StreamRuneCryptoProducers {
     return wrapWithCache(
         delegate,
         props.cache(),
-        resolveForgetSignal(dataSource, props.cache().expireAfterWrite(), "aws-kms"));
+        resolveForgetSignal(
+            cryptoBackend, dataSource, props.cache().expireAfterWrite(), "aws-kms"));
   }
 
   /**
@@ -528,16 +608,19 @@ public class StreamRuneCryptoProducers {
   }
 
   /**
-   * Resolves the cross-replica forget channel for a non-Postgres backend — the prompt {@link
-   * PostgresCryptoForgetSignal} (LISTEN/NOTIFY, see {@link #postgresForgetSignal}) when a
-   * DataSource is present, else {@link CryptoForgetSignal#NOOP} with a startup WARN naming the
-   * cache write-TTL ceiling as the only cross-replica erasure bound. Package-private for direct
-   * testing.
+   * Resolves the cross-replica forget channel for an engine that keeps its keys outside the
+   * database — the crypto backend's prompt signal (on PostgreSQL LISTEN/NOTIFY, see {@link
+   * #forgetSignal}) when a DataSource is present, else {@link CryptoForgetSignal#NOOP} with a
+   * startup WARN naming the cache write-TTL ceiling as the only cross-replica erasure bound.
+   * Package-private for direct testing.
    */
   static CryptoForgetSignal resolveForgetSignal(
-      DataSource dataSource, Duration configuredWriteTtl, String backend) {
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      Duration configuredWriteTtl,
+      String backend) {
     if (dataSource != null) {
-      return postgresForgetSignal(dataSource);
+      return forgetSignal(cryptoBackend, dataSource);
     }
     log.warn(
         "No DataSource available to wire the cross-replica crypto-forget channel for the {} crypto"
@@ -550,20 +633,20 @@ public class StreamRuneCryptoProducers {
   }
 
   /**
-   * The LISTEN/NOTIFY forget channel over {@code dataSource}. Publishing borrows a connection of
-   * {@code dataSource}; listening holds one connection of a dedicated pool. The datasource
-   * quarkus-agroal injects keeps its JDBC URL and credentials in its configuration rather than
-   * behind the accessors the channel reads, so for an Agroal datasource the dedicated pool is
-   * opened from that configuration ({@link AgroalForgetListenPool}); any other {@code DataSource}
-   * (an application-produced {@code HikariDataSource}, say) goes through the channel's own
-   * derivation. Package-private for direct testing.
+   * The crypto backend's forget channel over {@code dataSource} — on PostgreSQL LISTEN/NOTIFY:
+   * publishing borrows a connection of {@code dataSource}; listening holds one connection of a
+   * dedicated pool. The datasource quarkus-agroal injects keeps its JDBC URL and credentials in its
+   * configuration rather than behind the accessors the channel reads, so for an Agroal datasource
+   * the backend is handed a factory that opens the dedicated pool from that configuration ({@link
+   * AgroalForgetListenPool}); any other {@code DataSource} (an application-produced {@code
+   * HikariDataSource}, say) goes through the channel's own derivation. Package-private for direct
+   * testing.
    */
-  static CryptoForgetSignal postgresForgetSignal(DataSource dataSource) {
+  static CryptoForgetSignal forgetSignal(CryptoBackend cryptoBackend, DataSource dataSource) {
     if (AgroalTypes.isAgroal(dataSource.getClass())) {
-      return new PostgresCryptoForgetSignal(
-          dataSource, () -> AgroalForgetListenPool.open(dataSource));
+      return cryptoBackend.forgetSignal(dataSource, () -> AgroalForgetListenPool.open(dataSource));
     }
-    return new PostgresCryptoForgetSignal(dataSource);
+    return cryptoBackend.forgetSignal(dataSource);
   }
 
   private CryptoEngine wrapWithCache(
