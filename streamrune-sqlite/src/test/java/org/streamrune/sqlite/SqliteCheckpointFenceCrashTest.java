@@ -51,7 +51,8 @@ class SqliteCheckpointFenceCrashTest {
   private DataSource clean;
   private final SqliteCrashPoints crashPoints = new SqliteCrashPoints(Kill.CLOSE_CONNECTION);
   private DataSource crashing;
-  private final SqliteCheckpointFence fence = new SqliteCheckpointFence(Clock.systemUTC());
+  private final SqliteCheckpointFence fence =
+      new SqliteCheckpointFence(CheckpointTable.READ_MODEL, Clock.systemUTC());
 
   @BeforeEach
   void open() throws SQLException {

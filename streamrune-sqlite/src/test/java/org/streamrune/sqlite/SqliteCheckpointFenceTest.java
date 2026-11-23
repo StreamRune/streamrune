@@ -26,6 +26,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
 import org.streamrune.core.EventStoreException;
@@ -33,13 +35,12 @@ import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
-import org.streamrune.test.EventStoreContract;
 
 /**
- * The checkpoint-row fence over {@code readmodel_checkpoint}: the epoch fence and the overlap guard
+ * The checkpoint-row fence over each table it can touch: the epoch fence and the overlap guard
  * under the database's write lock, the monotonic offset and epoch writes, the unguarded reset, and
- * that the event store's {@code subscription_checkpoint} never sees its rows. The database carries
- * both series, the way an event-store file that also holds its read models does.
+ * that the two tables never see each other's rows. The database carries both series, the way an
+ * event-store file that also holds its read models does.
  *
  * <p>SQLite has no leadership, so the epoch a real lease hands out never reaches the fence there;
  * the cases stamp epochs directly, which exercises the same statements a lease would.
@@ -62,7 +63,12 @@ class SqliteCheckpointFenceTest {
     database.migrate(SqliteSchemaSeries.EVENT_STORE);
     database.migrate(SqliteSchemaSeries.READ_MODEL);
     dataSource = database.dataSource();
-    fence = new SqliteCheckpointFence(Clock.fixed(NOW, ZoneOffset.UTC));
+    fence = fenceOver(CheckpointTable.READ_MODEL);
+  }
+
+  /** A fence over {@code table} on the fixed clock. */
+  private static SqliteCheckpointFence fenceOver(CheckpointTable table) {
+    return new SqliteCheckpointFence(table, Clock.fixed(NOW, ZoneOffset.UTC));
   }
 
   @AfterEach
@@ -116,6 +122,10 @@ class SqliteCheckpointFenceTest {
     }
   }
 
+  private boolean rowExists(CheckpointTable table, ProjectionName name) throws SQLException {
+    return rowExists(table.tableName(), name);
+  }
+
   private boolean rowExists(String table, ProjectionName name) throws SQLException {
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps =
@@ -140,8 +150,10 @@ class SqliteCheckpointFenceTest {
     }
   }
 
-  @Test
-  void staleEpochIsRejectedUnderTheWriteLock() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void staleEpochIsRejectedUnderTheWriteLock(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.stampEpoch(dataSource, name, 5L);
 
@@ -173,8 +185,10 @@ class SqliteCheckpointFenceTest {
    * A batch that is both stale and overlapping is the epoch fence's: the runners treat that guard
    * as lost leadership, so the epoch check runs first and names it.
    */
-  @Test
-  void epochFenceWinsOverOverlap() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void epochFenceWinsOverOverlap(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.stampEpoch(dataSource, name, 5L);
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(10));
@@ -197,8 +211,10 @@ class SqliteCheckpointFenceTest {
     }
   }
 
-  @Test
-  void overlapIsRejected() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void overlapIsRejected(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(10));
 
@@ -223,8 +239,10 @@ class SqliteCheckpointFenceTest {
     }
   }
 
-  @Test
-  void saveIsMonotonic() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void saveIsMonotonic(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
 
     try (Connection conn = begin()) {
@@ -265,16 +283,18 @@ class SqliteCheckpointFenceTest {
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(20));
     assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(20));
     var unseen = freshName();
-    assertThat(rowExists("readmodel_checkpoint", unseen)).isFalse();
+    assertThat(rowExists(table, unseen)).isFalse();
     assertThat(fence.lastOffset(dataSource, unseen)).isEqualTo(GlobalOffset.initial());
     fence.saveUnlocked(dataSource, unseen, GlobalOffset.of(4));
-    assertThat(rowExists("readmodel_checkpoint", unseen)).isTrue();
+    assertThat(rowExists(table, unseen)).isTrue();
     assertThat(fence.lastOffset(dataSource, unseen)).isEqualTo(GlobalOffset.of(4));
   }
 
   /** A greater caller epoch on an advance is stamped: the stored epoch rises with the leader. */
-  @Test
-  void anAdvanceStampsAGreaterCallerEpoch() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void anAdvanceStampsAGreaterCallerEpoch(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.stampEpoch(dataSource, name, 3L);
 
@@ -288,21 +308,19 @@ class SqliteCheckpointFenceTest {
     assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(2));
   }
 
-  @Test
-  void stampIsMonotonic() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void stampIsMonotonic(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
 
     // Epoch 0 is a no-op: no row appears.
     fence.stampEpoch(dataSource, name, 0L);
-    assertThat(rowExists("readmodel_checkpoint", name))
-        .as("an epoch-0 stamp writes no row")
-        .isFalse();
+    assertThat(rowExists(table, name)).as("an epoch-0 stamp writes no row").isFalse();
 
     // The first stamp seeds the row at offset 0 and never moves the offset afterwards.
     fence.stampEpoch(dataSource, name, 5L);
-    assertThat(rowExists("readmodel_checkpoint", name))
-        .as("the first stamp seeds the row")
-        .isTrue();
+    assertThat(rowExists(table, name)).as("the first stamp seeds the row").isTrue();
     assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.initial());
     assertThat(fence.readEpoch(dataSource, name)).isEqualTo(5L);
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(9));
@@ -320,8 +338,10 @@ class SqliteCheckpointFenceTest {
     assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(9));
   }
 
-  @Test
-  void resetRewindsUnguarded() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void resetRewindsUnguarded(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.stampEpoch(dataSource, name, 3L);
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(10));
@@ -335,17 +355,19 @@ class SqliteCheckpointFenceTest {
 
     // A reset of a projection never seen seeds it at 0.
     var unseen = freshName();
-    assertThat(rowExists("readmodel_checkpoint", unseen)).isFalse();
+    assertThat(rowExists(table, unseen)).isFalse();
     fence.reset(dataSource, unseen);
-    assertThat(rowExists("readmodel_checkpoint", unseen)).as("the reset seeds the row").isTrue();
+    assertThat(rowExists(table, unseen)).as("the reset seeds the row").isTrue();
     try (Connection conn = begin()) {
       assertThat(fence.lockForBatch(conn, unseen, 0L, GlobalOffset.of(1))).isZero();
       rollback(conn);
     }
   }
 
-  @Test
-  void replayHoldsTheWriteLockAndWritesNothing() throws Exception {
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void replayHoldsTheWriteLockAndWritesNothing(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
     var name = freshName();
     fence.stampEpoch(dataSource, name, 4L);
     fence.saveUnlocked(dataSource, name, GlobalOffset.of(8));
@@ -361,102 +383,140 @@ class SqliteCheckpointFenceTest {
     // A replay of a projection that never committed seeds the 0 row (uncommitted, so invisible to
     // another connection until the replay commits).
     var unseen = freshName();
-    assertThat(rowExists("readmodel_checkpoint", unseen)).isFalse();
+    assertThat(rowExists(table, unseen)).isFalse();
     try (Connection conn = begin()) {
       fence.lockForReplay(conn, unseen);
-      assertThat(rowExists("readmodel_checkpoint", unseen))
+      assertThat(rowExists(table, unseen))
           .as("the seed is not visible before the replay commits")
           .isFalse();
       commit(conn);
     }
-    assertThat(rowExists("readmodel_checkpoint", unseen))
-        .as("the replay's seed row is committed with it")
-        .isTrue();
+    assertThat(rowExists(table, unseen)).as("the replay's seed row is committed with it").isTrue();
     assertThat(fence.lastOffset(dataSource, unseen)).isEqualTo(GlobalOffset.initial());
     assertThat(fence.readEpoch(dataSource, unseen)).isZero();
   }
 
   /**
-   * The fence over {@code readmodel_checkpoint} and the event store's {@code
-   * subscription_checkpoint} ({@link SqliteOffsetStore}) never see each other's rows, though one
-   * file holds both.
+   * The two fences never see each other's rows, though one file holds both tables; the event
+   * store's {@link SqliteOffsetStore} reads the subscription fence's row.
    */
   @Test
   void tablesAreIsolated() throws Exception {
-    new SqliteEventStoreFactory(database, EventStoreContract.Setup.defaults().registry()).create();
-    var subscription = new SqliteOffsetStore(database);
+    var subscription = fenceOver(CheckpointTable.SUBSCRIPTION);
+    var readModel = fenceOver(CheckpointTable.READ_MODEL);
     var name = freshName();
 
-    subscription.saveOffset(name, GlobalOffset.of(30));
+    subscription.stampEpoch(dataSource, name, 9L);
+    subscription.saveUnlocked(dataSource, name, GlobalOffset.of(30));
 
-    assertThat(rowExists("subscription_checkpoint", name)).isTrue();
-    assertThat(rowExists("readmodel_checkpoint", name)).as("the other table has no row").isFalse();
-    assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.initial());
-    assertThat(fence.readEpoch(dataSource, name)).isZero();
+    assertThat(rowExists(CheckpointTable.SUBSCRIPTION, name)).isTrue();
+    assertThat(rowExists(CheckpointTable.READ_MODEL, name))
+        .as("the other table has no row")
+        .isFalse();
+    assertThat(readModel.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.initial());
+    assertThat(readModel.readEpoch(dataSource, name)).isZero();
     try (Connection conn = begin()) {
-      // Not overlapped by the other table's offset.
-      assertThat(fence.lockForBatch(conn, name, 1L, GlobalOffset.of(1))).isZero();
-      fence.saveLocked(conn, name, GlobalOffset.of(2), 1L);
+      // Not fenced by the other table's epoch, not overlapped by its offset.
+      assertThat(readModel.lockForBatch(conn, name, 1L, GlobalOffset.of(1))).isZero();
+      readModel.saveLocked(conn, name, GlobalOffset.of(2), 1L);
       commit(conn);
     }
-    assertThat(fence.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(2));
-    assertThat(fence.readEpoch(dataSource, name)).isEqualTo(1L);
-    fence.reset(dataSource, name);
+    assertThat(readModel.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(2));
+    assertThat(readModel.readEpoch(dataSource, name)).isEqualTo(1L);
+    readModel.reset(dataSource, name);
 
-    assertThat(subscription.getLastOffset(name)).isEqualTo(GlobalOffset.of(30));
+    assertThat(subscription.lastOffset(dataSource, name)).isEqualTo(GlobalOffset.of(30));
+    assertThat(subscription.readEpoch(dataSource, name)).isEqualTo(9L);
+    assertThat(new SqliteOffsetStore(database).getLastOffset(name)).isEqualTo(GlobalOffset.of(30));
   }
 
   /**
-   * The statements are the Postgres fence's over {@code readmodel_checkpoint}, translated: the
-   * application clock's value bound for {@code NOW()}, {@code max()} for {@code GREATEST()}, and no
-   * {@code FOR UPDATE} (the caller's {@code BEGIN IMMEDIATE} holds the database's write lock).
+   * The statements are the Postgres fence's, translated: the application clock's value bound for
+   * {@code NOW()}, {@code max()} for {@code GREATEST()}, and no {@code FOR UPDATE} (the caller's
+   * transaction holds the database's write lock). Over {@code readmodel_checkpoint} only the table
+   * name differs.
    */
   @Test
-  void statementsAreThePostgresOnesTranslated() {
-    assertThat(SqliteCheckpointFence.SEED)
+  void statementsAreThePostgresOnesTranslatedWithOnlyTheTableSubstituted() {
+    var fence = fenceOver(CheckpointTable.SUBSCRIPTION);
+    assertThat(fence.seedSql)
         .isEqualTo(
-            "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+            "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at)"
                 + " VALUES (?, 0, ?) ON CONFLICT (projection_name) DO NOTHING");
-    assertThat(SqliteCheckpointFence.READ_FOR_BATCH)
-        .isEqualTo("SELECT last_offset, epoch FROM readmodel_checkpoint WHERE projection_name = ?");
-    assertThat(SqliteCheckpointFence.SAVE_LOCKED)
+    assertThat(fence.readForBatchSql)
         .isEqualTo(
-            "INSERT INTO readmodel_checkpoint (projection_name, last_offset, epoch, updated_at)"
+            "SELECT last_offset, epoch FROM subscription_checkpoint WHERE projection_name = ?");
+    assertThat(fence.saveLockedSql)
+        .isEqualTo(
+            "INSERT INTO subscription_checkpoint (projection_name, last_offset, epoch, updated_at)"
                 + " VALUES (?, ?, ?, ?)"
                 + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = excluded.last_offset,"
-                + " epoch = max(readmodel_checkpoint.epoch, excluded.epoch),"
+                + " epoch = max(subscription_checkpoint.epoch, excluded.epoch),"
                 + " updated_at = excluded.updated_at"
-                + " WHERE excluded.last_offset > readmodel_checkpoint.last_offset");
-    assertThat(SqliteCheckpointFence.STAMP)
+                + " WHERE excluded.last_offset > subscription_checkpoint.last_offset");
+    assertThat(fence.stampSql)
         .isEqualTo(
-            "INSERT INTO readmodel_checkpoint (projection_name, last_offset, epoch, updated_at)"
+            "INSERT INTO subscription_checkpoint (projection_name, last_offset, epoch, updated_at)"
                 + " VALUES (?, 0, ?, ?)"
                 + " ON CONFLICT (projection_name) DO UPDATE SET"
-                + " epoch = max(readmodel_checkpoint.epoch, excluded.epoch),"
+                + " epoch = max(subscription_checkpoint.epoch, excluded.epoch),"
                 + " updated_at = excluded.updated_at"
-                + " WHERE excluded.epoch > readmodel_checkpoint.epoch");
-    assertThat(SqliteCheckpointFence.SELECT_EPOCH)
-        .isEqualTo("SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?");
-    assertThat(SqliteCheckpointFence.RESET)
+                + " WHERE excluded.epoch > subscription_checkpoint.epoch");
+    assertThat(fence.epochSql)
+        .isEqualTo("SELECT epoch FROM subscription_checkpoint WHERE projection_name = ?");
+    assertThat(fence.resetSql)
         .isEqualTo(
-            "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+            "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at)"
                 + " VALUES (?, 0, ?)"
                 + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0,"
                 + " updated_at = excluded.updated_at");
-    assertThat(SqliteCheckpointFence.SELECT_OFFSET)
-        .isEqualTo("SELECT last_offset FROM readmodel_checkpoint WHERE projection_name = ?");
-    assertThat(SqliteCheckpointFence.SAVE_UNLOCKED)
+    assertThat(fence.lastOffsetSql)
+        .isEqualTo("SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?");
+    assertThat(fence.saveUnlockedSql)
         .isEqualTo(
-            "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+            "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at)"
                 + " VALUES (?, ?, ?)"
                 + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = excluded.last_offset,"
                 + " updated_at = excluded.updated_at"
-                + " WHERE excluded.last_offset > readmodel_checkpoint.last_offset");
+                + " WHERE excluded.last_offset > subscription_checkpoint.last_offset");
+
+    var readModel = fenceOver(CheckpointTable.READ_MODEL);
+    List<String> subscriptionSql =
+        List.of(
+            fence.seedSql,
+            fence.readForBatchSql,
+            fence.saveLockedSql,
+            fence.stampSql,
+            fence.epochSql,
+            fence.resetSql,
+            fence.lastOffsetSql,
+            fence.saveUnlockedSql);
+    List<String> readModelSql =
+        List.of(
+            readModel.seedSql,
+            readModel.readForBatchSql,
+            readModel.saveLockedSql,
+            readModel.stampSql,
+            readModel.epochSql,
+            readModel.resetSql,
+            readModel.lastOffsetSql,
+            readModel.saveUnlockedSql);
+    assertThat(readModelSql)
+        .isEqualTo(
+            subscriptionSql.stream()
+                .map(sql -> sql.replace("subscription_checkpoint", "readmodel_checkpoint"))
+                .toList());
   }
 
   @Test
-  void rejectsNullClock() {
-    assertThatThrownBy(() -> new SqliteCheckpointFence(null))
+  void tableNamesAreTheTwoShippedTablesAndNullsAreRefused() {
+    assertThat(CheckpointTable.SUBSCRIPTION.tableName()).isEqualTo("subscription_checkpoint");
+    assertThat(CheckpointTable.READ_MODEL.tableName()).isEqualTo("readmodel_checkpoint");
+    assertThat(fenceOver(CheckpointTable.READ_MODEL).table()).isSameAs(CheckpointTable.READ_MODEL);
+    assertThatThrownBy(() -> new SqliteCheckpointFence(null, Clock.systemUTC()))
+        .isExactlyInstanceOf(IllegalArgumentException.class)
+        .hasMessage("table is required");
+    assertThatThrownBy(() -> new SqliteCheckpointFence(CheckpointTable.READ_MODEL, null))
         .isExactlyInstanceOf(IllegalArgumentException.class)
         .hasMessage("clock is required");
   }
@@ -597,7 +657,8 @@ class SqliteCheckpointFenceTest {
   void updatedAtIsStampedWithTheClockAndOnlyByAWriteThatHappens() throws Exception {
     var name = freshName();
     Instant later = NOW.plusSeconds(60);
-    var laterFence = new SqliteCheckpointFence(Clock.fixed(later, ZoneOffset.UTC));
+    var laterFence =
+        new SqliteCheckpointFence(CheckpointTable.READ_MODEL, Clock.fixed(later, ZoneOffset.UTC));
 
     fence.stampEpoch(dataSource, name, 2L);
     assertThat(updatedAt(name)).isEqualTo(NOW);
@@ -616,7 +677,8 @@ class SqliteCheckpointFenceTest {
     assertThat(updatedAt(name)).as("an advance stamps").isEqualTo(later);
 
     Instant latest = later.plusSeconds(60);
-    new SqliteCheckpointFence(Clock.fixed(latest, ZoneOffset.UTC)).reset(dataSource, name);
+    new SqliteCheckpointFence(CheckpointTable.READ_MODEL, Clock.fixed(latest, ZoneOffset.UTC))
+        .reset(dataSource, name);
     assertThat(updatedAt(name)).as("a reset stamps").isEqualTo(latest);
   }
 

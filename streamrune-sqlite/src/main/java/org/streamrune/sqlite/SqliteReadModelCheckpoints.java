@@ -65,7 +65,7 @@ public final class SqliteReadModelCheckpoints implements OffsetStore {
       throw new IllegalArgumentException("clock is required");
     }
     this.dataSource = database.dataSource();
-    this.fence = new SqliteCheckpointFence(clock);
+    this.fence = new SqliteCheckpointFence(CheckpointTable.READ_MODEL, clock);
   }
 
   /**

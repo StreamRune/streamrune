@@ -1,9 +1,5 @@
 package org.streamrune.sqlite;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Clock;
 import java.util.Objects;
 import javax.sql.DataSource;
@@ -11,7 +7,6 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
@@ -21,7 +16,10 @@ import org.streamrune.core.types.ProjectionName;
  * <p><b>Guard.</b> {@link #saveOffset} applies the monotonic guard of the {@link OffsetStore}
  * contract: a save at or below the stored offset is a silent no-op. {@link #reset} rewinds to
  * offset {@code 0} past the guard and seeds the row for a name never seen. The {@code epoch} column
- * is never written here (always {@code 0} on SQLite, which has no leadership).
+ * is never written here (always {@code 0} on SQLite, which has no leadership). The statements are
+ * those of the checkpoint fence over {@code subscription_checkpoint} ({@link
+ * SqliteCheckpointFence}), the fence {@link SqliteReadModelCheckpoints} runs over {@code
+ * readmodel_checkpoint}, so both tables keep one set of checkpoint semantics.
  *
  * <p><b>Durability of a write.</b> Each write is one upsert inside its own {@code BEGIN IMMEDIATE}
  * ... {@code COMMIT} (see {@link SqliteTransactions}), so it is durable when the method returns.
@@ -31,37 +29,20 @@ import org.streamrune.core.types.ProjectionName;
  * application's transaction untouched), and a connection in manual-commit mode is refused with
  * {@link IllegalStateException}. A read is one plain query.
  *
- * <p><b>Subscription checkpoint.</b> SQLite has no leadership and no checkpoint fence, so {@link
- * #subscriptionCheckpoint()} is the interface default: this store paired with {@link
- * AtomicBatchProcessor#nonAtomicAtLeastOnce()}, under the name {@value
- * OffsetStore#SUBSCRIPTION_CHECKPOINT}.
+ * <p><b>Subscription checkpoint.</b> SQLite has no leadership, and no batch runs the fence's guards
+ * on {@code subscription_checkpoint}, so {@link #subscriptionCheckpoint()} is the interface
+ * default: this store paired with {@link AtomicBatchProcessor#nonAtomicAtLeastOnce()}, under the
+ * name {@value OffsetStore#SUBSCRIPTION_CHECKPOINT}.
  *
  * <p>The table must exist: build the event store through {@link SqliteEventStoreFactory} on the
  * same {@link SqliteDatabase} first, which migrates the baseline that holds it.
  */
 public final class SqliteOffsetStore implements OffsetStore {
 
-  private static final String SELECT_OFFSET =
-      "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?";
-
-  // The monotonic guard: a backward or sideways save updates no row. Parameters: name, offset,
-  // updated_at.
-  private static final String SAVE =
-      "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at)"
-          + " VALUES (?, ?, ?)"
-          + " ON CONFLICT (projection_name) DO UPDATE SET"
-          + " last_offset = excluded.last_offset, updated_at = excluded.updated_at"
-          + " WHERE excluded.last_offset > subscription_checkpoint.last_offset";
-
-  // The rewind, past the guard; the epoch is left as it is. Parameters: name, updated_at.
-  private static final String RESET =
-      "INSERT INTO subscription_checkpoint (projection_name, last_offset, updated_at)"
-          + " VALUES (?, 0, ?)"
-          + " ON CONFLICT (projection_name) DO UPDATE SET"
-          + " last_offset = 0, updated_at = excluded.updated_at";
-
   private final DataSource dataSource;
-  private final Clock clock;
+
+  /** The fence over {@code subscription_checkpoint}, whose unfenced statements this store runs. */
+  private final SqliteCheckpointFence fence;
 
   /**
    * Creates the store over {@code database}, stamping {@code updated_at} with {@link
@@ -83,7 +64,9 @@ public final class SqliteOffsetStore implements OffsetStore {
    */
   public SqliteOffsetStore(SqliteDatabase database, Clock clock) {
     this.dataSource = Objects.requireNonNull(database, "database is required").dataSource();
-    this.clock = Objects.requireNonNull(clock, "clock is required");
+    this.fence =
+        new SqliteCheckpointFence(
+            CheckpointTable.SUBSCRIPTION, Objects.requireNonNull(clock, "clock is required"));
   }
 
   /**
@@ -95,17 +78,7 @@ public final class SqliteOffsetStore implements OffsetStore {
    */
   @Override
   public GlobalOffset getLastOffset(ProjectionName projectionName) {
-    Objects.requireNonNull(projectionName, "projectionName is required");
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(SELECT_OFFSET)) {
-      ps.setString(1, projectionName.value());
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? GlobalOffset.of(rs.getLong(1)) : GlobalOffset.initial();
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException(
-          "Failed to read offset for projection: " + shown(projectionName), e);
-    }
+    return fence.lastOffset(dataSource, projectionName);
   }
 
   /**
@@ -122,17 +95,7 @@ public final class SqliteOffsetStore implements OffsetStore {
    */
   @Override
   public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
-    Objects.requireNonNull(projectionName, "projectionName is required");
-    Objects.requireNonNull(offset, "offset is required");
-    write(
-        projectionName,
-        "save",
-        SAVE,
-        ps -> {
-          ps.setString(1, projectionName.value());
-          ps.setLong(2, offset.value());
-          ps.setLong(3, SqliteTimestamps.toMicros(clock.instant()));
-        });
+    fence.saveUnlocked(dataSource, projectionName, offset);
   }
 
   /**
@@ -148,38 +111,6 @@ public final class SqliteOffsetStore implements OffsetStore {
    */
   @Override
   public void reset(ProjectionName projectionName) {
-    Objects.requireNonNull(projectionName, "projectionName is required");
-    write(
-        projectionName,
-        "reset",
-        RESET,
-        ps -> {
-          ps.setString(1, projectionName.value());
-          ps.setLong(2, SqliteTimestamps.toMicros(clock.instant()));
-        });
-  }
-
-  @FunctionalInterface
-  private interface Binder {
-    void bind(PreparedStatement ps) throws SQLException;
-  }
-
-  private void write(ProjectionName projectionName, String what, String sql, Binder binder) {
-    SqliteTransactions.write(
-        dataSource,
-        "projection offset " + what,
-        "offset " + what + " of projection " + shown(projectionName),
-        "Failed to " + what + " offset for projection: " + shown(projectionName),
-        c -> {
-          try (PreparedStatement ps = c.prepareStatement(sql)) {
-            binder.bind(ps);
-            return ps.executeUpdate();
-          }
-        });
-  }
-
-  /** A projection name rendered for an exception message: caller text, so sanitized. */
-  private static String shown(ProjectionName name) {
-    return LogSanitizer.sanitizeForLog(name.value());
+    fence.reset(dataSource, projectionName);
   }
 }

@@ -80,5 +80,6 @@ class SqliteReadModelCheckpointsContractTest extends OffsetStoreContract {
 
     assertThat(checkpoints.fence()).isSameAs(checkpoints.fence());
     assertThat(checkpoints.fence().clock()).isSameAs(clock);
+    assertThat(checkpoints.fence().table()).isSameAs(CheckpointTable.READ_MODEL);
   }
 }

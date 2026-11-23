@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.util.Objects;
+import java.util.OptionalLong;
 import javax.sql.DataSource;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
@@ -15,10 +16,12 @@ import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 
 /**
- * The checkpoint-row fence over {@code readmodel_checkpoint}: every read and write of a
- * projection's checkpoint row ({@code projection_name}, {@code last_offset}, {@code epoch}) that
- * guards a commit against split-brain double-apply and lost events. It is the SQLite port of the
- * Postgres fence over the same table, with the same guards, outcomes and exceptions.
+ * The checkpoint-row fence over one {@link CheckpointTable}: every read and write of a projection's
+ * checkpoint row ({@code projection_name}, {@code last_offset}, {@code epoch}) that guards a commit
+ * against split-brain double-apply and lost events. It is the SQLite port of the Postgres fence
+ * over the same tables, with the same guards, outcomes and exceptions. {@link SqliteOffsetStore}
+ * reads and writes {@code subscription_checkpoint} through it, and {@link
+ * SqliteReadModelCheckpoints} and the read-model store's processor {@code readmodel_checkpoint}.
  *
  * <p><b>Three guards under the write lock.</b> A batch transaction calls {@link #lockForBatch}
  * first. Where Postgres locks the checkpoint row with {@code SELECT ... FOR UPDATE}, the caller's
@@ -69,19 +72,22 @@ import org.streamrune.core.types.ProjectionName;
  * microseconds ({@link SqliteTimestamps}), bound where Postgres calls {@code NOW()}; a write the
  * guards refuse stamps nothing.
  *
- * <p>The statements are fixed; the projection name is always a bind parameter.
+ * <p>The table name comes only from {@link CheckpointTable}; the statements are fixed when the
+ * fence is built, and the projection name is always a bind parameter.
  */
 final class SqliteCheckpointFence {
 
+  // The statement templates; %1$s is the checkpoint table's name, and nothing else is spliced in.
+
   // Seeds the 0 row the batch reads and the monotonic guard measures against. Parameters: name,
   // updated_at.
-  static final String SEED =
-      "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+  private static final String SEED =
+      "INSERT INTO %1$s (projection_name, last_offset, updated_at)"
           + " VALUES (?, 0, ?) ON CONFLICT (projection_name) DO NOTHING";
 
   // The read under the caller's write lock; Postgres locks the row here with FOR UPDATE.
-  static final String READ_FOR_BATCH =
-      "SELECT last_offset, epoch FROM readmodel_checkpoint WHERE projection_name = ?";
+  private static final String READ_FOR_BATCH =
+      "SELECT last_offset, epoch FROM %1$s WHERE projection_name = ?";
 
   // Monotonic guard: a backward or sideways save updates 0 rows. Intentional rewinds use the reset
   // path, never a save (see the OffsetStore javadoc). The advance also stamps the caller's fencing
@@ -89,66 +95,92 @@ final class SqliteCheckpointFence {
   // takeover; an unfenced epoch-0 caller leaves the stored epoch unchanged. The stamp rides the
   // SAME monotonic WHERE guard, so a rejected (0-row) advance stamps nothing. Parameters: name,
   // offset, epoch, updated_at.
-  static final String SAVE_LOCKED =
-      "INSERT INTO readmodel_checkpoint (projection_name, last_offset, epoch, updated_at)"
+  private static final String SAVE_LOCKED =
+      "INSERT INTO %1$s (projection_name, last_offset, epoch, updated_at)"
           + " VALUES (?, ?, ?, ?)"
           + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = excluded.last_offset,"
-          + " epoch = max(readmodel_checkpoint.epoch, excluded.epoch),"
+          + " epoch = max(%1$s.epoch, excluded.epoch),"
           + " updated_at = excluded.updated_at"
-          + " WHERE excluded.last_offset > readmodel_checkpoint.last_offset";
+          + " WHERE excluded.last_offset > %1$s.last_offset";
 
   // The takeover stamp: seeds last_offset 0 for a projection that never committed and never
   // touches last_offset on conflict. The WHERE makes a same-epoch re-stamp a 0-row no-op and never
   // lets the epoch regress. Parameters: name, epoch, updated_at.
-  static final String STAMP =
-      "INSERT INTO readmodel_checkpoint (projection_name, last_offset, epoch, updated_at)"
+  private static final String STAMP =
+      "INSERT INTO %1$s (projection_name, last_offset, epoch, updated_at)"
           + " VALUES (?, 0, ?, ?)"
           + " ON CONFLICT (projection_name) DO UPDATE SET"
-          + " epoch = max(readmodel_checkpoint.epoch, excluded.epoch),"
+          + " epoch = max(%1$s.epoch, excluded.epoch),"
           + " updated_at = excluded.updated_at"
-          + " WHERE excluded.epoch > readmodel_checkpoint.epoch";
+          + " WHERE excluded.epoch > %1$s.epoch";
 
-  static final String SELECT_EPOCH =
-      "SELECT epoch FROM readmodel_checkpoint WHERE projection_name = ?";
+  private static final String SELECT_EPOCH = "SELECT epoch FROM %1$s WHERE projection_name = ?";
 
   // Unguarded rewind for the reset/rebuild path. Deliberately omits the monotonic guard so an
   // intentional rewind to 0 is not rejected as a regression. Upserts so a not-yet-seen projection
   // name resets cleanly to 0 as well. Parameters: name, updated_at.
-  static final String RESET =
-      "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+  private static final String RESET =
+      "INSERT INTO %1$s (projection_name, last_offset, updated_at)"
           + " VALUES (?, 0, ?)"
           + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = 0,"
           + " updated_at = excluded.updated_at";
 
-  static final String SELECT_OFFSET =
-      "SELECT last_offset FROM readmodel_checkpoint WHERE projection_name = ?";
+  private static final String SELECT_OFFSET =
+      "SELECT last_offset FROM %1$s WHERE projection_name = ?";
 
   // The OffsetStore.saveOffset path: the same monotonic guard as SAVE_LOCKED, without the epoch
   // stamp. A backward or sideways save is a silent no-op (no throw): there is no transaction of the
   // caller's to roll back. Parameters: name, offset, updated_at.
-  static final String SAVE_UNLOCKED =
-      "INSERT INTO readmodel_checkpoint (projection_name, last_offset, updated_at)"
+  private static final String SAVE_UNLOCKED =
+      "INSERT INTO %1$s (projection_name, last_offset, updated_at)"
           + " VALUES (?, ?, ?)"
           + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = excluded.last_offset,"
           + " updated_at = excluded.updated_at"
-          + " WHERE excluded.last_offset > readmodel_checkpoint.last_offset";
+          + " WHERE excluded.last_offset > %1$s.last_offset";
 
-  /** The stored epoch {@link #stampEpoch}'s transaction reports when its stamp was written. */
-  private static final long STAMPED = Long.MIN_VALUE;
+  // The statements over this fence's table (package-private so a test can pin them).
+  final String seedSql;
+  final String readForBatchSql;
+  final String saveLockedSql;
+  final String stampSql;
+  final String epochSql;
+  final String resetSql;
+  final String lastOffsetSql;
+  final String saveUnlockedSql;
 
+  private final CheckpointTable table;
   private final Clock clock;
 
   /**
-   * A fence that stamps {@code updated_at} with {@code clock}.
+   * A fence over {@code table} that stamps {@code updated_at} with {@code clock}.
    *
+   * @param table the checkpoint table
    * @param clock the application clock
-   * @throws IllegalArgumentException if {@code clock} is {@code null}
+   * @throws IllegalArgumentException if an argument is {@code null}
    */
-  SqliteCheckpointFence(Clock clock) {
+  SqliteCheckpointFence(CheckpointTable table, Clock clock) {
+    if (table == null) {
+      throw new IllegalArgumentException("table is required");
+    }
     if (clock == null) {
       throw new IllegalArgumentException("clock is required");
     }
+    this.table = table;
     this.clock = clock;
+    String name = table.tableName();
+    this.seedSql = SEED.formatted(name);
+    this.readForBatchSql = READ_FOR_BATCH.formatted(name);
+    this.saveLockedSql = SAVE_LOCKED.formatted(name);
+    this.stampSql = STAMP.formatted(name);
+    this.epochSql = SELECT_EPOCH.formatted(name);
+    this.resetSql = RESET.formatted(name);
+    this.lastOffsetSql = SELECT_OFFSET.formatted(name);
+    this.saveUnlockedSql = SAVE_UNLOCKED.formatted(name);
+  }
+
+  /** The table this fence guards. */
+  CheckpointTable table() {
+    return table;
   }
 
   /** The clock that stamps {@code updated_at}. */
@@ -220,7 +252,7 @@ final class SqliteCheckpointFence {
    */
   void saveLocked(Connection c, ProjectionName name, GlobalOffset newOffset, long fencingEpoch)
       throws SQLException {
-    try (PreparedStatement ps = c.prepareStatement(SAVE_LOCKED)) {
+    try (PreparedStatement ps = c.prepareStatement(saveLockedSql)) {
       ps.setString(1, name.value());
       ps.setLong(2, newOffset.value());
       ps.setLong(3, fencingEpoch);
@@ -269,7 +301,8 @@ final class SqliteCheckpointFence {
     if (fencingEpoch == 0L) {
       return;
     }
-    long stored =
+    // Empty when the stamp was written; otherwise the epoch the row already stores.
+    OptionalLong unstamped =
         SqliteTransactions.write(
             ds,
             "projection fencing stamp",
@@ -277,16 +310,18 @@ final class SqliteCheckpointFence {
             "Failed to stamp fencing epoch " + fencingEpoch + " for projection: " + shown(name),
             c -> {
               int stamped;
-              try (PreparedStatement ps = c.prepareStatement(STAMP)) {
+              try (PreparedStatement ps = c.prepareStatement(stampSql)) {
                 ps.setString(1, name.value());
                 ps.setLong(2, fencingEpoch);
                 ps.setLong(3, now());
                 stamped = ps.executeUpdate();
               }
-              return stamped == 0 ? readStoredEpoch(c, name) : STAMPED;
+              return stamped == 0
+                  ? OptionalLong.of(readStoredEpoch(c, name))
+                  : OptionalLong.empty();
             });
-    if (stored > fencingEpoch) {
-      throw new ProjectionEpochRegressionException(name, fencingEpoch, stored);
+    if (unstamped.isPresent() && unstamped.getAsLong() > fencingEpoch) {
+      throw new ProjectionEpochRegressionException(name, fencingEpoch, unstamped.getAsLong());
     }
   }
 
@@ -322,7 +357,7 @@ final class SqliteCheckpointFence {
   GlobalOffset lastOffset(DataSource ds, ProjectionName name) {
     requireName(name);
     try (Connection conn = ds.getConnection();
-        PreparedStatement ps = conn.prepareStatement(SELECT_OFFSET)) {
+        PreparedStatement ps = conn.prepareStatement(lastOffsetSql)) {
       ps.setString(1, name.value());
       try (ResultSet rs = ps.executeQuery()) {
         return rs.next() ? GlobalOffset.of(rs.getLong(1)) : GlobalOffset.initial();
@@ -352,7 +387,7 @@ final class SqliteCheckpointFence {
         name,
         "reset",
         c -> {
-          try (PreparedStatement ps = c.prepareStatement(RESET)) {
+          try (PreparedStatement ps = c.prepareStatement(resetSql)) {
             ps.setString(1, name.value());
             ps.setLong(2, now());
             return ps.executeUpdate();
@@ -382,7 +417,7 @@ final class SqliteCheckpointFence {
         name,
         "save",
         c -> {
-          try (PreparedStatement ps = c.prepareStatement(SAVE_UNLOCKED)) {
+          try (PreparedStatement ps = c.prepareStatement(saveUnlockedSql)) {
             ps.setString(1, name.value());
             ps.setLong(2, offset.value());
             ps.setLong(3, now());
@@ -410,12 +445,12 @@ final class SqliteCheckpointFence {
    * the caller's write transaction.
    */
   private Checkpoint seedAndRead(Connection conn, ProjectionName name) throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(SEED)) {
+    try (PreparedStatement ps = conn.prepareStatement(seedSql)) {
       ps.setString(1, name.value());
       ps.setLong(2, now());
       ps.executeUpdate();
     }
-    try (PreparedStatement ps = conn.prepareStatement(READ_FOR_BATCH)) {
+    try (PreparedStatement ps = conn.prepareStatement(readForBatchSql)) {
       ps.setString(1, name.value());
       try (ResultSet rs = ps.executeQuery()) {
         return rs.next() ? new Checkpoint(rs.getLong(1), rs.getLong(2)) : new Checkpoint(0L, 0L);
@@ -473,8 +508,8 @@ final class SqliteCheckpointFence {
   }
 
   /** The epoch stored on the row, or {@code 0} when there is none, on {@code conn}. */
-  private static long readStoredEpoch(Connection conn, ProjectionName name) throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(SELECT_EPOCH)) {
+  private long readStoredEpoch(Connection conn, ProjectionName name) throws SQLException {
+    try (PreparedStatement ps = conn.prepareStatement(epochSql)) {
       ps.setString(1, name.value());
       try (ResultSet rs = ps.executeQuery()) {
         return rs.next() ? rs.getLong(1) : 0L;
