@@ -143,7 +143,8 @@ public interface SagaDeadLetterStore {
    * </ul>
    *
    * <p>"Absent" means no entry at the full key: an entry of another saga type at the same saga id
-   * and offset is neither kept nor replaced — the hold writes its own entry beside it.
+   * and offset is neither kept nor replaced — the hold writes its own entry beside it. A {@link
+   * HoldResult.Kept} entry therefore always carries the hold's saga type, saga id and event offset.
    *
    * <p>An absent owner row (the row-less residual) has applied nothing and leaves the shield write
    * a no-op. Two concurrent holds of one event write it once. A look-up followed by a write does
@@ -172,9 +173,6 @@ public interface SagaDeadLetterStore {
    * org.streamrune.runtime.SagaSkippedWhileFaultedException}. A kept entry of the hold's saga type
    * with any other error type, on a shielded row that is not {@code FAULTED}, is taken for the
    * saga's own poison whose fault write did not land, and the runner makes that fault write.
-   *
-   * <p>A {@link HoldResult.Kept} entry therefore always carries the hold's saga type, saga id and
-   * event offset.
    *
    * @param entry the hold's entry; {@code sagaId} is required
    * @return what the call did: {@link HoldResult.Written}, {@link HoldResult.Kept} with the stored

@@ -463,7 +463,7 @@ public abstract class SagaDeadLetterStoreContract {
 
   /**
    * With both types stored at the key, a hold keeps and hands back its own type's entry, never the
-   * other type's.
+   * other type's — whichever type holds, and whichever entry was stored first.
    */
   @Test
   public void publishShieldedIfAbsent_withBothTypesStoredAtTheKey_handsBackItsOwnTypesEntry() {
@@ -478,6 +478,13 @@ public abstract class SagaDeadLetterStoreContract {
     assertEquals(TYPE, kept.sagaType());
     assertEquals("java.lang.RuntimeException", kept.errorType());
     assertEquals(T0.plusSeconds(1), kept.faultedAt());
+    SagaDeadLetterEntry keptOther =
+        assertInstanceOf(
+                HoldResult.Kept.class,
+                store.publishShieldedIfAbsent(held(A, OTHER, 10L, T0.plusSeconds(4))))
+            .entry();
+    assertEquals(OTHER, keptOther.sagaType());
+    assertEquals(T0.plusSeconds(2), keptOther.faultedAt());
     assertEquals(2, store.findBySaga(A).size());
     assertEquals(
         "org.streamrune.runtime.SagaSkippedWhileFaultedException",

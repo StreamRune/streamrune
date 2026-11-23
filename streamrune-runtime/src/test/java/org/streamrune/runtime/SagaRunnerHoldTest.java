@@ -815,7 +815,7 @@ abstract class SagaRunnerHoldTest {
    * The poison of this saga is recorded with its shield and the process stops before the fault
    * write; another saga type deriving the same saga id then records an entry at the same offset.
    * The rerun still finds this type's poison entry, keeps it and makes the fault write; the other
-   * type's entry is left as stored.
+   * type's entry is left as stored. A further redelivery changes nothing.
    */
   @Test
   void poisonCrashBeforeTheFault_thenAnotherTypesEntryAtTheKey_rerunStillFaultsTheSaga() {
@@ -853,6 +853,17 @@ abstract class SagaRunnerHoldTest {
     assertThat(entriesOf(SagaType.of("Other")))
         .singleElement()
         .satisfies(e -> assertThat(e.errorMessage()).isEqualTo("the other type's poison"));
+    assertThat(row.version()).isEqualTo(2L);
+    assertThat(held).as("a redelivery of a recorded event is not a new hold").isEmpty();
+    assertThat(faulted.get()).isEqualTo(1);
+
+    var ownAfterRerun = entriesOf(TYPE);
+    var otherAfterRerun = entriesOf(SagaType.of("Other"));
+    deliver(runner, correlatedEvent(5L)); // and again: the FAULTED row keeps both entries
+    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().version()).isEqualTo(2L);
+    assertThat(entriesOf(TYPE)).isEqualTo(ownAfterRerun);
+    assertThat(entriesOf(SagaType.of("Other"))).isEqualTo(otherAfterRerun);
+    assertThat(held).isEmpty();
     assertThat(faulted.get()).isEqualTo(1);
   }
 

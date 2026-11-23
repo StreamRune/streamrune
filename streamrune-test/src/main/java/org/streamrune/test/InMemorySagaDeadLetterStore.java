@@ -33,7 +33,7 @@ import org.streamrune.core.types.SagaType;
  * newest {@code targetSagaId} onto every fresh duplicate, so in both stores the entry the replayer
  * reads bears the set's true first-attempt, first-fault and resolved-target facts.) Null-saga
  * {@link #discard} therefore operates on all matching null-saga entries at the offset, mirroring
- * the Postgres {@code IS NOT DISTINCT FROM} statements.
+ * the Postgres store's {@code saga_id IS NULL} statements.
  *
  * <p><b>The store is bound to the saga rows it shields</b> (the SPI's wiring rule): it is
  * constructed with the {@link SagaStore} whose rows its runner writes. A test whose runner uses a

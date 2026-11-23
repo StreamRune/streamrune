@@ -335,11 +335,11 @@ class PostgresSagaDeadLetterStoreTest {
    * treats two {@code NULL} values as distinct, so re-publishing a null-saga entry at the same
    * offset does NOT upsert like the non-null case — it inserts a second row. This is a deliberate,
    * accepted edge case (rare routing failures before a saga could be identified), not a bug to fix.
-   * {@code discard(null, type, offset)} uses {@code IS NOT DISTINCT FROM}, so it removes both rows
-   * at once; the retention sweeper ({@code deleteOlderThan}) independently clears any stray
-   * duplicates that accumulate across repeated failed replays. The accumulation itself stays
-   * accepted — but each fresh row is born carrying the set's immutable evidence, pinned separately
-   * in {@code publish_nullSagaRequarantine_newRowCarriesAnchorAndFirstFault}.
+   * {@code discard(null, type, offset)} matches {@code saga_id IS NULL}, so it removes both rows at
+   * once; the retention sweeper ({@code deleteOlderThan}) independently clears any stray duplicates
+   * that accumulate across repeated failed replays. The accumulation itself stays accepted — but
+   * each fresh row is born carrying the set's immutable evidence, pinned separately in {@code
+   * publish_nullSagaRequarantine_newRowCarriesAnchorAndFirstFault}.
    */
   @Test
   void publish_nullSagaEntry_sameOffsetTwice_insertsTwoRows_discardRemovesBoth() {
@@ -371,8 +371,7 @@ class PostgresSagaDeadLetterStoreTest {
     assertTrue(all.stream().allMatch(e -> e.sagaId() == null));
     assertTrue(all.stream().allMatch(e -> e.eventOffset().equals(offset)));
 
-    // discard(null, type, offset) matches via IS NOT DISTINCT FROM — clears both stray rows at
-    // once.
+    // discard(null, type, offset) matches saga_id IS NULL — clears both stray rows at once.
     assertTrue(store.discard(null, SagaType.of("T"), offset));
     assertTrue(store.findAll(10).isEmpty());
   }
@@ -1404,7 +1403,7 @@ class PostgresSagaDeadLetterStoreTest {
     } catch (Exception e) {
       throw new IllegalStateException(e);
     }
-    throw new AssertionError("the hold's shield write never queued behind the drain's row lock");
+    throw new AssertionError("no statement starting with '" + prefix + "' waited on a lock");
   }
 
   /**
@@ -1623,6 +1622,43 @@ class PostgresSagaDeadLetterStoreTest {
     }
     assertTrue(store.findBySaga(a).isEmpty(), "no entry records the applied event");
     assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * A hold that keeps a stored entry locks its row until the hold's transaction ends: a discard of
+   * that entry from another connection, started after the hold's upsert, waits for the hold to
+   * commit, so the entry the hold reads back is the one its upsert decided on. The discard then
+   * removes it. Two real connections.
+   */
+  @Test
+  void publishShieldedIfAbsent_keptEntry_staysLockedUntilTheHoldCommits_interleaving()
+      throws Exception {
+    var rows = sagaRows();
+    var a = SagaId.of("dl-race-hold-lock");
+    var type = SagaType.of("T");
+    rows.create(a, type, new ShieldState(SagaStatus.RUNNING, "m"), SagaStatus.RUNNING);
+    store.publishShielded(entry(a, type, 60L, "the poison", T0));
+    var discard = new AtomicReference<CompletableFuture<Boolean>>();
+    var holder =
+        new PostgresSagaDeadLetterStore(
+            hookedBeforeStatement(
+                "UPDATE saga_state SET dead_letter_pending = TRUE",
+                () -> {
+                  // the hold's upsert has run in its open transaction: the discard queues on the
+                  // row
+                  discard.set(
+                      CompletableFuture.supplyAsync(
+                          () -> store.discard(a, type, GlobalOffset.of(60L))));
+                  awaitBlockedOnRowLock("DELETE FROM saga_dead_letters");
+                }));
+
+    var result = holder.publishShieldedIfAbsent(entry(a, type, 60L, "held", T0.plusSeconds(1)));
+
+    var kept = assertInstanceOf(SagaDeadLetterStore.HoldResult.Kept.class, result).entry();
+    assertEquals("the poison", kept.errorMessage());
+    assertEquals(T0, kept.faultedAt());
+    assertTrue(discard.get().get(20, TimeUnit.SECONDS), "the discard ran once the hold committed");
+    assertTrue(store.findBySaga(a).isEmpty());
   }
 
   /** The clear never runs its UPDATE on an absent row: no lock, no write, {@code false}. */
