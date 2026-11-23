@@ -448,11 +448,12 @@ public abstract class ProjectionRepositoryQueryContract {
     saveMap(name, "b-null", "tag", null, true);
     saveMap(name, "c-value", "tag", "x", true);
     saveMap(name, "d-empty", "tag", "", true);
+    saveMap(name, "e-text", "tag", "null", true);
 
-    assertEquals(List.of(), mapFilter(name, "tag", "null"));
+    assertEquals(List.of("e-text"), mapFilter(name, "tag", "null"));
     assertEquals(List.of("d-empty"), mapFilter(name, "tag", ""));
     assertEquals(
-        List.of("d-empty", "c-value", "a-missing", "b-null"),
+        List.of("d-empty", "e-text", "c-value", "a-missing", "b-null"),
         mapSort(name, "tag", SortDirection.ASC));
   }
 
@@ -463,9 +464,22 @@ public abstract class ProjectionRepositoryQueryContract {
     saveMap(name, "s", "v", "a", true);
     saveMap(name, "n9", "v", 9, true);
     saveMap(name, "n10", "v", 10, true);
+    saveMap(name, "s5", "v", "5", true);
 
-    assertEquals(List.of("n10", "n9", "s"), mapSort(name, "v", SortDirection.ASC));
-    assertEquals(List.of("s", "n9", "n10"), mapSort(name, "v", SortDirection.DESC));
+    assertEquals(List.of("n10", "s5", "n9", "s"), mapSort(name, "v", SortDirection.ASC));
+    assertEquals(List.of("s", "n9", "s5", "n10"), mapSort(name, "v", SortDirection.DESC));
+  }
+
+  /** A string with a quote or a backslash matches its unescaped text, as {@code ->>} returns it. */
+  @Test
+  public void jsonEscapedStringsCompareUnescaped() {
+    var name = freshName();
+    saveMap(name, "q", "v", "a\"b", true);
+    saveMap(name, "b", "v", "a\\b", true);
+
+    assertEquals(List.of("q"), mapFilter(name, "v", "a\"b"));
+    assertEquals(List.of("b"), mapFilter(name, "v", "a\\b"));
+    assertEquals(List.of(), mapFilter(name, "v", "a\\\"b"));
   }
 
   /** Ids and values outside ASCII compare byte-wise, so by code point, not linguistically. */

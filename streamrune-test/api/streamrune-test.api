@@ -953,6 +953,7 @@ public abstract class org.streamrune.test.ProjectionRepositoryQueryContract
   public void booleansCompareAsTrueFalseText()
   public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem()
   public void declaringAnIndexTwiceIsAccepted()
+  public void jsonEscapedStringsCompareUnescaped()
   public void missingAndNullFieldsNeverMatchAValue()
   public void mixedTypesSortAsText()
   public void nonAsciiIdsAndValuesSortBytewise()
