@@ -32,7 +32,9 @@ public interface ForgottenSubjectStore {
    * backend-sourced creation instant</em> — the evidence {@code VaultCryptoEngine.reinstate} later
    * uses to prove key IDENTITY. Idempotent, and <b>first-write-wins on the evidence too</b>: a
    * repeated {@code deleteKey} must never overwrite the first erasure's record, because the key it
-   * can read the second time may already be post-forget residue.
+   * can read the second time may already be post-forget residue. A tombstone first recorded
+   * <em>without</em> evidence (through {@link #forget(SubjectId)} or with a {@code null} instant)
+   * therefore never gains evidence from a later call.
    *
    * <p>Why it exists: comparing the transit key's age against the tombstone's age would span TWO
    * hosts' clocks (this process's {@code now} and the store's {@code forgotten_at} — Postgres

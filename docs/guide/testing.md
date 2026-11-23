@@ -1113,6 +1113,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `CommandInboxContract` | The contract suite of every `CommandInbox`, written through the keyed append of its event store: the recorded result and retention. |
 | `DeadLetterQueueContract` | The contract suite of every `DeadLetterQueue`: newest-first read, retry bookkeeping, counts, lookup by idempotency key and retention. |
 | `AuditStoreContract`, `EventAuditStoreContract` | The contract suites of the audit sinks: what `save` accepts, the one-entry-per-`eventId` rule and the atomic `saveAll`. |
+| `CryptoKeyStoreContract`, `ForgottenSubjectStoreContract` | The contract suites of a durable crypto engine (per-subject keys, terminal erasure, `reinstate`) and of a `ForgottenSubjectStore` (idempotent tombstones, first-write-wins evidence, durability across a restart). |
 | `CommandAuditQueryContract`, `EventAuditQueryContract`, `ComplianceReportQueryContract` | The contract suites of the audit reads: filters, inclusive time windows, order, paging, the causal chain and the compliance totals. |
 | `ProjectionDeadLetterStoreContract` | The contract suite of every `ProjectionDeadLetterStore`: oldest-first reads, per-projection isolation, discard and the backlog count. |
 | `OffsetStoreContract` | The contract suite of every `OffsetStore`: reads, saves, `reset` and the monotonic guard. |

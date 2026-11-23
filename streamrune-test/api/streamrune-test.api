@@ -147,6 +147,11 @@ public abstract class org.streamrune.test.ComplianceReportQueryContract
   protected abstract org.streamrune.core.audit.ComplianceReportQuery query()
   public <init>()
 
+public abstract class org.streamrune.test.CryptoKeyStoreContract
+  protected abstract org.streamrune.core.crypto.CryptoEngine newEngine()
+  protected abstract org.streamrune.core.crypto.CryptoEngine sameKeysNewInstance(org.streamrune.core.crypto.CryptoEngine)
+  public <init>()
+
 public abstract class org.streamrune.test.DeadLetterQueueContract
   protected abstract org.streamrune.core.DeadLetterQueue newQueue()
   public <init>()
@@ -463,6 +468,12 @@ public final class org.streamrune.test.FaultSchedule
   public org.streamrune.test.FaultSchedule throwing(java.util.function.Supplier<? extends java.lang.RuntimeException>)
   public static org.streamrune.test.FaultSchedule none()
   public void reset()
+
+public abstract class org.streamrune.test.ForgottenSubjectStoreContract
+  protected abstract org.streamrune.crypto.ForgottenSubjectStore newStore()
+  protected boolean durable()
+  protected org.streamrune.crypto.ForgottenSubjectStore sameStateNewInstance(org.streamrune.crypto.ForgottenSubjectStore)
+  public <init>()
 
 public class org.streamrune.test.ForwardingCommandBus implements org.streamrune.core.CommandBus
   protected final org.streamrune.core.CommandBus delegate

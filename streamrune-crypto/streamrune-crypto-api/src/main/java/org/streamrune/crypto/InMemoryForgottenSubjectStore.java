@@ -36,22 +36,28 @@ public final class InMemoryForgottenSubjectStore implements ForgottenSubjectStor
   private final ConcurrentHashMap<SubjectId, java.time.Instant> keyCreatedAt =
       new ConcurrentHashMap<>();
 
+  /** One monitor for every mutator: the tombstone and its evidence change together. */
+  private final Object lock = new Object();
+
   @Override
   public void forget(SubjectId subjectId) {
-    if (subjectId == null) {
-      throw new IllegalArgumentException("subjectId must not be null");
-    }
-    forgotten.putIfAbsent(subjectId, java.time.Instant.now());
+    forget(subjectId, null);
   }
 
   @Override
   public void forget(SubjectId subjectId, java.time.Instant erasedKeyCreatedAt) {
-    forget(subjectId);
-    if (erasedKeyCreatedAt != null) {
-      // First-write-wins, like the durable store's ON CONFLICT DO NOTHING: a repeated deleteKey
-      // must never overwrite the FIRST erasure's evidence, because the key it reads the second
-      // time may already be post-forget residue.
-      keyCreatedAt.putIfAbsent(subjectId, erasedKeyCreatedAt);
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
+    synchronized (lock) {
+      // First-write-wins on the whole record, like the durable store's ON CONFLICT DO NOTHING: a
+      // repeated deleteKey must never overwrite the FIRST erasure's record, because the key it
+      // reads the second time may already be post-forget residue. A tombstone first recorded
+      // without evidence therefore never gains some later.
+      if (forgotten.putIfAbsent(subjectId, java.time.Instant.now()) == null
+          && erasedKeyCreatedAt != null) {
+        keyCreatedAt.put(subjectId, erasedKeyCreatedAt);
+      }
     }
   }
 
@@ -68,11 +74,13 @@ public final class InMemoryForgottenSubjectStore implements ForgottenSubjectStor
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
     }
-    forgotten.remove(subjectId);
-    // The evidence belongs to the tombstone (the durable store holds both in ONE row, so the
-    // tombstone DELETE takes the evidence with it). Leaving it behind would let a LATER erasure's
-    // reinstate be proven against a PREVIOUS erasure's key.
-    keyCreatedAt.remove(subjectId);
+    synchronized (lock) {
+      forgotten.remove(subjectId);
+      // The evidence belongs to the tombstone (the durable store holds both in ONE row, so the
+      // tombstone DELETE takes the evidence with it). Leaving it behind would let a LATER
+      // erasure's reinstate be proven against a PREVIOUS erasure's key.
+      keyCreatedAt.remove(subjectId);
+    }
   }
 
   @Override

@@ -14,6 +14,7 @@ dependencies {
     implementation(libs.postgresql)
     implementation(libs.slf4j.api)
     testImplementation(project(":streamrune-crypto:streamrune-crypto-api"))
+    testImplementation(project(":streamrune-test"))
     testImplementation(libs.bundles.testcontainers.pg)
     testImplementation(libs.postgresql)
 }
