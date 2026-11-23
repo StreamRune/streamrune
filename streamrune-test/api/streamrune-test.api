@@ -133,6 +133,10 @@ public static final record org.streamrune.test.CommandInboxContract$Inboxed
   public org.streamrune.core.CommandInbox inbox()
   public org.streamrune.core.EventStore store()
 
+public abstract class org.streamrune.test.DeadLetterQueueContract
+  protected abstract org.streamrune.core.DeadLetterQueue newQueue()
+  public <init>()
+
 public final class org.streamrune.test.DeciderFixture<C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent>
   public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage given(E...)
   public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage givenEvents(E...)
@@ -860,6 +864,10 @@ public abstract class org.streamrune.test.OutboxStoreContract
   public void traceLink_withIdsThatAreNotW3cIds_isNotStored_andTheEntryIsStillDelivered_bothModes()
   public void transientFailureOnTheHeadHoldsTheWholeAggregate_bothModes()
   public void twoStreamsSharingAnIdValue_haveIndependentHeads_strict()
+
+public abstract class org.streamrune.test.ProjectionDeadLetterStoreContract
+  protected abstract org.streamrune.core.projection.ProjectionDeadLetterStore newStore()
+  public <init>()
 
 public final class org.streamrune.test.ProjectionFixture<S>
   public org.streamrune.test.ProjectionFixture<S>$GivenStage givenEvents(java.util.List<org.streamrune.core.EventEnvelope>)
