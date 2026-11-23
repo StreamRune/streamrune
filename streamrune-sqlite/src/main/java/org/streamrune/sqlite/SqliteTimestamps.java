@@ -1,5 +1,6 @@
 package org.streamrune.sqlite;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -42,6 +43,35 @@ final class SqliteTimestamps {
       throw new IllegalArgumentException(
           "instant " + instant + " is outside the range of epoch microseconds", e);
     }
+  }
+
+  /**
+   * {@code micros} moved by {@code duration}, the interval arithmetic Postgres does with {@code
+   * NOW() + interval}: the duration in whole microseconds (sub-microsecond digits dropped), and a
+   * result beyond a 64-bit count of microseconds held at {@link Long#MIN_VALUE} or {@link
+   * Long#MAX_VALUE}, so a backoff or lease too long to store means "never" and one too far in the
+   * past means "always", instead of an overflow.
+   *
+   * @param micros a column value
+   * @param duration the duration to add; negative moves into the past
+   * @return the column value {@code duration} after {@code micros}, saturated
+   */
+  static long plusSaturating(long micros, Duration duration) {
+    long seconds = duration.getSeconds();
+    long durationMicros;
+    try {
+      durationMicros =
+          Math.addExact(
+              Math.multiplyExact(seconds, MICROS_PER_SECOND), duration.getNano() / NANOS_PER_MICRO);
+    } catch (ArithmeticException e) {
+      return seconds < 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+    }
+    long sum = micros + durationMicros;
+    // Overflow iff both operands have the same sign and the sum's sign differs.
+    if (((micros ^ sum) & (durationMicros ^ sum)) < 0) {
+      return durationMicros < 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+    }
+    return sum;
   }
 
   /** The instant a column value stands for. */

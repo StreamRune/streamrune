@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -117,5 +118,21 @@ class SqliteTimestampsTest {
       }
     }
     return result;
+  }
+
+  @Test
+  void plusSaturatingMovesByWholeMicrosecondsAndSaturatesAtTheRange() {
+    assertThat(SqliteTimestamps.plusSaturating(10, Duration.ofNanos(2_999))).isEqualTo(12);
+    assertThat(SqliteTimestamps.plusSaturating(10, Duration.ofSeconds(-1))).isEqualTo(-999_990);
+    assertThat(SqliteTimestamps.plusSaturating(0, Duration.ofSeconds(Long.MAX_VALUE)))
+        .isEqualTo(Long.MAX_VALUE);
+    assertThat(SqliteTimestamps.plusSaturating(0, Duration.ofSeconds(Long.MIN_VALUE)))
+        .isEqualTo(Long.MIN_VALUE);
+    assertThat(SqliteTimestamps.plusSaturating(Long.MAX_VALUE - 1, Duration.ofNanos(5_000)))
+        .isEqualTo(Long.MAX_VALUE);
+    assertThat(SqliteTimestamps.plusSaturating(Long.MIN_VALUE + 1, Duration.ofNanos(-5_000)))
+        .isEqualTo(Long.MIN_VALUE);
+    assertThat(SqliteTimestamps.plusSaturating(Long.MAX_VALUE, Duration.ofNanos(-1_000)))
+        .isEqualTo(Long.MAX_VALUE - 1);
   }
 }
