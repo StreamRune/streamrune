@@ -258,6 +258,30 @@ class SqliteEventStoreOutboxInboxTest {
     assertThat(stored.status()).isEqualTo(OutboxStatus.PENDING);
   }
 
+  /** The four-argument append writes the given entries only, not the mapper's. */
+  @Test
+  void givenEntriesAreTheOnlyEntriesTheFourArgumentAppendWrites() {
+    SqliteDatabase database = database("given-only.db");
+    SqliteEventStore store =
+        (SqliteEventStore)
+            factory(database)
+                .outboxStore(new SqliteOutboxStore(database))
+                .outboxEventMapper(TWO_PER_EVENT)
+                .create();
+    OutboxEntry given = OutboxEntry.pending(OutboxEntryId.of("given"), "{}", "G", STREAM);
+    EventEnvelope event = event(1, SpanLink.NONE);
+
+    store.append(STREAM, List.of(event), Version.initial(), List.of(given));
+
+    var outbox = new SqliteOutboxStore(database);
+    assertThat(outbox.findByStatus(OutboxStatus.PENDING, 10))
+        .extracting(e -> e.id().value())
+        .containsExactly("given");
+    assertThat(outbox.findById(OutboxEntryId.of(event.metadata().eventId().value() + "-a")))
+        .as("the mapper's entries are not written")
+        .isEmpty();
+  }
+
   @Test
   void givenEntriesNeedAnOutboxStoreAndEvents() {
     SqliteDatabase database = database("given-refused.db");

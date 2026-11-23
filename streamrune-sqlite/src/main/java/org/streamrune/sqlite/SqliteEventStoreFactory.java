@@ -191,10 +191,11 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   }
 
   /**
-   * Sets the mapper that derives the outbox entries of each appended event. Optional; set together
-   * with {@link #outboxStore}, or neither. To write only the entries passed to {@link
-   * SqliteEventStore#append(org.streamrune.core.types.StreamId, List,
-   * org.streamrune.core.types.Version, List)}, set a mapper that returns no entries.
+   * Sets the mapper that derives the outbox entries of each event of an {@code append(StreamId,
+   * List, Version)} and an {@code appendWithKey}. Optional; set together with {@link #outboxStore},
+   * or neither. {@link SqliteEventStore#append(org.streamrune.core.types.StreamId, List,
+   * org.streamrune.core.types.Version, List)} writes only the entries given to it; to write those
+   * alone, set a mapper that returns no entries.
    *
    * @param outboxEventMapper the mapper, or {@code null} for none
    * @return this factory for method chaining

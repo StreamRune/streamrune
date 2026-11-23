@@ -100,6 +100,26 @@ class SqliteCommandInboxTest {
     assertThat(row.processedAt()).isEqualTo(T0);
   }
 
+  /**
+   * A backfill that finds no row of the key throws, so the append it belongs to rolls back instead
+   * of committing a claim without its offsets.
+   */
+  @Test
+  void aBackfillOfAKeyWithoutARowThrows() throws Exception {
+    SqliteDatabase database = migrated("backfill.db");
+    var inbox = new SqliteCommandInbox(database);
+    try (Connection conn = database.dataSource().getConnection()) {
+      SqliteTransactions.begin(conn);
+      assertThatThrownBy(
+              () ->
+                  inbox.backfillOffsets(
+                      IdempotencyKey.of("never-claimed"), List.of(GlobalOffset.of(1)), conn))
+          .isExactlyInstanceOf(SQLException.class)
+          .hasMessageContaining("never-claimed");
+      SqliteTransactions.rollback(conn, "test");
+    }
+  }
+
   /** Retention deletes in chunks, each in its own write transaction, until none is left. */
   @Test
   void retentionDeletesMoreRowsThanOneChunk() throws Exception {

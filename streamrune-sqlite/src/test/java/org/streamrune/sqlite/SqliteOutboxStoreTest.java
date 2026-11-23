@@ -620,6 +620,42 @@ class SqliteOutboxStoreTest {
     assertThat(store.countByStatus(OutboxStatus.PENDING)).isZero();
   }
 
+  // ── Plans ───────────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The claim runs under the database-wide write lock on every poll, so it must not read the whole
+   * table (the DELIVERED backlog included): in both modes, and for the reclaim before it, every
+   * read of outbox_events goes through an index.
+   */
+  @Test
+  void theClaimReadsOutboxEventsThroughIndexesOnly() throws Exception {
+    SqliteDatabase database = migrated("plan.db");
+    for (OutboxOrderingMode mode : OutboxOrderingMode.values()) {
+      List<String> plan = plan(database, SqliteOutboxStore.claimPendingSql(mode));
+      assertThat(plan).as(mode + ": " + plan).noneMatch(SqliteOutboxStoreTest::isFullScan);
+      assertThat(plan).as(mode + ": " + plan).anyMatch(line -> line.contains("USING"));
+    }
+    List<String> reclaim = plan(database, SqliteOutboxStore.reclaimExpiredSql());
+    assertThat(reclaim).as(reclaim.toString()).noneMatch(SqliteOutboxStoreTest::isFullScan);
+  }
+
+  /** A plan line that reads a table of outbox_events row by row, without an index. */
+  private static boolean isFullScan(String line) {
+    return line.matches("SCAN (outbox_events|o|ip)( |$).*") && !line.contains("USING");
+  }
+
+  private static List<String> plan(SqliteDatabase database, String sql) throws SQLException {
+    List<String> lines = new ArrayList<>();
+    try (Connection conn = database.dataSource().getConnection();
+        Statement st = conn.createStatement();
+        ResultSet rs = st.executeQuery("EXPLAIN QUERY PLAN " + sql)) {
+      while (rs.next()) {
+        lines.add(rs.getString("detail"));
+      }
+    }
+    return lines;
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
   private static Object column(SqliteDatabase database, String id, String column)

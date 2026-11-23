@@ -92,7 +92,7 @@ public final class SqliteOutboxStore implements OutboxStore {
   private static final String CLAIM_TEMPLATE =
       "WITH heads AS ("
           + "  SELECT min(seq) AS seq FROM outbox_events"
-          + "  WHERE status IN (%s) AND aggregate_id IS NOT NULL"
+          + "  WHERE status IN ('PENDING', 'FAILED')%s AND aggregate_id IS NOT NULL"
           + "  GROUP BY aggregate_type, aggregate_id"
           + "), eligible AS ("
           + "  SELECT seq FROM outbox_events"
@@ -113,12 +113,18 @@ public final class SqliteOutboxStore implements OutboxStore {
           + ENTRY_COLUMNS;
 
   /** STRICT_PER_AGGREGATE: a FAILED row is a head too, so it holds its stream. */
-  private static final String CLAIM_PENDING_STRICT =
-      CLAIM_TEMPLATE.formatted("'PENDING', 'FAILED'");
+  private static final String CLAIM_PENDING_STRICT = CLAIM_TEMPLATE.formatted("");
 
-  /** AVAILABILITY_FIRST: only PENDING rows are heads; a FAILED row is claimed past. */
+  /**
+   * AVAILABILITY_FIRST: only PENDING rows are heads; a FAILED row is claimed past. The predicate
+   * keeps the strict statement's {@code status IN ('PENDING', 'FAILED')}, which is the predicate of
+   * the partial index {@code idx_outbox_stream_seq}, and narrows it to {@code PENDING}: SQLite uses
+   * a partial index only for a query whose WHERE contains the index's own terms, so {@code status =
+   * 'PENDING'} alone would read the whole table, the delivered backlog included, under the write
+   * lock on every poll.
+   */
   private static final String CLAIM_PENDING_AVAILABILITY_FIRST =
-      CLAIM_TEMPLATE.formatted("'PENDING'");
+      CLAIM_TEMPLATE.formatted(" AND status = 'PENDING'");
 
   /** The claim statement the store runs for {@code mode}. */
   static String claimPendingSql(OutboxOrderingMode mode) {
@@ -132,6 +138,11 @@ public final class SqliteOutboxStore implements OutboxStore {
   private static final String RECLAIM_EXPIRED =
       "UPDATE outbox_events SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL"
           + " WHERE status = 'IN_PROGRESS' AND claimed_at < ?";
+
+  /** The reclaim statement the claim runs first. */
+  static String reclaimExpiredSql() {
+    return RECLAIM_EXPIRED;
+  }
 
   // Every mark* is a compare-and-set on IN_PROGRESS + claimed_by, as on Postgres: a relay whose
   // lease was stolen updates 0 rows, a benign no-op.

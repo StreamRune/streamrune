@@ -132,7 +132,8 @@ public final class SqliteCommandInbox implements CommandInbox {
    * Records the appended events' offsets in the row just claimed, on the caller's connection,
    * inside the caller's open write transaction.
    *
-   * @throws SQLException if the write fails; the caller rolls its transaction back
+   * @throws SQLException if the write fails or finds no row of {@code key}; the caller rolls its
+   *     transaction back
    */
   void backfillOffsets(IdempotencyKey key, List<GlobalOffset> offsets, Connection conn)
       throws SQLException {
@@ -143,7 +144,14 @@ public final class SqliteCommandInbox implements CommandInbox {
     try (PreparedStatement ps = conn.prepareStatement(BACKFILL)) {
       ps.setString(1, array.toString());
       ps.setString(2, key.value());
-      ps.executeUpdate();
+      if (ps.executeUpdate() != 1) {
+        // Only a claim of this transaction precedes the backfill; without its row the append would
+        // commit a claim without its offsets, so it fails and rolls back instead.
+        throw new SQLException(
+            "No command inbox row to record the offsets of key "
+                + LogSanitizer.sanitizeForLog(key.value())
+                + " in: the backfill must follow the key's claim in the same transaction");
+      }
     }
   }
 

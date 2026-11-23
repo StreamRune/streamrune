@@ -771,10 +771,10 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * Appends {@code events} and {@code outboxEntries} in one write transaction, with the entries the
-   * configured mapper derives from the events: all of them commit, or none does. The entries given
-   * here all take the trace link of the first event (one append's events come from one command),
-   * replacing any link they carry.
+   * Appends {@code events} and {@code outboxEntries} in one write transaction: all of them commit,
+   * or none does. Only the entries given here are written; the configured mapper is not applied to
+   * these events, as on Postgres. The entries all take the trace link of the first event (one
+   * append's events come from one command), replacing any link they carry.
    *
    * <p>Entries given with an empty {@code events} list are refused: they commit with the events,
    * and there are none to commit them with. An entry with no events to accompany it is saved alone
