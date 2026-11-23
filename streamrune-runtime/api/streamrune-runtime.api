@@ -274,6 +274,7 @@ public interface org.streamrune.runtime.LeaseRoleAware
 public final class org.streamrune.runtime.LocalStripedLocker implements org.streamrune.core.AggregateLocker
   public <init>(int)
   public <init>(int, boolean)
+  public int applicationPoolConnectionsPerLock()
   public java.lang.AutoCloseable acquireLock(org.streamrune.core.types.StreamId, java.time.Duration)
   public org.streamrune.runtime.LocalStripedLocker traced(org.streamrune.core.tracing.StreamRuneTracing)
 

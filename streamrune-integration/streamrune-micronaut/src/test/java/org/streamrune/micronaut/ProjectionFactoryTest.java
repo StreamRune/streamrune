@@ -161,7 +161,8 @@ class ProjectionFactoryTest {
             true,
             true,
             true,
-            null);
+            null,
+            "4");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(

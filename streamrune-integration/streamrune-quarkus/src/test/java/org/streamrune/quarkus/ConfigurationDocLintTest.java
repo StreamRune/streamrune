@@ -45,12 +45,19 @@ class ConfigurationDocLintTest {
 
   private static final String README = "streamrune-integration/streamrune-quarkus/README.md";
 
-  /** The keys the projection discovery looks up in code; see the Spring test for the defaults. */
+  /**
+   * The keys read by name in code: those the projection discovery looks up (see the Spring test for
+   * the defaults) and the per-subscription saga parallelism.
+   */
   private static final List<ReadElsewhere> LOOKUPS =
       List.of(
           new ReadElsewhere("streamrune.projections.auto-discovery.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.enabled", "true", "lookup"),
-          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"));
+          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
+          new ReadElsewhere("streamrune.saga.subscriptions.<name>.parallelism", null, "lookup"));
+
+  /** The map {@link StreamRuneQuarkusProperties.SagaConfig#subscriptions()} binds. */
+  private static final String SUBSCRIPTIONS_MAP = "streamrune.saga.subscriptions";
 
   /** {@code @WithName} where present, else SmallRye's kebab case of the method name. */
   private static final KeyNaming SMALLRYE =
@@ -104,6 +111,13 @@ class ConfigurationDocLintTest {
     bound.putAll(
         ConfigurationOracle.ofConfigMapping(
             crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
+    // The mapping declares every key under streamrune.saga.subscriptions as one map, so that the
+    // configuration accepts them; the one key it accepts is documented as the lookup it is read by,
+    // streamrune.saga.subscriptions.<name>.parallelism, not as a key of its own.
+    if (bound.remove(SUBSCRIPTIONS_MAP) == null) {
+      throw new IllegalStateException(
+          SUBSCRIPTIONS_MAP + " is no longer bound by the mapping; drop its replacement here");
+    }
     return ConfigurationOracle.merge(bound, LOOKUPS);
   }
 

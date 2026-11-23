@@ -1238,8 +1238,27 @@ public class StreamRuneAutoConfiguration {
   public SagaEventPathRetentionConfigurer sagaEventPathRetentionConfigurer(
       ObjectProvider<org.streamrune.runtime.SagaRunner<?>> sagaRunnerProvider,
       StreamRuneProperties properties,
-      ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership> leadershipProvider) {
-    return new SagaEventPathRetentionConfigurer(sagaRunnerProvider, properties, leadershipProvider);
+      ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership> leadershipProvider,
+      org.springframework.core.env.Environment environment) {
+    return new SagaEventPathRetentionConfigurer(
+        sagaRunnerProvider, properties, leadershipProvider, environment);
+  }
+
+  /**
+   * After every {@code SmartLifecycle} has started: unknown {@code
+   * streamrune.saga.subscriptions.<name>.parallelism} names, one line per saga runner, the refusal
+   * of a pool the aggregate locks can take whole, and the pool warning.
+   */
+  @Bean
+  @ConditionalOnMissingBean(SagaParallelismStartupCheck.class)
+  public SagaParallelismStartupCheck sagaParallelismStartupCheck(
+      ObjectProvider<org.streamrune.runtime.SagaRunner<?>> sagaRunners,
+      StreamRuneProperties properties,
+      org.springframework.core.env.Environment environment,
+      ObjectProvider<javax.sql.DataSource> dataSource,
+      ObjectProvider<org.streamrune.core.AggregateLocker> locker) {
+    return new SagaParallelismStartupCheck(
+        sagaRunners, properties, environment, dataSource, locker);
   }
 
   /**

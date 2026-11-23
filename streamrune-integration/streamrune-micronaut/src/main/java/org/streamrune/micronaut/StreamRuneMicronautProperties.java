@@ -247,7 +247,16 @@ public record StreamRuneMicronautProperties(
     @io.micronaut.core.annotation.Nullable
         @io.micronaut.context.annotation.Property(
             name = "streamrune.read-model.schema.auto-initialize")
-        Boolean readModelAutoInitializeSchema) {
+        Boolean readModelAutoInitializeSchema,
+    // saga.parallelism: matches Spring/Quarkus. How many saga steps a SagaRunner runs at once, for
+    // the runners whose builder named none. Bound as text so that the integration's own reading
+    // names the property and the value when it is not a whole number from 1 to 64.
+    // streamrune.saga.subscriptions.<name>.parallelism is read by name, see
+    // SagaParallelismProperties. Appended at the end so the positional withDefaults() stays
+    // aligned.
+    @Bindable(defaultValue = "4")
+        @io.micronaut.context.annotation.Property(name = "streamrune.saga.parallelism")
+        String sagaParallelism) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
@@ -332,7 +341,9 @@ public record StreamRuneMicronautProperties(
         true,
         true,
         // read-model.schema.auto-initialize: unset, follows event-store.schema.auto-initialize
-        null);
+        null,
+        // saga.parallelism
+        "4");
   }
 
   /**

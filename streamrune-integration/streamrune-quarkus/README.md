@@ -89,6 +89,8 @@ streamrune.query-cache.enabled=false
 # Sagas
 streamrune.saga.enabled=true
 streamrune.saga.forward-fence=auto
+streamrune.saga.parallelism=4
+# streamrune.saga.subscriptions.<name>.parallelism=
 streamrune.saga.compensation-retry-enabled=true
 streamrune.saga.compensation-retry-interval=PT60S
 streamrune.saga.compensation-retry-give-up-after=PT1H

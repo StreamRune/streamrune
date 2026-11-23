@@ -56,10 +56,11 @@ public interface Application extends AutoCloseable {
   Map<String, Object> health();
 
   /**
-   * What the start logged at level {@code WARN} and above.
+   * What the start logged: every record at level {@code WARN} and above, and the records at level
+   * {@code INFO} of the framework's own loggers, those under {@code org.streamrune}.
    *
-   * @return one line per log record, its level, its logger's name and its formatted message, in the
-   *     order logged
+   * @return one line per log record, its level ({@code INFO}, {@code WARN} or {@code ERROR}), its
+   *     logger's name and its formatted message, in the order logged
    */
   List<String> startupLogLines();
 

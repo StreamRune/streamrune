@@ -15,6 +15,7 @@ public final record org.streamrune.core.AggregateHistory
 
 public interface org.streamrune.core.AggregateLocker
   public abstract java.lang.AutoCloseable acquireLock(org.streamrune.core.types.StreamId, java.time.Duration)
+  public default int applicationPoolConnectionsPerLock()
   public static final int MIN_TIMEOUT_MILLIS = 1
   public static void requireValidTimeout(java.time.Duration, java.lang.String)
 

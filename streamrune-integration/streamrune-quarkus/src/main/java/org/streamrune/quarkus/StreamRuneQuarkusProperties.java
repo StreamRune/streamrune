@@ -5,6 +5,7 @@ import io.smallrye.config.WithConverter;
 import io.smallrye.config.WithDefault;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -330,6 +331,26 @@ public interface StreamRuneQuarkusProperties {
      */
     @WithDefault("auto")
     String forwardFence();
+
+    /**
+     * How many saga steps of one page a {@code SagaRunner} runs at once, from 1 to 64, for every
+     * runner whose builder named none and whose subscription has no value of its own. Bound as text
+     * so that an unreadable value fails startup naming the property.
+     */
+    @WithDefault("4")
+    String parallelism();
+
+    /**
+     * Every key under {@code streamrune.saga.subscriptions.}, as written after that prefix, to its
+     * text: {@code streamrune.saga.subscriptions.order-saga.parallelism=16} is the entry {@code
+     * order-saga.parallelism} with {@code 16}. Declared so that the configuration accepts the
+     * per-subscription key {@code streamrune.saga.subscriptions.<name>.parallelism}: SmallRye
+     * refuses a key under {@code streamrune} that no member of this mapping declares. The
+     * integration reads the per-subscription values from the configuration's property names, where
+     * a key that is not {@code <name>.parallelism} fails startup naming it, and an environment
+     * variable names a subscription in its own spelling.
+     */
+    Map<String, Optional<String>> subscriptions();
   }
 
   /** Outbox section, {@code streamrune.outbox.*}. */

@@ -106,6 +106,11 @@ public record StreamRuneProperties(
    *     {@code auto} (default) follows {@code streamrune.subscription.single-active-consumer
    *     .enabled}, {@code on} fences, {@code off} does not. Bound as text so that an unquoted YAML
    *     {@code on}/{@code off} (read as a boolean) means the same as the quoted word
+   * @param parallelism how many saga steps a runner runs at once, from 1 to 64, for the {@code
+   *     SagaRunner} beans whose builder named none (default 4). {@code
+   *     streamrune.saga.subscriptions.<name>.parallelism} sets it for one subscription and wins
+   *     over the builder. Bound as text so that an unreadable value is refused with the property's
+   *     name
    */
   public record Saga(
       @DefaultValue("true") boolean enabled,
@@ -113,7 +118,8 @@ public record StreamRuneProperties(
       @DefaultValue("true") boolean compensationRetryEnabled,
       @DefaultValue("60s") Duration compensationRetryInterval,
       @DefaultValue("1h") Duration compensationRetryGiveUpAfter,
-      @DefaultValue("auto") String forwardFence) {}
+      @DefaultValue("auto") String forwardFence,
+      @DefaultValue("4") String parallelism) {}
 
   /**
    * @param enabled whether outbox polling is enabled (opt-in)

@@ -906,20 +906,20 @@ license.
   `SagaStore.connectionFailureClassifier()` (default `ConnectionFailureClassifier.GENERIC`:
   SQLState class `08` and the JDBC transient and non-transient connection exceptions;
   `PostgresSagaStore` adds `57P01`, `57P02`, `57P03` and `53300`), or from
-  `SagaRunner.Builder.connectionFailureClassifier(...)`. When deployment settings are given to the
-  runner, the value comes, in precedence order, from the setting named for a subscription bound to
-  the runner, the builder, the deployment's global setting, then 4; a setting that names a
-  subscription no runner is bound to is refused, and a changed value applies from the next page. The
-  integrations bind these settings to configuration properties. A runner bound to k subscriptions can
+  `SagaRunner.Builder.connectionFailureClassifier(...)`. Under an integration the value comes, in
+  precedence order, from `streamrune.saga.subscriptions.<name>.parallelism` of a subscription bound
+  to the runner, the builder, then `streamrune.saga.parallelism` (default 4); a runner that named
+  nothing reports the source `streamrune.saga.parallelism`, and only a runner wired by hand falls
+  back to the built-in 4. A changed value applies from the next page. A runner bound to k subscriptions can
   have k pages, so k times the parallelism steps, in flight; a closed subscription releases its bind.
   At parallelism 1 the runner routes the whole page before its first step. At a parallelism above 1 a
   page that is not acknowledged, also one whose routing failed, is reported by a WARN, the first such
   page and then at most once per 5 minutes with the number of pages since, and `close()` called from
-  inside a step waits for the page's join, up to 30 seconds. A step in flight holds one connection of the
-  application's pool, two with a `PgAdvisoryLocker` on that pool; when `parallelism` × subscriptions
-  × lock connections reaches the pool's maximum size, the workers can hold every connection as a lock
-  connection and wait for a second, so every saga ends only after many redeliveries: give the locker a
-  dedicated pool, a larger pool, or a lower parallelism. Give the subscription a fetch size of at
+  inside a step waits for the page's join, up to 30 seconds. A saga type's connection budget is
+  `parallelism × (1 + AggregateLocker.applicationPoolConnectionsPerLock())` connections of the
+  application's pool per bound subscription (0 per lock for `LocalStripedLocker` and
+  `PgAdvisoryLocker.withDedicatedPool`, 1 for a `PgAdvisoryLocker` built with its constructor,
+  whatever `DataSource` it is given, and for a locker that does not say). Give the subscription a fetch size of at
   least 4 × `parallelism`; an orchestrator keeps no mutable fields, and scoped values other than the
   request context, the dispatch cause and — when the runner has a tracing — the trace context are not
   carried to a step.
@@ -1278,6 +1278,26 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   `streamrune.subscription.single-active-consumer.enabled`, `on` and `off` set it regardless, and
   a runner's own `forwardFence(...)` wins. The boolean spellings (`true`/`false`, `yes`/`no`, …)
   read as `on`/`off`, so an unquoted YAML `on` works; an unknown value fails startup.
+- `streamrune.saga.parallelism` (1 to 64, default 4) sets the parallelism of every `SagaRunner` bean
+  whose builder named none, and `streamrune.saga.subscriptions.<name>.parallelism` that of the
+  runner bound to the subscription of that name, over the builder. A value that is not a whole number
+  from 1 to 64 fails startup, and so do a key under `streamrune.saga.subscriptions.` that is not
+  `<name>.parallelism` and a name no saga runner is bound to, also without saga runners; the
+  refusal lists the bound names. Spring writes in brackets a name with a character it would drop
+  (`[orders/v2]`; a dotted name reads the same as `[orders.v2]` or `orders.v2`) and two names of one
+  property source that differ only in case, `-` or `_` (`[Orders]`, `[orders]`), Quarkus writes a
+  dotted name quoted (`"orders.v2"`) or unquoted, Micronaut unbracketed as it is; Spring and
+  Micronaut refuse two written names they read as one property, naming both keys. An environment
+  variable yields a lower-case name with `_` read as `.`, so a variable for a hyphenated name names
+  another subscription and is refused; such a name is set in the file or as a system property. Once the application has built its saga subscriptions (Quarkus: an observer at
+  the default priority or lower; Micronaut: an order below `Ordered.LOWEST_PRECEDENCE`), each
+  integration logs one INFO line per runner with its parallelism, the property that decided it and
+  its connection budget. It refuses the start when the aggregate lock shares the application's pool
+  and `stepsInFlightAtMost × applicationPoolConnectionsPerLock()` reaches the pool's maximum size,
+  naming the ways out in this order: give the locker a pool of its own
+  (`PgAdvisoryLocker.withDedicatedPool`), raise the pool, or lower `streamrune.saga.parallelism`. It
+  logs a WARN when the steps' budget exceeds half the pool. The pool's size is read from HikariCP and,
+  on Quarkus, from Agroal; a pool whose size cannot be read is neither refused nor warned about.
 - `streamrune.subscription.single-active-consumer.enabled` has one meaning on all three
   integrations: the condition that creates the `LeaseBasedLeadership` bean and the forward fence's
   `auto` both read it through `SingleActiveConsumerSetting` (`streamrune-integration-api`), which

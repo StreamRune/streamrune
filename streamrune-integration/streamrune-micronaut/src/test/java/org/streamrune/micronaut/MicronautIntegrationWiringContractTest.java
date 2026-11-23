@@ -1,6 +1,8 @@
 package org.streamrune.micronaut;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -12,6 +14,9 @@ import io.micronaut.context.ApplicationContext;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.context.event.ApplicationEventListener;
+import io.micronaut.context.event.StartupEvent;
+import io.micronaut.core.order.Ordered;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Post;
 import io.micronaut.runtime.server.EmbeddedServer;
@@ -29,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.postgresql.ds.PGSimpleDataSource;
@@ -45,6 +51,8 @@ import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandState;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
+import org.streamrune.integration.tck.ContractBeans.SagaWithBuilderParallelism;
+import org.streamrune.integration.tck.ContractBeans.SagaWithSubscription;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.integration.tck.ContractHttp;
 import org.streamrune.integration.tck.HttpResponse;
@@ -88,6 +96,15 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   /** The property that declares the {@link ApplicationBeans#ungatedSagaRunner()} of a start. */
   static final String UNGATED_SAGA_RUNNER = "contract.ungated-saga-runner";
 
+  /** The property that declares the {@link ApplicationBeans#sagaWithSubscription()} of a start. */
+  static final String SAGA_WITH_SUBSCRIPTION = "contract.saga-with-subscription";
+
+  /**
+   * The property that declares the {@link ApplicationBeans#sagaWithBuilderParallelism()} of a
+   * start.
+   */
+  static final String SAGA_WITH_BUILDER_PARALLELISM = "contract.saga-with-builder-parallelism";
+
   /**
    * The property that declares the {@link ApplicationBeans#contractCommandRegistration()} of a
    * start: a {@code DeciderRegistration}, which Micronaut collects into an injected {@code List}.
@@ -103,6 +120,51 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
    * cannot be.
    */
   static final String DEFAULT_STORE_PROJECTION = "contract.default-store-projection";
+
+  /** The property that declares the {@link StartedTier} of a start. */
+  static final String STARTED_TIER = "contract.started-tier";
+
+  /**
+   * A startup listener in the runners' tier that records being started and stopped, standing in for
+   * what the integration's own lifecycle listeners start.
+   */
+  @Singleton
+  @Requires(property = STARTED_TIER, value = "true")
+  static class StartedTier
+      implements ApplicationEventListener<StartupEvent>, AutoCloseable, Ordered {
+    static volatile boolean started;
+    static volatile boolean stopped;
+
+    @Override
+    public int getOrder() {
+      return 1100;
+    }
+
+    @Override
+    public void onApplicationEvent(StartupEvent event) {
+      started = true;
+    }
+
+    @Override
+    public void close() {
+      stopped = true;
+    }
+  }
+
+  @Test
+  void aStartRefusedByTheLateSagaCheckStopsWhatAnEarlierStartupListenerStarted() {
+    StartedTier.started = false;
+    StartedTier.stopped = false;
+    Application application =
+        start(
+            null,
+            Map.of(STARTED_TIER, "true", "streamrune.saga.subscriptions.nope.parallelism", "2"),
+            Set.of());
+    application.close();
+    assertFalse(application.started(), "the late check must refuse the start");
+    assertTrue(StartedTier.started, "the listener must have started before the refusal");
+    assertTrue(StartedTier.stopped, "the refused start must stop the started listener");
+  }
 
   /**
    * The application's beans that Micronaut must know at compile time, each declared only for a
@@ -125,6 +187,18 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     @Requires(property = UNGATED_SAGA_RUNNER, value = "true")
     SagaRunner<ContractSagaState> ungatedSagaRunner() {
       return new UngatedSagaRunner().get();
+    }
+
+    @Singleton
+    @Requires(property = SAGA_WITH_SUBSCRIPTION, value = "true")
+    SagaRunner<ContractSagaState> sagaWithSubscription() {
+      return new SagaWithSubscription().get();
+    }
+
+    @Singleton
+    @Requires(property = SAGA_WITH_BUILDER_PARALLELISM, value = "true")
+    SagaRunner<ContractSagaState> sagaWithBuilderParallelism() {
+      return new SagaWithBuilderParallelism().get();
     }
 
     @Singleton
@@ -264,6 +338,10 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     for (Class<?> beanClass : extraBeans) {
       if (beanClass == UngatedSagaRunner.class) {
         configuration.put(UNGATED_SAGA_RUNNER, "true");
+      } else if (beanClass == SagaWithSubscription.class) {
+        configuration.put(SAGA_WITH_SUBSCRIPTION, "true");
+      } else if (beanClass == SagaWithBuilderParallelism.class) {
+        configuration.put(SAGA_WITH_BUILDER_PARALLELISM, "true");
       } else if (beanClass == ContractCommandRegistration.class) {
         configuration.put(COMMAND_REGISTRATION, "true");
       } else if (beanClass == DispatchingRoute.class) {
@@ -282,23 +360,53 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     ListAppender<ILoggingEvent> log = new ListAppender<>();
     log.start();
     root.addAppender(log);
+    // The framework's INFO lines are part of what the start logged, see startupLogLines(); the
+    // test logging configuration keeps the root at WARN.
+    Logger framework = (Logger) LoggerFactory.getLogger("org.streamrune");
+    Level frameworkLevel = framework.getLevel();
+    framework.setLevel(Level.INFO);
     ApplicationContext context = null;
     try {
       context =
           ApplicationContext.builder()
               .properties(configuration)
               .singletons(singletons.toArray())
-              .start();
+              .build();
+      context.start();
       EmbeddedServer server = context.getBean(EmbeddedServer.class);
       server.start();
       return new MicronautApplication(context, server, null, lines(log));
     } catch (RuntimeException e) {
-      if (context != null && context.isRunning()) {
-        context.close();
+      if (context != null) {
+        if (context.isRunning()) {
+          context.close();
+        } else {
+          stopStartedListeners(context);
+        }
       }
       return new MicronautApplication(null, null, messages(e), lines(log));
     } finally {
       root.detachAppender(log);
+      framework.setLevel(frameworkLevel);
+    }
+  }
+
+  /**
+   * Stops what the startup listeners of a start that failed have started. Micronaut does not stop a
+   * context whose start threw ({@code stop()} acts on a running context only), so a start refused
+   * by a late startup listener would leave the runners an earlier listener started running in the
+   * test JVM: every startup listener that has been created and is {@code AutoCloseable} is closed,
+   * as the context's shutdown closes it.
+   */
+  static void stopStartedListeners(ApplicationContext context) {
+    for (var registration : context.getActiveBeanRegistrations(ApplicationEventListener.class)) {
+      if (registration.bean() instanceof AutoCloseable started) {
+        try {
+          started.close();
+        } catch (Exception e) {
+          throw new IllegalStateException("cannot stop " + started.getClass().getName(), e);
+        }
+      }
     }
   }
 
@@ -351,7 +459,9 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   private static List<String> lines(ListAppender<ILoggingEvent> log) {
     List<String> lines = new ArrayList<>();
     for (ILoggingEvent event : List.copyOf(log.list)) {
-      if (event.getLevel().isGreaterOrEqual(Level.WARN)) {
+      if (event.getLevel().isGreaterOrEqual(Level.WARN)
+          || (event.getLevel() == Level.INFO
+              && event.getLoggerName().startsWith("org.streamrune"))) {
         lines.add(
             event.getLevel() + " " + event.getLoggerName() + ": " + event.getFormattedMessage());
       }

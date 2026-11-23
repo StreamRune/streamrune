@@ -121,6 +121,30 @@ tasks.named<Test>("test") {
     )
 }
 
+// A test JVM without Agroal: agroal-api is compile-only, so an application without quarkus-agroal
+// has none of its jars, and the saga parallelism startup check must load and run there. A class
+// loader that hides a package cannot hide it from the classes the parent defines, so the jars leave
+// the classpath. The main test task leaves the test out: Agroal is on its classpath.
+val agroalAbsentTestClass = "org.streamrune.quarkus.SagaParallelismAgroalAbsentTest"
+
+val agroalAbsentTest =
+    tasks.register<Test>("agroalAbsentTest") {
+        group = "verification"
+        description = "Runs the saga parallelism startup check on a classpath without the Agroal jars."
+        val testSourceSet = project.the<SourceSetContainer>()["test"]
+        testClassesDirs = testSourceSet.output.classesDirs
+        classpath = testSourceSet.runtimeClasspath.filter { !it.name.startsWith("agroal-") }
+        filter { includeTestsMatching(agroalAbsentTestClass) }
+    }
+
+tasks.named<Test>("test") {
+    filter { excludeTestsMatching(agroalAbsentTestClass) }
+}
+
+tasks.named("check") {
+    dependsOn(agroalAbsentTest)
+}
+
 // The Micrometer version this build declares must not exceed the one the Quarkus BOM manages.
 // Gradle resolves the highest version requested, so a higher declared version would replace the
 // Quarkus-managed one in a Gradle-built Quarkus application; the Quarkus Micrometer extension's

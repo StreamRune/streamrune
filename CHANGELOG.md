@@ -47,9 +47,16 @@ jars. In brief:
   (`SagaStore.connectionFailureClassifier()`) or the third failure stops the page, and the page is
   acknowledged only when every saga ran to its end. Four meters report it
   (`streamrune.saga.steps.in_flight`, `streamrune.saga.page.pending`,
-  `streamrune.saga.page.effective_parallelism`, `streamrune.saga.page.failed`); the connection
-  budget and its threshold are in the [production guide](docs/guide/production.md#pool-sizing-for-saga-parallelism)
-  and the [saga guide](docs/guide/advanced/saga.md#parallel-steps).
+  `streamrune.saga.page.effective_parallelism`, `streamrune.saga.page.failed`). On Spring, Quarkus
+  and Micronaut, `streamrune.saga.parallelism` sets it for the runners that name none and
+  `streamrune.saga.subscriptions.<name>.parallelism` for one subscription's saga, over the builder;
+  an unknown name fails startup. At startup each integration logs one line per saga runner with its
+  parallelism and connection budget, `parallelism × (1 + AggregateLocker.applicationPoolConnectionsPerLock())`,
+  refuses the start when the aggregate locks can take the whole pool (give the locker a pool of its
+  own, raise the pool, or lower the parallelism), and warns above half the pool; a pool whose size
+  cannot be read is neither refused nor warned about. See the
+  [production guide](docs/guide/production.md#pool-sizing-for-saga-parallelism) and the
+  [saga guide](docs/guide/advanced/saga.md#saga-parallelism).
 - **Command dead-letter queue with operator-confirmed replay.** A command that keeps failing on
   infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller
   receives `CommandDeadLetteredException`, whose `pendingOutcome()` says whether the retry schedule

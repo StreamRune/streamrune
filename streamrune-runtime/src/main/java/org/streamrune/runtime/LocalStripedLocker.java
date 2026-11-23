@@ -103,6 +103,16 @@ public final class LocalStripedLocker implements AggregateLocker {
   /**
    * {@inheritDoc}
    *
+   * <p>0: the locks are in-process and hold no connection. A {@link #traced} copy answers the same.
+   */
+  @Override
+  public int applicationPoolConnectionsPerLock() {
+    return 0;
+  }
+
+  /**
+   * {@inheritDoc}
+   *
    * <p>A negative timeout is rejected rather than passed to {@code tryLock}, where it silently
    * degraded to "try once, do not wait" — the same configuration made {@code PgAdvisoryLocker}
    * substitute a 30-second default and block instead. {@link Duration#ZERO} keeps the documented

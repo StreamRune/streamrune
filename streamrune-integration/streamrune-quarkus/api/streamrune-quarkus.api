@@ -29,8 +29,13 @@ public class org.streamrune.quarkus.SagaCompensationRetryLifecycle
 
 public class org.streamrune.quarkus.SagaEventPathRetentionConfigurer
   protected <init>()
-  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.subscription.SubscriptionLeadership>)
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.subscription.SubscriptionLeadership>, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>)
   public void apply(io.quarkus.runtime.StartupEvent)
+
+public class org.streamrune.quarkus.SagaParallelismStartupCheck
+  protected <init>()
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<javax.sql.DataSource>, jakarta.enterprise.inject.Instance<org.streamrune.core.AggregateLocker>, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>)
+  public void check(io.quarkus.runtime.StartupEvent)
 
 public class org.streamrune.quarkus.SagaStateCryptoValidator
   protected <init>()
@@ -308,9 +313,11 @@ public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$SagaC
   public abstract boolean compensationRetryEnabled()
   public abstract boolean enabled()
   public abstract java.lang.String forwardFence()
+  public abstract java.lang.String parallelism()
   public abstract java.time.Duration compensationRetryGiveUpAfter()
   public abstract java.time.Duration compensationRetryInterval()
   public abstract java.time.Duration deadLetterRetentionMaxAge()
+  public abstract java.util.Map<java.lang.String, java.util.Optional<java.lang.String>> subscriptions()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$SecurityConfig
   public abstract boolean trustUserIdHeader()

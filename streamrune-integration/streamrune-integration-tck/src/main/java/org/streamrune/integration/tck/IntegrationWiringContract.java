@@ -63,6 +63,8 @@ import org.streamrune.integration.tck.ContractBeans.IdentifiedCallers;
 import org.streamrune.integration.tck.ContractBeans.OpenTelemetryBean;
 import org.streamrune.integration.tck.ContractBeans.OutboxStoreBean;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
+import org.streamrune.integration.tck.ContractBeans.SagaWithBuilderParallelism;
+import org.streamrune.integration.tck.ContractBeans.SagaWithSubscription;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
 import org.streamrune.runtime.DeadLetterRetryRunner;
@@ -608,6 +610,81 @@ public abstract class IntegrationWiringContract {
                   + "\"; it logged:\n  "
                   + String.join("\n  ", lines));
     }
+  }
+
+  /**
+   * {@code streamrune.saga.parallelism} reaches a saga runner that names no parallelism: the start
+   * logs the runner's line with the value and the property it came from.
+   */
+  @Test
+  public void theGlobalSagaParallelismReachesARunnerThatNamedNothing() {
+    try (Application application =
+        start(
+            null, Map.of("streamrune.saga.parallelism", "8"), Set.of(SagaWithSubscription.class))) {
+      assertStarted(application);
+      assertSagaLine(application, "parallelism 8 (streamrune.saga.parallelism)");
+    }
+  }
+
+  /**
+   * A saga runner that names its parallelism on its builder keeps it against {@code
+   * streamrune.saga.parallelism}.
+   */
+  @Test
+  public void aRunnerThatNamedItsParallelismKeepsItAgainstTheGlobalProperty() {
+    try (Application application =
+        start(
+            null,
+            Map.of("streamrune.saga.parallelism", "8"),
+            Set.of(SagaWithBuilderParallelism.class))) {
+      assertStarted(application);
+      assertSagaLine(application, "parallelism 2 (SagaRunner.Builder.parallelism)");
+    }
+  }
+
+  /**
+   * {@code streamrune.saga.subscriptions.<name>.parallelism} of the subscription a saga runner is
+   * bound to wins over the runner's builder.
+   */
+  @Test
+  public void aSubscriptionPropertyWinsOverTheBuilder() {
+    String property =
+        "streamrune.saga.subscriptions." + SagaWithSubscription.SUBSCRIPTION + ".parallelism";
+    try (Application application =
+        start(null, Map.of(property, "16"), Set.of(SagaWithBuilderParallelism.class))) {
+      assertStarted(application);
+      assertSagaLine(application, "parallelism 16 (" + property + ")");
+    }
+  }
+
+  /**
+   * A per-subscription parallelism that names no subscription a saga runner is bound to refuses the
+   * start, and the refusal lists the unknown name and the known ones.
+   */
+  @Test
+  public void anUnknownSagaSubscriptionNameRefusesStartListingTheKnownNames() {
+    try (Application application =
+        start(
+            null,
+            Map.of("streamrune.saga.subscriptions.nope.parallelism", "2"),
+            Set.of(SagaWithSubscription.class))) {
+      assertRefused(application, "[nope]", "[" + SagaWithSubscription.SUBSCRIPTION + "]");
+    }
+  }
+
+  /** The start logged the saga runner's {@code INFO} line, and it contains {@code fragment}. */
+  private static void assertSagaLine(Application application, String fragment) {
+    List<String> lines = application.startupLogLines();
+    String type = "saga type " + ContractSagaState.class.getName();
+    assertTrue(
+        lines.stream()
+            .anyMatch(
+                line -> line.startsWith("INFO") && line.contains(type) && line.contains(fragment)),
+        () ->
+            "the start must log the saga runner's INFO line with \""
+                + fragment
+                + "\"; it logged:\n  "
+                + String.join("\n  ", lines));
   }
 
   /**

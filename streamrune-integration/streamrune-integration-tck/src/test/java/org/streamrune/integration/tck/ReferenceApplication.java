@@ -54,6 +54,7 @@ import org.streamrune.integration.ConfigurationSpelling;
 import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
+import org.streamrune.integration.SagaParallelismSetting;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
@@ -72,6 +73,8 @@ import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.OpenTelemetryTracing;
 import org.streamrune.runtime.OutboxPoller;
 import org.streamrune.runtime.SagaLeaseWiring;
+import org.streamrune.runtime.SagaParallelismDefault;
+import org.streamrune.runtime.SagaParallelismSettings;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingProjectionDecorator;
@@ -126,7 +129,11 @@ final class ReferenceApplication implements Application {
     ZERO_WITH_ITS_UNIT,
     LOCK_TIMEOUT,
     BARE_NUMBERS,
-    SWITCHES
+    SWITCHES,
+    GLOBAL_SAGA_PARALLELISM,
+    BUILDER_SAGA_PARALLELISM,
+    SUBSCRIPTION_SAGA_PARALLELISM,
+    KNOWN_SAGA_SUBSCRIPTIONS
   }
 
   /** The durations among the keys the contract sets, read as an integration binds them. */
@@ -303,6 +310,56 @@ final class ReferenceApplication implements Application {
           "WARN org.streamrune.runtime.SagaLeaseWiring: Saga type "
               + ContractBeans.ContractSagaState.class.getName()
               + " is delivered on every replica: its SagaRunner carries no lease.");
+    }
+    checkSagaParallelism(runners);
+  }
+
+  /**
+   * The integrations' late saga parallelism check: the settings reach the runners, a
+   * per-subscription value that names no bound subscription refuses the start, and each runner logs
+   * its line. An application that breaks {@link Rule#GLOBAL_SAGA_PARALLELISM} hands the runners no
+   * settings, one that breaks {@link Rule#BUILDER_SAGA_PARALLELISM} hands a set global value to
+   * every bound subscription as its own, over the builder, one that breaks {@link
+   * Rule#SUBSCRIPTION_SAGA_PARALLELISM} drops the per-subscription values, one that breaks {@link
+   * Rule#KNOWN_SAGA_SUBSCRIPTIONS} does not refuse an unknown name.
+   */
+  private void checkSagaParallelism(List<SagaRunner<?>> runners) {
+    Map<String, String> bySubscription = new LinkedHashMap<>();
+    properties.forEach(
+        (key, value) -> {
+          if (key.startsWith(SagaParallelismSetting.SUBSCRIPTIONS_PREFIX)
+              && key.endsWith(SagaParallelismSetting.SUBSCRIPTION_SUFFIX)) {
+            bySubscription.put(
+                key.substring(
+                    SagaParallelismSetting.SUBSCRIPTIONS_PREFIX.length(),
+                    key.length() - SagaParallelismSetting.SUBSCRIPTION_SUFFIX.length()),
+                value);
+          }
+        });
+    SagaParallelismSetting.Parsed parsed =
+        SagaParallelismSetting.parse(
+            properties.get(SagaParallelismSetting.PROPERTY), bySubscription);
+    Map<String, Integer> applied =
+        new LinkedHashMap<>(
+            keeps(Rule.SUBSCRIPTION_SAGA_PARALLELISM) ? parsed.bySubscription() : Map.of());
+    if (!keeps(Rule.BUILDER_SAGA_PARALLELISM)
+        && properties.containsKey(SagaParallelismSetting.PROPERTY)) {
+      for (SagaRunner<?> runner : runners) {
+        runner
+            .boundSubscriptionNames()
+            .forEach(name -> applied.putIfAbsent(name.value(), parsed.global()));
+      }
+    }
+    SagaParallelismSettings settings = new SagaParallelismSettings(parsed.global(), applied);
+    if (keeps(Rule.GLOBAL_SAGA_PARALLELISM)) {
+      SagaParallelismDefault.apply(runners, settings);
+    }
+    if (keeps(Rule.KNOWN_SAGA_SUBSCRIPTIONS)) {
+      SagaParallelismDefault.requireKnownSubscriptions(
+          runners, new SagaParallelismSettings(parsed.global(), parsed.bySubscription()));
+    }
+    for (String line : SagaParallelismDefault.startupLines(runners, 1)) {
+      logLines.add("INFO org.streamrune.reference.SagaParallelismStartupCheck: " + line);
     }
   }
 

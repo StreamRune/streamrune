@@ -46,8 +46,13 @@ public final class org.streamrune.spring.SagaCompensationRetryLifecycle implemen
   public void stop()
 
 public class org.streamrune.spring.SagaEventPathRetentionConfigurer implements org.springframework.beans.factory.SmartInitializingSingleton
-  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>)
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.core.env.Environment)
   public void afterSingletonsInstantiated()
+
+public class org.streamrune.spring.SagaParallelismStartupCheck implements org.springframework.context.ApplicationListener<org.springframework.context.event.ContextRefreshedEvent>, org.springframework.context.ApplicationContextAware
+  public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.core.env.Environment, org.springframework.beans.factory.ObjectProvider<javax.sql.DataSource>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.AggregateLocker>)
+  public void onApplicationEvent(org.springframework.context.event.ContextRefreshedEvent)
+  public void setApplicationContext(org.springframework.context.ApplicationContext) throws org.springframework.beans.BeansException
 
 public class org.streamrune.spring.SagaStateCryptoValidator implements org.springframework.beans.factory.SmartInitializingSingleton
   public <init>(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>)
@@ -146,7 +151,8 @@ public class org.streamrune.spring.StreamRuneAutoConfiguration
   public org.streamrune.spring.RunnerLifecycle streamRuneSagaDeadLetterRetentionSweeperLifecycle(org.streamrune.runtime.SagaDeadLetterRetentionSweeper)
   public org.streamrune.spring.RunnerLifecycle streamRuneSubscriptionLeadershipLifecycle(org.streamrune.core.subscription.SubscriptionLeadership)
   public org.streamrune.spring.SagaCompensationRetryLifecycle streamRuneSagaCompensationRetryLifecycle(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.core.saga.SagaStore, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.StreamRuneMetrics>, org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.streamrune.spring.StreamRuneProperties)
-  public org.streamrune.spring.SagaEventPathRetentionConfigurer sagaEventPathRetentionConfigurer(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>)
+  public org.streamrune.spring.SagaEventPathRetentionConfigurer sagaEventPathRetentionConfigurer(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.subscription.SubscriptionLeadership>, org.springframework.core.env.Environment)
+  public org.streamrune.spring.SagaParallelismStartupCheck sagaParallelismStartupCheck(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.spring.StreamRuneProperties, org.springframework.core.env.Environment, org.springframework.beans.factory.ObjectProvider<javax.sql.DataSource>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.AggregateLocker>)
   public org.streamrune.spring.SagaStateCryptoValidator sagaStateCryptoValidator(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaRunner<?>>, org.springframework.beans.factory.ObjectProvider<org.streamrune.core.crypto.CryptoEngine>)
   public org.streamrune.spring.SagaTimeoutRunnerHealthRegistrar streamRuneSagaTimeoutRunnerHealthRegistrar(org.springframework.beans.factory.ObjectProvider<org.streamrune.runtime.SagaTimeoutRunner<?>>, org.streamrune.runtime.BackgroundRelayHealthContributor)
   public org.streamrune.spring.SpringSecurityAuthenticatedUserResolver springSecurityAuthenticatedUserResolver()
@@ -362,13 +368,14 @@ public static final record org.streamrune.spring.StreamRuneProperties$ReadModelS
   public java.lang.Boolean autoInitialize()
 
 public static final record org.streamrune.spring.StreamRuneProperties$Saga
-  public <init>(boolean, java.time.Duration, boolean, java.time.Duration, java.time.Duration, java.lang.String)
+  public <init>(boolean, java.time.Duration, boolean, java.time.Duration, java.time.Duration, java.lang.String, java.lang.String)
   public boolean compensationRetryEnabled()
   public boolean enabled()
   public final boolean equals(java.lang.Object)
   public final int hashCode()
   public final java.lang.String toString()
   public java.lang.String forwardFence()
+  public java.lang.String parallelism()
   public java.time.Duration compensationRetryGiveUpAfter()
   public java.time.Duration compensationRetryInterval()
   public java.time.Duration deadLetterRetentionMaxAge()
