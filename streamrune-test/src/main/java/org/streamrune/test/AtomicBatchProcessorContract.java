@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -48,11 +49,13 @@ import org.streamrune.core.types.Version;
  * the checkpoint does not move. (v) {@code writesTo(this)} is true, and stays true through a {@link
  * Proxy} that forwards to the real object. And what {@link AtomicBatchProcessor#serializesReplay()}
  * {@code == true} promises: a replay and a batch of one projection never run at the same time, a
- * replay applies its writes all-or-nothing, and it moves neither the offset nor the epoch. Run by
- * {@code InMemoryProjectionRepositoryContractTest} (streamrune-test) and {@code
- * JdbcProjectionRepositoryContractTest} (streamrune-postgres): the test-time half of "startup
- * verifies the shared transaction" — the static {@code ProjectionDeliveryPolicy} and {@code
- * ProjectionFencingPolicy} trust the two flags, this suite is what makes them honest.
+ * replay applies its writes all-or-nothing, and it moves neither the offset nor the epoch; and,
+ * where the lock is per projection ({@link #locksPerProjection()}), a replay of one projection does
+ * not wait for an open batch of another. Run by {@code InMemoryProjectionRepositoryContractTest}
+ * (streamrune-test) and {@code JdbcProjectionRepositoryContractTest} (streamrune-postgres): the
+ * test-time half of "startup verifies the shared transaction" — the static {@code
+ * ProjectionDeliveryPolicy} and {@code ProjectionFencingPolicy} trust the two flags, this suite is
+ * what makes them honest.
  */
 public abstract class AtomicBatchProcessorContract {
 
@@ -101,6 +104,19 @@ public abstract class AtomicBatchProcessorContract {
    * @return the committed row, or empty
    */
   protected abstract Optional<ContractView> readFromOutside(ProjectionName name, String id);
+
+  /**
+   * Whether the processor's lock is per projection, so a replay of one projection runs while a
+   * batch of another is open (PostgreSQL's checkpoint-row lock, the in-memory per-projection
+   * monitor: yes). A store whose write lock spans every projection returns {@code false} (SQLite,
+   * whose write lock covers the whole database file): there a replay of one projection waits for an
+   * open batch of any other, and the case that proves the opposite is skipped.
+   *
+   * @return {@code true} if the lock a batch and a replay take is per projection
+   */
+  protected boolean locksPerProjection() {
+    return true;
+  }
 
   /**
    * The processor under test seen as the repository it writes through.
@@ -435,6 +451,7 @@ public abstract class AtomicBatchProcessorContract {
   /** A replay of one projection does not wait for an open batch of another. */
   @Test
   public void replayDoesNotWaitForAnOpenBatchOfAnotherProjection() throws InterruptedException {
+    Assumptions.assumeTrue(locksPerProjection(), "the store's write lock spans every projection");
     var open = freshName();
     var other = freshName();
     var firstIsOpen = new CountDownLatch(1);
