@@ -712,7 +712,20 @@ class SagaStateWriteRatchetTest {
     assertEquals("a\\u0073", decodeEscapes("a\\\\u0073"));
     assertEquals("a\\qb\"'", decodeEscapes("a\\qb\\\"\\'"));
     assertEquals("ab", decodeEscapes("a\\\nb"), "a text block's line continuation");
-    assertEquals("a b", stripSqlComments("a/* x\n y */b").replace("  ", " "));
+    assertEquals("a b", stripSqlComments("a/* x\n y */b"));
+    assertEquals("a  \nb", stripSqlComments("a -- x\nb"));
+    assertEquals("a  " + SUPPLIED + "b", stripSqlComments("a -- x" + SUPPLIED + "b"));
+    // Comment marks inside a SQL string or quoted name are text, not comments.
+    assertEquals("SELECT '--'; UPDATE x", stripSqlComments("SELECT '--'; UPDATE x"));
+    assertEquals("SELECT 'it''s -- /*'; x", stripSqlComments("SELECT 'it''s -- /*'; x"));
+    assertTrue(
+        SAGA_STATE_WRITE
+            .matcher(
+                only(Source.of("String A = \"SELECT '--'; UPDATE saga_state SET x = 1\";")
+                        .statements())
+                    .literals())
+            .find(),
+        "a -- inside a SQL string hides no write after it");
   }
 
   /**
@@ -972,12 +985,40 @@ class SagaStateWriteRatchetTest {
   }
 
   /**
-   * Replaces each {@code /* ... *}{@code /} comment and each {@code --} comment with a space. A
-   * line comment ends at a line break or at a {@link #SUPPLIED} mark: the value the code supplies
-   * there may hold the line break.
+   * Replaces each {@code /* ... *}{@code /} comment and each {@code --} comment with a space,
+   * outside SQL quotes: a {@code '...'} string or a {@code "..."} identifier is copied as it is (a
+   * doubled quote stays inside), so a {@code --} or {@code /*} written inside one does not swallow
+   * the text after it. A line comment ends at a line break or at a {@link #SUPPLIED} mark: the
+   * value the code supplies there may hold the line break. An unterminated block comment is kept.
    */
   static String stripSqlComments(String sql) {
-    return sql.replaceAll("(?s)/\\*.*?\\*/", " ").replaceAll("--[^\n" + SUPPLIED + "]*", " ");
+    StringBuilder out = new StringBuilder(sql.length());
+    int i = 0;
+    int n = sql.length();
+    while (i < n) {
+      char c = sql.charAt(i);
+      if (c == '\'' || c == '"') {
+        int end = i + 1;
+        while (end < n && (sql.charAt(end) != c || (end + 1 < n && sql.charAt(end + 1) == c))) {
+          end += sql.charAt(end) == c ? 2 : 1;
+        }
+        end = Math.min(end + 1, n);
+        out.append(sql, i, end);
+        i = end;
+      } else if (sql.startsWith("/*", i) && sql.indexOf("*/", i + 2) >= 0) {
+        out.append(' ');
+        i = sql.indexOf("*/", i + 2) + 2;
+      } else if (sql.startsWith("--", i)) {
+        out.append(' ');
+        while (i < n && sql.charAt(i) != '\n' && sql.charAt(i) != SUPPLIED) {
+          i++;
+        }
+      } else {
+        out.append(c);
+        i++;
+      }
+    }
+    return out.toString();
   }
 
   /**
