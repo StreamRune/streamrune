@@ -27,21 +27,21 @@ import org.streamrune.core.types.SagaType;
  * saga_dead_letters} table, created by the framework's baseline Flyway migration ({@code
  * V001__streamrune_baseline.sql}); this class never creates it.
  *
- * <p>{@link #publish} is an idempotent upsert keyed by {@code (saga_id, event_offset)}. A second
- * call with the same pair updates the existing row — refreshing every column except the immutable
- * {@code first_faulted_at}, the immutable {@code first_replay_started_at} anchor and the
+ * <p>{@link #publish} is an idempotent upsert keyed by {@code (saga_id, saga_type, event_offset)}.
+ * A second call with the same key updates the existing row — refreshing every column except the
+ * immutable {@code first_faulted_at}, the immutable {@code first_replay_started_at} anchor and the
  * resolved-target hint {@code target_saga_id}, whose stored values always win on a conflict —
- * rather than inserting a duplicate. When {@code sagaId} is {@code null} (routing failure before a
- * saga was identified), the UNIQUE constraint uses the standard SQL treatment of NULL — multiple
- * null-saga rows at distinct offsets are independent entries; a re-published null-saga event at the
- * same offset inserts a second row — accepted, rare routing failure. Each such duplicate is BORN
- * carrying the set's immutable evidence — the oldest {@code first_faulted_at}, the oldest {@code
- * first_replay_started_at} anchor, and the newest resolved {@code target_saga_id} among
- * type-matching null-saga rows at the offset: readers surface the NEWEST row per entry, so an
- * evidence-bare fresh row would launder a prior replay attempt's anchor out of the replayer's
- * key-age guard (re-opening the pruned-forward-key duplicate execution), grant the set a fresh
- * retention life per re-quarantine, or let the retention sweep prune a TARGET_PENDING-resolved set
- * out from under an operator mid-reconciliation.
+ * rather than inserting a duplicate; two saga types at the same saga id and offset keep two rows.
+ * When {@code sagaId} is {@code null} (routing failure before a saga was identified), the UNIQUE
+ * constraint uses the standard SQL treatment of NULL — multiple null-saga rows at distinct offsets
+ * are independent entries; a re-published null-saga event at the same offset inserts a second row —
+ * accepted, rare routing failure. Each such duplicate is BORN carrying the set's immutable evidence
+ * — the oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at} anchor, and the
+ * newest resolved {@code target_saga_id} among type-matching null-saga rows at the offset: readers
+ * surface the NEWEST row per entry, so an evidence-bare fresh row would launder a prior replay
+ * attempt's anchor out of the replayer's key-age guard (re-opening the pruned-forward-key duplicate
+ * execution), grant the set a fresh retention life per re-quarantine, or let the retention sweep
+ * prune a TARGET_PENDING-resolved set out from under an operator mid-reconciliation.
  *
  * <p>Failures are wrapped in {@link EventStoreException}.
  */
@@ -49,7 +49,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   private static final Logger log = LoggerFactory.getLogger(PostgresSagaDeadLetterStore.class);
 
-  // Idempotent upsert keyed by (saga_id, event_offset). When saga_id IS NULL, the UNIQUE
+  // Idempotent upsert keyed by (saga_id, saga_type, event_offset). When saga_id IS NULL, the UNIQUE
   // constraint treats two NULLs as distinct (standard SQL NULL semantics), so two null-saga
   // rows at the same offset produce separate entries — an accepted edge case for rare
   // routing failures.
@@ -76,17 +76,17 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       "INSERT INTO saga_dead_letters ("
           + COLUMNS
           + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-          + "ON CONFLICT (saga_id, event_offset) DO UPDATE SET "
-          + "saga_type = EXCLUDED.saga_type, event_type = EXCLUDED.event_type, "
+          + "ON CONFLICT (saga_id, saga_type, event_offset) DO UPDATE SET "
+          + "event_type = EXCLUDED.event_type, "
           + "error_type = EXCLUDED.error_type, error_message = EXCLUDED.error_message, "
           + "faulted_at = EXCLUDED.faulted_at";
 
-  // The hold's write: UPSERT, except that a conflict with a stored row of the SAME saga type
-  // updates nothing — the stored entry (a poison's cause, or an earlier hold) is kept as it is.
-  // A stored row of another type at the key is replaced exactly as UPSERT replaces it (the named
-  // key has no type). The row count tells the two apart: 1 = inserted or replaced, 0 = kept.
-  private static final String HOLD_UPSERT =
-      UPSERT + " WHERE saga_dead_letters.saga_type <> EXCLUDED.saga_type";
+  // The hold's write: UPSERT, except that a conflict updates nothing — the entry stored at the key
+  // (a poison's cause, or an earlier hold) is kept as it is. The conflict arm still locks the
+  // stored row (ON CONFLICT DO UPDATE locks it whether or not its WHERE holds), so the kept entry
+  // read back in the same transaction is the row the write decided on. The row count tells the two
+  // apart: 1 = inserted, 0 = kept.
+  private static final String HOLD_UPSERT = UPSERT + " WHERE FALSE";
 
   // Dedicated INSERT for NULL-saga entries. The UNIQUE
   // constraint treats NULLs as distinct, so a null-saga publish at an existing offset can never
@@ -289,10 +289,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   private static final String ASSERT_SHIELD_RETURNING_APPLIED =
       ASSERT_SHIELD + " RETURNING last_applied_offset";
 
-  // The entry the hold's upsert kept. Read in the hold's transaction, which holds the row lock the
-  // conflict arm took, so it is the row the upsert decided on.
-  private static final String SELECT_NAMED_AT_OFFSET =
-      "SELECT " + COLUMNS + " FROM saga_dead_letters WHERE saga_id = ? AND event_offset = ?";
+  // The entry the hold's upsert kept, at its full key. Read in the hold's transaction, which holds
+  // the row lock the conflict arm took, so it is the row the upsert decided on.
+  private static final String SELECT_NAMED_AT_KEY =
+      "SELECT "
+          + COLUMNS
+          + " FROM saga_dead_letters WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
 
   private static final int DELETE_BATCH_SIZE = 1000;
 
@@ -324,12 +326,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
-   * <p>Idempotent for a named entry: a second call with the same {@code (sagaId, eventOffset)} pair
-   * updates the existing row rather than inserting a duplicate. A {@code null sagaId} always
-   * INSERTs (NULL-distinct unique semantics), carrying the duplicate set's immutable evidence — the
-   * oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at}, and the newest
-   * resolved {@code target_saga_id} among type-matching null-saga rows at the offset — onto the new
-   * row.
+   * <p>Idempotent for a named entry: a second call with the same {@code (sagaId, sagaType,
+   * eventOffset)} key updates the existing row rather than inserting a duplicate. A {@code null
+   * sagaId} always INSERTs (NULL-distinct unique semantics), carrying the duplicate set's immutable
+   * evidence — the oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at}, and
+   * the newest resolved {@code target_saga_id} among type-matching null-saga rows at the offset —
+   * onto the new row.
    */
   @Override
   public void publish(SagaDeadLetterEntry entry) {
@@ -399,11 +401,11 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>One transaction, as {@link #publishShielded}: the hold's upsert, whose conflict arm writes
-   * nothing over a stored row of the same saga type, then the owner's shield, whose {@code
-   * RETURNING} gives the row's {@code last_applied_offset}. When the row has applied the event the
-   * transaction is rolled back — neither the entry nor the shield is written. Otherwise the kept
-   * entry, if any, is read back, and the transaction commits. Lock order dead-letter row → saga
-   * row, as {@link #publishShielded}.
+   * nothing over the row stored at the key, then the owner's shield, whose {@code RETURNING} gives
+   * the row's {@code last_applied_offset}. When the row has applied the event the transaction is
+   * rolled back — neither the entry nor the shield is written. Otherwise the kept entry, if any, is
+   * read back, and the transaction commits. Lock order dead-letter row → saga row, as {@link
+   * #publishShielded}.
    */
   @Override
   public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
@@ -445,9 +447,10 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
     if (written) {
       return new HoldResult.Written();
     }
-    try (var ps = c.prepareStatement(SELECT_NAMED_AT_OFFSET)) {
+    try (var ps = c.prepareStatement(SELECT_NAMED_AT_KEY)) {
       ps.setString(1, entry.sagaId().value());
-      ps.setLong(2, entry.eventOffset().value());
+      ps.setString(2, entry.sagaType().value());
+      ps.setLong(3, entry.eventOffset().value());
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
           throw new SQLException(

@@ -157,6 +157,11 @@ Unreleased changes to read-model storage:
 Unreleased changes to the schema: the event-store table `projection_offset` is renamed
 `subscription_checkpoint`, and `streamrune-postgres` ships a separate read-model migration series
 (`classpath:db/readmodel-migration`, its own Flyway history) that creates `readmodel_checkpoint`.
+The unique key of `saga_dead_letters` is `(saga_id, saga_type, event_offset)`, and
+`InMemorySagaDeadLetterStore` keys its entries the same way: two saga types that derive the same
+`SagaId` keep one dead-letter entry each at an offset, so a hold or a poison record of one type
+never replaces the other type's entry, and `SagaDeadLetterStore.publishShieldedIfAbsent` keeps only
+an entry at its full key.
 
 ### Modules
 

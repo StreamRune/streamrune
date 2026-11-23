@@ -312,7 +312,7 @@ class SagaFaultedWindowSkipTest {
 
     assertThat(dlq.findBySaga(SAGA))
         .as(
-            "a hold keeps the entry already recorded at (sagaId, eventOffset) — a redelivery"
+            "a hold keeps the entry already recorded at (sagaId, sagaType, eventOffset) — a redelivery"
                 + " storm or a second replica cannot multiply the record")
         .hasSize(1);
   }
@@ -508,7 +508,7 @@ class SagaFaultedWindowSkipTest {
 
     assertThat(dlq.findBySaga(SAGA))
         .as(
-            "a hold keeps the entry at (sagaId, eventOffset): a crash-redelivery converges on one row")
+            "a hold keeps the entry at (sagaId, sagaType, eventOffset): a crash-redelivery converges on one row")
         .hasSize(2);
   }
 

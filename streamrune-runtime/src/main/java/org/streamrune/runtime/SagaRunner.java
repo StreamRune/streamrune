@@ -1346,9 +1346,9 @@ public final class SagaRunner<S extends SagaState> {
   /**
    * Whether an entry a hold kept on a shielded live row is the saga's own poison whose fault write
    * did not land: an entry of this runner's saga type that no hold wrote ({@link
-   * #HOLD_ERROR_TYPES}). The type check matters for a store that keeps one named entry per saga
-   * type at an offset; the shipped stores keep one per saga and offset, and report another type's
-   * entry as replaced, never as kept.
+   * #HOLD_ERROR_TYPES}). A store keys a named entry by saga id, saga type and offset, so the entry
+   * it keeps is of the hold's type; the type check refuses an entry of another type from a store
+   * that breaks that rule.
    */
   private boolean isUnfinishedPoison(SagaDeadLetterStore.SagaDeadLetterEntry kept) {
     return SagaType.fromClass(orchestrator.stateType()).equals(kept.sagaType())

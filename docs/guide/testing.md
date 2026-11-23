@@ -1092,7 +1092,7 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `RecordingStreamRuneMetrics` | A `StreamRuneMetrics` that records every call under its `MetricNames` meter and tags; `assertIncremented`, `count`, `total`, `lastGauge`. |
 | `ScriptedSubscriptionLeadership` | A `SubscriptionLeadership` the test grants, denies and revokes, counting attempts, acquisitions and resignations; `granting()` starts granting, the constructor denying. |
 | `InMemorySagaStore` | A `SagaStore` that keeps the state objects themselves and stamps their times from the `Clock` it is given. |
-| `InMemorySagaDeadLetterStore` | A `SagaDeadLetterStore` whose `publish` is an upsert per saga and event offset, as in PostgreSQL. |
+| `InMemorySagaDeadLetterStore` | A `SagaDeadLetterStore` whose `publish` is an upsert per saga, saga type and event offset, as in PostgreSQL. |
 | `InMemoryCryptoEngine` | An AES-256-GCM `CryptoEngine` with its keys in memory and the terminal erasure of the production engines. |
 | `MutableClock` | A `Clock` the test sets and advances: retry backoff, timeouts and timestamps without sleeping. |
 | `DeciderFixture` | Given events, when a command, then events or a domain exception, for a decider. |

@@ -368,8 +368,8 @@ CREATE TABLE saga_dead_letters (
     error_type              TEXT         NOT NULL,
     error_message           TEXT,
     faulted_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),   -- refreshed by every re-quarantine
-    -- First quarantine of this (saga_id, event_offset): kept by the re-quarantine upsert; anchors
-    -- retention.
+    -- First quarantine of this (saga_id, saga_type, event_offset): kept by the re-quarantine
+    -- upsert; anchors retention.
     first_faulted_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     -- Resolved target saga of a null-saga entry, stamped by the replayer; lets retention protect
     -- the entry while that saga is still FAULTED. Kept by the re-quarantine upsert.
@@ -377,9 +377,10 @@ CREATE TABLE saga_dead_letters (
     -- First replay attempt of this entry: written once (establish-only), kept by the re-quarantine
     -- upsert; anchors the replayer's command-inbox key-age guard.
     first_replay_started_at TIMESTAMPTZ,
-    -- Idempotent re-quarantine upsert key. SQL NULL semantics: null-saga rows at one offset are
-    -- distinct (an accepted edge case for rare routing failures).
-    CONSTRAINT saga_dead_letters_uniq UNIQUE (saga_id, event_offset)
+    -- Idempotent re-quarantine upsert key. The saga type is part of it: two saga types deriving the
+    -- same saga id keep one entry each at an offset. SQL NULL semantics: null-saga rows at one
+    -- offset are distinct (an accepted edge case for rare routing failures).
+    CONSTRAINT saga_dead_letters_uniq UNIQUE (saga_id, saga_type, event_offset)
 );
 
 CREATE INDEX idx_saga_dead_letters_saga

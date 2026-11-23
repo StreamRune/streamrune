@@ -893,7 +893,9 @@ license.
   `PostgresSagaStore` is built with `PostgresSagaStore.createObjectMapper(cryptoEngine)` — the mapper
   is an explicit, mandatory constructor argument.
 - A `SagaStore` insert of a different saga type under the same `SagaId` throws
-  `SagaTypeCollisionException`; lookups, drains and discards are saga-type scoped.
+  `SagaTypeCollisionException`; lookups, drains and discards are saga-type scoped, and the saga
+  dead-letter store keys an entry by saga id, saga type and event offset, so the entries of two
+  colliding types at one offset stay apart.
 - Parallel saga steps: `SagaRunner` steps the sagas of a page at the same time, at most
   `SagaRunner.Builder.parallelism(n)` (1 to 64, default 4; `parallelism(1)` steps the page serially
   and ends it at its first failure). The events of one saga run in offset order, one step at a time;
