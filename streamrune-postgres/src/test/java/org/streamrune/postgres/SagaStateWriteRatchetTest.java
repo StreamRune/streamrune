@@ -2,6 +2,7 @@ package org.streamrune.postgres;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -85,9 +86,13 @@ import org.junit.jupiter.api.Test;
  * {@code String.format("UPDATE %s ...", table)}) is found too and must be listed in {@link
  * #COMPOSED_TARGETS} with the reason its table is never {@code saga_state}; and no literal may name
  * {@code saga_state} alone — the piece such a write would be composed from — outside {@link
- * #LITERAL_TABLE_NAMES}. The limit: the test does not follow a supplied value to where it is
- * computed, so a listed write stays listed if the code feeding it changes; and the scan covers the
- * repository's Java main sources and SQL resources, not SQL built at run time from other input.
+ * #LITERAL_TABLE_NAMES}. A name whose first part the literal writes and whose rest the code
+ * supplies ({@code "UPDATE saga_" + SUFFIX}, {@code String.format("UPDATE saga_%s ...", ...)}) is a
+ * composed target too. The limits: the test does not follow a supplied value to where it is
+ * computed, so a listed write stays listed if the code feeding it changes; a value supplied before
+ * the verb ({@code PREFIX + "saga_state SET ..."}, where {@code PREFIX} holds {@code "UPDATE "}) is
+ * not seen as a write; and the scan covers the repository's Java main sources and SQL resources,
+ * not SQL built at run time from other input.
  *
  * <p>Each call of {@code fenceChangingWrite(...)} passes {@code leavesForwardPhase} as the literal
  * {@code true} or as {@code leavesForwardPhase(<status>)}, so the one place the lock condition can
@@ -334,11 +339,12 @@ class SagaStateWriteRatchetTest {
   /**
    * A write whose verb is followed by a value the text does not show: a supplied value (a
    * concatenated constant, variable or call) or a format placeholder ({@code %s}, {@code %1$s},
-   * {@code {0}}), after a space or a quote, alone or behind a literal schema ({@code UPDATE
-   * app.<value>}); {@code ONLY} may follow the verb. The verb starts a statement's text, or follows
-   * {@code ;}, an opening or closing parenthesis (a common table expression) or a supplied value:
-   * {@code FOR UPDATE}, {@code DO UPDATE}, a message such as {@code "saga update"} and a lone word
-   * {@code "update"} are not writes.
+   * {@code {0}}), after a space or a quote, alone, behind a literal schema ({@code UPDATE
+   * app.<value>}) or behind the first part of the name ({@code "UPDATE saga_" + SUFFIX}, {@code
+   * "UPDATE saga_%s"}); {@code ONLY} may follow the verb. The verb starts a statement's text, or
+   * follows {@code ;}, an opening or closing parenthesis (a common table expression) or a supplied
+   * value: {@code FOR UPDATE}, {@code DO UPDATE}, a message such as {@code "saga update"} and a
+   * lone word {@code "update"} are not writes.
    */
   private static final Pattern COMPOSED_TARGET =
       Pattern.compile(
@@ -356,7 +362,7 @@ class SagaStateWriteRatchetTest {
               + QUOTE
               + "\\s*\\.\\s*"
               + QUOTE
-              + ")?(?:"
+              + ")?\\w*(?:"
               + SUPPLIED
               + "|%(?:\\d+\\$)?s|\\{\\d*\\})");
 
@@ -380,7 +386,7 @@ class SagaStateWriteRatchetTest {
   /**
    * A write of {@code saga_state}: a {@link #WRITE_VERB}, then the table, bare, quoted, or
    * qualified by a schema ({@code main.saga_state}, {@code public.saga_state}, {@code
-   * "saga_state"}).
+   * "saga_state"}), first in a list of tables or after others ({@code TRUNCATE other, saga_state}).
    */
   private static final Pattern SAGA_STATE_WRITE =
       Pattern.compile(
@@ -389,6 +395,16 @@ class SagaStateWriteRatchetTest {
               + "(?:\\s+|(?="
               + QUOTE_CHAR
               + "))"
+              // Other tables of a list before it.
+              + "(?:(?:"
+              + QUOTE
+              + "\\w+"
+              + QUOTE
+              + "\\s*\\.\\s*)?"
+              + QUOTE
+              + "\\w+"
+              + QUOTE
+              + "\\s*,\\s*)*"
               + "(?:"
               + QUOTE
               + "\\w+"
@@ -616,6 +632,8 @@ class SagaStateWriteRatchetTest {
     writes.put("DELETE FROM main.saga_state WHERE x = 1", Verb.DELETE);
     writes.put("MERGE INTO saga_state s USING t ON s.x = t.x", Verb.MERGE);
     writes.put("TRUNCATE TABLE saga_state", Verb.TRUNCATE);
+    writes.put("TRUNCATE TABLE other, saga_state", Verb.TRUNCATE);
+    writes.put("TRUNCATE other, \"public\".saga_state, third", Verb.TRUNCATE);
     for (var write : writes.entrySet()) {
       assertTrue(SAGA_STATE_WRITE.matcher(write.getKey()).find(), "a write: " + write.getKey());
       assertEquals(write.getValue(), verbOf(write.getKey()), write.getKey());
@@ -626,6 +644,8 @@ class SagaStateWriteRatchetTest {
             "SELECT status FROM saga_state WHERE saga_id = ? FOR UPDATE",
             "UPDATE saga_state_archive SET x = 1",
             "UPDATE main.saga_state_archive SET x = 1",
+            "TRUNCATE TABLE other, saga_state_archive",
+            "UPDATE t SET a = 1, saga_state = 2",
             "INSERT INTO saga_dead_letters (x) VALUES (?) ON CONFLICT (x) DO UPDATE SET x = 1",
             "CREATE TABLE saga_state (x INTEGER)")) {
       assertFalse(SAGA_STATE_WRITE.matcher(notAWrite).find(), "not a write: " + notAWrite);
@@ -653,10 +673,23 @@ class SagaStateWriteRatchetTest {
             "UPDATE [",
             "UPDATE 'main'.'",
             "UPDATE `main`.`",
-            "UPDATE [main].[")) {
+            "UPDATE [main].[",
+            "UPDATE saga_",
+            "UPDATE main.saga_")) {
       String shape = verb + SUPPLIED + " SET x = 1";
       assertTrue(COMPOSED_TARGET.matcher(shape).find(), "a composed write: " + verb);
     }
+    for (String java :
+        List.of(
+            "String A = String.format(\"UPDATE saga_%s SET x = 1\", \"state\");",
+            "String A = \"UPDATE saga\" + '_' + \"state SET x = 1\";")) {
+      assertTrue(
+          COMPOSED_TARGET.matcher(Source.of(java).statements().getFirst().shape()).find(),
+          "a composed write: " + java);
+    }
+    assertFalse(
+        COMPOSED_TARGET.matcher("UPDATE outbox_events SET x = " + SUPPLIED).find(),
+        "a value supplied after the table names no table");
   }
 
   /**
@@ -678,11 +711,34 @@ class SagaStateWriteRatchetTest {
             "UPDATE -- a comment\\n saga_state SET x = 1",
             "DELETE FROM /* x */ main /* y */ . /* z */ saga_state")) {
       Statement statement = only(Source.of("String A = \"" + literal + "\";").statements());
-      assertTrue(SAGA_STATE_WRITE.matcher(statement.literals()).find(), "a write: " + literal);
+      assertNotNull(sagaStateWriteText(statement), "a write: " + literal);
     }
     Statement split =
         only(Source.of("String A = \"UPDATE /* a \" + \" b */ saga_state\";").statements());
-    assertTrue(SAGA_STATE_WRITE.matcher(split.literals()).find(), "a comment split over literals");
+    assertNotNull(sagaStateWriteText(split), "a comment split over literals");
+
+    // A line break or a word boundary the code supplies between two literals, and comment marks
+    // inside quoted names: none hides the write.
+    for (String java :
+        List.of(
+            "static final String A = \"-- step one.\" + NL + \"UPDATE saga_state SET status ="
+                + " 'COMPLETED'\";",
+            "String A = String.join(\"\\n\", \"-- close the saga.\", \"UPDATE saga_state SET x ="
+                + " 1\");",
+            "String A = \"SELECT `a--b` FROM t; UPDATE saga_state SET x = 1\";",
+            "String A = \"SELECT [a--b] FROM t; UPDATE saga_state SET x = 1\";",
+            "String A = \"SELECT x\" + NL + \"DELETE FROM saga_state\";")) {
+      assertNotNull(sagaStateWriteText(only(Source.of(java).statements())), "a write: " + java);
+    }
+
+    // SQL resources: comments of both kinds removed, comment marks inside quotes kept as text.
+    assertTrue(sqlResourceWritesSagaState("UPDATE /* migrate */ saga_state SET x = 1;"));
+    assertTrue(
+        sqlResourceWritesSagaState(
+            "INSERT INTO notes VALUES ('--'); UPDATE saga_state SET x = 1;"));
+    assertTrue(sqlResourceWritesSagaState("-- a note\nDELETE FROM saga_state;"));
+    assertFalse(sqlResourceWritesSagaState("-- UPDATE saga_state SET x = 1\nSELECT 1;"));
+    assertFalse(sqlResourceWritesSagaState("/* DELETE FROM saga_state */ SELECT 1;"));
 
     for (String composed :
         List.of(
@@ -718,13 +774,13 @@ class SagaStateWriteRatchetTest {
     // Comment marks inside a SQL string or quoted name are text, not comments.
     assertEquals("SELECT '--'; UPDATE x", stripSqlComments("SELECT '--'; UPDATE x"));
     assertEquals("SELECT 'it''s -- /*'; x", stripSqlComments("SELECT 'it''s -- /*'; x"));
-    assertTrue(
-        SAGA_STATE_WRITE
-            .matcher(
-                only(Source.of("String A = \"SELECT '--'; UPDATE saga_state SET x = 1\";")
-                        .statements())
-                    .literals())
-            .find(),
+    assertEquals("SELECT `a--b`, [c--d]; x", stripSqlComments("SELECT `a--b`, [c--d]; x"));
+    assertEquals("SELECT `a``--`; x", stripSqlComments("SELECT `a``--`; x"));
+    assertNotNull(
+        sagaStateWriteText(
+            only(
+                Source.of("String A = \"SELECT '--'; UPDATE saga_state SET x = 1\";")
+                    .statements())),
         "a -- inside a SQL string hides no write after it");
   }
 
@@ -742,7 +798,7 @@ class SagaStateWriteRatchetTest {
             .anyMatch(s -> s.literals().matches("(?is).*\\bfrom\\s+saga_state\\b.*")),
         "SagaFence reads saga_state");
     assertTrue(
-        statements.stream().noneMatch(s -> SAGA_STATE_WRITE.matcher(s.literals()).find()),
+        statements.stream().noneMatch(s -> sagaStateWriteText(s) != null),
         "SagaFence writes no saga_state row");
     assertTrue(
         statements.stream().noneMatch(s -> COMPOSED_TARGET.matcher(s.shape()).find()),
@@ -940,22 +996,21 @@ class SagaStateWriteRatchetTest {
     for (Path file : mainJavaSources()) {
       String name = file.getFileName().toString();
       for (Statement statement : Source.of(read(file)).statements()) {
-        if (!SAGA_STATE_WRITE.matcher(statement.literals()).find()) {
+        String sql = sagaStateWriteText(statement);
+        if (sql == null) {
           continue;
         }
         Matcher declaration = CONSTANT_DECLARATION.matcher(statement.code());
         if (!declaration.find()) {
-          inline.add(file + ": " + statement.literals());
+          inline.add(file + ": " + sql);
           continue;
         }
         String key = name.replace(".java", "") + "." + declaration.group(2);
-        writes.put(
-            key, new Write(moduleOf(file), name, key, declaration.group(1), statement.literals()));
+        writes.put(key, new Write(moduleOf(file), name, key, declaration.group(1), sql));
       }
     }
     for (Path sql : sqlResources()) {
-      String text = read(sql).replaceAll("--[^\n]*", "");
-      if (SAGA_STATE_WRITE.matcher(text).find()) {
+      if (sqlResourceWritesSagaState(read(sql))) {
         inline.add(sql + ": a SQL resource writes saga_state");
       }
     }
@@ -963,6 +1018,25 @@ class SagaStateWriteRatchetTest {
       fail("saga_state written by an unnamed statement; name and classify it: " + inline);
     }
     return writes;
+  }
+
+  /**
+   * The text in which {@code statement} writes {@code saga_state}, or {@code null}: its joined
+   * literals, or else its shape. The shape is read too because the code between two literals may
+   * supply what the joined text lacks: a line break that ends a {@code --} comment ({@code "--
+   * note" + NL + "UPDATE saga_state ..."}), or a word boundary ({@code "... x" + NL + "DELETE FROM
+   * saga_state"}, joined {@code xDELETE}).
+   */
+  static String sagaStateWriteText(Statement statement) {
+    if (SAGA_STATE_WRITE.matcher(statement.literals()).find()) {
+      return statement.literals();
+    }
+    return SAGA_STATE_WRITE.matcher(statement.shape()).find() ? statement.shape() : null;
+  }
+
+  /** Whether the text of a SQL resource writes {@code saga_state}, its comments removed. */
+  static boolean sqlResourceWritesSagaState(String text) {
+    return SAGA_STATE_WRITE.matcher(stripSqlComments(text)).find();
   }
 
   /**
@@ -986,10 +1060,11 @@ class SagaStateWriteRatchetTest {
 
   /**
    * Replaces each {@code /* ... *}{@code /} comment and each {@code --} comment with a space,
-   * outside SQL quotes: a {@code '...'} string or a {@code "..."} identifier is copied as it is (a
-   * doubled quote stays inside), so a {@code --} or {@code /*} written inside one does not swallow
-   * the text after it. A line comment ends at a line break or at a {@link #SUPPLIED} mark: the
-   * value the code supplies there may hold the line break. An unterminated block comment is kept.
+   * outside SQL quotes: a {@code '...'} string and a name quoted with {@code "..."}, a backtick
+   * pair or {@code [...]} are copied as they are (a doubled quote stays inside the first three), so
+   * a {@code --} or {@code /*} written inside one does not swallow the text after it. A line
+   * comment ends at a line break or at a {@link #SUPPLIED} mark: the value the code supplies there
+   * may hold the line break. An unterminated block comment is kept.
    */
   static String stripSqlComments(String sql) {
     StringBuilder out = new StringBuilder(sql.length());
@@ -997,10 +1072,13 @@ class SagaStateWriteRatchetTest {
     int n = sql.length();
     while (i < n) {
       char c = sql.charAt(i);
-      if (c == '\'' || c == '"') {
+      if (c == '\'' || c == '"' || c == '`' || c == '[') {
+        char close = c == '[' ? ']' : c;
         int end = i + 1;
-        while (end < n && (sql.charAt(end) != c || (end + 1 < n && sql.charAt(end + 1) == c))) {
-          end += sql.charAt(end) == c ? 2 : 1;
+        while (end < n
+            && (sql.charAt(end) != close
+                || (c != '[' && end + 1 < n && sql.charAt(end + 1) == close))) {
+          end += sql.charAt(end) == close ? 2 : 1;
         }
         end = Math.min(end + 1, n);
         out.append(sql, i, end);
