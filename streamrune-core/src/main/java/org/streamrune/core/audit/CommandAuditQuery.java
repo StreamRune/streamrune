@@ -20,6 +20,11 @@ import org.streamrune.core.types.UserId;
  * PageRequest#sort()} component is ignored. An empty page is returned (never {@code null}) when no
  * entries match.
  *
+ * <p>{@link Page#content()} and {@link Page#totalElements()} come from one view of the trail: an
+ * entry written while the page is read changes both or neither. A page beyond the last is empty and
+ * still carries the total. An entry appears on exactly one page of a window that receives no entry
+ * between the reads.
+ *
  * <p>The audit trail contains both command and query executions: queries are recorded by {@code
  * AuditingQueryBus} with a {@code null} {@link AuditEntry#commandId()} and an empty {@link
  * AuditEntry#aggregateId()}. Methods on this interface do not discriminate between the two kinds —

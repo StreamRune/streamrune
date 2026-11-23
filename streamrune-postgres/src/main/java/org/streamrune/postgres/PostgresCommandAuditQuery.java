@@ -28,11 +28,13 @@ import org.streamrune.core.types.UserId;
  * by {@link PostgresAuditStore}. Mirrors {@link PostgresEventAuditQuery} in style.
  *
  * <p>{@link #findByCommandId(CommandId)} returns the most recent matching entry (the audit log is
- * append-only and permits duplicate {@code command_id} values on retry). The paged finders do
- * store-side paging with SQL {@code LIMIT}/{@code OFFSET}; the page and {@link
- * Page#totalElements()} come from one statement, so they agree. The order is {@code occurred_at}
- * ascending, then the row's {@code id}, so entries with an equal timestamp keep one position across
- * pages; the {@link PageRequest#sort()} component is ignored.
+ * append-only and permits duplicate {@code command_id} values on retry); of two entries with an
+ * equal timestamp, the one written later. The paged finders do store-side paging with SQL {@code
+ * LIMIT}/{@code OFFSET}; the page and {@link Page#totalElements()} come from one statement, so they
+ * agree. The order is {@code occurred_at} ascending, then the row's {@code id}, so entries with an
+ * equal timestamp keep one position across pages, and each entry appears once across the pages of a
+ * window that receives no entry between the reads; the {@link PageRequest#sort()} component is
+ * ignored.
  */
 public final class PostgresCommandAuditQuery implements CommandAuditQuery {
 
@@ -43,7 +45,7 @@ public final class PostgresCommandAuditQuery implements CommandAuditQuery {
   private static final String FIND_BY_COMMAND =
       "SELECT "
           + COLUMNS
-          + " FROM audit_log WHERE command_id = ? ORDER BY occurred_at DESC LIMIT 1";
+          + " FROM audit_log WHERE command_id = ? ORDER BY occurred_at DESC, id DESC LIMIT 1";
 
   private static final String FIND_BY_USER = pageSql("user_id");
 
