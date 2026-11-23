@@ -16,7 +16,8 @@ import org.streamrune.core.types.UserId;
  * Read-side interface for querying the event audit log.
  *
  * <p>All query methods return results ordered by {@link EventAuditEntry#occurredAt()} ascending. An
- * empty list is returned (never {@code null}) when no matching entries are found.
+ * empty list is returned (never {@code null}) when no matching entries are found, which includes a
+ * time window whose {@code from} is after its {@code to}.
  *
  * <p><b>Pagination.</b> The unpaged {@code find*} methods materialize every matching entry in
  * memory — on a production audit log a wide time window can return millions of rows. Prefer the

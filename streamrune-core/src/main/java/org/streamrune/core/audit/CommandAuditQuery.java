@@ -18,7 +18,7 @@ import org.streamrune.core.types.UserId;
  * <p>All paged methods return results ordered by {@link AuditEntry#occurredAt()} ascending, entries
  * with an equal timestamp in a stable order that does not change between pages; the {@link
  * PageRequest#sort()} component is ignored. An empty page is returned (never {@code null}) when no
- * entries match.
+ * entries match, which includes a time window whose {@code from} is after its {@code to}.
  *
  * <p>{@link Page#content()} and {@link Page#totalElements()} come from one view of the trail: an
  * entry written while the page is read changes both or neither. A page beyond the last is empty and

@@ -332,6 +332,19 @@ public abstract class CommandAuditQueryContract {
     }
   }
 
+  /** A window whose from is after its to holds nothing. */
+  @Test
+  void aWindowWhoseFromIsAfterItsToYieldsAnEmptyPage() {
+    writer.save(match("m-1", T0.plusSeconds(1)));
+    writer.save(match("m-2", T0.plusSeconds(2)));
+
+    for (Finder finder : FINDERS) {
+      Page<AuditEntry> page = finder.find(query, TO, FROM, PageRequest.of(0, 10));
+      assertTrue(page.content().isEmpty());
+      assertEquals(0, page.totalElements());
+    }
+  }
+
   // ---------------------------------------------------------------- order and paging
 
   /** Written newest-first, a millisecond apart: the page is occurredAt ascending regardless. */

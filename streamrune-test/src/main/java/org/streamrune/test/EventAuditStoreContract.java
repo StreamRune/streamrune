@@ -8,11 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CyclicBarrier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditStore;
 import org.streamrune.core.types.AggregateId;
@@ -81,7 +83,7 @@ public abstract class EventAuditStoreContract {
     try {
       store.save(entry(eventId));
       return false;
-    } catch (RuntimeException duplicate) {
+    } catch (EventStoreException duplicate) {
       return true;
     }
   }
@@ -105,8 +107,8 @@ public abstract class EventAuditStoreContract {
   void savingAnExistingEventIdFailsAndIsNeverASilentDuplicate() {
     store.save(entry("e-1"));
 
-    assertThrows(RuntimeException.class, () -> store.save(entry("e-1")));
-    assertThrows(RuntimeException.class, () -> store.saveAll(List.of(entry("e-1"))));
+    assertThrows(EventStoreException.class, () -> store.save(entry("e-1")));
+    assertThrows(EventStoreException.class, () -> store.saveAll(List.of(entry("e-1"))));
   }
 
   @Test
@@ -139,7 +141,7 @@ public abstract class EventAuditStoreContract {
         thread.join();
       }
       assertEquals(1, failures.size(), "round " + round + ": " + failures);
-      assertTrue(failures.peek() instanceof RuntimeException, () -> "" + failures.peek());
+      assertTrue(failures.peek() instanceof EventStoreException, () -> "" + failures.peek());
       assertTrue(persisted(id), id);
     }
   }
@@ -160,6 +162,17 @@ public abstract class EventAuditStoreContract {
     assertDoesNotThrow(() -> store.saveAll(List.of()));
   }
 
+  /** A null element is refused up front: no other entry of the batch is persisted. */
+  @Test
+  void aBatchContainingNullIsRefusedWithANullPointerExceptionAndPersistsNothing() {
+    assertThrows(
+        NullPointerException.class,
+        () -> store.saveAll(Arrays.asList(entry("a"), null, entry("b"))));
+
+    assertFalse(persisted("a"));
+    assertFalse(persisted("b"));
+  }
+
   @Test
   void aNullBatchIsRefusedWithANullPointerException() {
     assertThrows(NullPointerException.class, () -> store.saveAll(null));
@@ -171,10 +184,10 @@ public abstract class EventAuditStoreContract {
     store.save(entry("existing"));
 
     assertThrows(
-        RuntimeException.class,
+        EventStoreException.class,
         () -> store.saveAll(List.of(entry("first"), entry("existing"), entry("last"))));
     assertThrows(
-        RuntimeException.class, () -> store.saveAll(List.of(entry("existing"), entry("after"))));
+        EventStoreException.class, () -> store.saveAll(List.of(entry("existing"), entry("after"))));
 
     assertFalse(persisted("first"));
     assertFalse(persisted("last"));
@@ -184,7 +197,8 @@ public abstract class EventAuditStoreContract {
   @Test
   void aBatchRepeatingAnEventIdWithinItselfFailsAndPersistsNoneOfItsEntries() {
     assertThrows(
-        RuntimeException.class, () -> store.saveAll(List.of(entry("a"), entry("b"), entry("a"))));
+        EventStoreException.class,
+        () -> store.saveAll(List.of(entry("a"), entry("b"), entry("a"))));
 
     assertFalse(persisted("a"));
     assertFalse(persisted("b"));

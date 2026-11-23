@@ -199,6 +199,21 @@ public abstract class ComplianceReportQueryContract {
   }
 
   @Test
+  void aRangeWhoseFromIsAfterItsToYieldsAnEmptyReport() {
+    writeFixture();
+
+    ComplianceReport all = query.generate(TO, FROM);
+    ComplianceReport forUser = query.generateForUser(U1, TO, FROM);
+
+    for (ComplianceReport report : java.util.List.of(all, forUser)) {
+      assertEquals(0, report.totalCommands());
+      assertEquals(0, report.totalQueries());
+      assertEquals(0, report.totalFailures());
+      assertTrue(report.activityByUser().isEmpty());
+    }
+  }
+
+  @Test
   void anEmptyTrailYieldsAnEmptyReport() {
     ComplianceReport report = query.generate(FROM, TO);
 

@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.Sort;
@@ -276,6 +277,20 @@ public abstract class EventAuditQueryContract {
 
   // ---------------------------------------------------------------- order
 
+  /** A window whose from is after its to holds nothing. */
+  @Test
+  void aWindowWhoseFromIsAfterItsToYieldsAnEmptyResult() {
+    writer.save(match("m-1", T0.plusSeconds(1)));
+    writer.save(match("m-2", T0.plusSeconds(2)));
+
+    for (Finder finder : WINDOWED) {
+      assertTrue(finder.all(query, TO, FROM).isEmpty());
+      Page<EventAuditEntry> page = finder.page(query, TO, FROM, PageRequest.of(0, 10));
+      assertTrue(page.content().isEmpty());
+      assertEquals(0, page.totalElements());
+    }
+  }
+
   /** Written newest-first, a millisecond apart: every finder answers occurredAt ascending. */
   @Test
   void entriesAreOrderedByOccurredAtAscendingEvenAMillisecondApart() {
@@ -380,7 +395,7 @@ public abstract class EventAuditQueryContract {
     writer.save(match("existing", T0));
 
     assertThrows(
-        RuntimeException.class,
+        EventStoreException.class,
         () -> writer.saveAll(List.of(match("fresh", T0.plusSeconds(1)), match("existing", T0))));
 
     assertEquals(List.of("existing"), ids(query.findByCorrelationId(CORRELATION)));

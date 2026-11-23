@@ -11,7 +11,8 @@ public interface ComplianceReportQuery {
    *
    * @param from start of range (inclusive); must not be {@code null}
    * @param to end of range (inclusive); must not be {@code null}
-   * @return aggregated compliance report; an empty range yields zero totals and empty maps
+   * @return aggregated compliance report; an empty range, or one whose {@code from} is after its
+   *     {@code to}, yields zero totals and empty maps
    * @throws NullPointerException if any argument is {@code null}
    */
   ComplianceReport generate(Instant from, Instant to);
