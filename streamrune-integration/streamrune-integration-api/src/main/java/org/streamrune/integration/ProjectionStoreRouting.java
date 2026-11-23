@@ -27,7 +27,9 @@ import org.streamrune.core.types.LogSanitizer;
  *
  * <ol>
  *   <li><b>Explicit declaration.</b> A non-empty {@link Registration#readModelStore()} names the
- *       store. An unknown name is an error, and so is a {@code writeTarget()} that is not that
+ *       store; {@link ReadModelStore#DEFAULT} is the alias of the default store, the store named
+ *       after the backend (the default store itself, or the application store that replaced it by
+ *       name). An unknown name is an error, and so is a {@code writeTarget()} that is not that
  *       store's repository: the declaration and the code disagree.
  *   <li><b>{@code writeTarget()} matches a store</b> — its {@link
  *       ProjectionRepository#writeTargetIdentity()} equals the store repository's — routes there.
@@ -50,6 +52,11 @@ import org.streamrune.core.types.LogSanitizer;
  * stores with their capabilities, and the fix: declare {@code readModelStore = "<name>"}, or expose
  * {@code writeTarget()}.
  *
+ * <p>The default store's name is the selected backend's ({@code "postgres"}, {@code "sqlite"}),
+ * passed in as {@code defaultStoreName}. No store may be named {@link ReadModelStore#DEFAULT}, the
+ * alias: {@link #validateStores} refuses one however it was built, since a store that implements
+ * the interface directly never passes through {@link ReadModelStore#of}.
+ *
  * <p>The INLINE rule lives here too: an INLINE projection runs post-commit on the command thread
  * with no checkpoint and no transaction of its own, so it can only keep the {@link
  * ProjectionDeliveryMode#AT_LEAST_ONCE_IDEMPOTENT} promise.
@@ -62,16 +69,8 @@ public final class ProjectionStoreRouting {
   private ProjectionStoreRouting() {}
 
   /**
-   * The name of the default read-model store, {@value}: the {@code PostgresReadModelStore} each
-   * integration registers on the application's {@code DataSource}. A projection declares {@code
-   * readModelStore = "postgres"} to route to it explicitly; an application store of this name
-   * replaces it ({@link #selectStores}).
-   */
-  public static final String DEFAULT_STORE = "postgres";
-
-  /**
    * The bean name each integration registers the default store under, {@value}: a framework name,
-   * so a bean the application names {@code postgres} never collides with it, and so each
+   * so a bean the application names after the backend never collides with it, and so each
    * integration can leave it out of the application's stores without creating it.
    */
   public static final String DEFAULT_STORE_BEAN = "streamRuneDefaultReadModelStore";
@@ -124,21 +123,58 @@ public final class ProjectionStoreRouting {
           + " readModelStore declaration naming any other store is refused)";
 
   /**
-   * Refuses a store set routing could not decide over: two stores with the same {@link
+   * The message refusing a store named {@link ReadModelStore#DEFAULT}: the text {@link
+   * ReadModelStore#of} refuses the name with.
+   */
+  private static final String RESERVED_NAME =
+      "'"
+          + ReadModelStore.DEFAULT
+          + "' is reserved: it names the backend's default read-model store";
+
+  /**
+   * Refuses a store set routing could not decide over: a store named {@link ReadModelStore#DEFAULT}
+   * (the alias of the default store, exact and case-sensitive), two stores with the same {@link
    * ReadModelStore#name()} (explicit routing would be ambiguous), or two whose repositories have
    * equal {@link ProjectionRepository#writeTargetIdentity()} (rule 2 would match both). Replacing a
    * store is by name and explicit: define one store under that name, never a second.
    *
    * @param stores every store defined
    * @throws NullPointerException if {@code stores} or an element is {@code null}
-   * @throws IllegalStateException on a duplicate name or write-target identity, naming both stores
+   * @throws IllegalStateException on a store named {@link ReadModelStore#DEFAULT}, or on a
+   *     duplicate name or write-target identity, naming both stores
    */
   public static void validateStores(List<ReadModelStore> stores) {
     Objects.requireNonNull(stores, "stores is required");
-    for (int i = 0; i < stores.size(); i++) {
-      ReadModelStore first = Objects.requireNonNull(stores.get(i), "stores must not hold null");
-      validateAgainst(first, stores.subList(i + 1, stores.size()));
+    for (ReadModelStore store : stores) {
+      Objects.requireNonNull(store, "stores must not hold null");
+      if (ReadModelStore.DEFAULT.equals(store.name())) {
+        throw new IllegalStateException(RESERVED_NAME);
+      }
     }
+    for (int i = 0; i < stores.size(); i++) {
+      validateAgainst(stores.get(i), stores.subList(i + 1, stores.size()));
+    }
+  }
+
+  /**
+   * Checks the default store's name: the backend's name, never blank and never the alias.
+   *
+   * @throws NullPointerException if {@code defaultStoreName} is {@code null}
+   * @throws IllegalArgumentException if it is blank or {@link ReadModelStore#DEFAULT}
+   */
+  static String requireDefaultStoreName(String defaultStoreName) {
+    Objects.requireNonNull(defaultStoreName, "defaultStoreName is required");
+    if (defaultStoreName.isBlank()) {
+      throw new IllegalArgumentException("defaultStoreName must not be blank");
+    }
+    if (ReadModelStore.DEFAULT.equals(defaultStoreName)) {
+      throw new IllegalArgumentException(
+          "defaultStoreName must be the backend's name for its default read-model store, not the"
+              + " alias '"
+              + ReadModelStore.DEFAULT
+              + "'");
+    }
+    return defaultStoreName;
   }
 
   /**
@@ -179,27 +215,35 @@ public final class ProjectionStoreRouting {
   /**
    * The stores an application routes to: the application's own, and the default store unless one of
    * them takes its name. Replacing the default store is by name and explicit: an application store
-   * named {@value #DEFAULT_STORE} replaces it, and a store of any other name is added beside it.
+   * named {@code defaultStoreName} (the backend's name) replaces it, and a store of any other name
+   * is added beside it.
    *
    * <p>{@code defaultStore} creates the default store — which checks the server version, migrates
-   * and validates its schema — so it is called only when no application store is named {@value
-   * #DEFAULT_STORE}: a replaced default store is never created and never touches its database. The
-   * selection is validated ({@link #validateStores}) in one pass that compares each pair of stores
-   * once: the application's stores among themselves before the default store is created, then the
-   * default store against each of them. A duplicate name or write target fails here, as a store
-   * error, before any registration is routed.
+   * and validates its schema — so it is called only when no application store is named {@code
+   * defaultStoreName}: a replaced default store is never created and never touches its database.
+   * The selection is validated ({@link #validateStores}) in one pass that compares each pair of
+   * stores once: the application's stores among themselves before the default store is created,
+   * then the default store against each of them. A duplicate name or write target fails here, as a
+   * store error, before any registration is routed.
    *
+   * @param defaultStoreName the default store's name: the selected backend's name
    * @param defaultStore creates the default store, or supplies none (no {@code DataSource}); called
    *     at most once
    * @param applicationStores every store the application defines, the default store not among them
    * @return the default store (when kept) followed by the application's stores, validated
    * @throws NullPointerException if an argument, an element of {@code applicationStores} or the
    *     supplied {@code Optional} is {@code null}
-   * @throws IllegalStateException on a duplicate name or write-target identity ({@link
-   *     #validateStores}), or when the supplied default store is not named {@value #DEFAULT_STORE}
+   * @throws IllegalArgumentException if {@code defaultStoreName} is blank or {@link
+   *     ReadModelStore#DEFAULT}
+   * @throws IllegalStateException on a store named {@link ReadModelStore#DEFAULT}, a duplicate name
+   *     or write-target identity ({@link #validateStores}), or when the supplied default store is
+   *     not named {@code defaultStoreName}
    */
   public static List<ReadModelStore> selectStores(
-      Supplier<Optional<ReadModelStore>> defaultStore, List<ReadModelStore> applicationStores) {
+      String defaultStoreName,
+      Supplier<Optional<ReadModelStore>> defaultStore,
+      List<ReadModelStore> applicationStores) {
+    requireDefaultStoreName(defaultStoreName);
     Objects.requireNonNull(defaultStore, "defaultStore is required");
     Objects.requireNonNull(applicationStores, "applicationStores is required");
     for (ReadModelStore store : applicationStores) {
@@ -207,7 +251,7 @@ public final class ProjectionStoreRouting {
     }
     List<ReadModelStore> application = List.copyOf(applicationStores);
     validateStores(application);
-    if (application.stream().anyMatch(store -> DEFAULT_STORE.equals(store.name()))) {
+    if (application.stream().anyMatch(store -> defaultStoreName.equals(store.name()))) {
       return application;
     }
     Optional<ReadModelStore> created =
@@ -216,10 +260,10 @@ public final class ProjectionStoreRouting {
       return application;
     }
     ReadModelStore store = created.get();
-    if (!DEFAULT_STORE.equals(store.name())) {
+    if (!defaultStoreName.equals(store.name())) {
       throw new IllegalStateException(
           "The default read-model store must be named '"
-              + DEFAULT_STORE
+              + LogSanitizer.sanitizeForLog(defaultStoreName)
               + "', but it is named '"
               + safeName(store)
               + "' ("
@@ -275,25 +319,32 @@ public final class ProjectionStoreRouting {
    *
    * @param registration the registration to route
    * @param stores every store defined (0, 1 or more)
+   * @param defaultStoreName the default store's name, the selected backend's: what a {@link
+   *     ReadModelStore#DEFAULT} declaration names
    * @param subscriptionCheckpoint the event store's subscription checkpoint pair, rule 4's target
    * @param leadership the configured leadership, or {@link SubscriptionLeadership#NOOP} when none
    *     exists
    * @return the pair the registration's runner reads its position from and commits through
    * @throws NullPointerException if an argument is {@code null}
+   * @throws IllegalArgumentException if {@code defaultStoreName} is blank or {@link
+   *     ReadModelStore#DEFAULT}
    * @throws IllegalStateException if the store set is invalid, no rule routes the registration, or
    *     the routed processor lacks a capability the registration needs
    */
   public static CheckpointTarget route(
       Registration registration,
       List<ReadModelStore> stores,
+      String defaultStoreName,
       CheckpointTarget subscriptionCheckpoint,
       SubscriptionLeadership leadership) {
     Objects.requireNonNull(registration, "registration is required");
     Objects.requireNonNull(stores, "stores is required");
+    requireDefaultStoreName(defaultStoreName);
     Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
     Objects.requireNonNull(leadership, "leadership is required");
     validateStores(stores);
-    return resolve(registration, stores, subscriptionCheckpoint, leadership).target();
+    return resolve(registration, stores, defaultStoreName, subscriptionCheckpoint, leadership)
+        .target();
   }
 
   /**
@@ -303,6 +354,8 @@ public final class ProjectionStoreRouting {
    *
    * @param registration the registration to route
    * @param stores every store defined, already validated ({@link #validateStores})
+   * @param defaultStoreName the default store's name, what a {@link ReadModelStore#DEFAULT}
+   *     declaration names
    * @param subscriptionCheckpoint rule 4's target
    * @param leadership the configured leadership
    * @return the routed target, and its store ({@code null} for the subscription checkpoint)
@@ -310,14 +363,16 @@ public final class ProjectionStoreRouting {
   static Routed resolve(
       Registration registration,
       List<ReadModelStore> stores,
+      String defaultStoreName,
       CheckpointTarget subscriptionCheckpoint,
       SubscriptionLeadership leadership) {
     Objects.requireNonNull(registration, "registration is required");
     Objects.requireNonNull(stores, "stores is required");
+    requireDefaultStoreName(defaultStoreName);
     Objects.requireNonNull(subscriptionCheckpoint, "subscriptionCheckpoint is required");
     Objects.requireNonNull(leadership, "leadership is required");
 
-    Routed routed = select(registration, stores, subscriptionCheckpoint);
+    Routed routed = select(registration, stores, defaultStoreName, subscriptionCheckpoint);
     AtomicBatchProcessor processor = routed.target().processor();
     if (registration.mode().writesInCheckpointTransaction() && !processor.transactional()) {
       throw new IllegalStateException(
@@ -386,22 +441,27 @@ public final class ProjectionStoreRouting {
   private static Routed select(
       Registration registration,
       List<ReadModelStore> stores,
+      String defaultStoreName,
       CheckpointTarget subscriptionCheckpoint) {
     Optional<ProjectionRepository> writeTarget = registration.projection().writeTarget();
     Optional<ReadModelStore> owner = writeTarget.flatMap(target -> ownerOf(target, stores));
 
-    // Rule 1: explicit declaration.
+    // Rule 1: explicit declaration; "default" is the alias of the default store.
     if (!registration.readModelStore().isEmpty()) {
+      String declaredName =
+          ReadModelStore.DEFAULT.equals(registration.readModelStore())
+              ? defaultStoreName
+              : registration.readModelStore();
       ReadModelStore declared =
           stores.stream()
-              .filter(s -> s.name().equals(registration.readModelStore()))
+              .filter(s -> s.name().equals(declaredName))
               .findFirst()
               .orElseThrow(
                   () ->
                       new IllegalStateException(
                           head(registration)
                               + " declares "
-                              + declaration(registration)
+                              + declaration(registration, defaultStoreName)
                               + ", but no read-model store has that name; "
                               + storesClause(stores)
                               + ". Name one of them: "
@@ -411,7 +471,7 @@ public final class ProjectionStoreRouting {
         throw new IllegalStateException(
             head(registration)
                 + " declares "
-                + declaration(registration)
+                + declaration(registration, defaultStoreName)
                 + ", but its writeTarget() "
                 + owner
                     .map(o -> "is the repository of store '" + safeName(o) + "'")
@@ -504,10 +564,16 @@ public final class ProjectionStoreRouting {
         + ")";
   }
 
-  private static String declaration(Registration registration) {
-    return "readModelStore = \""
-        + LogSanitizer.sanitizeForLog(registration.readModelStore())
-        + "\"";
+  private static String declaration(Registration registration, String defaultStoreName) {
+    String declaration =
+        "readModelStore = \"" + LogSanitizer.sanitizeForLog(registration.readModelStore()) + "\"";
+    if (!ReadModelStore.DEFAULT.equals(registration.readModelStore())) {
+      return declaration;
+    }
+    return declaration
+        + " (the alias of the default read-model store '"
+        + LogSanitizer.sanitizeForLog(defaultStoreName)
+        + "')";
   }
 
   private static String safeName(ReadModelStore store) {

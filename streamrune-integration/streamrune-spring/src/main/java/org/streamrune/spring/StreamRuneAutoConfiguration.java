@@ -1978,8 +1978,7 @@ public class StreamRuneAutoConfiguration {
    * store, {@value}. A projection declares {@code readModelStore = "postgres"} to route to it
    * explicitly; an application store of this name replaces it.
    */
-  static final String DEFAULT_READ_MODEL_STORE =
-      org.streamrune.integration.ProjectionStoreRouting.DEFAULT_STORE;
+  static final String DEFAULT_READ_MODEL_STORE = "postgres";
 
   /**
    * The bean name of the default read-model store, {@value}: a framework name, so an application

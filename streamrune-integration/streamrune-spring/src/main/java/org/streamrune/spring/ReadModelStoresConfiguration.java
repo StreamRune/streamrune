@@ -14,9 +14,10 @@ import org.streamrune.integration.ReadModelStores;
  * The application's read-model stores in one bean, {@value #READ_MODEL_STORES}: the store beans the
  * application defines, and the default store — the bean {@value
  * ProjectionStoreRouting#DEFAULT_STORE_BEAN} {@link StreamRuneAutoConfiguration} registers on the
- * {@code DataSource} — unless one of them is named {@value ProjectionStoreRouting#DEFAULT_STORE}.
- * Imported by {@link StreamRuneAutoConfiguration} (whose {@code ProjectionRepository} bean reads
- * it) and by {@link ProjectionAutoConfig} (whose routes read it), so either one alone has it.
+ * {@code DataSource} — unless one of them is named {@value
+ * StreamRuneAutoConfiguration#DEFAULT_READ_MODEL_STORE}. Imported by {@link
+ * StreamRuneAutoConfiguration} (whose {@code ProjectionRepository} bean reads it) and by {@link
+ * ProjectionAutoConfig} (whose routes read it), so either one alone has it.
  *
  * <p>Replacing the default store is by name, so the condition cannot be a bean condition: a store's
  * name is known only once the store exists. The default store is therefore always defined (lazily)
@@ -43,7 +44,9 @@ class ReadModelStoresConfiguration {
   @Bean(READ_MODEL_STORES)
   ReadModelStores streamRuneReadModelStores(ListableBeanFactory beanFactory) {
     return new ReadModelStores(
-        () -> defaultStore(beanFactory), () -> applicationStores(beanFactory));
+        StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE,
+        () -> defaultStore(beanFactory),
+        () -> applicationStores(beanFactory));
   }
 
   /** The default store bean, created now; empty when it is not defined (no DataSource). */

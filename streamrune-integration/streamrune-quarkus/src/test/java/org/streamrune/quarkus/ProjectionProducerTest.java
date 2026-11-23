@@ -1083,7 +1083,7 @@ class ProjectionProducerTest {
 
   /** The application's stores, with no default store (no DataSource here). */
   private static ReadModelStores storesOf(ReadModelStore... stores) {
-    return new ReadModelStores(java.util.Optional::empty, () -> List.of(stores));
+    return new ReadModelStores("postgres", java.util.Optional::empty, () -> List.of(stores));
   }
 
   /** A store whose repository, checkpoints and processor are one in-memory repository. */
