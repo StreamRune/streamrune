@@ -55,6 +55,19 @@ public interface AggregateLocker {
   AutoCloseable acquireLock(StreamId streamId, Duration timeout);
 
   /**
+   * How many connections of the application's connection pool one held lock occupies. The default,
+   * 1, is the conservative answer for a locker the framework does not know: it is counted as taking
+   * its lock connection from the pool the event store uses. A locker that holds no connection, or
+   * holds it in a pool of its own, answers 0. A locker that delegates to another answers what that
+   * one answers.
+   *
+   * @return the connections of the application's pool one held lock occupies; never negative
+   */
+  default int applicationPoolConnectionsPerLock() {
+    return 1;
+  }
+
+  /**
    * The finest lock timeout the framework can express. Every wait bound in the lock path is a whole
    * number of milliseconds, so this is a property of the contract rather than of any one backend.
    */

@@ -133,6 +133,12 @@
       "defaultValue": "auto"
     },
     {
+      "name": "streamrune.saga.parallelism",
+      "type": "java.lang.String",
+      "description": "How many saga steps a SagaRunner runs at once, from 1 to 64, for the runners whose builder named none. streamrune.saga.subscriptions.<name>.parallelism sets it for the saga delivered through one subscription and wins over the runner's own parallelism(...). Each step holds a connection for its load and append, and one more for the aggregate lock when the lock shares the application's pool: a start is refused when the locks alone can take the whole pool, and a WARN is logged above half of it.",
+      "defaultValue": "4"
+    },
+    {
       "name": "streamrune.outbox.enabled",
       "type": "java.lang.Boolean",
       "description": "Enable outbox polling (opt-in, requires message broker)",

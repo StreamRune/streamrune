@@ -7,12 +7,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.core.env.Environment;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.integration.SingleActiveConsumerSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaLeaseWiring;
+import org.streamrune.runtime.SagaParallelismDefault;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -43,6 +45,12 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Parallelism.</b> The same hook applies {@code streamrune.saga.parallelism} and {@code
+ * streamrune.saga.subscriptions.<name>.parallelism} ({@link SagaParallelismDefault}): the
+ * subscription property wins over the builder, the builder over the global property. An unreadable
+ * value fails startup; a subscription name no runner is bound to fails it later, in {@link
+ * SagaParallelismStartupCheck}, once every subscription is built.
+ *
  * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
  * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
  * type is delivered on every replica ({@code SagaLeaseWiring.warnUngatedUnderLeadership}). The
@@ -60,14 +68,17 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
   private final ObjectProvider<SagaRunner<?>> sagaRunnerProvider;
   private final StreamRuneProperties properties;
   private final ObjectProvider<SubscriptionLeadership> leadershipProvider;
+  private final Environment environment;
 
   public SagaEventPathRetentionConfigurer(
       ObjectProvider<SagaRunner<?>> sagaRunnerProvider,
       StreamRuneProperties properties,
-      ObjectProvider<SubscriptionLeadership> leadershipProvider) {
+      ObjectProvider<SubscriptionLeadership> leadershipProvider,
+      Environment environment) {
     this.sagaRunnerProvider = sagaRunnerProvider;
     this.properties = properties;
     this.leadershipProvider = leadershipProvider;
+    this.environment = environment;
   }
 
   @Override
@@ -103,5 +114,7 @@ public class SagaEventPathRetentionConfigurer implements SmartInitializingSingle
                   + singleActiveConsumer
               : "");
     }
+    SagaParallelismDefault.apply(
+        sagaRunners, SagaParallelismProperties.read(environment, properties));
   }
 }

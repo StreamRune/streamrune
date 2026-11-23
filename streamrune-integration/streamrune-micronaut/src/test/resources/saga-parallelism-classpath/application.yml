@@ -1,0 +1,5 @@
+streamrune:
+  saga:
+    subscriptions:
+      other-saga:
+        parallelism: 2

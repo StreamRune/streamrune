@@ -166,7 +166,7 @@ class SagaEventPathRetentionWiringTest {
     when(instance.isResolvable()).thenReturn(leadership != null);
     when(instance.isUnsatisfied()).thenReturn(leadership == null);
     when(instance.get()).thenReturn(leadership);
-    return new SagaEventPathRetentionConfigurer(runners, properties, instance);
+    return new SagaEventPathRetentionConfigurer(runners, properties, instance, null);
   }
 
   /**

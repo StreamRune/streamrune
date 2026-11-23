@@ -11,6 +11,7 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -25,6 +26,7 @@ import org.streamrune.core.Decider;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.ProjectionConfig;
+import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
@@ -39,6 +41,7 @@ import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStatus;
+import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanBaggage;
@@ -55,12 +58,15 @@ import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.LocalStripedLocker;
 import org.streamrune.runtime.OpenTelemetryTracing;
+import org.streamrune.runtime.PollingEventSubscription;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.test.InMemoryDeadLetterQueue;
+import org.streamrune.test.InMemoryEventStore;
+import org.streamrune.test.InMemoryOffsetStore;
 import org.streamrune.test.InMemoryOutboxStore;
 import org.streamrune.test.InMemorySagaDeadLetterStore;
 import org.streamrune.test.InMemorySagaStore;
@@ -610,15 +616,70 @@ public final class ContractBeans {
   public static final class UngatedSagaRunner implements Supplier<SagaRunner<ContractSagaState>> {
     @Override
     public SagaRunner<ContractSagaState> get() {
-      var sagaStore = new InMemorySagaStore();
-      return SagaRunner.<ContractSagaState>builder()
-          .orchestrator(new ContractSagaOrchestrator())
-          .sagaStore(sagaStore)
-          .commandBus(new NoCommandBus())
-          .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
-          .forwardFence(false)
-          .build();
+      return contractSagaRunner().build();
     }
+  }
+
+  /**
+   * A {@link SagaRunner} that names no parallelism, delivered through a subscription named {@value
+   * #SUBSCRIPTION}. Building the bean also builds that subscription, a {@code
+   * PollingEventSubscription} over the test kit's in-memory event store and offset store with
+   * {@code .sagaRunner(runner)}, which binds the name to the runner; the subscription is never
+   * started. Its stores are the test kit's in-memory ones and its command bus executes nothing.
+   */
+  public static final class SagaWithSubscription
+      implements Supplier<SagaRunner<ContractSagaState>> {
+
+    /** The name of the subscription the runner is bound to. */
+    public static final String SUBSCRIPTION = "contract-saga";
+
+    @Override
+    public SagaRunner<ContractSagaState> get() {
+      return boundToTheContractSubscription(contractSagaRunner().build());
+    }
+  }
+
+  /**
+   * {@link SagaWithSubscription} with {@code SagaRunner.Builder.parallelism(2)}: the runner names
+   * its parallelism, {@value #PARALLELISM}.
+   */
+  public static final class SagaWithBuilderParallelism
+      implements Supplier<SagaRunner<ContractSagaState>> {
+
+    /** The parallelism the runner's builder names. */
+    public static final int PARALLELISM = 2;
+
+    @Override
+    public SagaRunner<ContractSagaState> get() {
+      return boundToTheContractSubscription(contractSagaRunner().parallelism(PARALLELISM).build());
+    }
+  }
+
+  /** The builder of {@link UngatedSagaRunner}'s runner, with no parallelism named. */
+  private static SagaRunner.Builder<ContractSagaState> contractSagaRunner() {
+    var sagaStore = new InMemorySagaStore();
+    return SagaRunner.<ContractSagaState>builder()
+        .orchestrator(new ContractSagaOrchestrator())
+        .sagaStore(sagaStore)
+        .commandBus(new NoCommandBus())
+        .sagaDeadLetterStore(new InMemorySagaDeadLetterStore(sagaStore))
+        .forwardFence(false);
+  }
+
+  /**
+   * Builds the never-started subscription {@value SagaWithSubscription#SUBSCRIPTION} with {@code
+   * .sagaRunner(runner)}, which binds its name to the runner, and returns the runner.
+   */
+  private static SagaRunner<ContractSagaState> boundToTheContractSubscription(
+      SagaRunner<ContractSagaState> runner) {
+    PollingEventSubscription.builder()
+        .subscriptionName(SubscriptionName.of(SagaWithSubscription.SUBSCRIPTION))
+        .eventStore(new InMemoryEventStore(SimpleEventTypeRegistry.builder().build()))
+        .offsetStore(new InMemoryOffsetStore())
+        .config(SubscriptionConfig.pollingOnly(Duration.ofHours(1)))
+        .sagaRunner(runner)
+        .build();
+    return runner;
   }
 
   /** A saga that no event starts. */

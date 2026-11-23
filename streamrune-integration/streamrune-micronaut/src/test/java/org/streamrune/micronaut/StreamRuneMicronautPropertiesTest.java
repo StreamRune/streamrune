@@ -178,7 +178,8 @@ class StreamRuneMicronautPropertiesTest {
             true,
             true,
             true,
-            null);
+            null,
+            "4");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(Duration.ofMillis(1), p.retryInitialDelay());

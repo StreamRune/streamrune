@@ -1,7 +1,9 @@
 package org.streamrune.quarkus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.quarkus.arc.BeanCreator;
 import io.quarkus.arc.SyntheticCreationalContext;
@@ -12,13 +14,16 @@ import io.quarkus.runtime.configuration.DurationConverter;
 import io.smallrye.config.PropertiesConfigSource;
 import io.smallrye.config.SmallRyeConfig;
 import io.smallrye.config.SmallRyeConfigBuilder;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.Dependent;
 import jakarta.enterprise.context.RequestScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
 import jakarta.enterprise.inject.spi.InjectionPoint;
 import jakarta.inject.Singleton;
+import jakarta.interceptor.Interceptor;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -128,6 +133,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           ProjectionIndexDeclarer.class,
           SagaStateCryptoValidator.class,
           SagaEventPathRetentionConfigurer.class,
+          SagaParallelismStartupCheck.class,
           SagaCompensationRetryLifecycle.class,
           SagaTimeoutRunnerHealthRegistrar.class,
           CryptoForgetListenHealthRegistrar.class,
@@ -358,10 +364,12 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     }
     CapturedLog log = new CapturedLog();
     RealArcTestContainer arc = null;
+    boolean startupFired = false;
     try {
       arc =
           RealArcTestContainer.bootApplication(
               beans, properties, REST_PROVIDERS, classes, supplied);
+      startupFired = true;
       arc.container().beanManager().getEvent().select(StartupEvent.class).fire(new StartupEvent());
       QuarkusRestTestServer server = null;
       // As a Quarkus application serves a resource: the resource and the request filter are the
@@ -384,10 +392,64 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     } catch (Throwable failure) {
       List<String> lines = log.close();
       if (arc != null) {
-        arc.close();
+        try {
+          if (startupFired) {
+            stopWhatTheStartupObserversStarted(arc);
+          }
+        } finally {
+          arc.close();
+        }
       }
       return new QuarkusApplication(null, null, messages(failure), lines);
     }
+  }
+
+  /**
+   * Fires the shutdown event on a container whose startup event failed. Quarkus does not fire it
+   * when a startup observer throws, so a start refused by a late observer would leave the runners
+   * an earlier observer started running in the test JVM; the framework's stop observers stop only
+   * what was started.
+   */
+  static void stopWhatTheStartupObserversStarted(RealArcTestContainer arc) {
+    arc.container().beanManager().getEvent().select(ShutdownEvent.class).fire(new ShutdownEvent());
+  }
+
+  /**
+   * A startup observer in the runners' tier that records being started and stopped, standing in for
+   * what the integration's own lifecycle observers start. An application class: the adapter makes
+   * it a singleton bean.
+   */
+  public static class StartedTier {
+    static volatile boolean started;
+    static volatile boolean stopped;
+
+    public void onStart(
+        @Observes @Priority(Interceptor.Priority.LIBRARY_BEFORE + 100) StartupEvent event) {
+      started = true;
+    }
+
+    public void onStop(@Observes ShutdownEvent event) {
+      stopped = true;
+    }
+  }
+
+  @Test
+  void aStartRefusedByTheLateSagaCheckStopsWhatAnEarlierStartupObserverStarted() {
+    StartedTier.started = false;
+    StartedTier.stopped = false;
+    Application application =
+        start(
+            null,
+            Map.of("streamrune.saga.subscriptions.nope.parallelism", "2"),
+            Set.of(StartedTier.class));
+    application.close();
+    assertFalse(application.started(), "the late check must refuse the start");
+    assertTrue(
+        StartedTier.started,
+        () ->
+            "the observer must have started before the refusal: "
+                + application.startupFailureMessage());
+    assertTrue(StartedTier.stopped, "the refused start must stop the started observer");
   }
 
   /**
@@ -580,24 +642,32 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   /**
-   * The log records of level WARNING and above while it is open, through a java.util.logging
-   * handler on the root logger: this module's tests bind SLF4J to JBoss LogManager, a JUL provider.
+   * The log records of level WARNING and above, and those of level INFO of the framework's loggers
+   * (under {@code org.streamrune}), while it is open, through a java.util.logging handler on the
+   * root logger: this module's tests bind SLF4J to JBoss LogManager, a JUL provider.
    */
   private static final class CapturedLog {
     private final Logger root = Logger.getLogger("");
+    private final Logger framework = Logger.getLogger("org.streamrune");
+    private final Level frameworkLevel = framework.getLevel();
     private final List<String> lines = new CopyOnWriteArrayList<>();
     private final Handler handler =
         new Handler() {
           @Override
           public void publish(LogRecord logRecord) {
             int level = logRecord.getLevel().intValue();
+            String logger = logRecord.getLoggerName();
             if (level >= Level.WARNING.intValue()) {
               lines.add(
                   (level >= Level.SEVERE.intValue() ? "ERROR" : "WARN")
                       + " "
-                      + logRecord.getLoggerName()
+                      + logger
                       + ": "
                       + logRecord.getMessage());
+            } else if (level == Level.INFO.intValue()
+                && logger != null
+                && logger.startsWith("org.streamrune")) {
+              lines.add("INFO " + logger + ": " + logRecord.getMessage());
             }
           }
 
@@ -610,10 +680,12 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
 
     CapturedLog() {
       root.addHandler(handler);
+      framework.setLevel(Level.INFO);
     }
 
     List<String> close() {
       root.removeHandler(handler);
+      framework.setLevel(frameworkLevel);
       return List.copyOf(lines);
     }
   }

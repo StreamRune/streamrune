@@ -1,5 +1,8 @@
 # The public API of :streamrune-postgres. verifyApiSurface (part of check) compares the build with this file;
 # after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.postgres.ConnectionPools
+  public static java.util.OptionalInt maximumSize(javax.sql.DataSource)
+
 public final class org.streamrune.postgres.HybridEventSubscription implements org.streamrune.core.subscription.SubscriptionLifecycle, org.streamrune.runtime.ReadPoisonAware, org.streamrune.runtime.PushHealthAware, org.streamrune.runtime.LeaseRoleAware
   public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int)
   public <init>(org.streamrune.core.types.SubscriptionName, javax.sql.DataSource, org.streamrune.core.EventStore, org.streamrune.core.projection.OffsetStore, org.streamrune.core.subscription.EventListener, org.streamrune.core.subscription.SubscriptionConfig, int, org.streamrune.core.StreamRuneMetrics)
@@ -79,6 +82,7 @@ public interface org.streamrune.postgres.ListenDataSource extends javax.sql.Data
 
 public final class org.streamrune.postgres.PgAdvisoryLocker implements org.streamrune.core.AggregateLocker, java.lang.AutoCloseable
   public <init>(javax.sql.DataSource)
+  public int applicationPoolConnectionsPerLock()
   public java.lang.AutoCloseable acquireLock(org.streamrune.core.types.StreamId, java.time.Duration)
   public org.streamrune.postgres.PgAdvisoryLocker traced(org.streamrune.core.tracing.StreamRuneTracing)
   public static org.streamrune.postgres.PgAdvisoryLocker withDedicatedPool(java.lang.String, java.lang.String, java.lang.String, int)

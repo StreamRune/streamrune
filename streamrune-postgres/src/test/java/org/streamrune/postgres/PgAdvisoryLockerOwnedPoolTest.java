@@ -113,6 +113,15 @@ class PgAdvisoryLockerOwnedPoolTest {
   }
 
   @Test
+  void aLockerOverItsOwnHikariPoolHoldsNoConnectionOfTheApplicationsPool() {
+    try (var locker =
+        PgAdvisoryLocker.withDedicatedPool(
+            PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), 2)) {
+      assertThat(locker.applicationPoolConnectionsPerLock()).isZero();
+    }
+  }
+
+  @Test
   void aPoolIsRequired() {
     assertThatThrownBy(() -> PgAdvisoryLocker.withDedicatedPool(null))
         .isInstanceOf(IllegalArgumentException.class)

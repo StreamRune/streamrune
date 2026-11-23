@@ -46,15 +46,18 @@ class ConfigurationDocLintTest {
   private static final String METADATA = "META-INF/additional-spring-configuration-metadata.json";
 
   /**
-   * The keys {@code ProjectionAutoConfig} looks up in the environment by name: they are neither
-   * bound nor a bean condition. A projection's own keys have no default of their own beyond
-   * "enabled": an absent {@code error-strategy} keeps the one {@code @ProjectionConfig} names.
+   * The keys looked up in the environment by name, neither bound nor a bean condition: the
+   * projection keys {@code ProjectionAutoConfig} reads, and the per-subscription saga parallelism
+   * {@code SagaParallelismProperties} reads. A projection's own keys have no default of their own
+   * beyond "enabled": an absent {@code error-strategy} keeps the one {@code @ProjectionConfig}
+   * names; a subscription without its own parallelism takes the runner's.
    */
   private static final List<ReadElsewhere> LOOKUPS =
       List.of(
           new ReadElsewhere("streamrune.projections.auto-discovery.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.enabled", "true", "lookup"),
-          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"));
+          new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
+          new ReadElsewhere("streamrune.saga.subscriptions.<name>.parallelism", null, "lookup"));
 
   private static Map<String, String> oracle;
   private static List<String> conflicts;

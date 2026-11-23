@@ -62,6 +62,7 @@ class ConfigurationDocLintTest {
           new ReadElsewhere("streamrune.projections.auto-discovery.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.enabled", "true", "lookup"),
           new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
+          new ReadElsewhere("streamrune.saga.subscriptions.<name>.parallelism", null, "lookup"),
           new ReadElsewhere(GraalJitGuard.ALLOW_PROPERTY, "false", "lookup"));
 
   /**

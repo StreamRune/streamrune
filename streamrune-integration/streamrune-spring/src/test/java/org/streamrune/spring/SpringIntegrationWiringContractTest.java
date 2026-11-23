@@ -158,6 +158,8 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
     configuration.add("spring.main.banner-mode=off");
     configuration.add("management.endpoints.web.exposure.include=health");
     configuration.add("management.endpoint.health.show-details=always");
+    // The framework's INFO lines are part of what the start logged, see startupLogLines().
+    configuration.add("logging.level.org.streamrune=INFO");
     properties.forEach((key, value) -> configuration.add(key + "=" + value));
     try {
       ConfigurableApplicationContext context =
@@ -311,7 +313,9 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
   private static List<String> lines(ListAppender<ILoggingEvent> log) {
     List<String> lines = new ArrayList<>();
     for (ILoggingEvent event : List.copyOf(log.list)) {
-      if (event.getLevel().isGreaterOrEqual(Level.WARN)) {
+      if (event.getLevel().isGreaterOrEqual(Level.WARN)
+          || (event.getLevel() == Level.INFO
+              && event.getLoggerName().startsWith("org.streamrune"))) {
         lines.add(
             event.getLevel() + " " + event.getLoggerName() + ": " + event.getFormattedMessage());
       }

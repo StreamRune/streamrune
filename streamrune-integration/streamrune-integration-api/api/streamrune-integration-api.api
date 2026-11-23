@@ -133,6 +133,11 @@ public static enum org.streamrune.integration.RequestIdentityPolicy$Mode
   public static org.streamrune.integration.RequestIdentityPolicy$Mode valueOf(java.lang.String)
   public static org.streamrune.integration.RequestIdentityPolicy$Mode[] values()
 
+public final class org.streamrune.integration.SagaConnectionBudget
+  public static int connectionsPerStep(org.streamrune.core.AggregateLocker)
+  public static java.util.Optional<java.lang.String> refusal(int, int, java.util.OptionalInt)
+  public static java.util.Optional<java.lang.String> warning(int, int, int, java.util.OptionalInt)
+
 public enum org.streamrune.integration.SagaForwardFenceSetting
   constants AUTO, ON, OFF
   public boolean enabled(boolean)
@@ -143,6 +148,21 @@ public enum org.streamrune.integration.SagaForwardFenceSetting
   public static org.streamrune.integration.SagaForwardFenceSetting parse(java.lang.String)
   public static org.streamrune.integration.SagaForwardFenceSetting valueOf(java.lang.String)
   public static org.streamrune.integration.SagaForwardFenceSetting[] values()
+
+public final class org.streamrune.integration.SagaParallelismSetting
+  public static final int DEFAULT = 4
+  public static final java.lang.String PROPERTY = "streamrune.saga.parallelism"
+  public static final java.lang.String SUBSCRIPTIONS_PREFIX = "streamrune.saga.subscriptions."
+  public static final java.lang.String SUBSCRIPTION_SUFFIX = ".parallelism"
+  public static org.streamrune.integration.SagaParallelismSetting$Parsed parse(java.lang.String, java.util.Map<java.lang.String, java.lang.String>)
+
+public static final record org.streamrune.integration.SagaParallelismSetting$Parsed
+  public <init>(int, java.util.Map<java.lang.String, java.lang.Integer>)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public int global()
+  public java.util.Map<java.lang.String, java.lang.Integer> bySubscription()
 
 public final class org.streamrune.integration.SingleActiveConsumerSetting
   public static boolean enabled(java.lang.String)

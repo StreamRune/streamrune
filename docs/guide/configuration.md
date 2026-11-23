@@ -101,6 +101,8 @@ bean fail the start.
 |---|---|---|
 | `streamrune.saga.enabled` | `true` | Whether the PostgreSQL saga stores are created (with a `DataSource`). |
 | `streamrune.saga.forward-fence` | `auto` | The forward fence of the runners that set none: `auto` follows single-active-consumer, `on`, `off`. |
+| `streamrune.saga.parallelism` | `4` | Saga steps of one saga type in flight at once, 1–64, for the runners that set none. |
+| `streamrune.saga.subscriptions.<name>.parallelism` | — | The same for the saga whose subscription has that name; wins over the runner's builder. An unknown name fails startup. |
 | `streamrune.saga.compensation-retry-enabled` | `true` | Whether the compensation-retry sweeper re-drives stuck compensations; `false` leaves it sampling the gauges. |
 | `streamrune.saga.compensation-retry-interval` | `1m` | How often the sweeper re-drives, and the age an episode reaches before it is re-driven. |
 | `streamrune.saga.compensation-retry-give-up-after` | `1h` | How long a saga may stay `COMPENSATING` before the sweeper faults it. |

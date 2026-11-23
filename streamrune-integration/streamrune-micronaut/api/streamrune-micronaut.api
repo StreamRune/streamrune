@@ -28,7 +28,12 @@ public class org.streamrune.micronaut.SagaCompensationRetryLifecycle implements 
   public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
 
 public class org.streamrune.micronaut.SagaEventPathRetentionConfigurer implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
-  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.subscription.SubscriptionLeadership)
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.micronaut.StreamRuneMicronautProperties, org.streamrune.core.subscription.SubscriptionLeadership, io.micronaut.context.env.Environment)
+  public int getOrder()
+  public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
+
+public class org.streamrune.micronaut.SagaParallelismStartupCheck implements io.micronaut.context.event.ApplicationEventListener<io.micronaut.context.event.StartupEvent>, io.micronaut.core.order.Ordered
+  public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, org.streamrune.micronaut.StreamRuneMicronautProperties, io.micronaut.context.env.Environment, javax.sql.DataSource, org.streamrune.core.AggregateLocker)
   public int getOrder()
   public void onApplicationEvent(io.micronaut.context.event.StartupEvent)
 
@@ -202,7 +207,7 @@ public class org.streamrune.micronaut.StreamRuneMicronautModule
   public org.streamrune.runtime.gdpr.ForgetSubjectService forgetSubjectService(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.audit.AuditStore, java.util.List<org.streamrune.core.gdpr.SubjectDataPurger>, org.streamrune.core.StreamRuneMetrics, org.streamrune.runtime.CachingQueryBus, org.streamrune.micronaut.StreamRuneMicronautProperties)
 
 public final record org.streamrune.micronaut.StreamRuneMicronautProperties
-  public <init>(int, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, int, int, int, java.time.Duration, boolean, boolean, boolean, java.time.Duration, boolean, int, java.time.Duration, boolean, int, java.time.Duration, java.time.Duration, boolean, java.lang.String, boolean, boolean, boolean, java.time.Duration, java.time.Duration, java.util.List<java.lang.String>, java.time.Duration, java.lang.String, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.lang.String, java.lang.String, java.lang.String, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, java.lang.Boolean)
+  public <init>(int, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, int, int, int, java.time.Duration, boolean, boolean, boolean, java.time.Duration, boolean, int, java.time.Duration, boolean, int, java.time.Duration, java.time.Duration, boolean, java.lang.String, boolean, boolean, boolean, java.time.Duration, java.time.Duration, java.util.List<java.lang.String>, java.time.Duration, java.lang.String, int, java.time.Duration, double, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.time.Duration, java.lang.String, java.lang.String, java.lang.String, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, java.lang.Boolean, java.lang.String)
   public boolean autoInitializeSchema()
   public boolean deadLetterEnabled()
   public boolean eventAuditEnabled()
@@ -239,6 +244,7 @@ public final record org.streamrune.micronaut.StreamRuneMicronautProperties
   public java.lang.String gdprSnapshotPurge()
   public java.lang.String metricsPrefix()
   public java.lang.String sagaForwardFence()
+  public java.lang.String sagaParallelism()
   public java.lang.String subscriptionSingleActiveConsumerEnabled()
   public java.time.Duration circuitBreakerCooldown()
   public java.time.Duration deadLetterRetentionMaxAge()

@@ -64,17 +64,25 @@ Enable `pg_stat_statements` for query performance monitoring.
 
 ### Pool sizing for saga parallelism
 
-`SagaRunner` steps the sagas of a page at the same time (default 4 steps, `SagaRunner.Builder.parallelism`), and every step in flight holds a connection of the application's pool while its command loads and appends. A saga type therefore needs, from the pool, up to `parallelism` connections, or `2 × parallelism` when its aggregate lock is a `PgAdvisoryLocker` on the application's `DataSource`:
+`SagaRunner` steps the sagas of a page at the same time (4 steps by default; `streamrune.saga.parallelism`, `streamrune.saga.subscriptions.<name>.parallelism` or `SagaRunner.Builder.parallelism`, see [Saga parallelism](advanced/saga.md#saga-parallelism)). Every step in flight holds a connection of the application's pool while its command loads and appends, plus what the aggregate locker holds from that pool for its lock. The connection budget of one saga type is
 
-| Aggregate locker | Connections one step in flight holds from the application's pool |
-|---|---|
-| `LocalStripedLocker` (the integrations' default) | 1 |
-| `PgAdvisoryLocker` with a pool of its own (`withDedicatedPool`) | 1 |
-| `PgAdvisoryLocker` on the application's `DataSource` | 2 |
+```
+parallelism × (1 + AggregateLocker.applicationPoolConnectionsPerLock())
+```
 
-A runner bound to k subscriptions can have k pages in flight, so multiply by k. Add the budget of every saga type, of the projections and of the request threads that share the pool. A pool below the sum makes steps wait for a connection and fail with the pool's connection timeout.
+`LocalStripedLocker` (the integrations' default) and `PgAdvisoryLocker.withDedicatedPool` hold 0 connections of the application's pool per lock, `PgAdvisoryLocker` built with its constructor 1, and a locker that does not say counts as 1. The constructor counts 1 whatever `DataSource` it is given, also a pool built for locking alone, so a small application pool can still refuse the start; build such a locker with `PgAdvisoryLocker.withDedicatedPool(pool)`, which counts 0. A runner bound to k subscriptions can have k pages in flight, so multiply by k. Add the budget of every saga type, of the projections and of the request threads that share the pool. A pool below the sum makes steps wait for a connection and fail with the pool's connection timeout. At startup each integration logs one INFO line per saga runner with its parallelism, where it came from and its budget.
 
-**The threshold.** When the aggregate lock shares the application's pool and `parallelism` × subscriptions × lock connections reaches the pool's maximum size, the saga workers can hold every connection as a lock connection and each wait for a second one. Progress then comes only from connection timeouts, and every saga still ends only after many redeliveries of its page. The cure is a dedicated lock pool (`PgAdvisoryLocker.withDedicatedPool`), a larger pool, or a lower parallelism.
+**The refusal.** When the aggregate lock shares the application's pool and the steps in flight at most (each runner's parallelism times its subscriptions, summed over the saga runners) times `applicationPoolConnectionsPerLock()` reach the pool's maximum size, the saga workers can hold every connection as a lock connection and each wait for a second one; progress would come only from connection timeouts. The integrations refuse that start:
+
+```
+StreamRune: saga steps can hold up to 4 connections of the connection pool as aggregate locks at once (4 steps, 1 per lock), at least the pool's maximum of 4: every connection can be taken by a lock while its step waits for a second one. Give the aggregate locker a pool of its own (PgAdvisoryLocker.withDedicatedPool), raise the pool, or lower streamrune.saga.parallelism.
+```
+
+The ways out, in that order: a dedicated lock pool (`PgAdvisoryLocker.withDedicatedPool`), a larger pool, or a lower parallelism.
+
+**The WARN.** Below that, a budget over all saga runners of more than half the pool's maximum size logs a WARN with the same numbers and ways out (without the dedicated lock pool when the locker holds no connection of the application's pool); the rest of the pool may not be enough for the projections and the requests.
+
+The integrations read the pool's maximum size from HikariCP (an unstarted pool with no size set counts as HikariCP's default of 10) and, on Quarkus, from Agroal. A pool whose size they cannot read is neither refused nor warned about.
 
 Give the saga's subscription a fetch size of at least 4 × `parallelism`: the page is the unit that runs in parallel, so a smaller page leaves workers idle. A growing subscription lag with a low `streamrune.saga.page.effective_parallelism` says the page waits for one long saga; a lag with `streamrune.saga.steps.in_flight` at the parallelism limit and `streamrune.saga.page.pending` above zero says the steps, not the number of sagas, limit the page. See [Parallel steps](advanced/saga.md#parallel-steps) in the saga guide.
 

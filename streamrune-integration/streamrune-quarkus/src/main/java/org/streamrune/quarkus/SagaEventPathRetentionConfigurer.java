@@ -10,6 +10,7 @@ import jakarta.interceptor.Interceptor;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import org.eclipse.microprofile.config.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.subscription.SubscriptionLeadership;
@@ -17,6 +18,7 @@ import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaLeaseWiring;
+import org.streamrune.runtime.SagaParallelismDefault;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -47,6 +49,13 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Parallelism.</b> The same hook applies {@code streamrune.saga.parallelism} and {@code
+ * streamrune.saga.subscriptions.<name>.parallelism} ({@link SagaParallelismDefault}): the
+ * subscription property wins over the builder, the builder over the global property; the
+ * per-subscription keys are read from the application's {@code Config} bean. An unreadable value
+ * fails startup; a subscription name no runner is bound to fails it later, in {@link
+ * SagaParallelismStartupCheck}, once every subscription is built.
+ *
  * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
  * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
  * type is delivered on every replica ({@code SagaLeaseWiring.warnUngatedUnderLeadership}). The
@@ -76,15 +85,18 @@ public class SagaEventPathRetentionConfigurer {
   private final List<SagaRunner<?>> sagaRunners;
   private final StreamRuneQuarkusProperties properties;
   private final Instance<SubscriptionLeadership> leadership;
+  private final Instance<Config> config;
 
   @jakarta.inject.Inject
   public SagaEventPathRetentionConfigurer(
       @All List<SagaRunner<?>> sagaRunners,
       StreamRuneQuarkusProperties properties,
-      Instance<SubscriptionLeadership> leadership) {
+      Instance<SubscriptionLeadership> leadership,
+      Instance<Config> config) {
     this.sagaRunners = sagaRunners;
     this.properties = properties;
     this.leadership = leadership;
+    this.config = config;
   }
 
   /**
@@ -100,6 +112,7 @@ public class SagaEventPathRetentionConfigurer {
     this.sagaRunners = List.of();
     this.properties = null;
     this.leadership = null;
+    this.config = null;
   }
 
   /**
@@ -141,5 +154,9 @@ public class SagaEventPathRetentionConfigurer {
                   + singleActiveConsumer
               : "");
     }
+    SagaParallelismDefault.apply(
+        sagaRunners,
+        SagaParallelismProperties.read(
+            SagaParallelismProperties.applicationConfig(config), properties.saga().parallelism()));
   }
 }

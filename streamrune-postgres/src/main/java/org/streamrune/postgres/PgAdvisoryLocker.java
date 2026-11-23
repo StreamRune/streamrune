@@ -54,7 +54,9 @@ import org.streamrune.runtime.GuardedTracing;
  * connections — the event-store pool then needs to cover only concurrent load/append (size ≈
  * concurrent commands), not 2× that. If you instead pass the shared event-store {@link DataSource}
  * to {@link #PgAdvisoryLocker(DataSource)}, size that pool for at least 2× the expected concurrent
- * command throughput.
+ * command throughput. {@link #applicationPoolConnectionsPerLock()} reports which of the two a
+ * locker is (1 over the application's {@code DataSource}, 0 with a dedicated pool), and the saga
+ * connection budget reads it.
  *
  * <p><b>A nested dispatch on a DIFFERENT aggregate needs one more lock connection.</b> {@code
  * VirtualThreadCommandBus} is reentrant on the SAME thread for the SAME aggregate — a follow-up
@@ -100,17 +102,25 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
   /** Whether {@link #tracing} records the lock area, read once. */
   private final boolean traced;
 
+  /**
+   * Whether the locker's connections come from a pool built for it alone, which is what {@link
+   * #withDedicatedPool} says; not the same as owning the pool, which a pool that is not {@link
+   * AutoCloseable} does not allow the locker to do.
+   */
+  private final boolean dedicatedPool;
+
   public PgAdvisoryLocker(DataSource dataSource) {
-    this(dataSource, null);
+    this(dataSource, null, false);
   }
 
-  private PgAdvisoryLocker(DataSource dataSource, AutoCloseable ownedPool) {
-    this(dataSource, ownedPool, new AtomicBoolean(), StreamRuneTracing.NOOP);
+  private PgAdvisoryLocker(DataSource dataSource, AutoCloseable ownedPool, boolean dedicatedPool) {
+    this(dataSource, ownedPool, dedicatedPool, new AtomicBoolean(), StreamRuneTracing.NOOP);
   }
 
   private PgAdvisoryLocker(
       DataSource dataSource,
       AutoCloseable ownedPool,
+      boolean dedicatedPool,
       AtomicBoolean closed,
       StreamRuneTracing tracing) {
     if (dataSource == null) {
@@ -118,6 +128,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     }
     this.dataSource = dataSource;
     this.ownedPool = ownedPool;
+    this.dedicatedPool = dedicatedPool;
     this.closed = closed;
     this.tracing = GuardedTracing.of(tracing);
     this.traced = this.tracing.enabled(TracingArea.LOCK);
@@ -148,7 +159,7 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    */
   public PgAdvisoryLocker traced(StreamRuneTracing tracing) {
     Objects.requireNonNull(tracing, "tracing is required");
-    return new PgAdvisoryLocker(dataSource, ownedPool, closed, tracing);
+    return new PgAdvisoryLocker(dataSource, ownedPool, dedicatedPool, closed, tracing);
   }
 
   /**
@@ -163,7 +174,9 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
    *
    * <p>The returned locker <em>owns</em> the pool: {@link #close()} closes it when it is {@link
    * AutoCloseable}. Hand it the application's own pool and that pool is closed with the locker; use
-   * {@link #PgAdvisoryLocker(DataSource)} for a pool the locker must not close.
+   * {@link #PgAdvisoryLocker(DataSource)} for a pool the locker must not close. A locker built by
+   * that constructor is counted as holding its lock connection in the application's pool, whatever
+   * pool it was given; build it with this method to be counted as dedicated.
    *
    * @param pool the dedicated pool, on the database the event store uses (required)
    * @return a locker backed by {@code pool}
@@ -173,7 +186,8 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
     if (pool == null) {
       throw new IllegalArgumentException("pool is required");
     }
-    return new PgAdvisoryLocker(pool, pool instanceof AutoCloseable closeable ? closeable : null);
+    return new PgAdvisoryLocker(
+        pool, pool instanceof AutoCloseable closeable ? closeable : null, true);
   }
 
   /**
@@ -282,7 +296,21 @@ public final class PgAdvisoryLocker implements AggregateLocker, AutoCloseable {
       config.setMetricsTrackerFactory(metricsTrackerFactory);
     }
     var pool = new HikariDataSource(config);
-    return new PgAdvisoryLocker(pool, pool);
+    return new PgAdvisoryLocker(pool, pool, true);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>1 for a locker over the application's {@link DataSource} ({@link
+   * #PgAdvisoryLocker(DataSource)}): its lock connection comes from the pool the event store uses.
+   * 0 for a locker built by {@link #withDedicatedPool}: its lock connections come from a pool of
+   * its own. The constructor counts the pool it is given as the application's, even when it is a
+   * pool the application built for locking alone. A {@link #traced} copy answers as its original.
+   */
+  @Override
+  public int applicationPoolConnectionsPerLock() {
+    return dedicatedPool ? 0 : 1;
   }
 
   /** The HikariCP pool this locker owns; for the tests of this package. */

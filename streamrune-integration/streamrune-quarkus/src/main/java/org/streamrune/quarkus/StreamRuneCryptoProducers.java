@@ -559,31 +559,11 @@ public class StreamRuneCryptoProducers {
    * derivation. Package-private for direct testing.
    */
   static CryptoForgetSignal postgresForgetSignal(DataSource dataSource) {
-    if (isAgroal(dataSource.getClass())) {
+    if (AgroalTypes.isAgroal(dataSource.getClass())) {
       return new PostgresCryptoForgetSignal(
           dataSource, () -> AgroalForgetListenPool.open(dataSource));
     }
     return new PostgresCryptoForgetSignal(dataSource);
-  }
-
-  /**
-   * Whether {@code type} implements {@code io.agroal.api.AgroalDataSource}, decided by name so that
-   * an application without Agroal on its classpath never loads an Agroal type (Agroal is a
-   * compile-only dependency of this module).
-   */
-  private static boolean isAgroal(Class<?> type) {
-    if (type == null) {
-      return false;
-    }
-    if ("io.agroal.api.AgroalDataSource".equals(type.getName())) {
-      return true;
-    }
-    for (Class<?> implemented : type.getInterfaces()) {
-      if (isAgroal(implemented)) {
-        return true;
-      }
-    }
-    return isAgroal(type.getSuperclass());
   }
 
   private CryptoEngine wrapWithCache(

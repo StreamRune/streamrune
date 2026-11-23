@@ -122,6 +122,12 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case LOCK_TIMEOUT -> this::aNegativeLockTimeoutRefusesStart;
       case BARE_NUMBERS -> this::aDurationWithoutItsUnitRefusesStart;
       case SWITCHES -> this::aSwitchSpelledOtherThanTrueOrFalseRefusesStart;
+      case GLOBAL_SAGA_PARALLELISM -> this::theGlobalSagaParallelismReachesARunnerThatNamedNothing;
+      case BUILDER_SAGA_PARALLELISM ->
+          this::aRunnerThatNamedItsParallelismKeepsItAgainstTheGlobalProperty;
+      case SUBSCRIPTION_SAGA_PARALLELISM -> this::aSubscriptionPropertyWinsOverTheBuilder;
+      case KNOWN_SAGA_SUBSCRIPTIONS ->
+          this::anUnknownSagaSubscriptionNameRefusesStartListingTheKnownNames;
     };
   }
 

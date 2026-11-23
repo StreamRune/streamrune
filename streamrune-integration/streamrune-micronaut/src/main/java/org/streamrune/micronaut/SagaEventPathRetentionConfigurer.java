@@ -1,5 +1,6 @@
 package org.streamrune.micronaut;
 
+import io.micronaut.context.env.Environment;
 import io.micronaut.context.event.ApplicationEventListener;
 import io.micronaut.context.event.StartupEvent;
 import io.micronaut.core.order.Ordered;
@@ -15,6 +16,7 @@ import org.streamrune.integration.SagaForwardFenceSetting;
 import org.streamrune.runtime.SagaEventPathRetention;
 import org.streamrune.runtime.SagaForwardFenceDefault;
 import org.streamrune.runtime.SagaLeaseWiring;
+import org.streamrune.runtime.SagaParallelismDefault;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SagaTypeOwnership;
 
@@ -45,6 +47,12 @@ import org.streamrune.runtime.SagaTypeOwnership;
  * streamrune.subscription.single-active-consumer.enabled} says. A runner that named its fence keeps
  * it. An unknown value fails startup.
  *
+ * <p><b>Parallelism.</b> The same hook applies {@code streamrune.saga.parallelism} and {@code
+ * streamrune.saga.subscriptions.<name>.parallelism} ({@link SagaParallelismDefault}): the
+ * subscription property wins over the builder, the builder over the global property. An unreadable
+ * value fails startup; a subscription name no runner is bound to fails it later, in {@link
+ * SagaParallelismStartupCheck}, once every subscription is built.
+ *
  * <p><b>Leadership.</b> With a real {@link SubscriptionLeadership} bean (not the always-leading
  * {@code NOOP}), the same hook logs one WARN per {@link SagaRunner} that carries no lease: its saga
  * type is delivered on every replica ({@code SagaLeaseWiring.warnUngatedUnderLeadership}). The
@@ -64,13 +72,16 @@ public class SagaEventPathRetentionConfigurer
   private final List<SagaRunner<?>> sagaRunners;
   private final StreamRuneMicronautProperties properties;
   private final SubscriptionLeadership leadership;
+  private final Environment environment;
 
   public SagaEventPathRetentionConfigurer(
       List<SagaRunner<?>> sagaRunners,
       StreamRuneMicronautProperties properties,
-      @Nullable SubscriptionLeadership leadership) {
+      @Nullable SubscriptionLeadership leadership,
+      Environment environment) {
     this.sagaRunners = sagaRunners;
     this.properties = properties;
+    this.environment = environment;
     this.leadership = leadership != null ? leadership : SubscriptionLeadership.NOOP;
   }
 
@@ -121,5 +132,7 @@ public class SagaEventPathRetentionConfigurer
                   + singleActiveConsumer
               : "");
     }
+    SagaParallelismDefault.apply(
+        runners, SagaParallelismProperties.read(environment, properties.sagaParallelism()));
   }
 }
