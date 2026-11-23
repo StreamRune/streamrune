@@ -22,6 +22,21 @@ public static final class org.streamrune.crypto.CachedCryptoEngine$Builder
   public org.streamrune.crypto.CachedCryptoEngine$Builder forgetSignal(org.streamrune.crypto.CryptoForgetSignal)
   public org.streamrune.crypto.CachedCryptoEngine$Builder maximumSize(int)
 
+public interface org.streamrune.crypto.CryptoBackend
+  public abstract java.lang.String name()
+  public abstract org.streamrune.core.crypto.CryptoEngine keyStoreEngine(javax.sql.DataSource, org.streamrune.crypto.CryptoBackend$KeyStoreEngineSettings)
+  public abstract org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource)
+  public abstract org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource, java.util.function.Supplier<? extends javax.sql.DataSource>)
+  public abstract org.streamrune.crypto.ForgottenSubjectStore forgottenSubjects(javax.sql.DataSource)
+
+public static final record org.streamrune.crypto.CryptoBackend$KeyStoreEngineSettings
+  public <init>(java.lang.String, org.streamrune.core.StreamRuneMetrics)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.lang.String tableName()
+  public org.streamrune.core.StreamRuneMetrics metrics()
+
 public interface org.streamrune.crypto.CryptoForgetSignal extends java.lang.AutoCloseable
   public abstract void publish(java.lang.String)
   public abstract void subscribe(java.util.function.Consumer<java.lang.String>, java.lang.Runnable)
