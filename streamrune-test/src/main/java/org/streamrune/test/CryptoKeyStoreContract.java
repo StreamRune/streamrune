@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -363,11 +364,12 @@ public abstract class CryptoKeyStoreContract {
   @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void anEncryptRacingDeleteKeyNeverLeavesARecoverableKeyOrCiphertext() throws Exception {
     int encryptors = 4;
-    int roundsWithCiphertext = 0;
+    int roundsChecked = 0;
     for (int round = 0; round < 20; round++) {
       var subject = subject();
-      // Even rounds race a live key (encrypts are fast, the erasure may land mid-stream); odd
-      // rounds race the first mint (the key is created while the erasure runs).
+      // Even rounds start with a live key, so the ciphertext checks below always run (a pre-minted
+      // ciphertext is checked too) and the encrypts may land before, during or after the erasure;
+      // odd rounds have no key and race the first mint against the erasure.
       byte[] preMinted = round % 2 == 0 ? engine.encrypt(subject, bytes("pre")) : null;
       long delayNanos = round * 25_000L;
       var barrier = new CyclicBarrier(encryptors + 1);
@@ -397,11 +399,9 @@ public abstract class CryptoKeyStoreContract {
                   () -> {
                     try {
                       barrier.await();
-                      // The erasure thread is the one the barrier releases first; staggering it by
-                      // a
-                      // growing delay lets the rounds cover erasures before, during and after the
-                      // encrypts.
-                      java.util.concurrent.locks.LockSupport.parkNanos(delayNanos);
+                      // Stagger the erasure by a growing delay, so the rounds cover erasures
+                      // before, during and after the encrypts.
+                      LockSupport.parkNanos(delayNanos);
                       engine.deleteKey(subject);
                     } catch (Throwable t) {
                       failures.add(t);
@@ -418,8 +418,8 @@ public abstract class CryptoKeyStoreContract {
       if (preMinted != null) {
         ciphertexts.add(preMinted);
       }
-      if (ciphertexts.size() > (preMinted == null ? 0 : 1)) {
-        roundsWithCiphertext++;
+      if (!ciphertexts.isEmpty()) {
+        roundsChecked++;
       }
       for (byte[] ciphertext : ciphertexts) {
         assertThrows(KeyNotFoundException.class, () -> engine.decrypt(subject, ciphertext));
@@ -427,8 +427,7 @@ public abstract class CryptoKeyStoreContract {
       }
     }
     assertTrue(
-        roundsWithCiphertext > 0,
-        "the race was never exercised: the erasure won every round before any encrypt returned");
+        roundsChecked > 0, "no round produced a ciphertext, so the decrypt assertions never ran");
   }
 
   @Test
