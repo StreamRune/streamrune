@@ -2,6 +2,10 @@ package org.streamrune.runtime;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -12,10 +16,13 @@ import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
+import org.streamrune.core.Internal;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.metrics.MetricNames;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaDeadLetterStore;
 import org.streamrune.core.saga.SagaDecider;
@@ -114,7 +121,7 @@ import org.streamrune.core.types.SubscriptionName;
  * {@code initialState} throws → entry only (the documented row-less residual). A fault write that
  * conflicts is retried once on a reload and otherwise left with a WARNING — the entry and the
  * shield ARE recorded, so live events are held and the next drain re-evaluates the saga. Processing
- * continues with the next event in the batch — no head-of-line blocking. {@link
+ * continues with the saga's next event and the rest of the page — no head-of-line blocking. {@link
  * SagaDeadLetterStore} is a <em>required</em> {@link Builder} field; {@link Builder#build()} throws
  * {@link NullPointerException} when it is absent. Infrastructure failures ({@link SagaStore}
  * load/create/update/CAS) are NOT caught; they propagate out of {@code onEvents} so the
@@ -151,6 +158,26 @@ import org.streamrune.core.types.SubscriptionName;
  * SagaCommandDispatch#episodeCompensationKey}). If the correlated event is redelivered and the
  * runner processes it again, the bus finds the key already in the command inbox and returns the
  * recorded result without re-running the handler or re-persisting events.
+ *
+ * <p><b>Parallel steps.</b> The listener routes a page on the delivering thread, then steps its
+ * sagas, at most {@link #parallelism()} steps at a time. The value is {@link Builder#parallelism},
+ * else {@value #DEFAULT_PARALLELISM}. When deployment settings are given to the runner, the
+ * precedence is: the setting of a subscription bound to this runner, the builder, the deployment's
+ * global setting, then {@value #DEFAULT_PARALLELISM}; the integrations bind these settings to
+ * configuration properties. Each subscription built with {@code sagaRunner(runner)} delivers pages
+ * of its own, so a runner bound to k subscriptions can have k pages, and k times {@link
+ * #parallelism()} steps, in flight at once. Within a page, the events of one saga run one after the
+ * other, in offset order, on one thread; different sagas at the same time. After a failed step
+ * nothing more of that saga is started in the page, and the listener returns only when every item
+ * of the page ended, throwing when one failed — so the subscription's checkpoint never passes an
+ * event that was not handled, and a saga's row never records an event before an earlier event of
+ * that saga. The sagas of a page share no state of the runner: a saga's row, its dead-letter
+ * entries and its command-inbox keys are its own, so each saga of a page stepped in parallel ends
+ * as in a serial delivery of it, and the page's redelivery answers every finished step from its
+ * row. Between sagas there is no order: two sagas whose commands target one aggregate reach it in
+ * whichever order the aggregate's lock grants, which a serial delivery or a redelivery need not
+ * repeat; a command that committed answers with its recorded result on any rerun. See {@link
+ * #asEventListener()}.
  *
  * <p><b>Concurrency:</b> Saga writes are CAS-protected ({@link SagaStore#createGenesisPending},
  * {@link SagaStore#applyEvent}, {@link SagaStore#claimCompensating}, {@link SagaStore#update},
@@ -273,6 +300,15 @@ public final class SagaRunner<S extends SagaState> {
    */
   public static final String LEASE_NAME_PREFIX = "saga:";
 
+  /**
+   * The parallelism of a runner that neither its builder, nor a subscription property, nor the
+   * global property names.
+   */
+  public static final int DEFAULT_PARALLELISM = 4;
+
+  /** The highest parallelism a runner accepts. */
+  public static final int MAX_PARALLELISM = 64;
+
   private final SagaOrchestrator<S> orchestrator;
 
   /**
@@ -341,9 +377,42 @@ public final class SagaRunner<S extends SagaState> {
   /** Whether {@link #tracing} records the saga area, read once. */
   private final boolean traced;
 
+  /** The parallelism the builder named; {@code null} when it named none. */
+  private final Integer builderParallelism;
+
+  /**
+   * The parallelism the next page uses with where it came from and the subscriptions bound: one
+   * immutable snapshot, published once per change, so a reader never pairs a value with another
+   * value's source. A page reads it once.
+   */
+  private volatile SagaParallelismSnapshot snapshot;
+
+  /** Guards the resolution: the names bound and the settings applied. */
+  private final Object parallelismLock = new Object();
+
+  /**
+   * How many open subscriptions bound each name of {@link #snapshot}'s bound names; guarded by
+   * {@link #parallelismLock}.
+   */
+  private final Map<String, Integer> bindCounts = new HashMap<>();
+
+  /** The settings an integration applied; {@code null} on a hand-wired runner. */
+  private SagaParallelismSettings parallelismSettings;
+
+  /** Decides which failure of a step stops the page; asked by the page's workers at once. */
+  private final SagaPageStopRule stopRule;
+
+  /** Runs the work items of a page, the items of one saga in offset order on one thread. */
+  private final KeyedPageExecutor pageExecutor;
+
+  /** The meters and the WARN of a page at a parallelism above 1. */
+  private final SagaPageAccounting pageAccounting;
+
   private SagaRunner(Builder<S> builder) {
+    this.builderParallelism = builder.parallelism;
     this.orchestrator = builder.orchestrator;
     this.sagaType = SagaType.fromClass(builder.orchestrator.stateType());
+    this.snapshot = resolveParallelism(List.of(), null);
     this.tracing = GuardedTracing.of(builder.tracing, builder.metrics);
     this.traced = tracing.enabled(TracingArea.SAGA);
     this.sagaStore = builder.sagaStore;
@@ -367,6 +436,16 @@ public final class SagaRunner<S extends SagaState> {
     this.lease =
         SubscriptionLease.of(
             builder.leadership, SubscriptionName.of(LEASE_NAME_PREFIX + sagaType.value()));
+    this.stopRule =
+        new SagaPageStopRule(
+            builder.connectionFailureClassifier != null
+                ? builder.connectionFailureClassifier
+                : new StoreConnectionFailureClassifier(sagaStore));
+    this.pageExecutor =
+        builder.workerThreads != null
+            ? new KeyedPageExecutor(builder.workerThreads, tracing)
+            : new KeyedPageExecutor("saga-" + sagaType.value() + "-step-", tracing);
+    this.pageAccounting = new SagaPageAccounting(sagaType, metrics, stopRule);
   }
 
   /**
@@ -377,6 +456,159 @@ public final class SagaRunner<S extends SagaState> {
    */
   public SubscriptionLease lease() {
     return lease;
+  }
+
+  /**
+   * The parallelism the next page uses: how many of its steps run at once. Read once per page.
+   *
+   * @return between 1 and {@value #MAX_PARALLELISM}
+   */
+  public int parallelism() {
+    return snapshot.value();
+  }
+
+  /**
+   * Records that a subscription delivering this runner's saga type was built with this runner, and
+   * recomputes the parallelism. A name bound again is counted, not listed twice; the bind lasts
+   * until the subscription is closed ({@link #releaseSubscription}). Called by the subscription
+   * builders as the last step of {@code build()}.
+   *
+   * @param name the subscription's name
+   * @throws IllegalStateException when two bound names set different parallelism
+   * @hidden
+   */
+  @Internal
+  public void bindSubscription(SubscriptionName name) {
+    Objects.requireNonNull(name, "name");
+    synchronized (parallelismLock) {
+      List<String> current = snapshot.boundNames();
+      if (current.contains(name.value())) {
+        bindCounts.merge(name.value(), 1, Integer::sum);
+        return;
+      }
+      List<String> candidate = new ArrayList<>(current);
+      candidate.add(name.value());
+      snapshot = resolveParallelism(candidate, parallelismSettings);
+      bindCounts.put(name.value(), 1);
+    }
+  }
+
+  /**
+   * Records that a subscription bound with {@link #bindSubscription} was closed, and recomputes the
+   * parallelism without it. A name bound by several subscriptions leaves the bound names when the
+   * last of them is released; a name that is not bound is ignored. Called by the subscriptions'
+   * {@code close()}.
+   *
+   * @param name the subscription's name
+   * @hidden
+   */
+  @Internal
+  public void releaseSubscription(SubscriptionName name) {
+    Objects.requireNonNull(name, "name");
+    synchronized (parallelismLock) {
+      Integer count = bindCounts.get(name.value());
+      if (count == null) {
+        return;
+      }
+      if (count > 1) {
+        bindCounts.put(name.value(), count - 1);
+        return;
+      }
+      List<String> candidate = new ArrayList<>(snapshot.boundNames());
+      candidate.remove(name.value());
+      // a subset of names that did not conflict cannot conflict: this resolution does not throw
+      snapshot = resolveParallelism(candidate, parallelismSettings);
+      bindCounts.remove(name.value());
+    }
+  }
+
+  /**
+   * The names of the subscriptions bound to this runner and not closed, in bind order.
+   *
+   * @return an unmodifiable snapshot
+   */
+  public List<SubscriptionName> boundSubscriptionNames() {
+    return snapshot.boundNames().stream().map(SubscriptionName::of).toList();
+  }
+
+  /** Applies the deployment's settings and recomputes the parallelism. */
+  void applyParallelismSettings(SagaParallelismSettings settings) {
+    Objects.requireNonNull(settings, "settings");
+    synchronized (parallelismLock) {
+      SagaParallelismSnapshot resolved = resolveParallelism(snapshot.boundNames(), settings);
+      parallelismSettings = settings;
+      snapshot = resolved;
+    }
+  }
+
+  /** Where the parallelism the next page uses came from. */
+  SagaParallelismSource parallelismSource() {
+    return snapshot.source();
+  }
+
+  /** The value, source, winning name and bound names as of one moment. */
+  SagaParallelismSnapshot parallelismSnapshot() {
+    return snapshot;
+  }
+
+  /**
+   * The one resolution of the four sources: the value of the bound name that has an entry in the
+   * settings, else the builder's, else the global one when settings were applied, else the default.
+   */
+  private SagaParallelismSnapshot resolveParallelism(
+      List<String> names, SagaParallelismSettings settings) {
+    List<String> bound = List.copyOf(names);
+    Integer value = null;
+    String winner = null;
+    if (settings != null) {
+      for (String name : bound) {
+        Integer configured = settings.bySubscription().get(name);
+        if (configured == null) {
+          continue;
+        }
+        if (value != null && !value.equals(configured)) {
+          throw new IllegalStateException(
+              "Saga type "
+                  + sagaType.value()
+                  + " is bound to the subscriptions '"
+                  + LogSanitizer.sanitizeForLog(winner)
+                  + "' and '"
+                  + LogSanitizer.sanitizeForLog(name)
+                  + "', which set different parallelism ("
+                  + value
+                  + " and "
+                  + configured
+                  + "): set one value");
+        }
+        if (value == null) {
+          value = configured;
+          winner = name;
+        }
+      }
+    }
+    if (value != null) {
+      return new SagaParallelismSnapshot(
+          value, SagaParallelismSource.SUBSCRIPTION_PROPERTY, winner, bound);
+    }
+    if (builderParallelism != null) {
+      return new SagaParallelismSnapshot(
+          builderParallelism, SagaParallelismSource.BUILDER, null, bound);
+    }
+    if (settings != null) {
+      return new SagaParallelismSnapshot(
+          settings.global(), SagaParallelismSource.GLOBAL_PROPERTY, null, bound);
+    }
+    return new SagaParallelismSnapshot(
+        DEFAULT_PARALLELISM, SagaParallelismSource.DEFAULT, null, bound);
+  }
+
+  /** The one range check of a parallelism, shared by the builder and the integrations' settings. */
+  static int requireParallelismInRange(String name, int value) {
+    if (value < 1 || value > MAX_PARALLELISM) {
+      throw new IllegalArgumentException(
+          name + " must be between 1 and " + MAX_PARALLELISM + ", got: " + value);
+    }
+    return value;
   }
 
   /**
@@ -531,32 +763,182 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * Returns an {@link EventListener} backed by this runner. The listener processes events
-   * sequentially within each batch. Poison events (orchestrator logic exceptions, deterministic
-   * state-conversion failures) are recorded by {@link #recordPoison} — the batch continues. A step
-   * that loses the compare-and-swap of its saga row is run again in place, up to three attempts in
-   * all. Infrastructure failures (store I/O) and a conflict that survives the third attempt
-   * propagate so the subscription retries.
+   * Returns an {@link EventListener} backed by this runner. A page is delivered in two phases.
+   *
+   * <ol>
+   *   <li><b>Routing</b>, on the delivering thread, in page order, before any step starts: each
+   *       event is routed by {@link #resolveTarget}. An event that belongs to no saga of this type
+   *       is done at once; a routing method that throws or returns {@code null} quarantines the
+   *       event as a null-saga entry ({@link #recordPoison}); every other event becomes a work item
+   *       of its saga. This holds at every parallelism, 1 included: the whole page is routed before
+   *       its first step, so a routing poison later in a page is quarantined even when an earlier
+   *       step fails, and again on each redelivery of that page (a null-saga entry is published
+   *       anew each time); a quarantine write that fails fails the page before any step ran.
+   *   <li><b>Steps</b>, at most {@link #parallelism()} at once, read once per page. The items of
+   *       one saga run in offset order on one thread, one after the other; the sagas of a page run
+   *       at the same time on virtual threads named {@code saga-<saga type>-step-<n>}, which carry
+   *       the delivering thread's request context and dispatch cause, and its trace context when
+   *       the runner has a tracing ({@link Builder#tracing}); a runner without one carries no trace
+   *       context to a worker, so the spans of the commands a parallel step dispatches are roots
+   *       there, not children of the delivery's span. A page with one saga, or a parallelism of 1,
+   *       runs on the delivering thread. A poison event is quarantined by {@link #recordPoison} on
+   *       the thread of its step and its saga's part of the page goes on. A step that loses the
+   *       compare-and-swap of its saga row is run again in place, up to three attempts in all.
+   * </ol>
+   *
+   * <p>A step that fails otherwise — a retry-later failure of a command, a store failure, a
+   * conflict that survives the third attempt — ends its saga's part of the page: nothing more of
+   * that saga is started in the page. The other sagas of the page run to their end, unless the
+   * failure is connection-class (the saga store's {@link SagaStore#connectionFailureClassifier()},
+   * or the builder's {@link Builder#connectionFailureClassifier}) or the third failure of the page:
+   * then no further step is started and the steps in flight finish. The listener returns only when
+   * every item of the page ran to its end; it throws the failure of the item with the lowest offset
+   * (an {@link Error} first), the others attached as suppressed, so the subscription does not save
+   * its checkpoint and delivers the page again. Every finished step is then answered from its saga
+   * row. A page whose items did not all run without a failure is never acknowledged — also when a
+   * worker thread ended without running its items (a tracing whose {@code propagating} wrapper
+   * dropped the task, or a worker that died while it recorded a failure): the listener then throws
+   * an {@link IllegalStateException}. With a parallelism of 1 the first failure ends the page at
+   * once, as a plain loop does, and is thrown as the step threw it.
+   *
+   * <p>At a parallelism above 1 a page that is not acknowledged — also one whose routing phase
+   * failed — counts one {@link MetricNames#SAGA_PAGE_FAILED} and is reported by the page WARN, the
+   * first such page and then at most once per 5 minutes with the number of pages since; neither for
+   * an {@link Error}, nor when the delivering thread was interrupted while it waited for the steps.
+   * The gauges of the steps in flight and of the items not started are set to 0 after every page,
+   * also when the page could not start its workers. A metrics backend or classifier that throws an
+   * exception never replaces the page's failure: the exception is logged and dropped (a failing
+   * gauge at most once per 5 minutes, on the delivering thread). An {@link Error} from either
+   * always leaves the listener, the page's own failure attached to it as suppressed; the page is
+   * then not acknowledged and its redelivery is answered from the rows.
+   *
+   * <p><b>{@code close()} from inside a step.</b> At a parallelism above 1 a step runs on a worker
+   * thread, not on the subscription's poll thread: a subscription's {@code close()} called from
+   * inside a step (a command handler or an orchestrator that shuts its own subscription down) does
+   * not recognise the listener's thread and waits for the poll thread, which waits for the page —
+   * up to the subscription's close timeout (30 s for {@link PollingEventSubscription}), after which
+   * it returns with its WARN.
    */
   public EventListener asEventListener() {
-    return events -> {
-      warnIfDeliveringWithoutAnAnchor();
-      for (EventEnvelope event : events) {
-        try {
-          resolveTarget(event).ifPresent(target -> deliverTraced(target, event));
-        } catch (SagaPoisonException poison) {
-          SagaId poisonSagaId = poison.sagaId();
-          recordPoison(poisonSagaId, event, poison.getCause());
-          LOG.warn(
-              "Saga poison event quarantined (saga={}, offset={})",
-              (poisonSagaId == null ? "<null>" : LogSanitizer.sanitizeForLog(poisonSagaId.value())),
-              event.globalOffset().value(),
-              poison.getCause());
-        }
-        // SagaStore (load/create/CAS) failures are NOT SagaPoisonException: they propagate out of
-        // onEvents, the subscription does not advance the offset, and the batch is retried.
+    return this::deliverPage;
+  }
+
+  /** One page: routed on this thread, then stepped as {@link #asEventListener()} describes. */
+  private void deliverPage(List<EventEnvelope> events) {
+    warnIfDeliveringWithoutAnAnchor();
+    int p = snapshot.value();
+    if (p == 1) {
+      List<SagaWorkItem> items = route(events);
+      // SagaStore (load/create/CAS) failures are NOT SagaPoisonException: they leave onEvents, the
+      // subscription does not advance the offset, and the page is delivered again.
+      failClosed(
+              pageExecutor.run(
+                  items, SagaWorkItem::sagaId, 1, this::deliverItem, stopRule, PageObserver.NONE))
+          .rethrow();
+      return;
+    }
+    List<SagaWorkItem> items;
+    try {
+      items = route(events);
+    } catch (RuntimeException routingFailed) {
+      // a quarantine write that failed: a failed page like any other, before any step started
+      try {
+        pageAccounting.afterRoutingFailure(routingFailed, events.size());
+      } catch (Error metricsOrClassifierError) {
+        metricsOrClassifierError.addSuppressed(routingFailed);
+        throw metricsOrClassifierError;
       }
-    };
+      throw routingFailed;
+    }
+    SagaPageAccounting.Page pageGauges = pageAccounting.startPage();
+    PageResult ran;
+    try {
+      ran =
+          pageExecutor.run(items, SagaWorkItem::sagaId, p, this::deliverItem, stopRule, pageGauges);
+    } catch (Throwable runFailed) {
+      // a worker thread that could not be started; run() waited for the workers that did start
+      try {
+        pageAccounting.endPage(pageGauges);
+      } catch (Error metricsError) {
+        metricsError.addSuppressed(runFailed);
+        throw metricsError;
+      }
+      throw runFailed;
+    }
+    PageResult result = failClosed(ran);
+    try {
+      pageAccounting.endPage(pageGauges);
+      pageAccounting.afterPage(result, items);
+    } catch (Error metricsOrClassifierError) {
+      if (result.failure() != null && result.failure() != metricsOrClassifierError) {
+        metricsOrClassifierError.addSuppressed(result.failure());
+      }
+      throw metricsOrClassifierError;
+    }
+    result.rethrow();
+  }
+
+  /**
+   * The page as it ran, with a failure when items were left unrun and nothing failed: a state no
+   * path of the executor produces, so the page fails closed instead of being acknowledged.
+   */
+  private static PageResult failClosed(PageResult result) {
+    if (result.failure() != null || result.notStarted() == 0) {
+      return result;
+    }
+    return new PageResult(
+        result.items(),
+        result.groups(),
+        result.failed(),
+        result.notStarted(),
+        new IllegalStateException(
+            result.notStarted()
+                + " of "
+                + result.items()
+                + " step(s) of the page did not run and none failed"),
+        -1,
+        result.stoppedBy(),
+        result.interrupted(),
+        result.stepNanos(),
+        result.wallNanos());
+  }
+
+  /**
+   * The routing phase of a page: the work items of the events that route to a saga, in page order.
+   * A routing poison is quarantined here, before any step of the page starts.
+   */
+  private List<SagaWorkItem> route(List<EventEnvelope> events) {
+    List<SagaWorkItem> items = new ArrayList<>(events.size());
+    for (EventEnvelope event : events) {
+      try {
+        resolveTarget(event)
+            .ifPresent(
+                target -> items.add(new SagaWorkItem(target.sagaId(), target.startPath(), event)));
+      } catch (SagaPoisonException poison) {
+        quarantinePoisonAndWarn(poison, event);
+      }
+    }
+    return items;
+  }
+
+  /** The step of one work item, on whichever thread the page executor runs it. */
+  private void deliverItem(SagaWorkItem item) {
+    try {
+      deliverTraced(item.target(), item.event());
+    } catch (SagaPoisonException poison) {
+      quarantinePoisonAndWarn(poison, item.event());
+    }
+  }
+
+  /** The single poison handler of the event path, and its WARN. */
+  private void quarantinePoisonAndWarn(SagaPoisonException poison, EventEnvelope event) {
+    SagaId poisonSagaId = poison.sagaId();
+    recordPoison(poisonSagaId, event, poison.getCause());
+    LOG.warn(
+        "Saga poison event quarantined (saga={}, offset={})",
+        (poisonSagaId == null ? "<null>" : LogSanitizer.sanitizeForLog(poisonSagaId.value())),
+        event.globalOffset().value(),
+        poison.getCause());
   }
 
   /**
@@ -1568,6 +1950,15 @@ public final class SagaRunner<S extends SagaState> {
     /** {@code null}: not named, which {@link #build()} treats as on. */
     private Boolean forwardFence;
 
+    /** {@code null}: not named. */
+    private Integer parallelism;
+
+    /** {@code null}: not named, the saga store's classifier is used. */
+    private ConnectionFailureClassifier connectionFailureClassifier;
+
+    /** {@code null}: the page's virtual worker threads; a test seam. */
+    private KeyedPageExecutor.WorkerThreads workerThreads;
+
     public Builder<S> orchestrator(SagaOrchestrator<S> orchestrator) {
       this.orchestrator = orchestrator;
       return this;
@@ -1642,9 +2033,18 @@ public final class SagaRunner<S extends SagaState> {
      * The tracing the runner starts its spans through when its {@link TracingArea#SAGA} area is on:
      * {@code saga/{SagaType}/step} for each event it delivers to a saga, linked to the span that
      * wrote the event and carrying the step's outcome, and {@code saga/{SagaType}/compensate} for
-     * each compensation command it dispatches. The commands a step dispatches run on the delivering
-     * thread, so their spans nest under the step's. Optional; defaults to {@link
-     * StreamRuneTracing#NOOP}, which traces nothing.
+     * each compensation command it dispatches. The commands a step dispatches run on the thread of
+     * the step, so their spans nest under the step's; the steps of a page that run in parallel
+     * carry the delivering thread's trace context, so their spans are children of the page's.
+     *
+     * <p>The trace context reaches a step on a worker thread through this tracing only ({@link
+     * StreamRuneTracing#propagating}). A runner without one carries the request context and the
+     * dispatch cause to its workers but no trace context: the spans the commands of a parallel step
+     * start through the command bus's own tracing are then roots, not children of the
+     * subscription's delivery span. A page of one saga, or a parallelism of 1, runs on the
+     * delivering thread, where the delivery's trace context is current either way.
+     *
+     * <p>Optional; defaults to {@link StreamRuneTracing#NOOP}, which traces nothing.
      *
      * @param tracing the tracing; not {@code null}
      * @return this builder
@@ -1768,6 +2168,57 @@ public final class SagaRunner<S extends SagaState> {
      */
     public Builder<S> forwardFence(boolean enabled) {
       this.forwardFence = enabled;
+      return this;
+    }
+
+    /**
+     * How many steps of this saga type run at once: the sagas of a page are stepped in parallel, up
+     * to this many at a time, and the events of one saga always one after the other, in offset
+     * order. Optional; {@value SagaRunner#DEFAULT_PARALLELISM} when not named. {@code 1} steps a
+     * page one event after the other on the delivering thread, ending at its first failure; the
+     * page is still routed whole before its first step, at every parallelism ({@link
+     * SagaRunner#asEventListener()}).
+     *
+     * <p>When deployment settings are given to the runner (the integrations bind them to
+     * configuration properties), the builder's value wins over the deployment's global setting and
+     * loses to the setting of a subscription built with {@code sagaRunner(runner)}. It applies to
+     * each such subscription: a runner bound to k subscriptions can have k pages in flight, so up
+     * to k times the value steps at once.
+     *
+     * <p>A step in flight holds a database connection while its commands load and append, so the
+     * value is bounded by the connection pool, not by the CPU count. A page is the unit that is
+     * stepped in parallel: a subscription fetch size of at least four times the parallelism keeps
+     * the steps busy.
+     *
+     * @param parallelism between 1 and {@value SagaRunner#MAX_PARALLELISM}
+     * @return this builder
+     * @throws IllegalArgumentException outside that range
+     */
+    public Builder<S> parallelism(int parallelism) {
+      this.parallelism = requireParallelismInRange("parallelism", parallelism);
+      return this;
+    }
+
+    /**
+     * Replaces the saga store's classifier, for an event store on another backend than the saga
+     * store. The classifier decides which failure of a step says the database, or the connection to
+     * it, is gone: after such a failure the page starts no further step, while any other failure
+     * ends only its own saga's part of the page. Optional; the runner reads {@link
+     * SagaStore#connectionFailureClassifier()} on its first use otherwise. Several steps of a page
+     * call it at once: it must be thread-safe.
+     *
+     * @param classifier the classifier; not {@code null}
+     * @return this builder
+     */
+    public Builder<S> connectionFailureClassifier(ConnectionFailureClassifier classifier) {
+      this.connectionFailureClassifier =
+          Objects.requireNonNull(classifier, "connectionFailureClassifier is required");
+      return this;
+    }
+
+    /** Test seam: how the page executor creates its worker threads. */
+    Builder<S> workerThreads(KeyedPageExecutor.WorkerThreads workerThreads) {
+      this.workerThreads = Objects.requireNonNull(workerThreads, "workerThreads is required");
       return this;
     }
 

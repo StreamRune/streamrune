@@ -588,15 +588,20 @@ public final class org.streamrune.runtime.SagaForwardFenceDefault
   public static boolean effectiveOf(org.streamrune.runtime.SagaRunner<?>)
 
 public final class org.streamrune.runtime.SagaRunner<S extends org.streamrune.core.saga.SagaState>
+  public int parallelism()
+  public java.util.List<org.streamrune.core.types.SubscriptionName> boundSubscriptionNames()
   public org.streamrune.core.subscription.EventListener asEventListener()
   public org.streamrune.runtime.SubscriptionLease lease()
   public static <S extends org.streamrune.core.saga.SagaState> org.streamrune.runtime.SagaRunner$Builder<S> builder()
+  public static final int DEFAULT_PARALLELISM = 4
+  public static final int MAX_PARALLELISM = 64
   public static final java.lang.String LEASE_NAME_PREFIX = "saga:"
 
 public static final class org.streamrune.runtime.SagaRunner$Builder<S extends org.streamrune.core.saga.SagaState>
   public <init>()
   public org.streamrune.runtime.SagaRunner$Builder<S> clock(java.time.Clock)
   public org.streamrune.runtime.SagaRunner$Builder<S> commandBus(org.streamrune.core.CommandBus)
+  public org.streamrune.runtime.SagaRunner$Builder<S> connectionFailureClassifier(org.streamrune.core.ConnectionFailureClassifier)
   public org.streamrune.runtime.SagaRunner$Builder<S> correlateByEventData(java.util.function.BiFunction<org.streamrune.core.types.StreamId, org.streamrune.core.DomainEvent, java.util.Optional<org.streamrune.core.saga.SagaId>>)
   public org.streamrune.runtime.SagaRunner$Builder<S> decider(org.streamrune.core.saga.SagaDecider<S>)
   public org.streamrune.runtime.SagaRunner$Builder<S> extractSagaId(java.util.function.Function<org.streamrune.core.EventEnvelope, org.streamrune.core.saga.SagaId>)
@@ -605,6 +610,7 @@ public static final class org.streamrune.runtime.SagaRunner$Builder<S extends or
   public org.streamrune.runtime.SagaRunner$Builder<S> leadership(org.streamrune.core.subscription.SubscriptionLeadership)
   public org.streamrune.runtime.SagaRunner$Builder<S> metrics(org.streamrune.core.StreamRuneMetrics)
   public org.streamrune.runtime.SagaRunner$Builder<S> orchestrator(org.streamrune.core.saga.SagaOrchestrator<S>)
+  public org.streamrune.runtime.SagaRunner$Builder<S> parallelism(int)
   public org.streamrune.runtime.SagaRunner$Builder<S> sagaDeadLetterStore(org.streamrune.core.saga.SagaDeadLetterStore)
   public org.streamrune.runtime.SagaRunner$Builder<S> sagaStore(org.streamrune.core.saga.SagaStore)
   public org.streamrune.runtime.SagaRunner$Builder<S> startWhen(java.util.function.Predicate<org.streamrune.core.EventEnvelope>)

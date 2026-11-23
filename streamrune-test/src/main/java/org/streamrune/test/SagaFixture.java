@@ -3,12 +3,14 @@ package org.streamrune.test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -81,6 +83,16 @@ import org.streamrune.runtime.SagaTimeoutRunner;
  * rejected or whose compensation cannot be dispatched. Like every shipped bus it refuses a dispatch
  * bound to a reserved correlation id that is not the bound saga origin's.
  *
+ * <p><b>One saga at a time.</b> The builder starts with {@code parallelism(1)}: the runner steps
+ * the sagas of a page one after the other, in page order, on the test's thread, so the commands of
+ * a step are dispatched in the order of their events — for the tests of an application too. The
+ * production default is {@value SagaRunner#DEFAULT_PARALLELISM}. A test that wants the sagas of a
+ * page stepped at the same time names a parallelism in the runner customizer, which runs after the
+ * fixture's defaults: {@code SagaFixture.of(OrderState.class, b ->
+ * b.orchestrator(saga).parallelism(4))}. The commands of one saga keep their order; between
+ * different sagas of a page there is then no order, so such a test reads {@link #dispatched()} as a
+ * set.
+ *
  * <p>Not thread-safe: one fixture per test, driven from the test's thread.
  *
  * @param <S> the saga's state type
@@ -118,7 +130,8 @@ public final class SagaFixture<S extends SagaState> {
             .commandBus(bus)
             .sagaDeadLetterStore(deadLetters)
             .clock(clock)
-            .forwardFence(false);
+            .forwardFence(false)
+            .parallelism(1);
     Objects.requireNonNull(runner, "runner is required").accept(builder);
     this.runner = builder.build();
   }
@@ -573,9 +586,10 @@ public final class SagaFixture<S extends SagaState> {
   /** Records each command; executes none; throws for the types {@link #failing} named. */
   private static final class RecordingCommandBus implements CommandBus {
 
-    private final List<Command> dispatched = new ArrayList<>();
+    // a runner the test customised to a parallelism above 1 dispatches from several threads
+    private final List<Command> dispatched = new CopyOnWriteArrayList<>();
     private final Map<Class<?>, Supplier<? extends RuntimeException>> failures =
-        new LinkedHashMap<>();
+        Collections.synchronizedMap(new LinkedHashMap<>());
 
     @Override
     public boolean supportsIdempotentExecution() {
@@ -592,8 +606,11 @@ public final class SagaFixture<S extends SagaState> {
     public <C extends Command> CommandResult execute(C command, IdempotencyKey key) {
       StreamRuneContext.requireNoForeignReservedCorrelationId();
       dispatched.add(command);
-      for (Map.Entry<Class<?>, Supplier<? extends RuntimeException>> failure :
-          failures.entrySet()) {
+      List<Map.Entry<Class<?>, Supplier<? extends RuntimeException>>> programmed;
+      synchronized (failures) {
+        programmed = List.copyOf(failures.entrySet());
+      }
+      for (Map.Entry<Class<?>, Supplier<? extends RuntimeException>> failure : programmed) {
         if (failure.getKey().isInstance(command)) {
           throw failure.getValue().get();
         }

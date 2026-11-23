@@ -244,6 +244,9 @@ final class ForwardingDecoratorChecks {
     if (type == long.class || type == Long.class) {
       return (long) n;
     }
+    if (type == double.class || type == Double.class) {
+      return n + 0.5;
+    }
     if (type == String.class) {
       return "value-" + n;
     }

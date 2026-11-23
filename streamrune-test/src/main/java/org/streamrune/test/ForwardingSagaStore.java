@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.saga.LoadedSaga;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
@@ -60,6 +61,12 @@ public class ForwardingSagaStore implements SagaStore {
   @Override
   public Object storageIdentity() {
     return schedule.call("storageIdentity", delegate::storageIdentity);
+  }
+
+  /** The wrapped store's classifier: the backend it reports on is the delegate's. */
+  @Override
+  public ConnectionFailureClassifier connectionFailureClassifier() {
+    return schedule.call("connectionFailureClassifier", delegate::connectionFailureClassifier);
   }
 
   @Override

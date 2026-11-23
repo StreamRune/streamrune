@@ -129,6 +129,9 @@ public final class org.streamrune.postgres.PostgresComplianceReportQuery impleme
   public org.streamrune.core.audit.ComplianceReport generate(java.time.Instant, java.time.Instant)
   public org.streamrune.core.audit.ComplianceReport generateForUser(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
 
+public final class org.streamrune.postgres.PostgresConnectionFailures
+  public static final org.streamrune.core.ConnectionFailureClassifier CLASSIFIER
+
 public final class org.streamrune.postgres.PostgresDeadLetterQueue implements org.streamrune.core.DeadLetterQueue
   public <init>(javax.sql.DataSource)
   public int deleteOlderThan(java.time.Instant)
@@ -308,6 +311,7 @@ public final class org.streamrune.postgres.PostgresSagaStore implements org.stre
   public java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
   public java.util.Optional<org.streamrune.core.saga.SagaStore$RowFacts> loadRowFacts(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
   public long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public org.streamrune.core.ConnectionFailureClassifier connectionFailureClassifier()
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine)
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
   public void applyEvent(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, long, org.streamrune.core.saga.SagaStore$AppliedEvent)

@@ -257,7 +257,9 @@ class SagaDeliveryRetryTest {
 
       assertThat(f.a.sagaStore.eventWriteAttempts()).isEqualTo(SagaRunner.MAX_DELIVERY_ATTEMPTS);
       assertThat(f.a.deliveryRetriedSamples).containsExactly(TYPE.value(), TYPE.value());
+      // the page WARN of a runner at a parallelism above 1 is the listener's, not the step's
       assertThat(log.warnings())
+          .filteredOn(w -> !w.getFormattedMessage().contains("was not acknowledged"))
           .singleElement()
           .satisfies(
               warning ->

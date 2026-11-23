@@ -2,8 +2,10 @@ package org.streamrune.integration;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.micrometer.core.instrument.distribution.ValueAtPercentile;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.streamrune.core.metrics.MetricNames;
 
 /**
  * Covers the saga/inbox/outbox operational hooks added to {@link
@@ -596,5 +598,77 @@ class MicrometerStreamRuneMetricsSagaTest {
             .tag("event.type", "OrderPlaced")
             .counter()
             .count());
+  }
+
+  @Test
+  void sagaPageMeters() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+    String type = "com.acme.OrderState";
+
+    metrics.recordSagaStepsInFlight(type, 3, 7);
+    metrics.recordSagaStepsInFlight(type, 1, 0);
+    metrics.recordSagaPageEffectiveParallelism(type, 3.5);
+    metrics.recordSagaPageFailed(type, MetricNames.STOP_CONNECTION);
+    metrics.recordSagaStepsInFlight("com.acme.PaymentState", 5, 2);
+
+    assertEquals(
+        5.0,
+        registry
+            .get(MetricNames.SAGA_STEPS_IN_FLIGHT)
+            .tag(MetricNames.TAG_SAGA_TYPE, "com.acme.PaymentState")
+            .gauge()
+            .value());
+    assertEquals(
+        1.0,
+        registry
+            .get(MetricNames.SAGA_STEPS_IN_FLIGHT)
+            .tag(MetricNames.TAG_SAGA_TYPE, type)
+            .gauge()
+            .value());
+    assertEquals(
+        0.0,
+        registry
+            .get(MetricNames.SAGA_PAGE_PENDING)
+            .tag(MetricNames.TAG_SAGA_TYPE, type)
+            .gauge()
+            .value());
+    assertEquals(
+        3.5,
+        registry
+            .get(MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM)
+            .tag(MetricNames.TAG_SAGA_TYPE, type)
+            .summary()
+            .totalAmount());
+    assertEquals(
+        1.0,
+        registry
+            .get(MetricNames.SAGA_PAGE_FAILED)
+            .tags(
+                MetricNames.TAG_SAGA_TYPE, type, MetricNames.TAG_STOP, MetricNames.STOP_CONNECTION)
+            .counter()
+            .count());
+  }
+
+  @Test
+  void theEffectiveParallelismSummaryPublishesItsMedian() {
+    var registry = new SimpleMeterRegistry();
+    var metrics = MicrometerStreamRuneMetrics.builder().registry(registry).build();
+    String type = "com.acme.OrderState";
+
+    metrics.recordSagaPageEffectiveParallelism(type, 1);
+    metrics.recordSagaPageEffectiveParallelism(type, 2);
+    metrics.recordSagaPageEffectiveParallelism(type, 3);
+
+    ValueAtPercentile[] percentiles =
+        registry
+            .get(MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM)
+            .tag(MetricNames.TAG_SAGA_TYPE, type)
+            .summary()
+            .takeSnapshot()
+            .percentileValues();
+    assertEquals(1, percentiles.length);
+    assertEquals(0.5, percentiles[0].percentile());
+    assertEquals(2.0, percentiles[0].value(), 0.1);
   }
 }

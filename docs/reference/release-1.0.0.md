@@ -894,6 +894,42 @@ license.
   is an explicit, mandatory constructor argument.
 - A `SagaStore` insert of a different saga type under the same `SagaId` throws
   `SagaTypeCollisionException`; lookups, drains and discards are saga-type scoped.
+- Parallel saga steps: `SagaRunner` steps the sagas of a page at the same time, at most
+  `SagaRunner.Builder.parallelism(n)` (1 to 64, default 4; `parallelism(1)` steps the page serially
+  and ends it at its first failure). The events of one saga run in offset order, one step at a time;
+  between sagas of one type there is no order. The page is acknowledged whole: the listener returns
+  when every item ran to its end and throws the failure of the item with the lowest offset (the
+  others suppressed), so the checkpoint never passes an event that was not handled. A failed saga ends
+  its own part of the page and the others finish; a connection-class failure or the third failed step
+  of the page stops the page, with the steps in flight finishing; poison is quarantined on its step's
+  thread and never blocks. What is connection-class comes from the saga store,
+  `SagaStore.connectionFailureClassifier()` (default `ConnectionFailureClassifier.GENERIC`:
+  SQLState class `08` and the JDBC transient and non-transient connection exceptions;
+  `PostgresSagaStore` adds `57P01`, `57P02`, `57P03` and `53300`), or from
+  `SagaRunner.Builder.connectionFailureClassifier(...)`. When deployment settings are given to the
+  runner, the value comes, in precedence order, from the setting named for a subscription bound to
+  the runner, the builder, the deployment's global setting, then 4; a setting that names a
+  subscription no runner is bound to is refused, and a changed value applies from the next page. The
+  integrations bind these settings to configuration properties. A runner bound to k subscriptions can
+  have k pages, so k times the parallelism steps, in flight; a closed subscription releases its bind.
+  At parallelism 1 the runner routes the whole page before its first step. At a parallelism above 1 a
+  page that is not acknowledged, also one whose routing failed, is reported by a WARN, the first such
+  page and then at most once per 5 minutes with the number of pages since, and `close()` called from
+  inside a step waits for the page's join, up to 30 seconds. A step in flight holds one connection of the
+  application's pool, two with a `PgAdvisoryLocker` on that pool; when `parallelism` × subscriptions
+  × lock connections reaches the pool's maximum size, the workers can hold every connection as a lock
+  connection and wait for a second, so every saga ends only after many redeliveries: give the locker a
+  dedicated pool, a larger pool, or a lower parallelism. Give the subscription a fetch size of at
+  least 4 × `parallelism`; an orchestrator keeps no mutable fields, and scoped values other than the
+  request context, the dispatch cause and — when the runner has a tracing — the trace context are not
+  carried to a step.
+- Four meters, recorded at a parallelism above 1 only and counted across the runner's pages, tagged
+  by `saga.type`: `streamrune.saga.steps.in_flight` and `streamrune.saga.page.pending` (gauges),
+  `streamrune.saga.page.effective_parallelism` (a distribution summary of each multi-saga page's step
+  time divided by its wall time) and `streamrune.saga.page.failed` (a counter of failed pages, one
+  per page that is not acknowledged, also one whose routing failed, tagged `stop`: `connection`,
+  `third_failure` or `none`; `connection` is decided from the failure the page stopped on, else from
+  the one it threw).
 
 ## Transactional outbox
 
@@ -1512,7 +1548,10 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
   and a `MutableClock`; steps (`given`, `when`, `replyingTo`, `redeliver`, `runTimeouts`) and
   expectations (`expectCommands`, `expectState`, `expectStatus`, `expectCompensating`,
   `expectCompleted`, `expectDeadLettered`). `streamrune-test` depends on `streamrune-runtime` for it,
-  and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread.
+  and `SagaTimeoutRunner.pollOnce()` runs one poll on the caller's thread. The fixture's runner
+  steps one saga at a time (parallelism 1, against the production default of 4), so a test's
+  commands come in page order; `.parallelism(n)` in the runner customizer runs the sagas of a page
+  in parallel, and the commands of different sagas then have no order between them.
 - `EventStreamFixtures`: the events of an `InMemoryEventStore` written to a JSON file (each payload
   as the store's own mapper writes it, `@Encrypted` fields in the clear), read back and appended to
   a fresh `InMemoryEventStore`, which resolves and upcasts each payload as it reads its own.

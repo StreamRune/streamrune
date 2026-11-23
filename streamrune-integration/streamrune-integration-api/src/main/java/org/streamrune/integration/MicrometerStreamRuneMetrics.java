@@ -1,6 +1,7 @@
 package org.streamrune.integration;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -116,6 +117,12 @@ public final class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
    */
   private final ConcurrentHashMap<String, AtomicLong> sagaCompensatingBacklog =
       new ConcurrentHashMap<>();
+
+  /** Gauges of the saga steps in flight, one per saga type. */
+  private final ConcurrentHashMap<String, AtomicLong> sagaStepsInFlight = new ConcurrentHashMap<>();
+
+  /** Gauges of the saga steps of a page not yet started, one per saga type. */
+  private final ConcurrentHashMap<String, AtomicLong> sagaPagePending = new ConcurrentHashMap<>();
 
   /** Saga backlog gauges, one per saga type, backing {@code streamrune.saga.timed_out}. */
   private final ConcurrentHashMap<String, AtomicLong> sagaTimedOutBacklog =
@@ -1109,6 +1116,65 @@ public final class MicrometerStreamRuneMetrics implements StreamRuneMetrics {
         .description(
             "Saga steps run again in place after the saga row's compare-and-swap was lost to"
                 + " another writer")
+        .register(registry)
+        .increment();
+  }
+
+  @Override
+  public void recordSagaStepsInFlight(String sagaType, int inFlight, int pending) {
+    sagaGauge(
+            sagaStepsInFlight,
+            MetricNames.SAGA_STEPS_IN_FLIGHT,
+            sagaType,
+            "Saga steps running now in a page of events")
+        .set(inFlight);
+    sagaGauge(
+            sagaPagePending,
+            MetricNames.SAGA_PAGE_PENDING,
+            sagaType,
+            "Saga steps of the page in hand that have not started yet")
+        .set(pending);
+  }
+
+  private AtomicLong sagaGauge(
+      ConcurrentHashMap<String, AtomicLong> holders,
+      String metricName,
+      String sagaType,
+      String description) {
+    return holders.computeIfAbsent(
+        sagaType,
+        type -> {
+          AtomicLong holder = new AtomicLong();
+          Gauge.builder(meter(metricName), holder, AtomicLong::doubleValue)
+              .tag(MetricNames.TAG_SAGA_TYPE, type)
+              .description(description)
+              .register(registry);
+          return holder;
+        });
+  }
+
+  /**
+   * The summary publishes a client-side percentile, which Micrometer computes with HdrHistogram. A
+   * native image needs the constructors of those classes registered; this module ships them in its
+   * {@code META-INF/native-image/.../reflect-config.json}, because Micrometer's own metadata lacks
+   * {@code ConcurrentHistogram(AbstractHistogram)} — do not remove them as redundant.
+   */
+  @Override
+  public void recordSagaPageEffectiveParallelism(String sagaType, double effectiveParallelism) {
+    DistributionSummary.builder(meter(MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .description("Sum of a page's saga step times divided by its wall time")
+        .publishPercentiles(0.5)
+        .register(registry)
+        .record(effectiveParallelism);
+  }
+
+  @Override
+  public void recordSagaPageFailed(String sagaType, String stop) {
+    Counter.builder(meter(MetricNames.SAGA_PAGE_FAILED))
+        .tag(MetricNames.TAG_SAGA_TYPE, sagaType)
+        .tag(MetricNames.TAG_STOP, stop)
+        .description("Pages of saga steps that ended with a failure")
         .register(registry)
         .increment();
   }

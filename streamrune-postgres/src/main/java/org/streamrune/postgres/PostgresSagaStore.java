@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
@@ -404,6 +405,12 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public Object storageIdentity() {
     return dataSource;
+  }
+
+  /** The generic JDBC rules plus the codes PostgreSQL reports when the server is going away. */
+  @Override
+  public ConnectionFailureClassifier connectionFailureClassifier() {
+    return PostgresConnectionFailures.CLASSIFIER;
   }
 
   /**

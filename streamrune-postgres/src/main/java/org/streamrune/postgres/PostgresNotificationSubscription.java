@@ -155,6 +155,9 @@ public final class PostgresNotificationSubscription implements EventSubscription
   /** Set once by {@link #close()}; makes close terminal so a restart cannot be accepted. */
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
+  /** The runner of {@link Builder#sagaRunner}, until close() releases its bind; else null. */
+  private final AtomicReference<SagaRunner<?>> boundSagaRunner = new AtomicReference<>();
+
   private volatile Thread listenerThread;
 
   // close() interrupts the listen thread through these: never while a page is being delivered
@@ -352,10 +355,14 @@ public final class PostgresNotificationSubscription implements EventSubscription
 
     /**
      * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
-     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
-     * subscription is then the anchor of the saga type's lease in this process, and the runner's
-     * timeout runner and compensation-retry sweeper act while it leads. Not together with {@link
-     * #listener}, {@link #lease} or {@link #leadership}.
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}, and
+     * it binds this subscription's name to the runner at the end of {@code build()}: the name a
+     * parallelism setting for the saga type refers to ({@code
+     * streamrune.saga.subscriptions.<name>.parallelism}). A subscription built with {@code
+     * listener(runner.asEventListener())} binds nothing. This subscription is then the anchor of
+     * the saga type's lease in this process, and the runner's timeout runner and compensation-retry
+     * sweeper act while it leads. Not together with {@link #listener}, {@link #lease} or {@link
+     * #leadership}.
      */
     public Builder sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = sagaRunner;
@@ -382,10 +389,17 @@ public final class PostgresNotificationSubscription implements EventSubscription
      * @throws IllegalArgumentException if a required value is missing or {@code fetchSize} is not
      *     positive, or when two of the settings name one thing: {@code sagaRunner} with {@code
      *     listener}, {@code lease} or {@code leadership}; {@code lease} with {@code leadership}
+     * @throws IllegalStateException when {@code sagaRunner} is already bound to a subscription
+     *     whose configured parallelism differs from this one's
      */
     public PostgresNotificationSubscription build() {
       refuseTwoSources("PostgresNotificationSubscription.Builder");
-      return new PostgresNotificationSubscription(this);
+      PostgresNotificationSubscription subscription = new PostgresNotificationSubscription(this);
+      if (sagaRunner != null) {
+        sagaRunner.bindSubscription(subscriptionName);
+        subscription.boundSagaRunner.set(sagaRunner);
+      }
+      return subscription;
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */
@@ -501,10 +515,23 @@ public final class PostgresNotificationSubscription implements EventSubscription
    * warning is logged and {@code close()} returns anyway, but the subscription stays permanently
    * non-restartable so a {@link #start()} cannot put a second listener on the checkpoint next to
    * the stuck one. Calling {@code close()} from the listener itself only signals — joining the
-   * current thread would deadlock. Idempotent.
+   * current thread would deadlock. A subscription built with {@link Builder#sagaRunner} releases
+   * its bind as the last step, so the runner counts only open subscriptions ({@link
+   * SagaRunner#boundSubscriptionNames()}). Idempotent.
    */
   @Override
   public void close() {
+    try {
+      closeAndAwaitThread();
+    } finally {
+      SagaRunner<?> runner = boundSagaRunner.getAndSet(null);
+      if (runner != null) {
+        runner.releaseSubscription(subscriptionName);
+      }
+    }
+  }
+
+  private void closeAndAwaitThread() {
     closed.set(true);
     running.set(false);
     Thread t = listenerThread;

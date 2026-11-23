@@ -38,6 +38,14 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
 
   private final List<LeasedNode> leasedNodes = new ArrayList<>();
 
+  /** The parallelism of the nodes a test builds; set before it builds them. */
+  int parallelism = 1;
+
+  @Override
+  protected int parallelism() {
+    return parallelism;
+  }
+
   /** Counts the checkpoint reads and saves of one subscription. */
   static final class CountingOffsetStore implements OffsetStore {
     private final OffsetStore delegate;
@@ -87,7 +95,7 @@ abstract class SagaLeadershipNodes extends SagaForwardFenceNodes {
       leaseSource.setConnectTimeout(2);
       leaseSource.setApplicationName(name + "-lease");
       leadership = new LeaseBasedLeadership(leaseSource, LEASE_TTL);
-      node = new Node(name, true, clock, TIMEOUT, true, leadership, POLLING);
+      node = new Node(name, true, clock, TIMEOUT, true, leadership, POLLING, parallelism());
       offsets = new CountingOffsetStore(new PostgresOffsetStore(node.source));
       subscription =
           PollingEventSubscription.builder()

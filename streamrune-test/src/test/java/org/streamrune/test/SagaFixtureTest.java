@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.Command;
 import org.streamrune.core.DomainEvent;
@@ -25,6 +26,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.SagaRunner;
 
 class SagaFixtureTest {
 
@@ -115,19 +117,26 @@ class SagaFixtureTest {
   }
 
   private static SagaFixture<State> fixture() {
+    return fixture(builder -> {});
+  }
+
+  /** The order saga's fixture; {@code more} runs after the saga is named. */
+  private static SagaFixture<State> fixture(Consumer<SagaRunner.Builder<State>> more) {
     var saga = new OrderSaga();
     return SagaFixture.of(
             State.class,
-            builder ->
-                builder
-                    .decider(saga)
-                    .startWhen(event -> event.event() instanceof OrderPlaced)
-                    .extractSagaId(event -> sagaOf(((OrderPlaced) event.event()).orderId()))
-                    .correlateByEventData(
-                        (streamId, event) ->
-                            event instanceof OrderCancelled || event instanceof Poison
-                                ? Optional.of(sagaOf(orderOf(event)))
-                                : Optional.empty()))
+            builder -> {
+              builder
+                  .decider(saga)
+                  .startWhen(event -> event.event() instanceof OrderPlaced)
+                  .extractSagaId(event -> sagaOf(((OrderPlaced) event.event()).orderId()))
+                  .correlateByEventData(
+                      (streamId, event) ->
+                          event instanceof OrderCancelled || event instanceof Poison
+                              ? Optional.of(sagaOf(orderOf(event)))
+                              : Optional.empty());
+              more.accept(builder);
+            })
         .withTimeouts(builder -> builder.decider(saga));
   }
 
@@ -371,5 +380,25 @@ class SagaFixtureTest {
             UnsupportedOperationException.class,
             () -> fixture.commandBus().execute(new ReserveStock("1")));
     assertTrue(refused.getMessage().contains("idempotency key"), refused.getMessage());
+  }
+
+  @Test
+  void theFixturesRunnerStepsOneSagaAtATimeByDefault() {
+    assertEquals(1, fixture().runner().parallelism());
+  }
+
+  @Test
+  void theRunnerCustomizerRunsTheFixturesSagasInParallel() {
+    var fixture = fixture(builder -> builder.parallelism(4));
+    StreamId order2 = StreamId.of(ORDER, AggregateId.of("2"));
+
+    fixture.given(
+        fixture.event(ORDER_1, new OrderPlaced("1")), fixture.event(order2, new OrderPlaced("2")));
+
+    assertEquals(4, fixture.runner().parallelism());
+    assertEquals(2, fixture.dispatched().size(), fixture.dispatched().toString());
+    assertTrue(fixture.dispatched().contains(new ReserveStock("1")));
+    assertTrue(fixture.dispatched().contains(new ReserveStock("2")));
+    fixture.expectStatus(SAGA_1, SagaStatus.RUNNING).expectStatus(sagaOf("2"), SagaStatus.RUNNING);
   }
 }

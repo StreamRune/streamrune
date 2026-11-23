@@ -1,6 +1,7 @@
 package org.streamrune.postgres;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import javax.sql.DataSource;
 import org.streamrune.core.EventStore;
@@ -69,6 +70,9 @@ public final class HybridEventSubscription
   // registers nothing. The Hybrid registers itself, not the polling subscription inside it, so the
   // contributor reads the push-path health from the Hybrid.
   private final SubscriptionHealthContributor healthContributor;
+
+  /** The runner of {@link Builder#sagaRunner}, until close() releases its bind; else null. */
+  private final AtomicReference<SagaRunner<?>> boundSagaRunner = new AtomicReference<>();
 
   public HybridEventSubscription(
       SubscriptionName subscriptionName,
@@ -490,6 +494,11 @@ public final class HybridEventSubscription
     return pollingSubscription.readPoisonError();
   }
 
+  /**
+   * Closes the polling path and the LISTEN path, then unregisters from the health contributor; a
+   * subscription built with {@link Builder#sagaRunner} releases its bind as the last step, so the
+   * runner counts only open subscriptions ({@link SagaRunner#boundSubscriptionNames()}).
+   */
   @Override
   public void close() {
     try {
@@ -503,7 +512,14 @@ public final class HybridEventSubscription
         unusedListenDataSource.close();
       }
     } finally {
-      healthContributor.unregister(subscriptionName);
+      try {
+        healthContributor.unregister(subscriptionName);
+      } finally {
+        SagaRunner<?> runner = boundSagaRunner.getAndSet(null);
+        if (runner != null) {
+          runner.releaseSubscription(subscriptionName);
+        }
+      }
     }
   }
 
@@ -636,10 +652,14 @@ public final class HybridEventSubscription
 
     /**
      * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
-     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
-     * subscription is then the anchor of the saga type's lease in this process, and the runner's
-     * timeout runner and compensation-retry sweeper act while it leads. Not together with {@link
-     * #listener}, {@link #lease} or {@link #leadership}.
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}, and
+     * it binds this subscription's name to the runner at the end of {@code build()}: the name a
+     * parallelism setting for the saga type refers to ({@code
+     * streamrune.saga.subscriptions.<name>.parallelism}). A subscription built with {@code
+     * listener(runner.asEventListener())} binds nothing. This subscription is then the anchor of
+     * the saga type's lease in this process, and the runner's timeout runner and compensation-retry
+     * sweeper act while it leads. Not together with {@link #listener}, {@link #lease} or {@link
+     * #leadership}.
      */
     public Builder sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = sagaRunner;
@@ -685,6 +705,8 @@ public final class HybridEventSubscription
      * {@link #config} even when notifications wake it: keep that fallback interval short.
      *
      * @throws IllegalStateException if {@code subscriptionName} was not set
+     * @throws IllegalStateException when {@code sagaRunner} is already bound to a subscription
+     *     whose configured parallelism differs from this one's
      * @throws IllegalArgumentException when two of the settings name one thing: {@code sagaRunner}
      *     with {@code listener}, {@code lease} or {@code leadership}; {@code lease} with {@code
      *     leadership}
@@ -696,20 +718,26 @@ public final class HybridEventSubscription
                 + " it is the durable offset key for this subscription");
       }
       refuseTwoSources("HybridEventSubscription.Builder");
-      return new HybridEventSubscription(
-          subscriptionName,
-          dataSource,
-          eventStore,
-          offsetStore,
-          sagaRunner != null ? sagaRunner.asEventListener() : listener,
-          config,
-          fetchSize,
-          metrics,
-          readPoisonBound,
-          UnaryOperator.identity(),
-          resolvedLease(),
-          healthContributor,
-          GuardedTracing.of(tracing, metrics));
+      HybridEventSubscription subscription =
+          new HybridEventSubscription(
+              subscriptionName,
+              dataSource,
+              eventStore,
+              offsetStore,
+              sagaRunner != null ? sagaRunner.asEventListener() : listener,
+              config,
+              fetchSize,
+              metrics,
+              readPoisonBound,
+              UnaryOperator.identity(),
+              resolvedLease(),
+              healthContributor,
+              GuardedTracing.of(tracing, metrics));
+      if (sagaRunner != null) {
+        sagaRunner.bindSubscription(subscriptionName);
+        subscription.boundSagaRunner.set(sagaRunner);
+      }
+      return subscription;
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

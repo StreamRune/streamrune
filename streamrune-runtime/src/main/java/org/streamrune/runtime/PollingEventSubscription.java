@@ -99,6 +99,9 @@ public final class PollingEventSubscription
   // registers nothing.
   private final SubscriptionHealthContributor healthContributor;
 
+  /** The runner of {@link Builder#sagaRunner}, until close() releases its bind; else null. */
+  private final AtomicReference<SagaRunner<?>> boundSagaRunner = new AtomicReference<>();
+
   // Times each delivery for the latency metric: the builder's clock, or System.nanoTime().
   private final TimeSource time;
 
@@ -456,15 +459,33 @@ public final class PollingEventSubscription
    * subscription's lease resigned, after close() returns. If the closing thread is interrupted
    * while waiting, the wait is abandoned and the interrupt flag restored.
    *
-   * <p>A subscription built with {@link Builder#healthContributor} unregisters from it as the last
-   * step.
+   * <p>A saga runner at a parallelism above 1 ({@link SagaRunner.Builder#parallelism}) runs its
+   * steps on worker threads of its own, not on the poll thread. A close() called from inside such a
+   * step is not recognised as the listener's: it waits for the poll thread, which waits for the
+   * page, and so returns after the {@value #CLOSE_JOIN_TIMEOUT_MS} ms bound with the WARN below.
+   *
+   * <p>A subscription built with {@link Builder#healthContributor} unregisters from it; one built
+   * with {@link Builder#sagaRunner} then releases its bind, so the runner counts only open
+   * subscriptions ({@link SagaRunner#boundSubscriptionNames()}).
    */
   @Override
   public void close() {
     try {
       closeAndAwaitThread();
     } finally {
-      healthContributor.unregister(subscriptionName);
+      try {
+        healthContributor.unregister(subscriptionName);
+      } finally {
+        releaseSagaRunner();
+      }
+    }
+  }
+
+  /** Releases the bind of a subscription built with {@link Builder#sagaRunner}; once. */
+  private void releaseSagaRunner() {
+    SagaRunner<?> runner = boundSagaRunner.getAndSet(null);
+    if (runner != null) {
+      runner.releaseSubscription(subscriptionName);
     }
   }
 
@@ -961,12 +982,16 @@ public final class PollingEventSubscription
 
     /**
      * Delivers a saga type's events to {@code sagaRunner}: the same as {@code
-     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}. This
-     * subscription is then the anchor of the saga type's lease in this process, and the runner's
-     * timeout runner and compensation-retry sweeper act while it leads. Build a saga's subscription
-     * this way: with {@code listener(runner.asEventListener())} a runner that carries a lease is
-     * never anchored, and its timeout runner and sweeper act nowhere. Not together with {@link
-     * #listener}, {@link #lease} or {@link #leadership}.
+     * listener(sagaRunner.asEventListener())} together with {@code lease(sagaRunner.lease())}, and
+     * it binds this subscription's name to the runner at the end of {@code build()}: the name a
+     * parallelism setting for the saga type refers to ({@code
+     * streamrune.saga.subscriptions.<name>.parallelism}). A subscription built with {@code
+     * listener(runner.asEventListener())} binds nothing. This subscription is then the anchor of
+     * the saga type's lease in this process, and the runner's timeout runner and compensation-retry
+     * sweeper act while it leads. Build a saga's subscription this way: with {@code
+     * listener(runner.asEventListener())} a runner that carries a lease is never anchored, and its
+     * timeout runner and sweeper act nowhere. Not together with {@link #listener}, {@link #lease}
+     * or {@link #leadership}.
      */
     public Builder sagaRunner(SagaRunner<?> sagaRunner) {
       this.sagaRunner = sagaRunner;
@@ -1024,6 +1049,8 @@ public final class PollingEventSubscription
      * Builds the {@link PollingEventSubscription}. Requires {@code subscriptionName}, {@code
      * eventStore}, {@code offsetStore}, and {@code listener} or {@code sagaRunner}.
      *
+     * @throws IllegalStateException when {@code sagaRunner} is already bound to a subscription
+     *     whose configured parallelism differs from this one's
      * @throws IllegalArgumentException when two of the settings name one thing: {@code sagaRunner}
      *     with {@code listener}, {@code lease} or {@code leadership}; {@code lease} with {@code
      *     leadership}
@@ -1031,19 +1058,25 @@ public final class PollingEventSubscription
     public PollingEventSubscription build() {
       refuseTwoSources("PollingEventSubscription.Builder");
       EventListener resolvedListener = sagaRunner != null ? sagaRunner.asEventListener() : listener;
-      return new PollingEventSubscription(
-          subscriptionName,
-          eventStore,
-          offsetStore,
-          resolvedListener,
-          config,
-          fetchSize,
-          metrics,
-          readPoisonBound,
-          resolvedLease(),
-          healthContributor,
-          clock,
-          GuardedTracing.of(tracing, metrics));
+      PollingEventSubscription subscription =
+          new PollingEventSubscription(
+              subscriptionName,
+              eventStore,
+              offsetStore,
+              resolvedListener,
+              config,
+              fetchSize,
+              metrics,
+              readPoisonBound,
+              resolvedLease(),
+              healthContributor,
+              clock,
+              GuardedTracing.of(tracing, metrics));
+      if (sagaRunner != null) {
+        sagaRunner.bindSubscription(subscriptionName);
+        subscription.boundSagaRunner.set(sagaRunner);
+      }
+      return subscription;
     }
 
     /** Refuses one setting named twice: a saga runner sets the listener and the lease. */

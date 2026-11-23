@@ -400,8 +400,22 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
      * @param pooled whether the node holds a connection pool of its own, as a process under load
      *     does; without one every use opens a physical connection
      */
-    Node(String name, boolean forwardFence, Clock clock, Duration timeout, boolean pooled) {
-      this(name, forwardFence, clock, timeout, pooled, SubscriptionLeadership.NOOP, null);
+    Node(
+        String name,
+        boolean forwardFence,
+        Clock clock,
+        Duration timeout,
+        boolean pooled,
+        int parallelism) {
+      this(
+          name,
+          forwardFence,
+          clock,
+          timeout,
+          pooled,
+          SubscriptionLeadership.NOOP,
+          null,
+          parallelism);
     }
 
     /**
@@ -409,6 +423,7 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
      *     SubscriptionLeadership#NOOP} for none
      * @param timeoutPollInterval the pause between two polls of the node's timeout runner; {@code
      *     null} for the timeout runner's default
+     * @param parallelism how many steps of the saga type the node's runner runs at once
      */
     Node(
         String name,
@@ -417,7 +432,8 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
         Duration timeout,
         boolean pooled,
         SubscriptionLeadership leadership,
-        Duration timeoutPollInterval) {
+        Duration timeoutPollInterval,
+        int parallelism) {
       this.name = name;
       PGSimpleDataSource physical = new PGSimpleDataSource();
       physical.setUrl(POSTGRES.getJdbcUrl());
@@ -493,6 +509,7 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
               .metrics(metrics)
               .forwardFence(forwardFence)
               .leadership(leadership)
+              .parallelism(parallelism)
               .build();
       SagaTimeoutRunner.Builder<State> timeouts =
           SagaTimeoutRunner.<State>builder()
@@ -583,11 +600,19 @@ abstract class SagaForwardFenceNodes extends E2ETestBase {
 
   /** A node with its own connection pool, on {@code nodeClock}, with {@code timeout}. */
   Node pooledNode(String name, boolean forwardFence, Clock nodeClock, Duration timeout) {
-    return track(new Node(name, forwardFence, nodeClock, timeout, true));
+    return track(new Node(name, forwardFence, nodeClock, timeout, true, parallelism()));
   }
 
   private Node node(String name, boolean forwardFence, Clock nodeClock, Duration timeout) {
-    return track(new Node(name, forwardFence, nodeClock, timeout, false));
+    return track(new Node(name, forwardFence, nodeClock, timeout, false, parallelism()));
+  }
+
+  /**
+   * How many steps of the saga type a node's runner runs at once: {@link
+   * SagaRunner#DEFAULT_PARALLELISM} unless a subclass says otherwise.
+   */
+  protected int parallelism() {
+    return SagaRunner.DEFAULT_PARALLELISM;
   }
 
   private Node track(Node node) {

@@ -78,8 +78,12 @@ import org.streamrune.core.types.SagaType;
  *       attempted on a thread that is inside a step of that saga is refused like any claim under a
  *       step in flight.
  *   <li><b>Lock order.</b> A step takes the lock of its own saga and of no other, and a claim holds
- *       nothing else while it holds one. The framework's subscriptions deliver one event at a time
- *       per listener and release the lock before the next event, so no thread holds two saga locks.
+ *       nothing else while it holds one. A runner steps the sagas of a page in parallel ({@link
+ *       SagaRunner.Builder#parallelism}): the events of one saga on one thread, one after the
+ *       other, and different sagas on different threads, each thread holding the lock of the saga
+ *       it steps and releasing it before its next event — so no thread holds two saga locks. A step
+ *       that waits inside its command for an aggregate's lock waits for a thread that holds at most
+ *       the lock of another saga, which the waiting step never wants: parallel steps add no cycle.
  *       Listener plumbing of an application that delivers a second saga's event inside the first
  *       saga's command dispatch does hold two; a cycle between two such threads ends at the step
  *       bound, as a failed delivery that is redelivered. A step also holds its saga's lock while

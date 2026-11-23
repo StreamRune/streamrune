@@ -798,7 +798,17 @@ saga.when(order, new OrderPlaced("1"))                 // an event a request sto
 | `saga(id)`, `dispatched()`, `delivered()`, `runner()`, `sagaStore()`, `deadLetterStore()`, `clock()`, `sagaStoreFaults()` | The parts, for an assertion of your own |
 
 The builder starts with `forwardFence(false)`: the recording bus stores nothing, so it fences
-nothing. A crash point of a step is a fault of the saga store the runner writes through:
+nothing. It also starts with `parallelism(1)`, where a production runner steps up to 4 sagas of a
+page at once: the runner steps the sagas of a page one after the other, in page order, on the
+test's thread, so `expectCommands` sees the commands of a page in the order of their events. To run
+the fixture's sagas in parallel, end the builder customizer above with `.parallelism(4)`, after
+`.extractSagaId(...)`: the customizer runs after the fixture's defaults. The events of one saga keep
+their order; the commands of different sagas of a page then come in no fixed order, so read them as
+a set (`dispatched()`) rather than with `expectCommands`. A runner you wire yourself over
+`InMemoryCommandBus` needs `parallelism(1)`, because that bus is not thread-safe (see
+[Parallel steps](advanced/saga.md#parallel-steps)).
+
+A crash point of a step is a fault of the saga store the runner writes through:
 
 ```java
 saga.sagaStoreFaults().crashAfter("createGenesisPending");   // stop after the first write

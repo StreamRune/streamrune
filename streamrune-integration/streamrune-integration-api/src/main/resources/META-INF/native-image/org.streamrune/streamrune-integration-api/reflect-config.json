@@ -1,0 +1,11 @@
+[
+  {"name": "org.HdrHistogram.Histogram", "methods": [
+    {"name": "<init>", "parameterTypes": ["long", "long", "int"]},
+    {"name": "<init>", "parameterTypes": ["org.HdrHistogram.AbstractHistogram"]}
+  ]},
+  {"name": "org.HdrHistogram.ConcurrentHistogram", "methods": [
+    {"name": "<init>", "parameterTypes": ["long", "long", "int"]},
+    {"name": "<init>", "parameterTypes": ["org.HdrHistogram.AbstractHistogram"]}
+  ]},
+  {"name": "org.HdrHistogram.DoubleHistogram", "allPublicConstructors": true}
+]

@@ -140,6 +140,13 @@ public static final record org.streamrune.core.CommandInterceptor$CommandContext
   public org.streamrune.core.types.CommandId commandId()
   public org.streamrune.core.types.StreamId streamId()
 
+public interface org.streamrune.core.ConnectionFailureClassifier
+  public abstract boolean isConnectionFailure(java.lang.Throwable)
+  public default org.streamrune.core.ConnectionFailureClassifier or(org.streamrune.core.ConnectionFailureClassifier)
+  public static final int MAX_CAUSE_DEPTH = 50
+  public static final org.streamrune.core.ConnectionFailureClassifier GENERIC
+  public static org.streamrune.core.ConnectionFailureClassifier genericAndSqlStates(java.lang.String...)
+
 public interface org.streamrune.core.DeadLetterQueue
   public abstract java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
   public abstract void discard(org.streamrune.core.types.CommandId)
@@ -589,11 +596,14 @@ public interface org.streamrune.core.StreamRuneMetrics
   public default void recordSagaFaultedRows(java.lang.String, long)
   public default void recordSagaForcedStaleResume(java.lang.String)
   public default void recordSagaForwardCommandFenced(java.lang.String)
+  public default void recordSagaPageEffectiveParallelism(java.lang.String, double)
+  public default void recordSagaPageFailed(java.lang.String, java.lang.String)
   public default void recordSagaQuarantined(java.lang.String)
   public default void recordSagaReplayDeferred(java.lang.String)
   public default void recordSagaReplayed(java.lang.String, java.lang.String)
   public default void recordSagaResumeFaulted(java.lang.String, java.lang.String)
   public default void recordSagaSkippedWhileFaulted(java.lang.String)
+  public default void recordSagaStepsInFlight(java.lang.String, int, int)
   public default void recordSagaTimedOutBacklog(java.lang.String, long)
   public default void recordSagaTimeoutClaimDeferred(java.lang.String)
   public default void recordSnapshotCreated()
@@ -861,17 +871,24 @@ public final class org.streamrune.core.metrics.MetricNames
   public static final java.lang.String SAGA_FAULTED_ROWS = "streamrune.saga.faulted_rows"
   public static final java.lang.String SAGA_FORCED_STALE_RESUME = "streamrune.saga.forced_stale_resume"
   public static final java.lang.String SAGA_FORWARD_COMMANDS_FENCED = "streamrune.saga.forward_commands_fenced"
+  public static final java.lang.String SAGA_PAGE_EFFECTIVE_PARALLELISM = "streamrune.saga.page.effective_parallelism"
+  public static final java.lang.String SAGA_PAGE_FAILED = "streamrune.saga.page.failed"
+  public static final java.lang.String SAGA_PAGE_PENDING = "streamrune.saga.page.pending"
   public static final java.lang.String SAGA_QUARANTINED = "streamrune.saga.quarantined"
   public static final java.lang.String SAGA_REPLAYED = "streamrune.saga.replayed"
   public static final java.lang.String SAGA_REPLAY_DEFERRED = "streamrune.saga.replay_deferred"
   public static final java.lang.String SAGA_RESUME_FAULTED = "streamrune.saga.resume_faulted"
   public static final java.lang.String SAGA_SKIPPED_WHILE_FAULTED = "streamrune.saga.skipped_while_faulted"
+  public static final java.lang.String SAGA_STEPS_IN_FLIGHT = "streamrune.saga.steps.in_flight"
   public static final java.lang.String SAGA_TIMED_OUT = "streamrune.saga.timed_out"
   public static final java.lang.String SAGA_TIMEOUT_CLAIMS_DEFERRED = "streamrune.saga.timeout_claims_deferred"
   public static final java.lang.String SNAPSHOTS_CREATED = "streamrune.snapshots.created"
   public static final java.lang.String SNAPSHOTS_DISCARDED = "streamrune.snapshots.discarded"
   public static final java.lang.String SNAPSHOTS_LOADED = "streamrune.snapshots.loaded"
   public static final java.lang.String SNAPSHOTS_REFUSED = "streamrune.snapshots.refused"
+  public static final java.lang.String STOP_CONNECTION = "connection"
+  public static final java.lang.String STOP_NONE = "none"
+  public static final java.lang.String STOP_THIRD_FAILURE = "third_failure"
   public static final java.lang.String SUBSCRIPTIONS_DELIVERY_LATENCY = "streamrune.subscriptions.delivery.latency"
   public static final java.lang.String SUBSCRIPTIONS_EVENTS_RECEIVED = "streamrune.subscriptions.events.received"
   public static final java.lang.String SUBSCRIPTIONS_LAG = "streamrune.subscriptions.lag"
@@ -888,6 +905,7 @@ public final class org.streamrune.core.metrics.MetricNames
   public static final java.lang.String TAG_QUERY_TYPE = "query.type"
   public static final java.lang.String TAG_REASON = "reason"
   public static final java.lang.String TAG_SAGA_TYPE = "saga.type"
+  public static final java.lang.String TAG_STOP = "stop"
   public static final java.lang.String TAG_STREAM_ID = "stream.id"
   public static final java.lang.String TAG_SUBSCRIPTION_NAME = "subscription.name"
   public static final java.lang.String TRACING_FAILURES = "streamrune.tracing.failures"
@@ -1376,6 +1394,7 @@ public interface org.streamrune.core.saga.SagaStore
   public default java.lang.Object storageIdentity()
   public default java.util.List<org.streamrune.core.saga.SagaStore$CompensatingSaga> findCompensating(org.streamrune.core.types.SagaType, java.time.Instant, int)
   public default long countByStatus(org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaStatus)
+  public default org.streamrune.core.ConnectionFailureClassifier connectionFailureClassifier()
   public default void claimCompensating(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, long)
   public default void create(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus)
   public default void createGenesisPending(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType, org.streamrune.core.saga.SagaState, org.streamrune.core.saga.SagaStatus, boolean)

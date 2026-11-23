@@ -14,6 +14,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 import org.streamrune.core.StreamRuneMetrics;
@@ -40,7 +41,10 @@ import org.streamrune.core.types.SubscriptionName;
  * overload that carries a tag records it ({@code recordCommandSucceeded(commandType)} records
  * {@code streamrune.commands.succeeded} with {@code command.type}). Each call is one {@link
  * Sample}: a counter's increment (1, or the rows a sweep removed), a timer's nanoseconds, or the
- * value a gauge was set to. A gauge registered with a supplier ({@code
+ * value a gauge was set to. Two calls differ: {@code recordSagaStepsInFlight} records two samples,
+ * the in-flight and the pending gauge, and {@code recordSagaPageEffectiveParallelism} records its
+ * ratio in thousandths ({@code Math.round(value * 1000)}); the exact values are read through {@link
+ * #sagaPageEffectiveParallelism()}. A gauge registered with a supplier ({@code
  * registerInFlightCommandsGauge}, {@code registerSubscriptionLagGauge}) is kept as that supplier
  * and read when {@link #lastGauge} asks for it, as a metrics scrape reads it; it is no sample.
  *
@@ -59,7 +63,8 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
    * @param meterName the meter, a constant of {@link MetricNames}
    * @param tags the tags the call carries, by {@link MetricNames} tag key, in the order of the
    *     call's parameters; a value is {@code null} when the call passed none
-   * @param value the counter's increment, the timer's nanoseconds or the gauge's value
+   * @param value the counter's increment, the timer's nanoseconds or the gauge's value; for the
+   *     effective parallelism the ratio in thousandths
    */
   public record Sample(String meterName, Map<String, String> tags, long value) {
 
@@ -93,13 +98,54 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   private static final Set<String> METERS = constants(MetricNames.class, true);
   private static final Set<String> TAG_KEYS = constants(MetricNames.class, false);
 
+  /** The {@code stop} tag values of {@link MetricNames}. */
+  private static final Set<String> STOP_TAGS =
+      Set.of(MetricNames.STOP_CONNECTION, MetricNames.STOP_THIRD_FAILURE, MetricNames.STOP_NONE);
+
   private final List<Sample> samples = new CopyOnWriteArrayList<>();
   private final List<SuppliedGauge> suppliedGauges = new CopyOnWriteArrayList<>();
+
+  private final AtomicInteger maxSagaStepsInFlight = new AtomicInteger();
+  private final List<Double> effectiveParallelisms = new CopyOnWriteArrayList<>();
 
   /** Creates a recorder with nothing recorded. */
   public RecordingStreamRuneMetrics() {}
 
   // ==================== Queries ====================
+
+  /**
+   * The highest in-flight count any recordSagaStepsInFlight call reported, over every saga type; 0
+   * when none.
+   *
+   * @return the highest in-flight count reported
+   */
+  public int maxSagaStepsInFlight() {
+    return maxSagaStepsInFlight.get();
+  }
+
+  /**
+   * How many pages were recorded as failed with this stop tag, over every saga type.
+   *
+   * @param stop the stop tag: {@link MetricNames#STOP_CONNECTION}, {@link
+   *     MetricNames#STOP_THIRD_FAILURE} or {@link MetricNames#STOP_NONE}
+   * @return the number of failed pages recorded with that tag
+   * @throws IllegalArgumentException if {@code stop} is null or none of the three
+   */
+  public long sagaPageFailed(String stop) {
+    if (stop == null || !STOP_TAGS.contains(stop)) {
+      throw new IllegalArgumentException("not a stop tag of MetricNames: " + stop);
+    }
+    return count(MetricNames.SAGA_PAGE_FAILED, MetricNames.TAG_STOP, stop);
+  }
+
+  /**
+   * Every effective-parallelism sample, in the order recorded.
+   *
+   * @return an immutable copy
+   */
+  public List<Double> sagaPageEffectiveParallelism() {
+    return List.copyOf(effectiveParallelisms);
+  }
 
   /**
    * Every call recorded so far, in the order the calls were made; supplier-registered gauges are
@@ -196,10 +242,15 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
             + (recorded.isEmpty() ? "nothing" : recorded));
   }
 
-  /** Forgets every sample and every registered gauge. */
+  /**
+   * Forgets every sample and every registered gauge, the highest in-flight count and the
+   * effective-parallelism values.
+   */
   public void reset() {
     samples.clear();
     suppliedGauges.clear();
+    maxSagaStepsInFlight.set(0);
+    effectiveParallelisms.clear();
   }
 
   private List<Sample> matching(String meterName, String... tags) {
@@ -665,6 +716,38 @@ public class RecordingStreamRuneMetrics implements StreamRuneMetrics {
   @Override
   public void recordSagaDeliveryRetried(String sagaType) {
     record(MetricNames.SAGA_DELIVERY_RETRIED, 1, MetricNames.TAG_SAGA_TYPE, sagaType);
+  }
+
+  @Override
+  public void recordSagaStepsInFlight(String sagaType, int inFlight, int pending) {
+    record(MetricNames.SAGA_STEPS_IN_FLIGHT, inFlight, MetricNames.TAG_SAGA_TYPE, sagaType);
+    record(MetricNames.SAGA_PAGE_PENDING, pending, MetricNames.TAG_SAGA_TYPE, sagaType);
+    maxSagaStepsInFlight.accumulateAndGet(inFlight, Math::max);
+  }
+
+  /**
+   * Records one sample whose {@code long} value is the parallelism in thousandths ({@code
+   * Math.round(value * 1000)}); {@link #sagaPageEffectiveParallelism()} returns the exact values.
+   */
+  @Override
+  public void recordSagaPageEffectiveParallelism(String sagaType, double effectiveParallelism) {
+    record(
+        MetricNames.SAGA_PAGE_EFFECTIVE_PARALLELISM,
+        Math.round(effectiveParallelism * 1000),
+        MetricNames.TAG_SAGA_TYPE,
+        sagaType);
+    effectiveParallelisms.add(effectiveParallelism);
+  }
+
+  @Override
+  public void recordSagaPageFailed(String sagaType, String stop) {
+    record(
+        MetricNames.SAGA_PAGE_FAILED,
+        1,
+        MetricNames.TAG_SAGA_TYPE,
+        sagaType,
+        MetricNames.TAG_STOP,
+        stop);
   }
 
   @Override

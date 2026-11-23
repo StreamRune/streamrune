@@ -1,9 +1,7 @@
 package org.streamrune.runtime;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.Internal;
@@ -83,9 +81,7 @@ public final class GuardedTracing implements StreamRuneTracing {
 
   private static final Logger LOG = LoggerFactory.getLogger(GuardedTracing.class);
 
-  static final long LOG_INTERVAL_MINUTES = 5;
-
-  private static final long LOG_INTERVAL_NANOS = Duration.ofMinutes(LOG_INTERVAL_MINUTES).toNanos();
+  static final long LOG_INTERVAL_MINUTES = FailureLogLimiter.INTERVAL_MINUTES;
 
   /**
    * The invocation of a propagated task running on this thread, so the guard can tell a wrapper
@@ -123,22 +119,14 @@ public final class GuardedTracing implements StreamRuneTracing {
   /** Where failures are counted; {@link StreamRuneMetrics#NOOP} for nowhere. Never changes. */
   private final StreamRuneMetrics metrics;
 
-  /** The failure count and the WARN limiter, shared by the guards derived from one guard. */
-  private final Reporting reporting;
-
-  /** What a guard, and every guard derived from it, reports through: one count, one WARN stream. */
-  private static final class Reporting {
-    final AtomicLong failures = new AtomicLong();
-    final AtomicLong unloggedFailures = new AtomicLong();
-
-    /**
-     * {@code System.nanoTime()} of the last WARN; meaningful once {@link #failures} is positive.
-     */
-    final AtomicLong lastLogNanos = new AtomicLong();
-  }
+  /**
+   * The failure count and the WARN limiter, shared by the guards derived from one guard: one count,
+   * one WARN stream.
+   */
+  private final FailureLogLimiter reporting;
 
   private GuardedTracing(
-      StreamRuneTracing delegate, StreamRuneMetrics metrics, Reporting reporting) {
+      StreamRuneTracing delegate, StreamRuneMetrics metrics, FailureLogLimiter reporting) {
     this.delegate = delegate;
     this.metrics = metrics;
     this.reporting = reporting;
@@ -158,7 +146,7 @@ public final class GuardedTracing implements StreamRuneTracing {
     if (tracing == StreamRuneTracing.NOOP || tracing instanceof GuardedTracing) {
       return tracing;
     }
-    return new GuardedTracing(tracing, StreamRuneMetrics.NOOP, new Reporting());
+    return new GuardedTracing(tracing, StreamRuneMetrics.NOOP, new FailureLogLimiter());
   }
 
   /**
@@ -197,7 +185,7 @@ public final class GuardedTracing implements StreamRuneTracing {
           ? guarded
           : new GuardedTracing(guarded.delegate, metrics, guarded.reporting);
     }
-    return new GuardedTracing(tracing, metrics, new Reporting());
+    return new GuardedTracing(tracing, metrics, new FailureLogLimiter());
   }
 
   /**
@@ -207,7 +195,7 @@ public final class GuardedTracing implements StreamRuneTracing {
    * @return the number of failures the guard caught
    */
   public long failureCount() {
-    return reporting.failures.get();
+    return reporting.total();
   }
 
   @Override
@@ -389,17 +377,11 @@ public final class GuardedTracing implements StreamRuneTracing {
       // A metrics backend that throws must not fail the traced work either.
     }
     try {
-      long count = reporting.failures.incrementAndGet();
-      long unlogged = reporting.unloggedFailures.incrementAndGet();
-      long now = System.nanoTime();
-      long last = reporting.lastLogNanos.get();
-      if (count != 1 && now - last < LOG_INTERVAL_NANOS) {
-        return;
+      reporting.count();
+      long unlogged = reporting.claim();
+      if (unlogged == 0) {
+        return; // logged within the interval, or by another thread
       }
-      if (!reporting.lastLogNanos.compareAndSet(last, now)) {
-        return; // another thread logs this interval
-      }
-      reporting.unloggedFailures.addAndGet(-unlogged);
       LOG.warn(
           "Tracing failed in {} ({} failure(s) since the last report); the traced work continues"
               + " without it. A StreamRuneTracing must not throw: check the tracing"
