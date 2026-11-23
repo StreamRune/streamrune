@@ -65,5 +65,8 @@
   {"name": "org.streamrune.core.tracing.SpanLink", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.tracing.TracingArea", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.saga.LoadedSaga", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
-  {"name": "org.streamrune.core.saga.SagaStatus", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true}
+  {"name": "org.streamrune.core.saga.SagaStatus", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.backend.BackendContext", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.backend.EventStoreOptions", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.core.backend.OutboxOptions", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true}
 ]
