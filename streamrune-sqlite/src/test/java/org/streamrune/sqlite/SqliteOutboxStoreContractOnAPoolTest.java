@@ -33,9 +33,7 @@ class SqliteOutboxStoreContractOnAPoolTest extends OutboxStoreContract {
   }
 
   private SqliteDatabase open(Path on) {
-    HikariDataSource pool =
-        SqliteEventStoreContractOnAPoolTest.poolOfOne(
-            on, "outbox-contract-pool-" + resources.size());
+    HikariDataSource pool = TestDatabases.poolOfOne(on, "outbox-contract-pool-" + resources.size());
     resources.add(pool);
     SqliteDatabase handle = SqliteDatabase.open(pool);
     resources.add(handle);

@@ -33,8 +33,7 @@ class SqliteDeadLetterQueueContractOnAPoolTest extends DeadLetterQueueContract {
   @Override
   protected DeadLetterQueue newQueue() {
     HikariDataSource pool =
-        SqliteSagaStoreContractOnAPoolTest.poolOfOne(
-            dir.resolve("pooled-dlq-" + files++ + ".db"), "dlq-contract-pool");
+        TestDatabases.poolOfOne(dir.resolve("pooled-dlq-" + files++ + ".db"), "dlq-contract-pool");
     resources.add(pool);
     SqliteDatabase database = SqliteDatabase.open(pool);
     resources.add(database);

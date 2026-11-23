@@ -1,5 +1,7 @@
 package org.streamrune.sqlite;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -28,6 +30,20 @@ final class TestDatabases {
   /** A data source on {@code file} with the required settings followed by {@code override}. */
   static DataSource dataSource(Path file, String override) {
     return url("jdbc:sqlite:file:" + file + "?" + REQUIRED_SETTINGS + "&" + override);
+  }
+
+  /**
+   * A HikariCP pool of one connection on {@code file}, with every required setting, whose borrow
+   * waits at most ten seconds: a call that waits for its own connection fails instead of hanging.
+   * The caller closes it.
+   */
+  static HikariDataSource poolOfOne(Path file, String name) {
+    HikariConfig config = new HikariConfig();
+    config.setJdbcUrl("jdbc:sqlite:file:" + file + "?" + REQUIRED_SETTINGS);
+    config.setMaximumPoolSize(1);
+    config.setConnectionTimeout(10_000);
+    config.setPoolName(name);
+    return new HikariDataSource(config);
   }
 
   /**

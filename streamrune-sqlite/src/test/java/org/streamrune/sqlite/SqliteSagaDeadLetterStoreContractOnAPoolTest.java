@@ -37,7 +37,7 @@ class SqliteSagaDeadLetterStoreContractOnAPoolTest extends SagaDeadLetterStoreCo
   @Override
   protected SagaStore newSagaStore() {
     HikariDataSource pool =
-        SqliteSagaStoreContractOnAPoolTest.poolOfOne(
+        TestDatabases.poolOfOne(
             dir.resolve("pooled-dead-" + files++ + ".db"), "dead-letter-contract-pool");
     resources.add(pool);
     current = SqliteDatabase.open(pool);

@@ -1,6 +1,5 @@
 package org.streamrune.sqlite;
 
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,21 +38,9 @@ class SqliteEventStoreContractOnAPoolTest extends EventStoreContract {
     }
   }
 
-  /**
-   * A pool of one connection on {@code file}, with the required settings, whose borrow waits at
-   * most ten seconds: a call that waits for its own connection fails instead of hanging.
-   */
-  static HikariDataSource poolOfOne(Path file, String name) {
-    HikariConfig config = new HikariConfig();
-    config.setJdbcUrl("jdbc:sqlite:file:" + file + "?" + TestDatabases.REQUIRED_SETTINGS);
-    config.setMaximumPoolSize(1);
-    config.setConnectionTimeout(10_000);
-    config.setPoolName(name);
-    return new HikariDataSource(config);
-  }
-
   private SqliteDatabase open(Path file) {
-    HikariDataSource pool = poolOfOne(file, "event-contract-pool-" + resources.size());
+    HikariDataSource pool =
+        TestDatabases.poolOfOne(file, "event-contract-pool-" + resources.size());
     resources.add(pool);
     SqliteDatabase handle = SqliteDatabase.open(pool);
     resources.add(handle);

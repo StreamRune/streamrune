@@ -2,7 +2,6 @@ package org.streamrune.sqlite;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -33,19 +32,11 @@ class SqliteSagaStoreContractOnAPoolTest extends SagaStoreContract {
     }
   }
 
-  /** A pool of one connection on {@code file}, with the required settings. */
-  static HikariDataSource poolOfOne(Path file, String name) {
-    HikariConfig config = new HikariConfig();
-    config.setJdbcUrl("jdbc:sqlite:file:" + file + "?" + TestDatabases.REQUIRED_SETTINGS);
-    config.setMaximumPoolSize(1);
-    config.setPoolName(name);
-    return new HikariDataSource(config);
-  }
-
   @Override
   protected SagaStore newStore() {
     HikariDataSource pool =
-        poolOfOne(dir.resolve("pooled-sagas-" + files++ + ".db"), "saga-contract-pool");
+        TestDatabases.poolOfOne(
+            dir.resolve("pooled-sagas-" + files++ + ".db"), "saga-contract-pool");
     resources.add(pool);
     SqliteDatabase database = SqliteDatabase.open(pool);
     resources.add(database);

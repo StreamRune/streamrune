@@ -39,7 +39,10 @@ import org.streamrune.core.types.UserId;
  * microseconds, read inside the publish's write transaction once the write lock is granted (on
  * Postgres the database's {@code NOW()} stamps it). Every other timestamp, and every bound of
  * {@link #readRetryable}, {@link #countAwaitingOperator} and {@link #deleteOlderThan}, is the
- * caller's.
+ * caller's. The two clocks need not agree: when this queue's clock runs behind the clock the
+ * retention cutoff is taken from, a publish can stamp a row older than a cutoff already passed to
+ * {@link #deleteOlderThan}, and that sweep may delete it too. It deletes only rows older than its
+ * cutoff, as promised; on Postgres a cutoff later than the database's {@code NOW()} does the same.
  *
  * <p><b>Durable on return.</b> Every write, single statements included, runs as {@code BEGIN
  * IMMEDIATE} … {@code COMMIT} through the one SQLite write helper, so it is committed when it
@@ -344,8 +347,9 @@ public final class SqliteDeadLetterQueue implements DeadLetterQueue {
                 }
               });
       total += batch;
-      // Until a batch deletes nothing, as on Postgres: each non-empty batch shrinks the finite set
-      // of rows older than the cutoff.
+      // Until a batch deletes nothing, as on Postgres. Each batch deletes rows older than the
+      // cutoff; a publish whose clock runs behind the cutoff's can add such rows meanwhile, so the
+      // loop ends once deleting outruns those publishes (not because the set can only shrink).
     } while (batch > 0);
     return total;
   }
