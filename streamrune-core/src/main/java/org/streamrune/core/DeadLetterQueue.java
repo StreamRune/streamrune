@@ -39,7 +39,9 @@ public interface DeadLetterQueue {
   /**
    * Data required to publish a failed command to the dead letter queue.
    *
-   * @param commandPayload serialized command payload (JSON string); must not be null
+   * @param commandPayload serialized command payload (JSON string); must not be null. A store may
+   *     normalise the text (whitespace, key order): it reads back as the same JSON document, not
+   *     necessarily the same characters.
    * @param commandType fully-qualified class name ({@link Class#getName()}) of the command; must
    *     not be null or blank, and at most {@value CommandInbox#MAX_COMMAND_TYPE_LENGTH} characters
    *     ({@link CommandInbox#requireCommandType}), the width of {@code
@@ -245,6 +247,9 @@ public interface DeadLetterQueue {
    * @throws IllegalArgumentException if {@code commandId} is null
    */
   default Optional<DeadLetterEntry> find(CommandId commandId) {
+    if (commandId == null) {
+      throw new IllegalArgumentException("commandId is required");
+    }
     return read(Integer.MAX_VALUE).stream()
         .filter(entry -> entry.commandId().equals(commandId))
         .findFirst();

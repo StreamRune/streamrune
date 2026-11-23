@@ -234,4 +234,17 @@ public abstract class ProjectionDeadLetterStoreContract {
     assertThrows(IllegalArgumentException.class, () -> store.readAll(0));
     assertThrows(IllegalArgumentException.class, () -> store.readAll(-1));
   }
+
+  @Test
+  void aMillisecondFailedAtRoundTripsAndOrdersEntriesOneMillisecondApart() {
+    Instant first = Instant.parse("2026-03-04T05:06:07.123Z");
+    store.save(entry(ORDERS, 20, first.plusMillis(1)));
+    store.save(entry(ORDERS, 10, first.plusMillis(1).plusMillis(1)));
+    store.save(entry(ORDERS, 30, first));
+
+    List<ProjectionDeadLetterEntry> read = store.read(ORDERS, 10);
+
+    assertEquals(List.of("orders@30", "orders@20", "orders@10"), keys(read));
+    assertEquals(first, read.getFirst().failedAt());
+  }
 }

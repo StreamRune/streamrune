@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.EventStoreException;
@@ -107,12 +106,6 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
         .sorted(Comparator.comparing(DeadLetterEntry::publishedAt).reversed())
         .limit(limit)
         .toList();
-  }
-
-  @Override
-  public Optional<DeadLetterEntry> find(CommandId commandId) {
-    requireArgument(commandId, "commandId");
-    return entries.stream().filter(e -> e.commandId().equals(commandId)).findFirst();
   }
 
   @Override

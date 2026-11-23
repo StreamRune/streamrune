@@ -11,7 +11,9 @@ import org.streamrune.core.types.ProjectionName;
 /**
  * In-memory {@link ProjectionDeadLetterStore} for unit tests.
  *
- * <p>Thread-safe via {@link CopyOnWriteArrayList}. Not suitable for production use.
+ * <p>Thread-safe: reads run against a {@link CopyOnWriteArrayList} snapshot, and every mutator
+ * ({@link #save}, {@link #discard}) is synchronized on the store so its index-based update cannot
+ * interleave with another. Not suitable for production use.
  *
  * <p>Use {@link #all()} in assertions to inspect all stored entries directly.
  */
@@ -80,7 +82,7 @@ public final class InMemoryProjectionDeadLetterStore implements ProjectionDeadLe
   }
 
   @Override
-  public void discard(ProjectionName projectionName, GlobalOffset fromOffset) {
+  public synchronized void discard(ProjectionName projectionName, GlobalOffset fromOffset) {
     requireArgument(projectionName, "projectionName");
     requireArgument(fromOffset, "fromOffset");
     entries.removeIf(

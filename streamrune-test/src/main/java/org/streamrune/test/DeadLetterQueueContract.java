@@ -9,7 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CyclicBarrier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.DeadLetterQueue;
@@ -517,5 +520,70 @@ public abstract class DeadLetterQueueContract {
     assertThrows(IllegalArgumentException.class, () -> queue.read(-1));
     assertThrows(IllegalArgumentException.class, () -> queue.readRetryable(3, 0, true, null));
     assertThrows(IllegalArgumentException.class, () -> queue.readRetryable(3, -1, true, null));
+  }
+
+  @Test
+  void aRepublishOfTheSameCommandUnderTheSameKeyReturnsNormallyAndChangesNothing() {
+    queue.publish(request("c-1", TYPE, stream("order-1"), IdempotencyKey.of("k1"), T0));
+    DeadLetterEntry before = queue.find(CommandId.of("c-1")).orElseThrow();
+
+    // the keyed one-entry rule decides before the duplicate-commandId rule
+    queue.publish(request("c-1", TYPE, stream("order-1"), IdempotencyKey.of("k1"), T0));
+
+    assertEquals(List.of(before), queue.read(10));
+  }
+
+  @Test
+  void aStoredCommandIdUnderAnotherKeyIsRejected() {
+    queue.publish(request("c-1", TYPE, stream("order-1"), IdempotencyKey.of("k1"), T0));
+
+    assertThrows(
+        EventStoreException.class,
+        () -> queue.publish(request("c-1", TYPE, stream("order-1"), IdempotencyKey.of("k2"), T0)));
+
+    assertEquals(1, queue.countPending());
+  }
+
+  /** Two replicas dead-lettering the same keyed command at the same moment store one entry. */
+  @Test
+  void twoConcurrentKeyedRequestsForOneCommandStoreOneEntry() throws Exception {
+    for (int round = 0; round < 20; round++) {
+      IdempotencyKey key = IdempotencyKey.of("race-" + round);
+      CyclicBarrier start = new CyclicBarrier(2);
+      ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+      List<Thread> threads = new ArrayList<>();
+      for (int publisher = 0; publisher < 2; publisher++) {
+        String id = "race-" + round + "-" + publisher;
+        threads.add(
+            Thread.ofVirtual()
+                .start(
+                    () -> {
+                      try {
+                        start.await();
+                        queue.publish(request(id, TYPE, stream("order-1"), key, T0));
+                      } catch (Throwable t) {
+                        errors.add(t);
+                      }
+                    }));
+      }
+      for (Thread thread : threads) {
+        thread.join();
+      }
+      assertTrue(errors.isEmpty(), () -> "round failed: " + errors);
+      assertEquals(1, queue.findByIdempotencyKey(key).size(), key.value());
+    }
+  }
+
+  @Test
+  void millisecondInstantsRoundTripUnchanged() {
+    Instant first = Instant.parse("2026-03-04T05:06:07.123Z");
+    Instant last = Instant.parse("2026-03-04T05:06:09.456Z");
+    queue.publish(request("c-1", TYPE, null, null, first));
+
+    queue.updateAttempts(CommandId.of("c-1"), 1, last);
+
+    DeadLetterEntry e = queue.find(CommandId.of("c-1")).orElseThrow();
+    assertEquals(first, e.firstAttemptAt());
+    assertEquals(last, e.lastAttemptAt());
   }
 }
