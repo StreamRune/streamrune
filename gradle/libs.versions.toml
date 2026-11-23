@@ -20,6 +20,8 @@ hikaricp = "6.2.1"
 dropwizard-metrics = "4.2.40"
 dropwizard-metrics5 = "5.0.8"
 postgresql = "42.7.10"
+# Bundles SQLite 3.54.1; the framework requires SQLite 3.45.0 or newer (SqliteVersion).
+sqlite-jdbc = "3.54.1.0"
 # 11.13.3+ (so 12.x and 13.x) accept PostgreSQL 18 without the "Flyway upgrade recommended: PostgreSQL 18.x is
 # newer than this version of Flyway" WARN that 10.22.0 logged on every migration against the 18 the suite runs on.
 # The API in use (Flyway.configure()...migrate()) is the same across 10 - 13.
@@ -109,6 +111,7 @@ jackson-datatype-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-dat
 
 # Database
 postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
 dropwizard-metrics-core = { module = "io.dropwizard.metrics:metrics-core", version.ref = "dropwizard-metrics" }
 dropwizard-metrics-healthchecks = { module = "io.dropwizard.metrics:metrics-healthchecks", version.ref = "dropwizard-metrics" }

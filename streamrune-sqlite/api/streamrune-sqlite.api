@@ -1,0 +1,10 @@
+# The public API of :streamrune-sqlite. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.sqlite.SqliteDatabase implements java.lang.AutoCloseable
+  public java.lang.String toString()
+  public java.nio.file.Path file()
+  public javax.sql.DataSource dataSource()
+  public static org.streamrune.sqlite.SqliteDatabase open(javax.sql.DataSource)
+  public void close()
+
+public final class org.streamrune.sqlite.SqliteGuardException extends java.lang.IllegalStateException

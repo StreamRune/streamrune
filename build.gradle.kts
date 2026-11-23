@@ -1155,6 +1155,7 @@ subprojects {
         val automaticModuleNames = mapOf(
             ":streamrune-runtime" to "org.streamrune.runtime",
             ":streamrune-postgres" to "org.streamrune.postgres",
+            ":streamrune-sqlite" to "org.streamrune.sqlite",
             ":streamrune-integration:streamrune-integration-api" to "org.streamrune.integration",
             ":streamrune-integration:streamrune-spring" to "org.streamrune.spring",
             ":streamrune-integration:streamrune-quarkus" to "org.streamrune.quarkus",
