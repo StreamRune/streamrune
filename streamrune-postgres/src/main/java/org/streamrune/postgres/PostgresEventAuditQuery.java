@@ -118,22 +118,27 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
 
   @Override
   public List<EventAuditEntry> findByCorrelationId(CorrelationId correlationId) {
+    Objects.requireNonNull(correlationId, "correlationId is required");
     return queryWithSingleParam(FIND_BY_CORRELATION, correlationId.value());
   }
 
   @Override
   public List<EventAuditEntry> findByCommandId(CommandId commandId) {
+    Objects.requireNonNull(commandId, "commandId is required");
     return queryWithSingleParam(FIND_BY_COMMAND, commandId.value());
   }
 
   @Override
   public List<EventAuditEntry> findByCausationId(CausationId causationId) {
+    Objects.requireNonNull(causationId, "causationId is required");
     return queryWithSingleParam(FIND_BY_CAUSATION, causationId.value());
   }
 
   @Override
   public List<EventAuditEntry> findByStreamId(StreamId streamId, Instant from, Instant to) {
     Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_STREAM)) {
       PostgresStreamKeys.bind(ps, 1, streamId);
@@ -147,6 +152,9 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
 
   @Override
   public List<EventAuditEntry> findByUserId(UserId userId, Instant from, Instant to) {
+    Objects.requireNonNull(userId, "userId is required");
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
     return queryWithTimeRange(FIND_BY_USER, userId.value(), from, to);
   }
 
@@ -208,6 +216,7 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
 
   @Override
   public List<EventAuditEntry> traceFullCausationChain(EventId eventId) {
+    Objects.requireNonNull(eventId, "eventId is required");
     return queryWithSingleParam(TRACE_CHAIN, eventId.value());
   }
 

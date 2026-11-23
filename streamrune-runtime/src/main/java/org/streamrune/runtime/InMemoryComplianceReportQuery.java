@@ -29,12 +29,16 @@ public final class InMemoryComplianceReportQuery implements ComplianceReportQuer
 
   @Override
   public ComplianceReport generate(Instant from, Instant to) {
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
     return buildReport(from, to, null);
   }
 
   @Override
   public ComplianceReport generateForUser(UserId userId, Instant from, Instant to) {
-    Objects.requireNonNull(userId, "userId");
+    Objects.requireNonNull(userId, "userId is required");
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
     return buildReport(from, to, userId);
   }
 

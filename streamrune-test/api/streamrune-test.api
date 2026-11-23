@@ -41,6 +41,15 @@ public static final record org.streamrune.test.AtomicBatchProcessorContract$Cont
   public java.lang.String id()
   public java.lang.String value()
 
+public abstract class org.streamrune.test.AuditStoreContract
+  protected abstract org.streamrune.core.audit.AuditStore newStore()
+  public <init>()
+
+public abstract class org.streamrune.test.CommandAuditQueryContract
+  protected abstract org.streamrune.core.audit.AuditStore writer()
+  protected abstract org.streamrune.core.audit.CommandAuditQuery query()
+  public <init>()
+
 public abstract class org.streamrune.test.CommandBusProvenanceContract
   protected abstract org.streamrune.core.CommandBus newBus(org.streamrune.core.EventStore)
   protected final java.util.List<org.streamrune.core.EventEnvelope> storedEventsOf(java.lang.ScopedValue$Carrier)
@@ -133,6 +142,11 @@ public static final record org.streamrune.test.CommandInboxContract$Inboxed
   public org.streamrune.core.CommandInbox inbox()
   public org.streamrune.core.EventStore store()
 
+public abstract class org.streamrune.test.ComplianceReportQueryContract
+  protected abstract org.streamrune.core.audit.AuditStore writer()
+  protected abstract org.streamrune.core.audit.ComplianceReportQuery query()
+  public <init>()
+
 public abstract class org.streamrune.test.DeadLetterQueueContract
   protected abstract org.streamrune.core.DeadLetterQueue newQueue()
   public <init>()
@@ -154,6 +168,15 @@ public final class org.streamrune.test.DeciderFixture$WhenStage
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectProduced(java.util.function.Consumer<java.util.List<E>>, java.util.function.Consumer<S>)
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectState(java.util.function.Consumer<S>)
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectStateMatches(S)
+
+public abstract class org.streamrune.test.EventAuditQueryContract
+  protected abstract org.streamrune.core.audit.EventAuditQuery query()
+  protected abstract org.streamrune.core.audit.EventAuditStore writer()
+  public <init>()
+
+public abstract class org.streamrune.test.EventAuditStoreContract
+  protected abstract org.streamrune.core.audit.EventAuditStore newStore()
+  public <init>()
 
 public final class org.streamrune.test.EventPayloadAssertions
   public static <E extends org.streamrune.core.DomainEvent> E assertRoundTrips(E)

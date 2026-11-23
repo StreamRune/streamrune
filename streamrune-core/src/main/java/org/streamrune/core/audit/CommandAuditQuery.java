@@ -36,11 +36,12 @@ public interface CommandAuditQuery {
   /**
    * Returns the audit entry for the given command execution.
    *
-   * <p>{@link AuditEntry#commandId()} uniquely identifies one command execution, so at most one
-   * entry matches.
+   * <p>{@link AuditEntry#commandId()} identifies one command execution, but a retry runs the same
+   * command again and appends another entry under the same id. The most recent entry (latest {@link
+   * AuditEntry#occurredAt()}) answers.
    *
    * @param commandId the command execution to look up; must not be {@code null}
-   * @return the matching entry, or empty if the command was never audited
+   * @return the most recent matching entry, or empty if the command was never audited
    * @throws NullPointerException if {@code commandId} is {@code null}
    */
   Optional<AuditEntry> findByCommandId(CommandId commandId);
