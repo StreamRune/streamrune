@@ -11,6 +11,7 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
@@ -79,17 +80,41 @@ final class SqliteCrashPoints {
     }
   }
 
-  private static final List<String> TRIGGERS =
-      List.of(
-          "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_counter AFTER UPDATE ON"
-              + " main.global_offset_counter BEGIN SELECT sr_crash_point('global_offset_counter');"
-              + " END",
-          "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_event AFTER INSERT ON main.event_stream"
-              + " BEGIN SELECT sr_crash_point('event_stream'); END",
-          "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_insert AFTER INSERT ON"
-              + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END",
-          "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_update AFTER UPDATE ON"
-              + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END");
+  /**
+   * The triggers that call {@code sr_crash_point} for each row a statement writes, by table; only
+   * the armed point's table gets them, so a database that lacks another table can be armed too.
+   */
+  private static final Map<String, List<String>> TRIGGERS =
+      Map.of(
+          "global_offset_counter",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_counter AFTER UPDATE ON"
+                  + " main.global_offset_counter BEGIN SELECT"
+                  + " sr_crash_point('global_offset_counter'); END"),
+          "event_stream",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_event AFTER INSERT ON main.event_stream"
+                  + " BEGIN SELECT sr_crash_point('event_stream'); END"),
+          "snapshot_store",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_insert AFTER INSERT ON"
+                  + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_update AFTER UPDATE ON"
+                  + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END"),
+          "saga_state",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_insert AFTER INSERT ON"
+                  + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_update AFTER UPDATE ON"
+                  + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END"),
+          "saga_dead_letters",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_insert AFTER INSERT ON"
+                  + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
+                  + " END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_update AFTER UPDATE ON"
+                  + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
+                  + " END"));
 
   private final Kill kill;
   private volatile Point armed;
@@ -215,8 +240,9 @@ final class SqliteCrashPoints {
 
     private Connection wrap(Connection conn) throws SQLException {
       Session session = new Session(conn);
-      if (armed != null && armed != Point.AFTER_COMMIT) {
-        install(conn, session);
+      Point point = armed;
+      if (point != null && point != Point.AFTER_COMMIT) {
+        install(conn, session, point.table());
       }
       return (Connection)
           Proxy.newProxyInstance(
@@ -274,7 +300,7 @@ final class SqliteCrashPoints {
           });
     }
 
-    private void install(Connection conn, Session session) throws SQLException {
+    private void install(Connection conn, Session session, String table) throws SQLException {
       Function.create(
           conn.unwrap(SQLiteConnection.class),
           "sr_crash_point",
@@ -286,7 +312,7 @@ final class SqliteCrashPoints {
             }
           });
       try (Statement statement = conn.createStatement()) {
-        for (String trigger : TRIGGERS) {
+        for (String trigger : TRIGGERS.get(table)) {
           statement.execute(trigger);
         }
       }

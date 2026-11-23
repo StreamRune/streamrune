@@ -24,12 +24,16 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Every statement in StreamRune's main sources that writes {@code saga_state} is classified here,
- * and every write that can take a saga out of its forward phase goes through {@code
- * PostgresSagaStore}'s one fence-changing write path, which takes the saga's exclusive fence lock
- * ({@link SagaFenceLock}) before the statement. A forward command's append reads the row under the
- * shared form of that lock; a write that skipped the exclusive lock could stamp an episode or end a
- * saga while a forward command of it is committing, and that command would be stored after the
- * compensation began.
+ * and every write that can take a saga out of its forward phase belongs to its backend's saga
+ * store. On Postgres it goes through {@code PostgresSagaStore}'s one fence-changing write path,
+ * which takes the saga's exclusive fence lock ({@link SagaFenceLock}) before the statement. A
+ * forward command's append reads the row under the shared form of that lock; a write that skipped
+ * the exclusive lock could stamp an episode or end a saga while a forward command of it is
+ * committing, and that command would be stored after the compensation began. On SQLite it is a
+ * statement of {@code SqliteSagaStore}, which runs every write inside {@code BEGIN IMMEDIATE} …
+ * {@code COMMIT}: the database-wide write lock it holds is the fence, so the statement needs no
+ * fence lock of its own (its behaviour is pinned by the SQLite store's tests, not here). Saga state
+ * is written by its backend's saga store only, and its shield by that backend's dead-letter store.
  *
  * <p><b>How to classify a new write.</b> The test finds every statement whose SQL text contains
  * {@code INSERT INTO saga_state}, {@code UPDATE saga_state}, {@code DELETE FROM saga_state}, {@code
@@ -42,10 +46,11 @@ import org.junit.jupiter.api.Test;
  * at a terminal status ({@code COMPLETED}, {@code COMPENSATED}, {@code FAILED}), or remove the row?
  *
  * <ul>
- *   <li>Yes, for some bind values: it is {@link Kind#FENCE_CHANGING}. Declare it in {@code
- *       PostgresSagaStore} as a {@code FenceChangingWrite} and run it through {@code
+ *   <li>Yes, for some bind values: it is {@link Kind#FENCE_CHANGING}. On Postgres, declare it in
+ *       {@code PostgresSagaStore} as a {@code FenceChangingWrite} and run it through {@code
  *       fenceChangingWrite(...)}, passing {@code leavesForwardPhase} true for every call whose bind
- *       values can make that turn (when in doubt, true: the lock then only costs a wait).
+ *       values can make that turn (when in doubt, true: the lock then only costs a wait). On
+ *       SQLite, declare it in {@code SqliteSagaStore} as a plain {@code String}.
  *   <li>No, for every bind value — a plain insert or an insert that does nothing on conflict (the
  *       fence refuses an absent row, so a new row turns nothing to "refused"; an upsert updates the
  *       existing row and is judged as an update), a write of a non-terminal status other than
@@ -92,57 +97,138 @@ class SagaStateWriteRatchetTest {
 
   private static final String SAGA_STORE = "PostgresSagaStore.java";
 
+  /**
+   * The SQLite saga store: on SQLite every write holds the database-wide write lock from its {@code
+   * BEGIN IMMEDIATE} to its commit, and that lock is the fence, so a fence-changing write there is
+   * a plain statement of this store, run in its write transaction, with no fence lock of its own.
+   */
+  private static final String SQLITE_SAGA_STORE = "SqliteSagaStore.java";
+
   /** Every {@code saga_state} write of the main sources, by {@code File.CONSTANT}. */
   private static final Map<String, Classified> CLASSIFIED =
-      Map.of(
-          "PostgresSagaStore.UPDATE_CAS",
-          new Classified(
-              Verb.UPDATE,
-              Kind.FENCE_CHANGING,
-              "update and claimCompensating: COMPENSATING stamps the episode, a terminal status"
-                  + " ends the saga"),
-          "PostgresSagaStore.APPLY_EVENT",
-          new Classified(
-              Verb.UPDATE,
-              Kind.FENCE_CHANGING,
-              "an evolved COMPENSATING stamps the episode, an evolved terminal status ends the"
-                  + " saga"),
-          "PostgresSagaStore.DELETE_BY_TYPE",
-          new Classified(
-              Verb.DELETE,
-              Kind.FENCE_CHANGING,
-              "a forward command of a saga with no row is refused"),
-          "PostgresSagaStore.INSERT_NEW",
-          new Classified(
-              Verb.INSERT,
-              Kind.KEEPS_FORWARD_PHASE,
-              "an insert: the fence refused the absent row before it"),
-          "PostgresSagaStore.INSERT_GENESIS_PENDING",
-          new Classified(
-              Verb.INSERT,
-              Kind.KEEPS_FORWARD_PHASE,
-              "an insert: the fence refused the absent row before it"),
-          "PostgresSagaStore.INSERT_FAULTED",
-          new Classified(
-              Verb.INSERT,
-              Kind.KEEPS_FORWARD_PHASE,
-              "an insert: the fence refused the absent row before it"),
-          "PostgresSagaStore.MARK_FAULTED",
-          new Classified(
-              Verb.UPDATE,
-              Kind.KEEPS_FORWARD_PHASE,
-              "FAULTED is not terminal and the statement does not touch the stamp"),
-          "PostgresSagaStore.SET_DEAD_LETTER_PENDING",
-          new Classified(
-              Verb.UPDATE, Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
-          "PostgresSagaDeadLetterStore.CLEAR_SHIELD_IF_DRAINED",
-          new Classified(
-              Verb.UPDATE, Kind.KEEPS_FORWARD_PHASE, "the shield flag; the fence does not read it"),
-          "PostgresSagaDeadLetterStore.ASSERT_SHIELD",
-          new Classified(
-              Verb.UPDATE,
-              Kind.KEEPS_FORWARD_PHASE,
-              "the shield flag; the fence does not read it"));
+      Map.ofEntries(
+          Map.entry(
+              "PostgresSagaStore.UPDATE_CAS",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.FENCE_CHANGING,
+                  "update and claimCompensating: COMPENSATING stamps the episode, a terminal status"
+                      + " ends the saga")),
+          Map.entry(
+              "PostgresSagaStore.APPLY_EVENT",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.FENCE_CHANGING,
+                  "an evolved COMPENSATING stamps the episode, an evolved terminal status ends the"
+                      + " saga")),
+          Map.entry(
+              "PostgresSagaStore.DELETE_BY_TYPE",
+              new Classified(
+                  Verb.DELETE,
+                  Kind.FENCE_CHANGING,
+                  "a forward command of a saga with no row is refused")),
+          Map.entry(
+              "PostgresSagaStore.INSERT_NEW",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "PostgresSagaStore.INSERT_GENESIS_PENDING",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "PostgresSagaStore.INSERT_FAULTED",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "PostgresSagaStore.MARK_FAULTED",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "FAULTED is not terminal and the statement does not touch the stamp")),
+          Map.entry(
+              "PostgresSagaStore.SET_DEAD_LETTER_PENDING",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")),
+          Map.entry(
+              "PostgresSagaDeadLetterStore.CLEAR_SHIELD_IF_DRAINED",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")),
+          Map.entry(
+              "PostgresSagaDeadLetterStore.ASSERT_SHIELD",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")),
+          Map.entry(
+              "SqliteSagaStore.UPDATE_CAS",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.FENCE_CHANGING,
+                  "update and claimCompensating, on SQLite: COMPENSATING stamps the episode, a terminal status ends the saga")),
+          Map.entry(
+              "SqliteSagaStore.APPLY_EVENT",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.FENCE_CHANGING,
+                  "on SQLite: an evolved COMPENSATING stamps the episode, an evolved terminal status ends the saga")),
+          Map.entry(
+              "SqliteSagaStore.DELETE_BY_TYPE",
+              new Classified(
+                  Verb.DELETE,
+                  Kind.FENCE_CHANGING,
+                  "on SQLite: a forward command of a saga with no row is refused")),
+          Map.entry(
+              "SqliteSagaStore.INSERT_NEW",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "SqliteSagaStore.INSERT_GENESIS_PENDING",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "SqliteSagaStore.INSERT_FAULTED",
+              new Classified(
+                  Verb.INSERT,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "an insert: the fence refused the absent row before it")),
+          Map.entry(
+              "SqliteSagaStore.MARK_FAULTED",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "FAULTED is not terminal and the statement does not touch the stamp")),
+          Map.entry(
+              "SqliteSagaStore.SET_DEAD_LETTER_PENDING",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")),
+          Map.entry(
+              "SqliteSagaDeadLetterStore.CLEAR_SHIELD_IF_DRAINED",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")),
+          Map.entry(
+              "SqliteSagaDeadLetterStore.ASSERT_SHIELD",
+              new Classified(
+                  Verb.UPDATE,
+                  Kind.KEEPS_FORWARD_PHASE,
+                  "the shield flag; the fence does not read it")));
 
   /** Why a write of {@code PostgresCheckpointFence} never targets {@code saga_state}. */
   private static final String CHECKPOINT_TABLE =
@@ -283,16 +369,27 @@ class SagaStateWriteRatchetTest {
                 + " of saga_state is always fence-changing");
       }
       if (classified.kind() == Kind.FENCE_CHANGING) {
+        String sagaStore = sagaStoreOf(write.file());
         assertEquals(
-            SAGA_STORE,
+            sagaStore,
             write.file(),
-            entry.getKey() + " changes the fence's verdict: it belongs to the saga store's path");
-        assertEquals(
-            "FenceChangingWrite",
-            write.declaredType(),
             entry.getKey()
-                + " changes the fence's verdict: declare it as a FenceChangingWrite so it can only"
-                + " run through fenceChangingWrite(...)");
+                + " changes the fence's verdict: it belongs to its backend's saga store");
+        if (sagaStore.equals(SAGA_STORE)) {
+          assertEquals(
+              "FenceChangingWrite",
+              write.declaredType(),
+              entry.getKey()
+                  + " changes the fence's verdict: declare it as a FenceChangingWrite so it can"
+                  + " only run through fenceChangingWrite(...)");
+        } else {
+          assertEquals(
+              "String",
+              write.declaredType(),
+              entry.getKey()
+                  + ": on SQLite the write lock is the fence, so the write is a plain String of"
+                  + " the saga store");
+        }
       } else {
         assertEquals(
             "String",
@@ -300,6 +397,15 @@ class SagaStateWriteRatchetTest {
             entry.getKey() + " is classified as keeping the forward phase: a plain String");
       }
     }
+  }
+
+  /**
+   * The saga store a fence-changing write must belong to: {@link #SQLITE_SAGA_STORE} for a file of
+   * the SQLite backend (its classes are named {@code Sqlite…}), {@link #SAGA_STORE} for every other
+   * file.
+   */
+  private static String sagaStoreOf(String file) {
+    return file.startsWith("Sqlite") ? SQLITE_SAGA_STORE : SAGA_STORE;
   }
 
   /**

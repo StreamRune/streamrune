@@ -18,6 +18,8 @@ dependencies {
     // crypto engine through its EncryptedTypeGuard, and guards its tracing with the runtime's
     // GuardedTracing, as PostgresEventStore does. No public signature of this module names a type
     // of these modules (CryptoEngine and the tracing SPI live in core), so implementation, not api.
+    // The saga store's public signatures name Jackson's ObjectMapper, which streamrune-core already
+    // exports as api, as for PostgresSagaStore.
     implementation(project(":streamrune-runtime"))
     implementation(project(":streamrune-crypto:streamrune-crypto-api"))
     implementation(libs.jackson.databind)
