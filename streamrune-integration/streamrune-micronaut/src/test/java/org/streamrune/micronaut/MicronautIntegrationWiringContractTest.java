@@ -42,6 +42,8 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ContractBeans;
@@ -167,6 +169,13 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   /**
+   * The property that declares the {@link ApplicationBeans#backendOutboxStore} of a start: the
+   * contract's {@link ContractBeans.BackendOutboxStore}, an outbox store built from the {@code
+   * BackendStores} bean.
+   */
+  static final String BACKEND_OUTBOX_STORE = "contract.backend-outbox-store";
+
+  /**
    * The application's beans that Micronaut must know at compile time, each declared only for a
    * start that sets its property.
    */
@@ -212,6 +221,12 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     @Requires(property = DEFAULT_STORE_PROJECTION, value = "true")
     DefaultStoreProjection defaultStoreProjection(ProjectionRepository repository) {
       return new DefaultStoreProjection(repository);
+    }
+
+    @Singleton
+    @Requires(property = BACKEND_OUTBOX_STORE, value = "true")
+    OutboxStore backendOutboxStore(BackendStores stores) {
+      return ContractBeans.BackendOutboxStore.from(stores);
     }
   }
 
@@ -348,6 +363,8 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
         configuration.put(DISPATCHING_ROUTE, "true");
       } else if (beanClass == DefaultStoreProjection.class) {
         configuration.put(DEFAULT_STORE_PROJECTION, "true");
+      } else if (beanClass == ContractBeans.BackendOutboxStore.class) {
+        configuration.put(BACKEND_OUTBOX_STORE, "true");
       } else if (ContractBeans.injected(beanClass)) {
         throw new IllegalArgumentException(
             beanClass.getName()

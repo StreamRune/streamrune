@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Predicate;
@@ -27,12 +29,15 @@ import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.CommandInterceptor;
+import org.streamrune.core.EventStore;
 import org.streamrune.core.audit.AuditEntry;
+import org.streamrune.core.backend.BackendStores;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.OffsetStore;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TracingArea;
@@ -49,14 +54,17 @@ import org.streamrune.integration.tck.ContractBeans.AcceptingOutboxPublisher;
 import org.streamrune.integration.tck.ContractBeans.ApplicationCommandInterceptor;
 import org.streamrune.integration.tck.ContractBeans.ApplicationLocker;
 import org.streamrune.integration.tck.ContractBeans.ApplicationTracing;
+import org.streamrune.integration.tck.ContractBeans.BackendOutboxStore;
 import org.streamrune.integration.tck.ContractBeans.CommandInboxBean;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractInlineProjection;
+import org.streamrune.integration.tck.ContractBeans.ContractOutboxMapper;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractSagaState;
 import org.streamrune.integration.tck.ContractBeans.CryptoEngineBean;
 import org.streamrune.integration.tck.ContractBeans.DeadLetterQueueBean;
+import org.streamrune.integration.tck.ContractBeans.DefaultAliasProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.FirstLeadership;
 import org.streamrune.integration.tck.ContractBeans.IdentifiedCallers;
@@ -67,6 +75,7 @@ import org.streamrune.integration.tck.ContractBeans.SagaWithBuilderParallelism;
 import org.streamrune.integration.tck.ContractBeans.SagaWithSubscription;
 import org.streamrune.integration.tck.ContractBeans.SecondLeadership;
 import org.streamrune.integration.tck.ContractBeans.UngatedSagaRunner;
+import org.streamrune.integration.tck.MultiReadModelStoreScenario.ContractEventTypes;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.GraalJitGuard;
 import org.streamrune.runtime.TracingCommandInterceptor;
@@ -85,7 +94,9 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  *
  * <p>An application starts without a database unless its rule needs one: the test kit's in-memory
  * event store, and the beans of {@link ContractBeans} in the place of the stores the rule involves.
- * The health check and the shutdown order run on PostgreSQL ({@link #postgresql()}).
+ * The health check, the shutdown order and the backend's stores ({@code BackendStores}, the default
+ * read-model store's alias, an outbox built from the stores) run on PostgreSQL ({@link
+ * #postgresql()}).
  */
 public abstract class IntegrationWiringContract {
 
@@ -783,6 +794,119 @@ public abstract class IntegrationWiringContract {
                 + String.join("\n  ", problems));
       }
     }
+  }
+
+  // ---- the backend SPI ---------------------------------------------------------------------
+
+  /** Runners that poll often enough for a test. */
+  private static final Map<String, String> PROMPT_POLLING =
+      Map.of("streamrune.polling-interval", "50ms", "streamrune.polling-jitter", "10ms");
+
+  /**
+   * With a {@code DataSource} the integration opens its stores through the selected backend —
+   * {@code postgres} when {@code streamrune.backend} is not set — and exposes that bundle as the
+   * {@code BackendStores} bean an application builds its optional infrastructure from. The stores
+   * the integration wires are the bundle's own: its subscription checkpoint is the bundle's offset
+   * store, not a second instance.
+   */
+  @Test
+  public void backendStoresBeanIsExposed() {
+    try (Application application = start(postgresql(), Map.of(), Set.of())) {
+      assertStarted(application);
+      BackendStores stores = application.bean(BackendStores.class);
+      assertEquals("postgres", stores.backendName(), "the default backend is postgres");
+      assertSame(
+          stores.offsetStore(),
+          application.bean(OffsetStore.class),
+          "the subscription checkpoint the integration wires is the bundle's offset store");
+    }
+  }
+
+  /**
+   * A projection that declares {@code readModelStore = ReadModelStore.DEFAULT} is routed to the
+   * default read-model store, the backend's, whatever its name: its position is held in that
+   * store's checkpoints, and the event store's subscription checkpoint holds none for it. The
+   * application registers its event types, which the projection runner reads back.
+   */
+  @Test
+  public void defaultAliasRoutesToDefaultStore() throws InterruptedException {
+    try (Application application =
+        start(
+            postgresql(),
+            PROMPT_POLLING,
+            Set.of(
+                ContractEventTypes.class,
+                DefaultAliasProjection.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("alias-1"));
+      BackendStores stores = application.bean(BackendStores.class);
+      ReadModelStore defaultStore = stores.defaultReadModelStore();
+      ProjectionName name = ProjectionName.of(DefaultAliasProjection.NAME);
+      await(
+          () -> defaultStore.checkpoints().getLastOffset(name).value() > 0,
+          "the projection declaring the alias must checkpoint in the default store "
+              + defaultStore.name());
+      assertEquals(stores.backendName(), defaultStore.name(), "the default store is the backend's");
+      assertEquals(
+          0L,
+          stores.offsetStore().getLastOffset(name).value(),
+          "the subscription checkpoint must hold no position for a projection routed to a store");
+    }
+  }
+
+  /**
+   * An outbox store the application builds from the backend's stores ({@code stores.outboxStore(new
+   * OutboxOptions(...))}), declared with an {@code OutboxEventMapper}, is the one the event store
+   * writes in the transaction of its append: an event and its outbox entry commit together, and an
+   * append whose outbox write fails leaves neither the event nor any entry behind. The application
+   * registers its event types, which the test reads back.
+   */
+  @Test
+  public void userOutboxFromBackendStoresSharesTheAppendTransaction() {
+    try (Application application =
+        start(
+            postgresql(),
+            Map.of(),
+            Set.of(
+                ContractEventTypes.class,
+                BackendOutboxStore.class,
+                ContractOutboxMapper.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(application);
+      OutboxStore outbox = application.bean(OutboxStore.class);
+      assertSame(
+          BackendOutboxStore.from(application.bean(BackendStores.class)),
+          outbox,
+          "the application's outbox store is the bundle's, built for its options");
+      VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
+      EventStore events = application.bean(EventStore.class);
+
+      bus.execute(new ContractCommand("outbox-1"));
+      assertEquals(1, events.load(contractStream("outbox-1")).events().size(), "the event");
+      assertTrue(
+          outbox.findById(ContractOutboxMapper.entryId("outbox-1")).isPresent(),
+          "the outbox entry must commit with its event");
+
+      String refused = ContractOutboxMapper.UNORDERED + "2";
+      assertThrows(
+          RuntimeException.class,
+          () -> bus.execute(new ContractCommand(refused)),
+          "an append whose outbox write fails must fail");
+      assertEquals(
+          List.of(),
+          events.load(contractStream(refused)).events(),
+          "an append whose outbox write failed must leave no event behind");
+      assertEquals(
+          Optional.empty(),
+          outbox.findById(ContractOutboxMapper.entryId(refused)),
+          "an append that failed must leave no outbox entry behind");
+    }
+  }
+
+  private static StreamId contractStream(String commandId) {
+    return StreamId.of(
+        AggregateType.of(ContractCommandRegistration.TYPE), AggregateId.of(commandId));
   }
 
   // ---- tracing -----------------------------------------------------------------------------
