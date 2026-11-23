@@ -37,13 +37,20 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>How to classify a new write.</b> The test finds every statement whose SQL text contains
  * {@code INSERT INTO saga_state}, {@code UPDATE saga_state}, {@code DELETE FROM saga_state}, {@code
- * MERGE INTO saga_state} or {@code TRUNCATE saga_state} (comments are ignored; the statement's
- * string literals are joined, so a split literal is found too) and fails for one that is not in
- * {@link #CLASSIFIED}, or whose kind of statement ({@link Verb}) is not the classified one — an
- * insert that gains {@code ON CONFLICT … DO UPDATE} is an upsert and is classified again, as an
- * update of the existing row. Ask of the new statement: can it turn the fence's verdict from
- * "forward" to "refused" — that is, can it leave a row carrying an episode stamp it did not carry,
- * at a terminal status ({@code COMPLETED}, {@code COMPENSATED}, {@code FAILED}), or remove the row?
+ * MERGE INTO saga_state} or {@code TRUNCATE saga_state}, or one of SQLite's forms {@code INSERT OR
+ * <action> INTO saga_state} ({@code IGNORE}, {@code REPLACE}, {@code ABORT}, {@code FAIL}, {@code
+ * ROLLBACK}), {@code REPLACE INTO saga_state} and {@code UPDATE OR <action> saga_state}, with the
+ * table bare, quoted ({@code "saga_state"}, {@code `saga_state`}, {@code [saga_state]}) or
+ * qualified by a schema ({@code main.saga_state}, {@code public.saga_state}) (comments are ignored;
+ * the statement's string literals are joined, so a split literal is found too) and fails for one
+ * that is not in {@link #CLASSIFIED}, or whose kind of statement ({@link Verb}) is not the
+ * classified one — an insert that gains {@code ON CONFLICT … DO UPDATE} is an upsert and is
+ * classified again, as an update of the existing row. A {@code REPLACE} form ({@code INSERT OR
+ * REPLACE}, {@code REPLACE INTO}, {@code UPDATE OR REPLACE}) deletes a conflicting row before it
+ * writes, so, like a delete, a merge and a truncate, it is always fence-changing. Ask of the new
+ * statement: can it turn the fence's verdict from "forward" to "refused" — that is, can it leave a
+ * row carrying an episode stamp it did not carry, at a terminal status ({@code COMPLETED}, {@code
+ * COMPENSATED}, {@code FAILED}), or remove the row?
  *
  * <ul>
  *   <li>Yes, for some bind values: it is {@link Kind#FENCE_CHANGING}. On Postgres, declare it in
@@ -60,7 +67,15 @@ import org.junit.jupiter.api.Test;
  * </ul>
  *
  * <p>An inline SQL string (not a constant) that writes {@code saga_state} is refused outright: name
- * it, then classify it. A delete, a merge and a truncate are always fence-changing.
+ * it, then classify it. A delete, a merge, a truncate and a replace are always fence-changing. A
+ * fence-changing write belongs to the saga store of its module ({@code streamrune-postgres}: {@code
+ * PostgresSagaStore}, {@code streamrune-sqlite}: {@code SqliteSagaStore}); a module without a saga
+ * store has none.
+ *
+ * <p><b>It runs on every build that changes what it scans.</b> The scan reads every module's main
+ * sources, not only this module's, so {@code streamrune-postgres/build.gradle.kts} declares them as
+ * inputs of the test task, and {@link #everyScannedFileIsDeclaredAsAGradleInputOfTheTestTask} fails
+ * when the declaration and the scan differ.
  *
  * <p><b>A table the text does not name.</b> The classification reads the table from the statement's
  * text. A write that composes its table from a value the code supplies ({@code "UPDATE " + TABLE},
@@ -90,12 +105,21 @@ class SagaStateWriteRatchetTest {
     UPDATE,
     DELETE,
     MERGE,
-    TRUNCATE
+    TRUNCATE,
+    /**
+     * SQLite's {@code INSERT OR REPLACE INTO}, {@code REPLACE INTO} and {@code UPDATE OR REPLACE}:
+     * a conflicting row is deleted and the new one written, so it can drop a stamp or replace a
+     * terminal row.
+     */
+    REPLACE
   }
 
   private record Classified(Verb verb, Kind kind, String reason) {}
 
   private static final String SAGA_STORE = "PostgresSagaStore.java";
+
+  /** The system property naming the manifest of the files Gradle declares as the task's input. */
+  private static final String DECLARED_SOURCES_PROPERTY = "streamrune.sagastate.declared-sources";
 
   /**
    * The SQLite saga store: on SQLite every write holds the database-wide write lock from its {@code
@@ -103,6 +127,13 @@ class SagaStateWriteRatchetTest {
    * a plain statement of this store, run in its write transaction, with no fence lock of its own.
    */
   private static final String SQLITE_SAGA_STORE = "SqliteSagaStore.java";
+
+  /**
+   * The saga store of each backend module: a fence-changing write of a module belongs to that
+   * module's saga store, and a module not listed has none.
+   */
+  private static final Map<String, String> SAGA_STORES =
+      Map.of("streamrune-postgres", SAGA_STORE, "streamrune-sqlite", SQLITE_SAGA_STORE);
 
   /** Every {@code saga_state} write of the main sources, by {@code File.CONSTANT}. */
   private static final Map<String, Classified> CLASSIFIED =
@@ -278,6 +309,25 @@ class SagaStateWriteRatchetTest {
   private static final char SUPPLIED = '\u0001';
 
   /**
+   * The verb of a write, as group 1: Postgres' {@code INSERT INTO}, {@code UPDATE [ONLY]}, {@code
+   * DELETE FROM [ONLY]}, {@code MERGE INTO} and {@code TRUNCATE [TABLE] [ONLY]}, and SQLite's
+   * {@code INSERT OR <action> INTO}, {@code REPLACE INTO} and {@code UPDATE OR <action>}.
+   */
+  private static final String WRITE_VERB =
+      "(insert\\s+or\\s+\\w+\\s+into|insert\\s+into|replace\\s+into|update\\s+or\\s+\\w+"
+          + "|update(?:\\s+only)?|delete\\s+from(?:\\s+only)?|merge\\s+into"
+          + "|truncate(?:\\s+table)?(?:\\s+only)?)";
+
+  /**
+   * An identifier quote around a table or schema name: a double quote (escaped or not in the Java
+   * literal), a backtick or a bracket.
+   */
+  private static final String QUOTE_CHAR = "(?:\\\\?\"|`|\\[|\\])";
+
+  /** {@link #QUOTE_CHAR}, or none. */
+  private static final String QUOTE = QUOTE_CHAR + "?";
+
+  /**
    * A write whose verb is followed by a value the text does not show: a supplied value (a
    * concatenated constant, variable or call) or a format placeholder ({@code %s}, {@code %1$s},
    * {@code {0}}), after a space or a quote, alone or behind a literal schema ({@code UPDATE
@@ -290,8 +340,8 @@ class SagaStateWriteRatchetTest {
       Pattern.compile(
           "(?i)(?:^|[;()"
               + SUPPLIED
-              + "])\\s*(insert\\s+into|update(?:\\s+only)?|delete\\s+from(?:\\s+only)?"
-              + "|merge\\s+into|truncate(?:\\s+table)?(?:\\s+only)?)"
+              + "])\\s*"
+              + WRITE_VERB
               + "(?:\\s+(?:\\\\?\")?|\\\\?\")\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?\\.(?:\\\\?\")?)?(?:"
               + SUPPLIED
               + "|%(?:\\d+\\$)?s|\\{\\d*\\})");
@@ -305,10 +355,27 @@ class SagaStateWriteRatchetTest {
       Pattern.compile(
           "(?i)\\s*(?:(?:\\\\?\")?\\w+(?:\\\\?\")?)?\\.?(?:\\\\?\")?saga_state(?:\\\\?\")?\\s*");
 
+  /**
+   * A write of {@code saga_state}: a {@link #WRITE_VERB}, then the table, bare, quoted, or
+   * qualified by a schema ({@code main.saga_state}, {@code public.saga_state}, {@code
+   * "saga_state"}).
+   */
   private static final Pattern SAGA_STATE_WRITE =
       Pattern.compile(
-          "(?i)\\b(insert\\s+into|update|delete\\s+from|merge\\s+into"
-              + "|truncate(?:\\s+table)?(?:\\s+only)?)\\s+saga_state\\b");
+          "(?i)\\b"
+              + WRITE_VERB
+              + "(?:\\s+|(?="
+              + QUOTE_CHAR
+              + "))"
+              + "(?:"
+              + QUOTE
+              + "\\w+"
+              + QUOTE
+              + "\\s*\\.\\s*)?"
+              + QUOTE
+              + "saga_state"
+              + QUOTE
+              + "(?!\\w)");
 
   private static final Pattern UPSERT =
       Pattern.compile("(?is)\\bon\\s+conflict\\b.*\\bdo\\s+update\\b");
@@ -322,6 +389,12 @@ class SagaStateWriteRatchetTest {
       Pattern.compile(
           "(?s)^\\s*(?:@\\w+\\s+)*(?:(?:private|public|protected|static|final)\\s+)+"
               + "([\\w.<>]+)\\s+([A-Z][A-Z0-9_]*)\\s*=");
+
+  /**
+   * The kinds of statement that can remove a row, whatever the bind values: never classified else.
+   */
+  private static final Set<Verb> ALWAYS_FENCE_CHANGING =
+      Set.of(Verb.DELETE, Verb.MERGE, Verb.TRUNCATE, Verb.REPLACE);
 
   private static final Set<String> PRUNED_DIRECTORY_NAMES =
       Set.of("build", "out", ".git", ".gradle", ".idea", "node_modules");
@@ -359,7 +432,7 @@ class SagaStateWriteRatchetTest {
           entry.getKey()
               + " is not the kind of statement it is classified as: classify it again"
               + " (see the class javadoc)");
-      if (Set.of(Verb.DELETE, Verb.MERGE, Verb.TRUNCATE).contains(classified.verb())) {
+      if (ALWAYS_FENCE_CHANGING.contains(classified.verb())) {
         assertEquals(
             Kind.FENCE_CHANGING,
             classified.kind(),
@@ -369,12 +442,22 @@ class SagaStateWriteRatchetTest {
                 + " of saga_state is always fence-changing");
       }
       if (classified.kind() == Kind.FENCE_CHANGING) {
-        String sagaStore = sagaStoreOf(write.file());
+        String sagaStore = SAGA_STORES.get(write.module());
+        assertTrue(
+            sagaStore != null,
+            entry.getKey()
+                + " changes the fence's verdict but is in module "
+                + write.module()
+                + ", which has no saga store: it belongs to a backend's saga store "
+                + SAGA_STORES);
         assertEquals(
             sagaStore,
             write.file(),
             entry.getKey()
-                + " changes the fence's verdict: it belongs to its backend's saga store");
+                + " changes the fence's verdict: it belongs to "
+                + sagaStore
+                + ", the saga store of its module "
+                + write.module());
         if (sagaStore.equals(SAGA_STORE)) {
           assertEquals(
               "FenceChangingWrite",
@@ -400,12 +483,13 @@ class SagaStateWriteRatchetTest {
   }
 
   /**
-   * The saga store a fence-changing write must belong to: {@link #SQLITE_SAGA_STORE} for a file of
-   * the SQLite backend (its classes are named {@code Sqlite…}), {@link #SAGA_STORE} for every other
-   * file.
+   * The module a main source belongs to: the directory that holds its {@code src/main}, relative to
+   * the repository root.
    */
-  private static String sagaStoreOf(String file) {
-    return file.startsWith("Sqlite") ? SQLITE_SAGA_STORE : SAGA_STORE;
+  private static String moduleOf(Path file) {
+    String rel = repositoryRoot().relativize(file).toString().replace('\\', '/');
+    int src = rel.indexOf("/src/main/");
+    return src < 0 ? "" : rel.substring(0, src);
   }
 
   /**
@@ -476,6 +560,119 @@ class SagaStateWriteRatchetTest {
               + condition
               + "`; pass true or leavesForwardPhase(<status>)");
     }
+  }
+
+  /**
+   * The write grammar finds every form of a {@code saga_state} write, Postgres' and SQLite's, with
+   * the table bare, quoted or qualified, and reads its kind of statement; reads and other tables
+   * are not writes of it.
+   */
+  @Test
+  void theWriteGrammarFindsEveryFormOfASagaStateWrite() {
+    Map<String, Verb> writes = new java.util.LinkedHashMap<>();
+    writes.put("INSERT INTO saga_state (x) VALUES (?)", Verb.INSERT);
+    writes.put(
+        "INSERT INTO saga_state (x) VALUES (?) ON CONFLICT (x) DO UPDATE SET x = 1", Verb.UPSERT);
+    writes.put("INSERT OR IGNORE INTO saga_state (x) VALUES (?)", Verb.INSERT);
+    writes.put("insert or abort into saga_state (x) values (?)", Verb.INSERT);
+    writes.put("INSERT OR REPLACE INTO saga_state (x) VALUES (?)", Verb.REPLACE);
+    writes.put("REPLACE INTO saga_state (x) VALUES (?)", Verb.REPLACE);
+    writes.put("UPDATE OR REPLACE saga_state SET x = 1", Verb.REPLACE);
+    writes.put("UPDATE OR IGNORE saga_state SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE saga_state SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE ONLY saga_state SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE main.saga_state SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE public . saga_state SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE \"saga_state\" SET x = 1", Verb.UPDATE);
+    // As a Java literal keeps it: the quotes escaped.
+    writes.put("UPDATE \\\"public\\\".\\\"saga_state\\\" SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE`saga_state` SET x = 1", Verb.UPDATE);
+    writes.put("UPDATE [saga_state] SET x = 1", Verb.UPDATE);
+    writes.put("DELETE FROM main.saga_state WHERE x = 1", Verb.DELETE);
+    writes.put("MERGE INTO saga_state s USING t ON s.x = t.x", Verb.MERGE);
+    writes.put("TRUNCATE TABLE saga_state", Verb.TRUNCATE);
+    for (var write : writes.entrySet()) {
+      assertTrue(SAGA_STATE_WRITE.matcher(write.getKey()).find(), "a write: " + write.getKey());
+      assertEquals(write.getValue(), verbOf(write.getKey()), write.getKey());
+    }
+    for (String notAWrite :
+        List.of(
+            "SELECT status FROM saga_state WHERE saga_id = ?",
+            "SELECT status FROM saga_state WHERE saga_id = ? FOR UPDATE",
+            "UPDATE saga_state_archive SET x = 1",
+            "UPDATE main.saga_state_archive SET x = 1",
+            "INSERT INTO saga_dead_letters (x) VALUES (?) ON CONFLICT (x) DO UPDATE SET x = 1",
+            "CREATE TABLE saga_state (x INTEGER)")) {
+      assertFalse(SAGA_STATE_WRITE.matcher(notAWrite).find(), "not a write: " + notAWrite);
+    }
+    assertTrue(
+        ALWAYS_FENCE_CHANGING.contains(Verb.REPLACE),
+        "a REPLACE deletes the conflicting row: always fence-changing");
+  }
+
+  /** The composed-target grammar knows SQLite's write forms too. */
+  @Test
+  void theComposedTargetGrammarFindsEveryWriteForm() {
+    for (String verb :
+        List.of(
+            "INSERT INTO ",
+            "INSERT OR REPLACE INTO ",
+            "INSERT OR IGNORE INTO ",
+            "REPLACE INTO ",
+            "UPDATE OR REPLACE ",
+            "UPDATE ",
+            "DELETE FROM ",
+            "UPDATE main.")) {
+      String shape = verb + SUPPLIED + " SET x = 1";
+      assertTrue(COMPOSED_TARGET.matcher(shape).find(), "a composed write: " + verb);
+    }
+  }
+
+  /**
+   * The test task re-runs when a file this ratchet scans changes: every scanned file is declared as
+   * a Gradle input of the task ({@code streamrune-postgres/build.gradle.kts}, which hands the
+   * declared list over as a manifest), and every declared file is scanned. Fails rather than skips
+   * when the manifest is missing: the wiring disappearing silently is the defect this guards.
+   */
+  @Test
+  void everyScannedFileIsDeclaredAsAGradleInputOfTheTestTask() {
+    String manifestPath = System.getProperty(DECLARED_SOURCES_PROPERTY);
+    if (manifestPath == null) {
+      fail(
+          "-D"
+              + DECLARED_SOURCES_PROPERTY
+              + " is not set, so the declared-inputs check cannot run. Gradle's test task supplies"
+              + " it (streamrune-postgres/build.gradle.kts); run `./gradlew"
+              + " :streamrune-postgres:test`. If that wiring was removed, the ratchet stops"
+              + " re-running when another module changes; restore it rather than deleting this"
+              + " test.");
+    }
+    Path root = repositoryRoot();
+    Set<String> scanned = new TreeSet<>();
+    for (Path file : mainJavaSources()) {
+      scanned.add(root.relativize(file).toString().replace('\\', '/'));
+    }
+    for (Path file : sqlResources()) {
+      scanned.add(root.relativize(file).toString().replace('\\', '/'));
+    }
+    Set<String> declared = new TreeSet<>();
+    for (String line : read(Path.of(manifestPath)).split("\n")) {
+      if (!line.isBlank()) {
+        declared.add(line.strip());
+      }
+    }
+    Set<String> scannedButNotDeclared = new TreeSet<>(scanned);
+    scannedButNotDeclared.removeAll(declared);
+    Set<String> declaredButNotScanned = new TreeSet<>(declared);
+    declaredButNotScanned.removeAll(scanned);
+    assertTrue(
+        scannedButNotDeclared.isEmpty() && declaredButNotScanned.isEmpty(),
+        "the ratchet's Gradle inputs no longer match what it scans; fix the globs in"
+            + " streamrune-postgres/build.gradle.kts.\n  scanned but NOT declared (a change to"
+            + " these would not re-run this test): "
+            + scannedButNotDeclared
+            + "\n  declared but not scanned: "
+            + declaredButNotScanned);
   }
 
   /**
@@ -566,7 +763,10 @@ class SagaStateWriteRatchetTest {
     if (!write.find()) {
       throw new IllegalStateException("not a saga_state write: " + sql);
     }
-    String head = write.group(1).toLowerCase(java.util.Locale.ROOT);
+    String head = write.group(1).toLowerCase(java.util.Locale.ROOT).replaceAll("\\s+", " ");
+    if (head.startsWith("replace") || head.matches("(insert|update) or replace\\b.*")) {
+      return Verb.REPLACE;
+    }
     if (head.startsWith("insert")) {
       return UPSERT.matcher(sql).find() ? Verb.UPSERT : Verb.INSERT;
     }
@@ -601,7 +801,8 @@ class SagaStateWriteRatchetTest {
     throw new IllegalStateException("unbalanced call from offset " + from);
   }
 
-  private record Write(String file, String constant, String declaredType, String sql) {}
+  private record Write(
+      String module, String file, String constant, String declaredType, String sql) {}
 
   /** Every statement of the main sources whose joined string literals write saga_state. */
   private static Map<String, Write> sagaStateWrites() {
@@ -619,7 +820,8 @@ class SagaStateWriteRatchetTest {
           continue;
         }
         String key = name.replace(".java", "") + "." + declaration.group(2);
-        writes.put(key, new Write(name, key, declaration.group(1), statement.literals()));
+        writes.put(
+            key, new Write(moduleOf(file), name, key, declaration.group(1), statement.literals()));
       }
     }
     for (Path sql : sqlResources()) {

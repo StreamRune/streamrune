@@ -74,3 +74,66 @@ dependencies {
     // set sees the test classpath (the plugin's includeTests), so it starts its PostgreSQL through
     // the same Testcontainers dependency and PostgresTestImage as the tests.
 }
+
+// ── The saga_state write ratchet must RUN on the build that breaks it ───────
+//
+// SagaStateWriteRatchetTest reads every module's main Java sources and main SQL resources at
+// runtime, but Gradle knew only about THIS module's sources, classes and classpath. A saga_state
+// write planted in streamrune-sqlite (which this module does not depend on) changed none of
+// :streamrune-postgres:test's declared inputs, so with `org.gradle.caching=true` the task came
+// FROM-CACHE and the ratchet never ran (reproduced; the same tree with `--rerun` failed it). The
+// same failure, and the same fix, as streamrune-core's log-sink ratchet (see
+// streamrune-core/build.gradle.kts): the scanned tree is declared as an input of the test task, and
+// a manifest of the declared files is handed to the test, which fails when what it scans and what
+// Gradle declared differ in either direction. The cost: a main-source edit in any module re-runs
+// this module's tests.
+val sagaStateWriteSources =
+    fileTree(rootDir) {
+        // Mirrors SagaStateWriteRatchetTest#mainJavaSources and #sqlResources: every .java under a
+        // src/main/java and every .sql under a src/main, at any depth, outside the directories its
+        // walk prunes.
+        include("**/src/main/java/**/*.java", "**/src/main/**/*.sql")
+        exclude("**/build/**", "**/out/**", "**/.git/**", "**/.gradle/**", "**/.idea/**")
+        exclude("**/node_modules/**")
+    }
+
+val sagaStateWriteSourceManifest =
+    tasks.register("sagaStateWriteSourceManifest") {
+        group = "verification"
+        description =
+            "Writes the source list declared as an input of the saga_state write ratchet, so the " +
+                "test can prove the declaration covers what it scans."
+        val sources = sagaStateWriteSources
+        val repoRoot = rootDir
+        val manifest = layout.buildDirectory.file("saga-state-writes/declared-sources.txt")
+        inputs
+            .files(sources)
+            .withPropertyName("sagaStateWriteSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        outputs.file(manifest)
+        doLast {
+            val file = manifest.get().asFile
+            file.parentFile.mkdirs()
+            file.writeText(
+                sources.files
+                    .map { it.relativeTo(repoRoot).invariantSeparatorsPath }
+                    .sorted()
+                    .joinToString("\n"),
+            )
+        }
+    }
+
+tasks.named<Test>("test") {
+    inputs
+        .files(sagaStateWriteSources)
+        .withPropertyName("sagaStateWriteSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    dependsOn(sagaStateWriteSourceManifest)
+    val manifest = sagaStateWriteSourceManifest.map { it.outputs.files.singleFile }
+    // An argument provider, not `systemProperty`, so the absolute path stays out of the cache key.
+    jvmArgumentProviders.add(
+        org.gradle.process.CommandLineArgumentProvider {
+            listOf("-Dstreamrune.sagastate.declared-sources=${manifest.get().absolutePath}")
+        },
+    )
+}
