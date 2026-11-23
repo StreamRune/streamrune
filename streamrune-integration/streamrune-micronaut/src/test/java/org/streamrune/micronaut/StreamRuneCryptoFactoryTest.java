@@ -20,11 +20,16 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
+import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.crypto.postgres.PostgresCryptoEngine;
 import software.amazon.awssdk.services.kms.KmsClient;
 
 /** Tests for {@link StreamRuneCryptoFactory}. */
 class StreamRuneCryptoFactoryTest {
+
+  /** The crypto backend the engine beans take on PostgreSQL. */
+  private static final CryptoBackend CRYPTO = new PostgresCryptoBackend();
 
   private final StreamRuneCryptoFactory factory = new StreamRuneCryptoFactory();
 
@@ -105,7 +110,8 @@ class StreamRuneCryptoFactoryTest {
   @Test
   void postgresCryptoEngineUncached_returnsBareEngine() {
     var props = CryptoTestProps.builder().build();
-    CryptoEngine engine = factory.postgresCryptoEngineUncached(mock(DataSource.class), props, null);
+    CryptoEngine engine =
+        factory.postgresCryptoEngineUncached(CRYPTO, mock(DataSource.class), props, null);
     assertFalse(engine instanceof CachedCryptoEngine);
     assertInstanceOf(PostgresCryptoEngine.class, engine);
   }
@@ -119,7 +125,7 @@ class StreamRuneCryptoFactoryTest {
             .vaultEngineMount("transit")
             .build();
     CryptoEngine engine =
-        factory.vaultCryptoEngineUncached(httpClient(), mock(DataSource.class), props);
+        factory.vaultCryptoEngineUncached(CRYPTO, httpClient(), mock(DataSource.class), props);
     assertFalse(engine instanceof CachedCryptoEngine);
   }
 
@@ -131,7 +137,8 @@ class StreamRuneCryptoFactoryTest {
             .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id")
             .build();
     CryptoEngine engine =
-        factory.awsKmsCryptoEngineUncached(kmsClient(), mock(DataSource.class), props, null);
+        factory.awsKmsCryptoEngineUncached(
+            CRYPTO, kmsClient(), mock(DataSource.class), props, null);
     assertFalse(engine instanceof CachedCryptoEngine);
   }
 
@@ -147,6 +154,7 @@ class StreamRuneCryptoFactoryTest {
     // in heap, whatever the data-key cache size says.
     CryptoEngine engine =
         factory.awsKmsCryptoEngineUncached(
+            CRYPTO,
             kmsClient(),
             mock(DataSource.class),
             awsProps().cacheEnabled(false).awsDataKeyCacheMaximumSize(500).build(),
@@ -158,7 +166,8 @@ class StreamRuneCryptoFactoryTest {
   @Test
   void awsKmsDataKeyCacheTakesItsDefaultsAndItsTunedValues() throws Exception {
     try (var cached =
-        factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), awsProps().build(), null)) {
+        factory.awsKmsCryptoEngine(
+            CRYPTO, kmsClient(), mock(DataSource.class), awsProps().build(), null)) {
       var kms =
           assertInstanceOf(org.streamrune.crypto.aws.AwsKmsCryptoEngine.class, cached.delegate());
       assertEquals(1_000, kms.dataKeyCacheMaximumSize());
@@ -166,6 +175,7 @@ class StreamRuneCryptoFactoryTest {
     }
     try (var cached =
         factory.awsKmsCryptoEngine(
+            CRYPTO,
             kmsClient(),
             mock(DataSource.class),
             awsProps()
@@ -187,6 +197,7 @@ class StreamRuneCryptoFactoryTest {
             IllegalStateException.class,
             () ->
                 factory.awsKmsCryptoEngine(
+                    CRYPTO,
                     kmsClient(),
                     mock(DataSource.class),
                     awsProps().awsDataKeyCacheMaximumSize(-1).build(),
@@ -203,6 +214,7 @@ class StreamRuneCryptoFactoryTest {
               IllegalStateException.class,
               () ->
                   factory.awsKmsCryptoEngineUncached(
+                      CRYPTO,
                       kmsClient(),
                       mock(DataSource.class),
                       awsProps().awsDataKeyCacheExpireAfterWrite(bad).build(),
@@ -281,7 +293,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.vaultCryptoEngine(httpClient(), null, props));
+            () -> factory.vaultCryptoEngine(CRYPTO, httpClient(), null, props));
     assertTrue(e.getMessage().contains("streamrune.crypto.vault.token"));
   }
 
@@ -297,7 +309,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.vaultCryptoEngine(httpClient(), null, props));
+            () -> factory.vaultCryptoEngine(CRYPTO, httpClient(), null, props));
     assertTrue(e.getMessage().contains("streamrune.crypto.vault.token"));
   }
 
@@ -315,7 +327,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.vaultCryptoEngine(httpClient(), null, props));
+            () -> factory.vaultCryptoEngine(CRYPTO, httpClient(), null, props));
     assertTrue(e.getMessage().contains("ForgottenSubjectStore"));
   }
 
@@ -330,7 +342,7 @@ class StreamRuneCryptoFactoryTest {
             .vaultEngineMount("transit")
             .build();
 
-    var engine = factory.vaultCryptoEngine(httpClient(), mock(DataSource.class), props);
+    var engine = factory.vaultCryptoEngine(CRYPTO, httpClient(), mock(DataSource.class), props);
     assertNotNull(engine);
   }
 
@@ -347,7 +359,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
+            () -> factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.region"));
   }
 
@@ -359,7 +371,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
+            () -> factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -374,7 +386,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
+            () -> factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), null, props, null));
     assertTrue(
         e.getMessage().contains("Failed to build AwsKmsCryptoEngine")
             || e.getMessage().contains("region"));
@@ -387,7 +399,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
+            () -> factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("streamrune.crypto.aws.kms-key-id"));
   }
 
@@ -404,7 +416,7 @@ class StreamRuneCryptoFactoryTest {
     var e =
         assertThrows(
             IllegalStateException.class,
-            () -> factory.awsKmsCryptoEngine(kmsClient(), null, props, null));
+            () -> factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), null, props, null));
     assertTrue(e.getMessage().contains("ForgottenSubjectStore"));
     assertTrue(e.getMessage().contains("durable GDPR erasure"));
   }
@@ -418,7 +430,8 @@ class StreamRuneCryptoFactoryTest {
             .awsKmsKeyId("arn:aws:kms:us-west-2:123456789012:key/test-key-id")
             .build();
 
-    var engine = factory.awsKmsCryptoEngine(kmsClient(), mock(DataSource.class), props, null);
+    var engine =
+        factory.awsKmsCryptoEngine(CRYPTO, kmsClient(), mock(DataSource.class), props, null);
     assertNotNull(engine);
   }
 
@@ -471,7 +484,7 @@ class StreamRuneCryptoFactoryTest {
           }
         };
 
-    CryptoEngine engine = factory.postgresCryptoEngine(ds, props, null);
+    CryptoEngine engine = factory.postgresCryptoEngine(CRYPTO, ds, props, null);
 
     assertNotNull(engine);
     assertTrue(
@@ -492,7 +505,7 @@ class StreamRuneCryptoFactoryTest {
             .build();
 
     // Vault token is set → engine is built. wrapWithCache reads expireAfterWrite.
-    var engine = factory.vaultCryptoEngine(httpClient(), mock(DataSource.class), props);
+    var engine = factory.vaultCryptoEngine(CRYPTO, httpClient(), mock(DataSource.class), props);
     assertNotNull(engine); // Build succeeds, wrapped in CachedCryptoEngine
   }
 
@@ -507,7 +520,7 @@ class StreamRuneCryptoFactoryTest {
             .cacheExpireAfterAccess(null)
             .build();
 
-    var engine = factory.vaultCryptoEngine(httpClient(), mock(DataSource.class), props);
+    var engine = factory.vaultCryptoEngine(CRYPTO, httpClient(), mock(DataSource.class), props);
     assertNotNull(engine);
   }
 
@@ -522,7 +535,7 @@ class StreamRuneCryptoFactoryTest {
             .cacheExpireAfterAccess(java.time.Duration.ofMinutes(5))
             .build();
 
-    var engine = factory.vaultCryptoEngine(httpClient(), mock(DataSource.class), props);
+    var engine = factory.vaultCryptoEngine(CRYPTO, httpClient(), mock(DataSource.class), props);
     assertNotNull(engine);
   }
 
@@ -532,7 +545,7 @@ class StreamRuneCryptoFactoryTest {
   void resolveForgetSignal_wiresPostgresChannel_whenDataSourcePresent() {
     var signal =
         StreamRuneCryptoFactory.resolveForgetSignal(
-            mock(DataSource.class), java.time.Duration.ofMinutes(5), "aws-kms");
+            CRYPTO, mock(DataSource.class), java.time.Duration.ofMinutes(5), "aws-kms");
     assertInstanceOf(
         org.streamrune.crypto.postgres.PostgresCryptoForgetSignal.class,
         signal,
@@ -541,7 +554,7 @@ class StreamRuneCryptoFactoryTest {
 
   @Test
   void resolveForgetSignal_fallsBackToNoop_whenNoDataSource() {
-    var signal = StreamRuneCryptoFactory.resolveForgetSignal(null, null, "vault");
+    var signal = StreamRuneCryptoFactory.resolveForgetSignal(CRYPTO, null, null, "vault");
     assertSame(org.streamrune.crypto.CryptoForgetSignal.NOOP, signal);
   }
 
@@ -557,6 +570,7 @@ class StreamRuneCryptoFactoryTest {
     assertCountsRetriedDecryptions(fileSystem, metrics);
     try (var cached =
         factory.fileSystemCryptoEngine(
+            CRYPTO,
             null,
             CryptoTestProps.builder()
                 .keyDirectory(Files.createTempDirectory("sr-keys-metrics").toString())
@@ -568,15 +582,15 @@ class StreamRuneCryptoFactoryTest {
         metrics,
         metricsOf(
             factory.postgresCryptoEngineUncached(
-                mock(DataSource.class), CryptoTestProps.builder().build(), metrics)));
+                CRYPTO, mock(DataSource.class), CryptoTestProps.builder().build(), metrics)));
     assertSame(
         metrics,
         metricsOf(
             factory.awsKmsCryptoEngineUncached(
-                kmsClient(), mock(DataSource.class), awsProps().build(), metrics)));
+                CRYPTO, kmsClient(), mock(DataSource.class), awsProps().build(), metrics)));
     try (var cached =
         factory.awsKmsCryptoEngine(
-            kmsClient(), mock(DataSource.class), awsProps().build(), metrics)) {
+            CRYPTO, kmsClient(), mock(DataSource.class), awsProps().build(), metrics)) {
       assertSame(metrics, metricsOf(cached.delegate()));
     }
   }
@@ -603,5 +617,56 @@ class StreamRuneCryptoFactoryTest {
             org.streamrune.core.metrics.MetricNames.CRYPTO_DECRYPT_RETRIED,
             org.streamrune.core.metrics.MetricNames.TAG_OUTCOME,
             "FAILED"));
+  }
+
+  // --- the crypto backend ---
+
+  @Test
+  void theCryptoBackendOfPostgresIsPostgresCryptoBackend() {
+    assertInstanceOf(
+        PostgresCryptoBackend.class,
+        StreamRuneCryptoFactory.cryptoBackendOf(new org.streamrune.postgres.PostgresBackend()));
+  }
+
+  @Test
+  void anotherBackendHasNoCryptoBackendInThisIntegration() {
+    var backend = mock(org.streamrune.core.backend.StreamRuneBackend.class);
+    org.mockito.Mockito.when(backend.name()).thenReturn("sqlite");
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> StreamRuneCryptoFactory.cryptoBackendOf(backend));
+    assertEquals(
+        "streamrune.backend=sqlite has no crypto backend in the Micronaut integration; only"
+            + " postgres has one",
+        ex.getMessage());
+  }
+
+  @Test
+  void theCryptoBackendConditionMatchesWhenAnyEngineIsEnabled() {
+    var condition = new StreamRuneCryptoFactory.AnyCryptoEngineEnabled();
+    for (String enabled : StreamRuneCryptoFactory.AnyCryptoEngineEnabled.ENGINE_PROPERTIES) {
+      assertTrue(condition.matches(conditionContext(Map.of(enabled, "true"))), enabled);
+      assertFalse(condition.matches(conditionContext(Map.of(enabled, "false"))), enabled);
+    }
+    assertFalse(condition.matches(conditionContext(Map.of())), "no engine enabled");
+    var notAPropertyResolver = mock(io.micronaut.context.condition.ConditionContext.class);
+    org.mockito.Mockito.when(notAPropertyResolver.getBeanContext())
+        .thenReturn(mock(io.micronaut.context.BeanContext.class));
+    assertFalse(condition.matches(notAPropertyResolver), "no properties to read");
+  }
+
+  private static io.micronaut.context.condition.ConditionContext conditionContext(
+      Map<String, String> values) {
+    var application = mock(io.micronaut.context.ApplicationContext.class);
+    org.mockito.Mockito.when(
+            application.getProperty(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(String.class)))
+        .thenAnswer(
+            invocation ->
+                java.util.Optional.ofNullable(values.get(invocation.<String>getArgument(0))));
+    var context = mock(io.micronaut.context.condition.ConditionContext.class);
+    org.mockito.Mockito.when(context.getBeanContext()).thenReturn(application);
+    return context;
   }
 }
