@@ -153,6 +153,11 @@ public final class org.streamrune.postgres.PostgresEventAuditQuery implements or
   public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByStreamId(org.streamrune.core.types.StreamId, java.time.Instant, java.time.Instant)
   public java.util.List<org.streamrune.core.audit.EventAuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant)
   public java.util.List<org.streamrune.core.audit.EventAuditEntry> traceFullCausationChain(org.streamrune.core.types.EventId)
+  public org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCausationId(org.streamrune.core.types.CausationId, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCommandId(org.streamrune.core.types.CommandId, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByCorrelationId(org.streamrune.core.types.CorrelationId, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByStreamId(org.streamrune.core.types.StreamId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
+  public org.streamrune.core.Page<org.streamrune.core.audit.EventAuditEntry> findByUserId(org.streamrune.core.types.UserId, java.time.Instant, java.time.Instant, org.streamrune.core.PageRequest)
 
 public final class org.streamrune.postgres.PostgresEventAuditStore implements org.streamrune.core.audit.EventAuditStore
   public <init>(javax.sql.DataSource)

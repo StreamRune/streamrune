@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Objects;
 import javax.sql.DataSource;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.Page;
+import org.streamrune.core.PageRequest;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditQuery;
 import org.streamrune.core.types.*;
@@ -18,40 +20,74 @@ import org.streamrune.core.types.*;
 /**
  * PostgreSQL implementation of {@link EventAuditQuery}. Uses WITH RECURSIVE CTE for {@link
  * #traceFullCausationChain(EventId)}.
+ *
+ * <p>Every read orders by {@code occurred_at}, then the row's {@code id}, so entries with an equal
+ * timestamp (the events of one command are stamped by consecutive clock reads) keep one position.
+ * The paged finders do store-side paging with SQL {@code LIMIT}/{@code OFFSET}; the page and {@link
+ * Page#totalElements()} come from one statement, so they agree, and a page beyond the last reads
+ * only the count. An entry appears on exactly one page of a window that receives no entry between
+ * the reads.
  */
 public final class PostgresEventAuditQuery implements EventAuditQuery {
 
-  private static final String FIND_BY_CORRELATION =
-      "SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id, "
-          + "correlation_id, "
-          + "causation_id, user_id, occurred_at "
-          + "FROM event_audit_log WHERE correlation_id = ? ORDER BY occurred_at";
+  private static final String COLUMNS =
+      "event_id, event_type, aggregate_type, aggregate_id, version, command_id, correlation_id,"
+          + " causation_id, user_id, occurred_at";
 
-  private static final String FIND_BY_COMMAND =
-      "SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id, "
-          + "correlation_id, "
-          + "causation_id, user_id, occurred_at "
-          + "FROM event_audit_log WHERE command_id = ? ORDER BY occurred_at";
+  private static final String BY_CORRELATION = "correlation_id = ?";
+  private static final String BY_COMMAND = "command_id = ?";
+  private static final String BY_CAUSATION = "causation_id = ?";
+  private static final String BY_STREAM =
+      "aggregate_type = ? AND aggregate_id = ? AND occurred_at >= ? AND occurred_at <= ?";
+  private static final String BY_USER = "user_id = ? AND occurred_at >= ? AND occurred_at <= ?";
 
-  private static final String FIND_BY_CAUSATION =
-      "SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id, "
-          + "correlation_id, "
-          + "causation_id, user_id, occurred_at "
-          + "FROM event_audit_log WHERE causation_id = ? ORDER BY occurred_at";
+  private static final String FIND_BY_CORRELATION = listSql(BY_CORRELATION);
+  private static final String FIND_BY_COMMAND = listSql(BY_COMMAND);
+  private static final String FIND_BY_CAUSATION = listSql(BY_CAUSATION);
+  private static final String FIND_BY_STREAM = listSql(BY_STREAM);
+  private static final String FIND_BY_USER = listSql(BY_USER);
 
-  private static final String FIND_BY_STREAM =
-      "SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id, "
-          + "correlation_id, "
-          + "causation_id, user_id, occurred_at "
-          + "FROM event_audit_log WHERE aggregate_type = ? AND aggregate_id = ?"
-          + " AND occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at";
+  private static final String PAGE_BY_CORRELATION = pageSql(BY_CORRELATION);
+  private static final String PAGE_BY_COMMAND = pageSql(BY_COMMAND);
+  private static final String PAGE_BY_CAUSATION = pageSql(BY_CAUSATION);
+  private static final String PAGE_BY_STREAM = pageSql(BY_STREAM);
+  private static final String PAGE_BY_USER = pageSql(BY_USER);
 
-  private static final String FIND_BY_USER =
-      "SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id, "
-          + "correlation_id, "
-          + "causation_id, user_id, occurred_at "
-          + "FROM event_audit_log WHERE user_id = ? AND occurred_at >= ? AND occurred_at <= ? "
-          + "ORDER BY occurred_at";
+  private static String listSql(String where) {
+    return "SELECT "
+        + COLUMNS
+        + " FROM event_audit_log WHERE "
+        + where
+        + " ORDER BY occurred_at, id";
+  }
+
+  /**
+   * The statement of a paged read: the count of the matching rows and one page of them, as two
+   * subqueries joined into one result, so both come from one snapshot. Every row carries the count;
+   * a page beyond the last is one row with the count and a {@code NULL} {@code id} ({@code id} is
+   * the primary key, so {@code NULL} means "no row"). The page is gated on the count ({@code
+   * LATERAL ... WHERE total.n > offset}), so a page beyond the last reads only the count. The order
+   * is {@code occurred_at}, then {@code id}; the outer {@code ORDER BY} restores it after the join.
+   * Parameters: the filter's values (the count), the same again and the offset (the page and its
+   * gate), {@code LIMIT}, {@code OFFSET}.
+   */
+  private static String pageSql(String where) {
+    return "SELECT total.n AS total_count, page.* FROM (SELECT count(*) AS n FROM event_audit_log"
+        + " WHERE "
+        + where
+        + ") AS total LEFT JOIN LATERAL (SELECT id, "
+        + COLUMNS
+        + " FROM event_audit_log WHERE "
+        + where
+        + " AND total.n > ? ORDER BY occurred_at, id LIMIT ? OFFSET ?) AS page ON true"
+        + " ORDER BY page.occurred_at, page.id";
+  }
+
+  /** Binds the values of one {@code WHERE} clause from {@code first} on. */
+  @FunctionalInterface
+  private interface Filter {
+    void bind(PreparedStatement ps, int first) throws SQLException;
+  }
 
   // UNION (not UNION ALL) is the cycle guard: a causation cycle (self-reference or A->B->A,
   // possible only through data corruption) re-derives an already-seen row, UNION discards the
@@ -59,17 +95,17 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
   // Legitimate chains are never truncated — recursion is bounded by the distinct rows reachable.
   private static final String TRACE_CHAIN =
       "WITH RECURSIVE chain AS ("
-          + "  SELECT event_id, event_type, aggregate_type, aggregate_id, version, command_id,"
+          + "  SELECT id, event_id, event_type, aggregate_type, aggregate_id, version, command_id,"
           + "         correlation_id, "
           + "         causation_id, user_id, occurred_at "
           + "  FROM event_audit_log WHERE event_id = ? "
           + "  UNION "
-          + "  SELECT e.event_id, e.event_type, e.aggregate_type, e.aggregate_id, e.version,"
+          + "  SELECT e.id, e.event_id, e.event_type, e.aggregate_type, e.aggregate_id, e.version,"
           + "         e.command_id, "
           + "         e.correlation_id, e.causation_id, e.user_id, e.occurred_at "
           + "  FROM event_audit_log e "
           + "  JOIN chain c ON e.causation_id = c.event_id"
-          + ") SELECT * FROM chain ORDER BY occurred_at";
+          + ") SELECT * FROM chain ORDER BY occurred_at, id";
 
   private final DataSource dataSource;
 
@@ -115,8 +151,92 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
   }
 
   @Override
+  public Page<EventAuditEntry> findByCorrelationId(
+      CorrelationId correlationId, PageRequest pageRequest) {
+    Objects.requireNonNull(correlationId, "correlationId is required");
+    return queryPage(
+        PAGE_BY_CORRELATION, 1, (ps, i) -> ps.setString(i, correlationId.value()), pageRequest);
+  }
+
+  @Override
+  public Page<EventAuditEntry> findByCommandId(CommandId commandId, PageRequest pageRequest) {
+    Objects.requireNonNull(commandId, "commandId is required");
+    return queryPage(
+        PAGE_BY_COMMAND, 1, (ps, i) -> ps.setString(i, commandId.value()), pageRequest);
+  }
+
+  @Override
+  public Page<EventAuditEntry> findByCausationId(CausationId causationId, PageRequest pageRequest) {
+    Objects.requireNonNull(causationId, "causationId is required");
+    return queryPage(
+        PAGE_BY_CAUSATION, 1, (ps, i) -> ps.setString(i, causationId.value()), pageRequest);
+  }
+
+  @Override
+  public Page<EventAuditEntry> findByStreamId(
+      StreamId streamId, Instant from, Instant to, PageRequest pageRequest) {
+    Objects.requireNonNull(streamId, "streamId is required");
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
+    return queryPage(
+        PAGE_BY_STREAM,
+        4,
+        (ps, i) -> {
+          PostgresStreamKeys.bind(ps, i, streamId);
+          ps.setTimestamp(i + 2, Timestamp.from(from));
+          ps.setTimestamp(i + 3, Timestamp.from(to));
+        },
+        pageRequest);
+  }
+
+  @Override
+  public Page<EventAuditEntry> findByUserId(
+      UserId userId, Instant from, Instant to, PageRequest pageRequest) {
+    Objects.requireNonNull(userId, "userId is required");
+    Objects.requireNonNull(from, "from is required");
+    Objects.requireNonNull(to, "to is required");
+    return queryPage(
+        PAGE_BY_USER,
+        3,
+        (ps, i) -> {
+          ps.setString(i, userId.value());
+          ps.setTimestamp(i + 1, Timestamp.from(from));
+          ps.setTimestamp(i + 2, Timestamp.from(to));
+        },
+        pageRequest);
+  }
+
+  @Override
   public List<EventAuditEntry> traceFullCausationChain(EventId eventId) {
     return queryWithSingleParam(TRACE_CHAIN, eventId.value());
+  }
+
+  private Page<EventAuditEntry> queryPage(
+      String sql, int filterParams, Filter filter, PageRequest pageRequest) {
+    Objects.requireNonNull(pageRequest, "pageRequest is required");
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(sql)) {
+      filter.bind(ps, 1);
+      filter.bind(ps, filterParams + 1);
+      ps.setLong(2 * filterParams + 1, pageRequest.offset());
+      ps.setInt(2 * filterParams + 2, pageRequest.size());
+      ps.setLong(2 * filterParams + 3, pageRequest.offset());
+      long total = 0;
+      List<EventAuditEntry> content = new ArrayList<>();
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          total = rs.getLong("total_count");
+          if (rs.getObject("id") != null) {
+            content.add(readEntry(rs));
+          }
+        }
+      } catch (IllegalArgumentException e) {
+        throw new EventStoreException("Failed to decode an event audit log row", e);
+      }
+      return new Page<>(content, total, pageRequest.page(), pageRequest.size());
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to query event audit log", e);
+    }
   }
 
   private List<EventAuditEntry> queryWithSingleParam(String sql, String param) {

@@ -77,9 +77,11 @@ jars. In brief:
   in memory alike. A `ProjectionIndex` declares the index such a read needs
   (`ProjectionRepository.declareIndex`, or a `ProjectionIndex` bean in the integrations), and the
   PostgreSQL repository creates it with the table.
-- **Stable command audit pages.** `CommandAuditQuery` reads a page and its total in one statement,
-  so they agree under concurrent writes, and orders by `occurredAt` with the row id as tiebreak, so
-  entries with an equal timestamp appear once across pages in a fixed order.
+- **Stable audit pages.** `CommandAuditQuery` and `EventAuditQuery` (PostgreSQL) read a page and its
+  total in one statement, so they agree under concurrent writes, and a page beyond the last reads
+  only the count. They order by `occurredAt` with the row id as tiebreak, so entries with an equal
+  timestamp keep a fixed order and appear once across the pages of a window that receives no entry
+  between the reads. `findByCommandId` returns the later written of two entries with one timestamp.
 - **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
   integrations: a trusted gateway's `X-User-Id` header when
   `streamrune.security.trust-user-id-header=true`, otherwise the authenticated principal, otherwise

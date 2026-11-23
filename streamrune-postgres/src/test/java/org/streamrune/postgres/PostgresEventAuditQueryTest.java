@@ -265,7 +265,7 @@ class PostgresEventAuditQueryTest {
               conn,
               "SELECT event_id FROM event_audit_log WHERE aggregate_type = 'product'"
                   + " AND aggregate_id = 'x-7' AND occurred_at >= now() - interval '1 day'"
-                  + " AND occurred_at <= now() ORDER BY occurred_at");
+                  + " AND occurred_at <= now() ORDER BY occurred_at, id");
 
       assertNotNull(
           ExplainPlans.findIndexScan(plan, "idx_event_audit_stream"), "plan was: " + plan);
@@ -358,6 +358,197 @@ class PostgresEventAuditQueryTest {
 
     assertEquals(1, chain.size());
     assertEquals("leaf-1", chain.getFirst().eventId().value());
+  }
+
+  private static void insertTied() {
+    var t = Instant.parse("2026-08-01T10:00:00Z");
+    var other = t.plusSeconds(1);
+    // Explicit ids, written in neither ascending nor descending id order: no insertion order and
+    // no scan direction of an index on occurred_at yields the id order by itself.
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "INSERT INTO event_audit_log (id, event_id, event_type, aggregate_type,"
+                    + " aggregate_id, version, command_id, correlation_id, causation_id, user_id,"
+                    + " occurred_at) VALUES (?, ?, 'Tied', ?, 'tie-stream', ?, 'tie-cmd',"
+                    + " 'tie-corr', 'tie-cause', 'tie-user', ?)")) {
+      for (int i : new int[] {3, 6, 1, 4, 0, 5, 2}) {
+        ps.setLong(1, 1000 + i);
+        ps.setString(2, String.format("tie-%02d", i));
+        ps.setString(3, TestStreams.TYPE.value());
+        ps.setLong(4, i + 1);
+        ps.setTimestamp(5, java.sql.Timestamp.from(i < 5 ? t : other));
+        ps.executeUpdate();
+      }
+    } catch (java.sql.SQLException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static List<String> ids(List<EventAuditEntry> entries) {
+    return entries.stream().map(e -> e.eventId().value()).toList();
+  }
+
+  /**
+   * A query whose sessions cannot read rows in index order, so a read is a sort of the matching
+   * rows and the statement's {@code ORDER BY} alone orders entries with an equal timestamp.
+   */
+  private static PostgresEventAuditQuery sortingQuery() {
+    var sorting = new PGSimpleDataSource();
+    sorting.setUrl(PG.getJdbcUrl());
+    sorting.setUser(PG.getUsername());
+    sorting.setPassword(PG.getPassword());
+    sorting.setOptions("-c enable_indexscan=off -c enable_bitmapscan=off");
+    return new PostgresEventAuditQuery(sorting);
+  }
+
+  @Test
+  void entriesWithEqualOccurredAt_appearExactlyOnceAcrossPagesInIdOrder() {
+    insertTied();
+    var t = Instant.parse("2026-08-01T10:00:00Z");
+    var other = t.plusSeconds(1);
+    var expected = List.of("tie-00", "tie-01", "tie-02", "tie-03", "tie-04", "tie-05", "tie-06");
+    var stream = TestStreams.stream("tie-stream");
+    var streamKey = StreamId.of(TestStreams.TYPE, new AggregateId("tie-stream"));
+
+    // In the plan the planner picks, and in one that has to sort: there the statement's ORDER BY
+    // alone decides where an entry with an equal timestamp goes.
+    for (PostgresEventAuditQuery paged : List.of(query, sortingQuery())) {
+      var byCorrelation = new java.util.ArrayList<String>();
+      var byCommand = new java.util.ArrayList<String>();
+      var byCausation = new java.util.ArrayList<String>();
+      var byStream = new java.util.ArrayList<String>();
+      var byUser = new java.util.ArrayList<String>();
+      for (int p = 0; p < 4; p++) {
+        var request = org.streamrune.core.PageRequest.of(p, 2);
+        var page = paged.findByCorrelationId(CorrelationId.of("tie-corr"), request);
+        assertEquals(7, page.totalElements());
+        assertEquals(4, page.totalPages());
+        byCorrelation.addAll(ids(page.content()));
+        byCommand.addAll(ids(paged.findByCommandId(CommandId.of("tie-cmd"), request).content()));
+        byCausation.addAll(
+            ids(paged.findByCausationId(CausationId.of("tie-cause"), request).content()));
+        byStream.addAll(ids(paged.findByStreamId(streamKey, t, other, request).content()));
+        byUser.addAll(ids(paged.findByUserId(UserId.of("tie-user"), t, other, request).content()));
+      }
+      assertEquals(expected, byCorrelation, "every entry once, ties in id order, then the later");
+      assertEquals(expected, byCommand);
+      assertEquals(expected, byCausation);
+      assertEquals(expected, byStream);
+      assertEquals(expected, byUser);
+
+      // The unpaged reads order the same way.
+      assertEquals(expected, ids(paged.findByCorrelationId(CorrelationId.of("tie-corr"))));
+      assertEquals(expected, ids(paged.findByUserId(UserId.of("tie-user"), t, other)));
+      assertEquals(expected, ids(paged.findByStreamId(stream, t, other)));
+    }
+  }
+
+  @Test
+  void eachPagedReadIsOneStoreSidePageStatement_soItsTotalAndItsRowsComeFromOneSnapshot() {
+    insertTied();
+    var t = Instant.parse("2026-08-01T10:00:00Z");
+    var other = t.plusSeconds(1);
+    var counting = new JdbcProjectionRepositoryQueryContractTest.CountingDataSource(dataSource);
+    var counted = new PostgresEventAuditQuery(counting.proxy());
+    var request = org.streamrune.core.PageRequest.of(0, 3);
+    var beyond = org.streamrune.core.PageRequest.of(9, 3);
+
+    var pages =
+        List.of(
+            counted.findByCorrelationId(CorrelationId.of("tie-corr"), request),
+            counted.findByCommandId(CommandId.of("tie-cmd"), request),
+            counted.findByCausationId(CausationId.of("tie-cause"), request),
+            counted.findByStreamId(TestStreams.stream("tie-stream"), t, other, request),
+            counted.findByUserId(UserId.of("tie-user"), t, other, request));
+    var past = counted.findByCorrelationId(CorrelationId.of("tie-corr"), beyond);
+
+    assertEquals(6, counting.statements.size(), counting.statements.toString());
+    counting.statements.forEach(sql -> assertTrue(sql.contains("LIMIT ? OFFSET ?"), sql));
+    pages.forEach(
+        page -> {
+          assertEquals(7, page.totalElements());
+          assertEquals(3, page.content().size());
+        });
+    assertEquals(7, past.totalElements());
+    assertTrue(past.isEmpty());
+  }
+
+  @Test
+  void aPageBeyondTheLastReadsOnlyTheCount() throws Exception {
+    insertTied();
+    var counting = new JdbcProjectionRepositoryQueryContractTest.CountingDataSource(dataSource);
+    new PostgresEventAuditQuery(counting.proxy())
+        .findByCorrelationId(
+            CorrelationId.of("tie-corr"), org.streamrune.core.PageRequest.of(0, 10));
+    assertEquals(1, counting.statements.size());
+
+    var plan = new StringBuilder();
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement("EXPLAIN (ANALYZE) " + counting.statements.getFirst())) {
+      ps.setString(1, "tie-corr");
+      ps.setString(2, "tie-corr");
+      ps.setLong(3, 1_000_000L);
+      ps.setInt(4, 20);
+      ps.setLong(5, 1_000_000L);
+      try (var rs = ps.executeQuery()) {
+        while (rs.next()) {
+          plan.append(rs.getString(1)).append('\n');
+        }
+      }
+    }
+
+    assertTrue(plan.toString().contains("One-Time Filter"), plan.toString());
+    assertTrue(plan.toString().contains("never executed"), plan.toString());
+  }
+
+  @Test
+  void theOccurredAtIndexes_endWithTheId_soTheyReadAPageInItsOrder() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs =
+            stmt.executeQuery(
+                "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN"
+                    + " ('idx_event_audit_occurred_at', 'idx_event_audit_stream')")) {
+      var defs = new java.util.HashMap<String, String>();
+      while (rs.next()) {
+        defs.put(rs.getString(1), rs.getString(2));
+      }
+      assertTrue(
+          defs.get("idx_event_audit_occurred_at").endsWith("(occurred_at, id)"), defs.toString());
+      assertTrue(
+          defs.get("idx_event_audit_stream")
+              .endsWith("(aggregate_type, aggregate_id, occurred_at, id)"),
+          defs.toString());
+    }
+  }
+
+  @Test
+  void traceFullCausationChain_ordersEqualTimestampsById() {
+    var t = Instant.parse("2026-08-02T10:00:00Z");
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "INSERT INTO event_audit_log (id, event_id, event_type, aggregate_type,"
+                    + " aggregate_id, version, command_id, correlation_id, causation_id,"
+                    + " occurred_at) VALUES (?, ?, 'Chain', ?, 'chain-stream', ?, 'chain-cmd',"
+                    + " 'chain-corr', ?, ?)")) {
+      for (int i : new int[] {2, 3, 1}) {
+        ps.setLong(1, 2000 + i);
+        ps.setString(2, "chain-" + i);
+        ps.setString(3, TestStreams.TYPE.value());
+        ps.setLong(4, i);
+        ps.setString(5, i == 1 ? null : "chain-1");
+        ps.setTimestamp(6, java.sql.Timestamp.from(t));
+        ps.executeUpdate();
+      }
+    } catch (java.sql.SQLException e) {
+      throw new IllegalStateException(e);
+    }
+
+    assertEquals(
+        List.of("chain-1", "chain-2", "chain-3"),
+        ids(sortingQuery().traceFullCausationChain(EventId.of("chain-1"))));
   }
 
   private static EventAuditEntry typedEntry(

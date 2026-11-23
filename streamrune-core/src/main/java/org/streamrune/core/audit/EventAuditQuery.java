@@ -23,8 +23,9 @@ import org.streamrune.core.types.UserId;
  * {@link PageRequest} overloads. Their default implementations delegate to the unpaged variant and
  * slice the result in memory (no better for the store, but a stable API), so implementations backed
  * by a database should override them with store-side paging (e.g. SQL {@code LIMIT}/{@code
- * OFFSET}). Paged results keep the fixed {@code occurredAt} ascending order; the {@link
- * PageRequest#sort()} component is ignored.
+ * OFFSET}). Paged results keep the fixed {@code occurredAt} ascending order, entries with an equal
+ * timestamp in a stable order that does not change between pages; the {@link PageRequest#sort()}
+ * component is ignored.
  */
 public interface EventAuditQuery {
 
