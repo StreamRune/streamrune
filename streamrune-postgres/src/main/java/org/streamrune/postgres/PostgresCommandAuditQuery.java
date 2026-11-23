@@ -28,10 +28,13 @@ import org.streamrune.core.types.UserId;
  * by {@link PostgresAuditStore}. Mirrors {@link PostgresEventAuditQuery} in style.
  *
  * <p>{@link #findByCommandId(CommandId)} returns the most recent matching entry (the audit log is
- * append-only and permits duplicate {@code command_id} values on retry). The paged finders do
- * store-side paging with SQL {@code LIMIT}/{@code OFFSET} and a separate {@code COUNT(*)} for
- * {@link Page#totalElements()}, ordered by {@code occurred_at} ascending; the {@link
- * PageRequest#sort()} component is ignored.
+ * append-only and permits duplicate {@code command_id} values on retry); of two entries with an
+ * equal timestamp, the one written later. The paged finders do store-side paging with SQL {@code
+ * LIMIT}/{@code OFFSET}; the page and {@link Page#totalElements()} come from one statement, so they
+ * agree. The order is {@code occurred_at} ascending, then the row's {@code id}, so entries with an
+ * equal timestamp keep one position across pages, and each entry appears once across the pages of a
+ * window that receives no entry between the reads; the {@link PageRequest#sort()} component is
+ * ignored.
  */
 public final class PostgresCommandAuditQuery implements CommandAuditQuery {
 
@@ -42,35 +45,36 @@ public final class PostgresCommandAuditQuery implements CommandAuditQuery {
   private static final String FIND_BY_COMMAND =
       "SELECT "
           + COLUMNS
-          + " FROM audit_log WHERE command_id = ? ORDER BY occurred_at DESC LIMIT 1";
+          + " FROM audit_log WHERE command_id = ? ORDER BY occurred_at DESC, id DESC LIMIT 1";
 
-  private static final String FIND_BY_USER =
-      "SELECT "
-          + COLUMNS
-          + " FROM audit_log WHERE user_id = ? "
-          + "AND occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at LIMIT ? OFFSET ?";
+  private static final String FIND_BY_USER = pageSql("user_id");
 
-  private static final String COUNT_BY_USER =
-      "SELECT COUNT(*) FROM audit_log WHERE user_id = ? AND occurred_at >= ? AND occurred_at <= ?";
+  private static final String FIND_BY_OUTCOME = pageSql("outcome");
 
-  private static final String FIND_BY_OUTCOME =
-      "SELECT "
-          + COLUMNS
-          + " FROM audit_log WHERE outcome = ? "
-          + "AND occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at LIMIT ? OFFSET ?";
+  private static final String FIND_BY_TYPE = pageSql("command_type");
 
-  private static final String COUNT_BY_OUTCOME =
-      "SELECT COUNT(*) FROM audit_log WHERE outcome = ? AND occurred_at >= ? AND occurred_at <= ?";
-
-  private static final String FIND_BY_TYPE =
-      "SELECT "
-          + COLUMNS
-          + " FROM audit_log WHERE command_type = ? "
-          + "AND occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at LIMIT ? OFFSET ?";
-
-  private static final String COUNT_BY_TYPE =
-      "SELECT COUNT(*) FROM audit_log WHERE command_type = ? "
-          + "AND occurred_at >= ? AND occurred_at <= ?";
+  /**
+   * The statement of a paged read: the count of the matching rows and one page of them, as two
+   * subqueries joined into one result, so both come from one snapshot. Every row carries the count;
+   * a page beyond the last is one row with the count and a {@code NULL} {@code id} ({@code id} is
+   * the primary key, so {@code NULL} means "no row"). The page is gated on the count ({@code
+   * LATERAL ... WHERE total.n > offset}), so a page beyond the last reads only the count. The order
+   * is {@code occurred_at}, then {@code id}, so rows with an equal timestamp keep one position
+   * across pages; the outer {@code ORDER BY} restores it after the join. Parameters: the filter
+   * value, {@code from}, {@code to} (the count), the same three again and the offset (the page and
+   * its gate), {@code LIMIT}, {@code OFFSET}.
+   */
+  private static String pageSql(String filterColumn) {
+    String where = " WHERE " + filterColumn + " = ? AND occurred_at >= ? AND occurred_at <= ?";
+    return "SELECT total.n AS total_count, page.* FROM (SELECT count(*) AS n FROM audit_log"
+        + where
+        + ") AS total LEFT JOIN LATERAL (SELECT id, "
+        + COLUMNS
+        + " FROM audit_log"
+        + where
+        + " AND total.n > ? ORDER BY occurred_at, id LIMIT ? OFFSET ?) AS page ON true"
+        + " ORDER BY page.occurred_at, page.id";
+  }
 
   private final DataSource dataSource;
 
@@ -99,75 +103,55 @@ public final class PostgresCommandAuditQuery implements CommandAuditQuery {
   public Page<AuditEntry> findByUserId(
       UserId userId, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(userId, "userId is required");
-    return queryPage(FIND_BY_USER, COUNT_BY_USER, userId.value(), from, to, pageRequest);
+    return queryPage(FIND_BY_USER, userId.value(), from, to, pageRequest);
   }
 
   @Override
   public Page<AuditEntry> findByOutcome(
       AuditOutcome outcome, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(outcome, "outcome is required");
-    return queryPage(FIND_BY_OUTCOME, COUNT_BY_OUTCOME, outcome.name(), from, to, pageRequest);
+    return queryPage(FIND_BY_OUTCOME, outcome.name(), from, to, pageRequest);
   }
 
   @Override
   public Page<AuditEntry> findByCommandType(
       String commandType, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(commandType, "commandType is required");
-    return queryPage(FIND_BY_TYPE, COUNT_BY_TYPE, commandType, from, to, pageRequest);
+    return queryPage(FIND_BY_TYPE, commandType, from, to, pageRequest);
   }
 
   private Page<AuditEntry> queryPage(
-      String selectSql,
-      String countSql,
-      String filter,
-      Instant from,
-      Instant to,
-      PageRequest pageRequest) {
+      String sql, String filter, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(from, "from is required");
     Objects.requireNonNull(to, "to is required");
     Objects.requireNonNull(pageRequest, "pageRequest is required");
-    try (Connection conn = dataSource.getConnection()) {
-      long total = count(conn, countSql, filter, from, to);
-      List<AuditEntry> content = selectPage(conn, selectSql, filter, from, to, pageRequest);
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(sql)) {
+      Timestamp fromTs = Timestamp.from(from);
+      Timestamp toTs = Timestamp.from(to);
+      ps.setString(1, filter);
+      ps.setTimestamp(2, fromTs);
+      ps.setTimestamp(3, toTs);
+      ps.setString(4, filter);
+      ps.setTimestamp(5, fromTs);
+      ps.setTimestamp(6, toTs);
+      ps.setLong(7, pageRequest.offset());
+      ps.setInt(8, pageRequest.size());
+      ps.setLong(9, pageRequest.offset());
+      long total = 0;
+      List<AuditEntry> content = new ArrayList<>();
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          total = rs.getLong("total_count");
+          if (rs.getObject("id") != null) {
+            content.add(readEntry(rs));
+          }
+        }
+      }
       return new Page<>(content, total, pageRequest.page(), pageRequest.size());
     } catch (SQLException e) {
       throw new EventStoreException("Failed to query command audit log", e);
     }
-  }
-
-  private long count(Connection conn, String sql, String filter, Instant from, Instant to)
-      throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, filter);
-      ps.setTimestamp(2, Timestamp.from(from));
-      ps.setTimestamp(3, Timestamp.from(to));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? rs.getLong(1) : 0L;
-      }
-    }
-  }
-
-  private List<AuditEntry> selectPage(
-      Connection conn, String sql, String filter, Instant from, Instant to, PageRequest pageRequest)
-      throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, filter);
-      ps.setTimestamp(2, Timestamp.from(from));
-      ps.setTimestamp(3, Timestamp.from(to));
-      ps.setInt(4, pageRequest.size());
-      ps.setLong(5, pageRequest.offset());
-      return readEntries(ps);
-    }
-  }
-
-  private List<AuditEntry> readEntries(PreparedStatement ps) throws SQLException {
-    List<AuditEntry> entries = new ArrayList<>();
-    try (ResultSet rs = ps.executeQuery()) {
-      while (rs.next()) {
-        entries.add(readEntry(rs));
-      }
-    }
-    return entries;
   }
 
   private AuditEntry readEntry(ResultSet rs) throws SQLException {

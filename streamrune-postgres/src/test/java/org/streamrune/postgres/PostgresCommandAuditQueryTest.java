@@ -400,6 +400,204 @@ class PostgresCommandAuditQueryTest {
   }
 
   @Test
+  void entriesWithEqualOccurredAt_appearExactlyOnceAcrossPagesInIdOrder() {
+    var t = Instant.parse("2026-08-01T10:00:00Z");
+    var other = t.plusSeconds(1);
+    // Explicit ids, written in neither ascending nor descending id order: no insertion order and
+    // no scan direction of an index on occurred_at yields the id order by itself.
+    try (var conn = dataSource.getConnection();
+        var ps =
+            conn.prepareStatement(
+                "INSERT INTO audit_log (id, command_id, command_type, user_id, occurred_at,"
+                    + " outcome) VALUES (?, ?, 'Tied', 'tie-user', ?, 'SUCCESS')")) {
+      for (int i : new int[] {3, 6, 1, 4, 0, 5, 2}) {
+        ps.setLong(1, 1000 + i);
+        ps.setString(2, String.format("tie-%02d", i));
+        ps.setTimestamp(3, java.sql.Timestamp.from(i < 5 ? t : other));
+        ps.executeUpdate();
+      }
+    } catch (java.sql.SQLException e) {
+      throw new IllegalStateException(e);
+    }
+    var ids =
+        java.util.List.of("tie-00", "tie-01", "tie-02", "tie-03", "tie-04", "tie-05", "tie-06");
+
+    // In the plan the planner picks, and in one that has to sort: there the statement's ORDER BY
+    // alone decides where an entry with an equal timestamp goes.
+    for (PostgresCommandAuditQuery paged : java.util.List.of(query, sortingQuery())) {
+      var byUser = new java.util.ArrayList<String>();
+      var byType = new java.util.ArrayList<String>();
+      for (int p = 0; p < 4; p++) {
+        Page<AuditEntry> page =
+            paged.findByUserId(UserId.of("tie-user"), t, other, PageRequest.of(p, 2));
+        assertEquals(7, page.totalElements());
+        assertEquals(4, page.totalPages());
+        page.content().forEach(e -> byUser.add(e.commandId().value()));
+        paged
+            .findByCommandType("Tied", t, other, PageRequest.of(p, 2))
+            .content()
+            .forEach(e -> byType.add(e.commandId().value()));
+      }
+      assertEquals(ids, byUser, "every entry once, equal timestamps in id order, then the later");
+      assertEquals(ids, byType);
+    }
+  }
+
+  /**
+   * A query whose sessions cannot read rows in index order, so a page is a sort of the matching
+   * rows and the statement's {@code ORDER BY} alone orders entries with an equal timestamp.
+   */
+  private static PostgresCommandAuditQuery sortingQuery() {
+    var sorting = new PGSimpleDataSource();
+    sorting.setUrl(PG.getJdbcUrl());
+    sorting.setUser(PG.getUsername());
+    sorting.setPassword(PG.getPassword());
+    sorting.setOptions("-c enable_indexscan=off -c enable_bitmapscan=off");
+    return new PostgresCommandAuditQuery(sorting);
+  }
+
+  @Test
+  void eachPagedReadIsOneStatement_soItsTotalAndItsRowsComeFromOneSnapshot() {
+    var t = Instant.parse("2026-08-04T10:00:00Z");
+    store.save(entry("one-1", "OneType", "one-user", t));
+    var counting = new JdbcProjectionRepositoryQueryContractTest.CountingDataSource(dataSource);
+    var counted = new PostgresCommandAuditQuery(counting.proxy());
+
+    var byUser = counted.findByUserId(UserId.of("one-user"), t, t, PageRequest.of(0, 10));
+    var byOutcome = counted.findByOutcome(AuditOutcome.SUCCESS, t, t, PageRequest.of(0, 10));
+    var beyond = counted.findByCommandType("OneType", t, t, PageRequest.of(3, 10));
+
+    assertEquals(3, counting.statements.size(), counting.statements.toString());
+    assertEquals(1, byUser.totalElements());
+    assertEquals(1, byOutcome.totalElements());
+    assertEquals(1, beyond.totalElements());
+    assertTrue(beyond.isEmpty());
+  }
+
+  @Test
+  void aPageBeyondTheLastReadsOnlyTheCount() throws Exception {
+    var t = Instant.parse("2026-08-05T10:00:00Z");
+    store.save(entry("gate-1", "Gate", "gate-user", t));
+    var counting = new JdbcProjectionRepositoryQueryContractTest.CountingDataSource(dataSource);
+    new PostgresCommandAuditQuery(counting.proxy())
+        .findByUserId(UserId.of("gate-user"), t, t, PageRequest.of(0, 10));
+    assertEquals(1, counting.statements.size());
+
+    var plan = new StringBuilder();
+    try (var conn = dataSource.getConnection();
+        var ps = conn.prepareStatement("EXPLAIN (ANALYZE) " + counting.statements.getFirst())) {
+      var at = java.sql.Timestamp.from(t);
+      ps.setString(1, "gate-user");
+      ps.setTimestamp(2, at);
+      ps.setTimestamp(3, at);
+      ps.setString(4, "gate-user");
+      ps.setTimestamp(5, at);
+      ps.setTimestamp(6, at);
+      ps.setLong(7, 1_000_000L);
+      ps.setInt(8, 20);
+      ps.setLong(9, 1_000_000L);
+      try (var rs = ps.executeQuery()) {
+        while (rs.next()) {
+          plan.append(rs.getString(1)).append('\n');
+        }
+      }
+    }
+
+    assertTrue(plan.toString().contains("One-Time Filter"), plan.toString());
+    assertTrue(plan.toString().contains("never executed"), plan.toString());
+  }
+
+  @Test
+  void theOccurredAtIndex_endsWithTheId_soItReadsAPageInItsOrder() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement();
+        var rs =
+            stmt.executeQuery(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_audit_occurred_at'")) {
+      assertTrue(rs.next());
+      assertTrue(rs.getString(1).endsWith("(occurred_at, id)"), rs.getString(1));
+    }
+  }
+
+  @Test
+  void findByCommandId_returnsTheLaterWrittenOfTwoEntriesWithOneTimestamp() {
+    var t = Instant.parse("2026-08-06T10:00:00Z");
+    store.save(
+        new AuditEntry(
+            CommandId.of("cmd-same"),
+            "C",
+            TestStreams.TYPE,
+            AggregateId.of("agg"),
+            null,
+            t,
+            AuditOutcome.FAILURE,
+            "boom",
+            0,
+            null));
+    store.save(
+        new AuditEntry(
+            CommandId.of("cmd-same"),
+            "C",
+            TestStreams.TYPE,
+            AggregateId.of("agg"),
+            null,
+            t,
+            AuditOutcome.SUCCESS,
+            null,
+            1,
+            null));
+
+    assertEquals(
+        AuditOutcome.SUCCESS,
+        query.findByCommandId(CommandId.of("cmd-same")).orElseThrow().outcome());
+  }
+
+  @Test
+  void aPageBeyondTheLast_isEmptyAndStillCarriesTheTotal() {
+    var t = Instant.parse("2026-08-02T10:00:00Z");
+    store.save(entry("beyond-1", "Beyond", "beyond-user", t));
+    store.save(entry("beyond-2", "Beyond", "beyond-user", t));
+    store.save(entry("beyond-3", "Beyond", "beyond-user", t));
+
+    Page<AuditEntry> beyond =
+        query.findByUserId(UserId.of("beyond-user"), t, t, PageRequest.of(5, 2));
+    assertTrue(beyond.content().isEmpty());
+    assertEquals(3, beyond.totalElements());
+
+    Page<AuditEntry> last =
+        query.findByUserId(UserId.of("beyond-user"), t, t, PageRequest.of(1, 2));
+    assertEquals(1, last.content().size());
+    assertEquals("beyond-3", last.content().getFirst().commandId().value());
+    assertEquals(3, last.totalElements());
+  }
+
+  @Test
+  void theTotalMatchesTheRowsOfEveryPageForOutcomeAndType() {
+    var t = Instant.parse("2026-08-03T10:00:00Z");
+    for (int i = 0; i < 5; i++) {
+      store.save(entry("tot-" + i, "TotType", "tot-user", t.plusSeconds(i % 2)));
+    }
+    var from = t.minusSeconds(1);
+    var to = t.plusSeconds(5);
+
+    int rows = 0;
+    for (int p = 0; p < 3; p++) {
+      Page<AuditEntry> page = query.findByCommandType("TotType", from, to, PageRequest.of(p, 2));
+      assertEquals(5, page.totalElements());
+      rows += page.content().size();
+    }
+    assertEquals(5, rows);
+
+    Page<AuditEntry> none =
+        query.findByOutcome(AuditOutcome.FAILURE, from, to, PageRequest.of(0, 2));
+    assertEquals(0, none.totalElements());
+    assertTrue(none.content().isEmpty());
+    assertEquals(
+        5,
+        query.findByOutcome(AuditOutcome.SUCCESS, from, to, PageRequest.of(0, 2)).totalElements());
+  }
+
+  @Test
   void constructor_rejectsNullDataSource() {
     assertThrows(IllegalArgumentException.class, () -> new PostgresCommandAuditQuery(null));
   }
