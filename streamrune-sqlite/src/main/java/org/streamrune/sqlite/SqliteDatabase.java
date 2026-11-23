@@ -67,6 +67,15 @@ public final class SqliteDatabase implements AutoCloseable {
 
   private static final Logger log = LoggerFactory.getLogger(SqliteDatabase.class);
 
+  /** The refusal of a data source that hands out connections in manual-commit mode. */
+  static final String MANUAL_COMMIT_POOL =
+      "The data source hands out SQLite connections in manual-commit mode (autoCommit=false)."
+          + " With transaction_mode=IMMEDIATE the driver opens a write transaction as soon as a"
+          + " connection enters manual commit, so every such connection idling in the pool holds"
+          + " the database's write lock, and no other connection can write. Configure the pool"
+          + " to hand out connections in autocommit mode (for HikariCP: autoCommit=true, its"
+          + " default).";
+
   private final DataSource dataSource;
   private final InstanceGuardRegistry.Lease guard;
 
@@ -87,8 +96,8 @@ public final class SqliteDatabase implements AutoCloseable {
    * @throws IllegalArgumentException if {@code dataSource} is {@code null}
    * @throws IllegalStateException if the connections are not SQLite, the database is in-memory or
    *     temporary or has other databases attached, the SQLite library is older than {@code 3.45.0},
-   *     or a required connection setting is wrong; the message names the setting and its expected
-   *     value
+   *     or a required connection setting is wrong (the message names the setting and its expected
+   *     value), or the data source hands out connections in manual-commit mode
    * @throws SqliteGuardException if another process holds the guard, or the lock file cannot be
    *     created, opened or locked
    * @throws EventStoreException if no connection can be borrowed or read
@@ -104,6 +113,9 @@ public final class SqliteDatabase implements AutoCloseable {
       SqliteSetup.refuseAttachedDatabases(sqlite);
       SqliteVersion.require(SqliteSetup.libraryVersion(sqlite));
       SqliteSetup.verify(sqlite);
+      if (!connection.getAutoCommit()) {
+        throw new IllegalStateException(MANUAL_COMMIT_POOL);
+      }
     } catch (SQLException e) {
       throw new EventStoreException(
           "Cannot open the SQLite database: " + LogSanitizer.sanitizeFreeText(e.getMessage()), e);

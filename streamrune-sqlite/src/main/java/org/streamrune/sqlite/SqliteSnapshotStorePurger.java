@@ -44,13 +44,13 @@ import org.streamrune.core.types.SubjectId;
  *     .build();
  * }</pre>
  *
- * <p><b>One statement, one transaction.</b> Every stream of the subject is purged by one upsert in
- * one write transaction, whatever the number of streams (they are passed as one JSON array, so
- * SQLite's limit on bound parameters does not apply): a failure or a crash leaves all of them
- * purged or none, and a re-run of the forget converges either way. Idempotent per {@link
- * SubjectDataPurger}'s contract: purging a stream again raises its generation once more; an empty
- * or {@code null} stream collection writes nothing. {@code created_at} is stamped with the purger's
- * {@link Clock}.
+ * <p><b>One statement, one transaction.</b> Every stream of the subject is purged by one upsert,
+ * which SQLite runs as one transaction of its own, whatever the number of streams (they are passed
+ * as one JSON array, so SQLite's limit on bound parameters does not apply): a failure or a crash
+ * leaves all of them purged or none, and a re-run of the forget converges either way. Idempotent
+ * per {@link SubjectDataPurger}'s contract: purging a stream again raises its generation once more;
+ * an empty or {@code null} stream collection writes nothing. {@code created_at} is stamped with the
+ * purger's {@link Clock}.
  */
 public final class SqliteSnapshotStorePurger implements SnapshotPurger {
 
@@ -125,26 +125,26 @@ public final class SqliteSnapshotStorePurger implements SnapshotPurger {
     }
     String streamsJson = streamsJson(streams);
     long createdAt = SqliteTimestamps.toMicros(clock.instant());
+    // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
+    // write lock when the statement starts (waiting at most busy_timeout) and purges every stream
+    // or none.
     try (var conn = database.dataSource().getConnection()) {
-      int purged =
-          SqliteTransactions.inTransaction(
-              conn,
-              "snapshot purge",
-              c -> {
-                try (var ps = c.prepareStatement(PURGE_SNAPSHOTS)) {
-                  ps.setLong(1, createdAt);
-                  ps.setString(2, streamsJson);
-                  return ps.executeUpdate();
-                }
-              });
+      SqliteTransactions.requireAutoCommit(conn);
+      int purged;
+      try (var ps = conn.prepareStatement(PURGE_SNAPSHOTS)) {
+        ps.setLong(1, createdAt);
+        ps.setString(2, streamsJson);
+        purged = ps.executeUpdate();
+      }
       log.info(
           "GDPR forget: purged the snapshots of {} stream(s) in snapshot_store for subject-hash={}",
           purged,
           subjectId.redacted());
     } catch (SQLException e) {
-      if (SqliteEventStore.isBusy(e)) {
-        throw new EventStoreException(
-            SqliteEventStore.busyMessage("purge of snapshot_store rows for subject"), e);
+      EventStoreException lockFailure =
+          SqliteEventStore.lockFailure(e, "purge of snapshot_store rows for subject");
+      if (lockFailure != null) {
+        throw lockFailure;
       }
       throw new EventStoreException("Failed to purge snapshot_store rows for subject", e);
     }

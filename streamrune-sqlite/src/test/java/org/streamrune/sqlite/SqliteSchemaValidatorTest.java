@@ -121,6 +121,30 @@ class SqliteSchemaValidatorTest {
             });
   }
 
+  /** Each offset trigger missing from event_stream is an error naming it. */
+  @Test
+  void aMissingOffsetTriggerIsAnError() throws Exception {
+    db.migrate(SqliteSchemaSeries.EVENT_STORE);
+    execute(ds, "DROP TRIGGER event_stream_offset_from_counter_on_update");
+
+    assertThat(validate())
+        .singleElement()
+        .satisfies(
+            issue -> {
+              assertThat(issue.severity()).isEqualTo(Severity.ERROR);
+              assertThat(issue.table()).isEqualTo("event_stream");
+              assertThat(issue.message())
+                  .startsWith("Missing trigger: event_stream_offset_from_counter_on_update");
+            });
+
+    execute(ds, "DROP TRIGGER event_stream_offset_from_counter");
+    assertThat(validate())
+        .extracting(SqliteSchemaValidator.Issue::message)
+        .anySatisfy(
+            m -> assertThat(m).startsWith("Missing trigger: event_stream_offset_from_counter "))
+        .hasSize(2);
+  }
+
   @Test
   void aCounterBehindTheEventsIsAnError() throws Exception {
     db.migrate(SqliteSchemaSeries.EVENT_STORE);

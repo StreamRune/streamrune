@@ -49,7 +49,7 @@ CREATE TABLE event_stream (
     -- rolled-back append never leaves a hole. The column is the table's row id (no AUTOINCREMENT):
     -- an insert that leaves it out, or binds NULL, is silently given max(global_offset) + 1 by
     -- SQLite, an offset the counter never handed out. The trigger event_stream_offset_from_counter
-    -- below refuses such a row.
+    -- and event_stream_offset_from_counter_on_update below refuse such a row.
     global_offset  INTEGER NOT NULL PRIMARY KEY,
     -- The stream key: the aggregate type the decider was registered under and the id the command's
     -- extractor returned, verbatim.
@@ -86,14 +86,23 @@ CREATE TABLE global_offset_counter (
 -- The counter row must exist before the first append; an empty store starts at 0.
 INSERT INTO global_offset_counter (id, next_value) VALUES (1, 0);
 
--- Refuses an event row whose offset the counter has not handed out. The append always reserves
--- its offsets first, so its rows lie at or below next_value. A row above it is one SQLite numbered
--- itself (an insert that left global_offset out or bound NULL, outside the event store), or an
--- import that skipped the counter; left in place it would collide with the next reservation and
--- stop every append. A missing counter row counts as 0. Postgres needs no such check: its
+-- Refuses an event row inserted at an offset the counter has not handed out. The append always
+-- reserves its offsets first, so its rows lie at or below next_value. A row above it is one SQLite
+-- numbered itself (an insert that left global_offset out or bound NULL, outside the event store),
+-- or an import that skipped the counter; left in place it would collide with the next reservation
+-- and stop every append. A missing counter row counts as 0. Postgres needs no such check: its
 -- global_offset has no default, so a row without one is refused by NOT NULL.
 CREATE TRIGGER event_stream_offset_from_counter
 AFTER INSERT ON event_stream
+WHEN NEW.global_offset > coalesce((SELECT next_value FROM global_offset_counter WHERE id = 1), 0)
+BEGIN
+    SELECT RAISE(ABORT, 'event_stream.global_offset was not reserved from global_offset_counter');
+END;
+
+-- The same rule for an UPDATE that moves a row's offset above the counter (SQLite has no trigger
+-- for INSERT and UPDATE at once).
+CREATE TRIGGER event_stream_offset_from_counter_on_update
+AFTER UPDATE OF global_offset ON event_stream
 WHEN NEW.global_offset > coalesce((SELECT next_value FROM global_offset_counter WHERE id = 1), 0)
 BEGIN
     SELECT RAISE(ABORT, 'event_stream.global_offset was not reserved from global_offset_counter');

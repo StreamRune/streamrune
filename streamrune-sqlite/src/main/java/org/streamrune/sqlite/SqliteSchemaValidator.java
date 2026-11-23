@@ -42,6 +42,10 @@ final class SqliteSchemaValidator {
   private static final String COUNTER_TABLE = "global_offset_counter";
   private static final String EVENT_TABLE = "event_stream";
 
+  /** The triggers that keep event_stream.global_offset at or below the counter (V001). */
+  private static final List<String> OFFSET_TRIGGERS =
+      List.of("event_stream_offset_from_counter", "event_stream_offset_from_counter_on_update");
+
   /**
    * The tables of each series and the columns the runtime reads and writes: the Postgres lists,
    * without the lease table (leadership is a no-op on SQLite) and with {@code
@@ -208,6 +212,20 @@ final class SqliteSchemaValidator {
       if (series == SqliteSchemaSeries.EVENT_STORE && tableExists(connection, COUNTER_TABLE)) {
         checkCounterRow(connection, tableExists(connection, EVENT_TABLE), issues);
       }
+      if (series == SqliteSchemaSeries.EVENT_STORE && tableExists(connection, EVENT_TABLE)) {
+        for (String trigger : OFFSET_TRIGGERS) {
+          if (!triggerExists(connection, trigger)) {
+            issues.add(
+                new Issue(
+                    Severity.ERROR,
+                    EVENT_TABLE,
+                    "Missing trigger: "
+                        + trigger
+                        + " — it refuses event rows whose global_offset the counter did not hand"
+                        + " out; re-create it from db/sqlite-migration/V001__baseline.sql"));
+          }
+        }
+      }
       String history = series.historyTable();
       if (tableExists(connection, history)) {
         checkVersion(connection, history, series.expectedVersion(), issues);
@@ -235,6 +253,17 @@ final class SqliteSchemaValidator {
       }
     }
     return message.toString();
+  }
+
+  private static boolean triggerExists(Connection connection, String trigger) throws SQLException {
+    try (PreparedStatement ps =
+        connection.prepareStatement(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ? COLLATE NOCASE")) {
+      ps.setString(1, trigger);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next();
+      }
+    }
   }
 
   private static boolean tableExists(Connection connection, String table) throws SQLException {

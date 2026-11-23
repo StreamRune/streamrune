@@ -83,6 +83,34 @@ class SqliteEventStoreCrashIT {
     assertAppendLeftNothing("SECOND_EVENT");
   }
 
+  /**
+   * An append larger than the page cache: SQLite spills frames of the open transaction into the WAL
+   * file before the COMMIT. Killed before the COMMIT, those frames carry no commit marker, and
+   * recovery ignores them: no row, no counter advance.
+   */
+  @Test
+  void anAppendLargerThanThePageCacheKilledBeforeItsCommitLeavesNothing() throws Exception {
+    Path db = dir.resolve("big.db");
+    killAt("big-append", db, "LAST_BIG_EVENT");
+
+    Path wal = Path.of(db + "-wal");
+    assertThat(java.nio.file.Files.size(wal))
+        .as("frames of the uncommitted append reached the WAL file before the kill")
+        .isGreaterThan(4L * 1024 * 1024);
+    try (SqliteDatabase database = SqliteDatabase.open(TestDatabases.dataSource(db))) {
+      EventStore store = restarted(database);
+      assertThat(store.load(CrashChild.A).events()).hasSize(1);
+      assertThat(counter(database)).isEqualTo(1);
+      assertThat(store.readGlobalStream(GlobalOffset.initial(), 10)).hasSize(1);
+      assertThat(
+              store
+                  .append(
+                      CrashChild.A, store.load(CrashChild.A).events().subList(0, 1), new Version(1))
+                  .globalOffsets())
+          .containsExactly(GlobalOffset.of(2));
+    }
+  }
+
   @Test
   void anAppendKilledRightAfterItsCommitIsStoredWhole() throws Exception {
     Path db = dir.resolve("after-commit.db");

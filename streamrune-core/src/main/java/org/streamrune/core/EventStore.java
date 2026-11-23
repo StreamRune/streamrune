@@ -506,8 +506,9 @@ public interface EventStore {
    * may stop short of a hole.
    *
    * @param afterOffset read events with global_offset strictly greater than this value
-   * @param maxCount maximum number of events to return
+   * @param maxCount maximum number of events to return; {@code 0} returns none
    * @return list of event envelopes ordered by global offset, empty if none available
+   * @throws IllegalArgumentException if {@code maxCount} is negative
    */
   List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount);
 
@@ -517,8 +518,9 @@ public interface EventStore {
    *
    * @param streamId the stream to read from
    * @param afterVersion read events with version strictly greater than this value
-   * @param maxCount maximum number of events to return
+   * @param maxCount maximum number of events to return; {@code 0} returns none
    * @return list of event envelopes ordered by version
+   * @throws IllegalArgumentException if {@code maxCount} is negative
    */
   List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount);
 

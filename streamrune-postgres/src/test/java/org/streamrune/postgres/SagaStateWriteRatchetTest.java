@@ -183,7 +183,10 @@ class SagaStateWriteRatchetTest {
   private static final Map<String, String> LITERAL_TABLE_NAMES =
       Map.of(
           "SchemaValidator.java",
-          "the tables the schema check expects to find; it reads the catalogue and writes nothing");
+          "the tables the schema check expects to find; it reads the catalogue and writes nothing",
+          "SqliteSchemaValidator.java",
+          "the tables the SQLite schema check expects to find; it reads the catalogue and writes"
+              + " nothing");
 
   /** In a statement's shape: a value the code supplies between two literals. */
   private static final char SUPPLIED = '\u0001';

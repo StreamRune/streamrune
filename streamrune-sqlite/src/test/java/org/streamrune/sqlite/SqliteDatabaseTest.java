@@ -82,6 +82,26 @@ class SqliteDatabaseTest {
     assertThat(ForkedJvm.probe(db)).startsWith(GuardChild.ACQUIRED);
   }
 
+  /**
+   * A pool that hands out connections in manual-commit mode holds the write lock with every idle
+   * connection: refused at open, before the guard, with the reason.
+   */
+  @Test
+  void aManualCommitPoolIsRefusedBeforeTheGuard() throws Exception {
+    Path db = dir.resolve("db.sqlite");
+    com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+    config.setJdbcUrl("jdbc:sqlite:file:" + db + "?" + TestDatabases.REQUIRED_SETTINGS);
+    config.setAutoCommit(false);
+    config.setMaximumPoolSize(1);
+    try (var pool = new com.zaxxer.hikari.HikariDataSource(config)) {
+      assertThatThrownBy(() -> SqliteDatabase.open(pool))
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("autoCommit=false")
+          .hasMessageContaining("write lock");
+    }
+    assertThat(Files.exists(lockFileOf(db))).isFalse();
+  }
+
   @Test
   void synchronousExtraIsAccepted() {
     Path db = dir.resolve("db.sqlite");

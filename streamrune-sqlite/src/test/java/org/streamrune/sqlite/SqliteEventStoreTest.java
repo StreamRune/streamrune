@@ -268,6 +268,30 @@ class SqliteEventStoreTest {
   }
 
   @Test
+  void anUpdateThatMovesAnOffsetAboveTheCounterIsRefused() throws Exception {
+    SqliteDatabase database = migrated("update.db");
+    EventStore store = factory(database).create();
+    store.append(A, events(A, 2), Version.initial());
+    try (Connection conn = database.dataSource().getConnection();
+        Statement st = conn.createStatement()) {
+      assertThatThrownBy(
+              () -> st.execute("UPDATE event_stream SET global_offset = 7 WHERE global_offset = 2"))
+          .isInstanceOfSatisfying(
+              SQLiteException.class,
+              e -> {
+                assertThat(e.getResultCode()).isEqualTo(SQLiteErrorCode.SQLITE_CONSTRAINT_TRIGGER);
+                assertThat(e.getMessage()).contains("was not reserved from global_offset_counter");
+              });
+      st.execute("UPDATE event_stream SET version = 2 WHERE global_offset = 2");
+      st.execute("DELETE FROM event_stream WHERE global_offset = 1");
+      st.execute("UPDATE event_stream SET global_offset = 1 WHERE global_offset = 2");
+    }
+    assertThat(store.readGlobalStream(GlobalOffset.initial(), 10))
+        .extracting(e -> e.globalOffset().value())
+        .containsExactly(1L);
+  }
+
+  @Test
   void withoutTheCounterRowEveryEventRowIsRefused() throws Exception {
     SqliteDatabase database = migrated("no-counter.db");
     try (Connection conn = database.dataSource().getConnection();
@@ -376,13 +400,24 @@ class SqliteEventStoreTest {
     Path file = dir.resolve("manual.db");
     SqliteDatabase database = open(TestDatabases.dataSource(file));
     EventStore store = factory(database).create();
-    SqliteDatabase manual = open(manualCommit(TestDatabases.dataSource(file)));
+    AtomicBoolean manualCommit = new AtomicBoolean(false);
+    SqliteDatabase manual = open(manualCommit(TestDatabases.dataSource(file), manualCommit));
     EventStore manualStore = factory(manual).autoInitializeSchema(false).create();
+    manualCommit.set(true);
 
     assertThatThrownBy(() -> manualStore.append(A, events(A, 1), Version.initial()))
         .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("autoCommit=false")
+        .hasMessageContaining("application transaction");
+    assertThatThrownBy(() -> manualStore.saveSnapshot(A, Version.initial(), new ContractState("s")))
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("autoCommit=false");
+    assertThatThrownBy(
+            () -> new SqliteSnapshotStorePurger(manual, s -> List.of(A)).purge(SubjectId.of("s")))
+        .isExactlyInstanceOf(IllegalStateException.class)
         .hasMessageContaining("autoCommit=false");
     assertThat(store.readGlobalStream(GlobalOffset.initial(), 10)).isEmpty();
+    assertThat(store.load(A).snapshotPurgeGeneration()).isZero();
   }
 
   // ── Classification ──────────────────────────────────────────────────────────────────────────
@@ -437,8 +472,48 @@ class SqliteEventStoreTest {
         .isTrue();
     assertThat(
             SqliteEventStore.isBusy(new SQLiteException("locked", SQLiteErrorCode.SQLITE_LOCKED)))
-        .isTrue();
+        .as("SQLITE_LOCKED is not governed by busy_timeout")
+        .isFalse();
     assertThat(SqliteEventStore.isBusy(new SQLException("plain"))).isFalse();
+  }
+
+  /** SQLITE_BUSY names busy_timeout; SQLITE_LOCKED, which no timeout governs, says so instead. */
+  @Test
+  void busyAndLockedFailuresHaveTheirOwnMessages() {
+    assertThat(
+            SqliteEventStore.lockFailure(
+                new SQLiteException("busy", SQLiteErrorCode.SQLITE_BUSY), "append to stream 'x'"))
+        .hasMessageContaining("busy_timeout")
+        .hasMessageContaining("append to stream 'x'")
+        .hasMessageNotContaining("SQLITE_LOCKED");
+    for (SQLiteErrorCode code :
+        List.of(
+            SQLiteErrorCode.SQLITE_LOCKED,
+            SQLiteErrorCode.SQLITE_LOCKED_SHAREDCACHE,
+            SQLiteErrorCode.SQLITE_LOCKED_VTAB)) {
+      assertThat(SqliteEventStore.lockFailure(new SQLiteException("locked", code), "purge"))
+          .hasMessageContaining("SQLITE_LOCKED")
+          .hasMessageContaining("busy_timeout does not apply");
+    }
+    assertThat(SqliteEventStore.lockFailure(new SQLException("plain"), "x")).isNull();
+  }
+
+  /** A real SQLITE_LOCKED: the same connection still reads the table a statement wants to drop. */
+  @Test
+  void aRealTableLockIsSqliteLocked() throws Exception {
+    SqliteDatabase database = migrated("locked.db");
+    try (Connection conn = database.dataSource().getConnection();
+        Statement read = conn.createStatement();
+        Statement drop = conn.createStatement()) {
+      drop.execute("CREATE TABLE scratch (x INTEGER) STRICT");
+      drop.execute("INSERT INTO scratch VALUES (1), (2)");
+      try (var rs = read.executeQuery("SELECT x FROM scratch")) {
+        rs.next();
+        assertThatThrownBy(() -> drop.execute("DROP TABLE scratch"))
+            .isInstanceOfSatisfying(
+                SQLException.class, e -> assertThat(SqliteEventStore.isLocked(e)).isTrue());
+      }
+    }
   }
 
   @Test
@@ -852,13 +927,18 @@ class SqliteEventStoreTest {
     }
   }
 
-  /** {@code source} with every connection switched to manual commit, as a misconfigured pool. */
-  private static DataSource manualCommit(DataSource source) {
+  /**
+   * {@code source}, its connections switched to manual commit while {@code manual} is set, as a
+   * pool reconfigured or an application transaction enlisting the connection.
+   */
+  private static DataSource manualCommit(DataSource source, AtomicBoolean manual) {
     return new DataSource() {
       @Override
       public Connection getConnection() throws SQLException {
         Connection conn = source.getConnection();
-        conn.setAutoCommit(false);
+        if (manual.get()) {
+          conn.setAutoCommit(false);
+        }
         return conn;
       }
 

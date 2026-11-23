@@ -953,8 +953,9 @@ public final class SqliteEventStore implements EventStore {
               + expectedVersion.value(),
           e);
     }
-    if (isBusy(e)) {
-      return new EventStoreException(busyMessage("append to stream '" + shownStream + "'"), e);
+    EventStoreException lockFailure = lockFailure(e, "append to stream '" + shownStream + "'");
+    if (lockFailure != null) {
+      return lockFailure;
     }
     return new EventStoreException("Failed to append events to stream: " + shownStream, e);
   }
@@ -992,8 +993,8 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * True when {@code e}'s cause chain holds {@code SQLITE_BUSY}, {@code SQLITE_BUSY_TIMEOUT} or
-   * {@code SQLITE_LOCKED}: the write lock was not granted within {@code busy_timeout}.
+   * True when {@code e}'s cause chain holds {@code SQLITE_BUSY} or {@code SQLITE_BUSY_TIMEOUT}: the
+   * write lock was not granted within {@code busy_timeout}.
    */
   static boolean isBusy(SQLException e) {
     SQLiteException sqlite = sqliteCause(e);
@@ -1001,9 +1002,48 @@ public final class SqliteEventStore implements EventStore {
       return false;
     }
     SQLiteErrorCode code = sqlite.getResultCode();
-    return code == SQLiteErrorCode.SQLITE_BUSY
-        || code == SQLiteErrorCode.SQLITE_BUSY_TIMEOUT
-        || code == SQLiteErrorCode.SQLITE_LOCKED;
+    return code == SQLiteErrorCode.SQLITE_BUSY || code == SQLiteErrorCode.SQLITE_BUSY_TIMEOUT;
+  }
+
+  /**
+   * True when {@code e}'s cause chain holds {@code SQLITE_LOCKED} or one of its extended codes: a
+   * conflict with another statement or transaction on the same connection (or, with a shared cache,
+   * the same cache), for which SQLite does not wait, whatever {@code busy_timeout} says.
+   */
+  static boolean isLocked(SQLException e) {
+    SQLiteException sqlite = sqliteCause(e);
+    if (sqlite == null) {
+      return false;
+    }
+    SQLiteErrorCode code = sqlite.getResultCode();
+    return code == SQLiteErrorCode.SQLITE_LOCKED
+        || code == SQLiteErrorCode.SQLITE_LOCKED_SHAREDCACHE
+        || code == SQLiteErrorCode.SQLITE_LOCKED_VTAB;
+  }
+
+  /**
+   * The {@link EventStoreException} of a write SQLite refused for a lock, naming {@code what}:
+   * {@link #busyMessage} for {@code SQLITE_BUSY}, {@link #lockedMessage} for {@code SQLITE_LOCKED};
+   * {@code null} for any other failure.
+   */
+  static EventStoreException lockFailure(SQLException e, String what) {
+    if (isBusy(e)) {
+      return new EventStoreException(busyMessage(what), e);
+    }
+    if (isLocked(e)) {
+      return new EventStoreException(lockedMessage(what), e);
+    }
+    return null;
+  }
+
+  /** The message of a write refused with SQLITE_LOCKED, which busy_timeout does not govern. */
+  static String lockedMessage(String what) {
+    return "SQLite refused the "
+        + what
+        + " with SQLITE_LOCKED: a table it needs is locked by another statement or transaction"
+        + " of the same connection (or of the same shared cache). SQLite does not wait for that"
+        + " lock, so busy_timeout does not apply; nothing was stored. Finish the other statement"
+        + " (close its result set) or do not share the connection or the cache.";
   }
 
   /** The first {@link SQLiteException} of {@code e}'s cause chain, walked at most 50 deep. */
@@ -1047,7 +1087,7 @@ public final class SqliteEventStore implements EventStore {
    * {@inheritDoc}
    *
    * <p>The snapshot's {@code state_type} is the state class's simple name, which must resolve back
-   * to that class in the registry. The write is one conditional upsert in a write transaction: it
+   * to that class in the registry. The write is one conditional upsert, atomic on its own: it
    * stores the snapshot only while the stream's row still has {@code snapshotPurgeGeneration} (or
    * there is no row). {@link SqliteSnapshotStorePurger} raises the generation of the same row, and
    * SQLite's write lock serializes the two, so a save from a state loaded before a purge writes
@@ -1139,27 +1179,26 @@ public final class SqliteEventStore implements EventStore {
     }
     long createdAt = SqliteTimestamps.toMicros(clock.instant());
 
+    // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
+    // write lock when the statement starts (waiting at most busy_timeout) and commits all of it or
+    // nothing.
     int written;
     try (var conn = dataSource.getConnection()) {
-      written =
-          SqliteTransactions.inTransaction(
-              conn,
-              "snapshot save",
-              c -> {
-                try (var ps = c.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
-                  SqliteStreamKeys.bind(ps, 1, streamId);
-                  ps.setLong(3, version.value());
-                  ps.setString(4, stateType);
-                  ps.setString(5, stateJson);
-                  ps.setLong(6, createdAt);
-                  ps.setInt(7, snapshotVersion);
-                  ps.setLong(8, snapshotPurgeGeneration);
-                  return ps.executeUpdate();
-                }
-              });
+      SqliteTransactions.requireAutoCommit(conn);
+      try (var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
+        SqliteStreamKeys.bind(ps, 1, streamId);
+        ps.setLong(3, version.value());
+        ps.setString(4, stateType);
+        ps.setString(5, stateJson);
+        ps.setLong(6, createdAt);
+        ps.setInt(7, snapshotVersion);
+        ps.setLong(8, snapshotPurgeGeneration);
+        written = ps.executeUpdate();
+      }
     } catch (SQLException e) {
-      if (isBusy(e)) {
-        throw new EventStoreException(busyMessage("snapshot save of stream " + shownStream), e);
+      EventStoreException lockFailure = lockFailure(e, "snapshot save of stream " + shownStream);
+      if (lockFailure != null) {
+        throw lockFailure;
       }
       throw new EventStoreException("Failed to save snapshot for stream: " + shownStream, e);
     }

@@ -32,6 +32,10 @@ import org.streamrune.test.EventStoreContract.ContractState;
  *       dies at {@code point} of the second append.
  *   <li>{@code snapshot <db> <point>}: appends two events, saves a snapshot {@code at-1}, then dies
  *       at {@code point} of saving {@code at-2}.
+ *   <li>{@code big-append <db> LAST_BIG_EVENT}: appends one event, then {@link #BIG_APPEND_EVENTS}
+ *       events of {@link #BIG_PAYLOAD} characters each, more than the page cache holds, so SQLite
+ *       writes frames of the open transaction to the WAL file before its COMMIT, and dies inside
+ *       the write of the last row.
  *   <li>{@code purge <db> <point>}: snapshots streams {@code k1}, {@code k2} and {@code k3}, then
  *       dies at {@code point} of the purge of all three.
  * </ul>
@@ -41,6 +45,8 @@ import org.streamrune.test.EventStoreContract.ContractState;
 public final class CrashChild {
 
   static final String NOT_KILLED = "NOT_KILLED";
+  static final int BIG_APPEND_EVENTS = 2_000;
+  static final int BIG_PAYLOAD = 4_000;
   static final StreamId A = StreamId.of(AggregateType.of("order"), AggregateId.of("A"));
   static final List<StreamId> PURGED = List.of(stream("k1"), stream("k2"), stream("k3"));
 
@@ -50,7 +56,8 @@ public final class CrashChild {
           "SECOND_EVENT", Point.SECOND_EVENT,
           "FIRST_SNAPSHOT_ROW", Point.FIRST_SNAPSHOT_ROW,
           "SECOND_SNAPSHOT_ROW", Point.SECOND_SNAPSHOT_ROW,
-          "AFTER_COMMIT", Point.AFTER_COMMIT);
+          "AFTER_COMMIT", Point.AFTER_COMMIT,
+          "LAST_BIG_EVENT", new Point("event_stream", BIG_APPEND_EVENTS));
 
   private CrashChild() {}
 
@@ -69,6 +76,22 @@ public final class CrashChild {
         store.append(A, events(1), Version.initial());
         crashPoints.arm(point);
         store.append(A, events(3), new Version(1));
+      }
+      case "big-append" -> {
+        store.append(A, events(1), Version.initial());
+        List<EventEnvelope> big = new ArrayList<>();
+        for (EventEnvelope event : events(BIG_APPEND_EVENTS)) {
+          big.add(
+              new EventEnvelope(
+                  event.globalOffset(),
+                  event.streamId(),
+                  event.version(),
+                  event.eventType(),
+                  new ContractEvent("x".repeat(BIG_PAYLOAD)),
+                  event.metadata()));
+        }
+        crashPoints.arm(point);
+        store.append(A, big, new Version(1));
       }
       case "snapshot" -> {
         store.append(A, events(2), Version.initial());
