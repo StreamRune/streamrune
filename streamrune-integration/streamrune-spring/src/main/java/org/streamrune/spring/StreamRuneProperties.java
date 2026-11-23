@@ -45,6 +45,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param gdpr GDPR configuration of the auto-configured {@code ForgetSubjectService}
  * @param jvm JVM configuration (the startup check of the JIT)
  * @param tracing tracing configuration: the master switch and the switch of each area
+ * @param backend the storage backend, {@code streamrune.backend}: {@code postgres} (the default) or
+ *     {@code sqlite}, read through {@link org.streamrune.integration.BackendSelection#parse}; any
+ *     other value fails the start
  */
 @ConfigurationProperties(prefix = "streamrune")
 public record StreamRuneProperties(
@@ -77,7 +80,8 @@ public record StreamRuneProperties(
     @DefaultValue Sse sse,
     @DefaultValue Gdpr gdpr,
     @DefaultValue Jvm jvm,
-    @DefaultValue Tracing tracing) {
+    @DefaultValue Tracing tracing,
+    @DefaultValue("postgres") String backend) {
 
   /**
    * @param enabled whether {@link org.streamrune.runtime.CachingQueryBus} is auto-configured
@@ -256,8 +260,8 @@ public record StreamRuneProperties(
   public record Schema(@DefaultValue("true") boolean autoInitialize) {}
 
   /**
-   * The default read-model store, {@code postgres}: the {@code PostgresReadModelStore} the
-   * integration registers on the application's {@code DataSource}.
+   * The default read-model store, named after the backend ({@code postgres} by default): the
+   * backend's read-model store the integration registers on the application's {@code DataSource}.
    *
    * @param schema its schema management configuration
    */
