@@ -20,6 +20,9 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.IdGenerator;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaId;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
@@ -29,6 +32,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
+import org.streamrune.core.types.SagaType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
@@ -386,5 +390,32 @@ class SqliteEventStoreTracingTest {
         .isInstanceOf(NullPointerException.class)
         .hasMessage("idempotencyKey is required");
     assertThat(tracing.names()).as("no span for refused arguments").isEmpty();
+  }
+
+  /** A forward command the fence refuses is the outcome FENCED, not an error. */
+  @Test
+  void aFencedRefusal_isTheOutcomeFenced_notAnError() {
+    var tracing = new RecordingTracing();
+    EventStore store =
+        new SqliteEventStoreFactory(database, EventStoreContract.Setup.defaults().registry())
+            .tracing(tracing)
+            .commandInbox(new SqliteCommandInbox(database))
+            .create();
+    SagaOrigin noSuchSaga = new SagaOrigin(SagaType.of("app.NoSuchSaga"), SagaId.of("s-1"), 0);
+
+    assertThatThrownBy(
+            () ->
+                store.appendWithKey(
+                    STREAM,
+                    List.of(event("a")),
+                    Version.initial(),
+                    IdempotencyKey.of("fenced"),
+                    "Cmd",
+                    noSuchSaga))
+        .isExactlyInstanceOf(SagaForwardFencedException.class);
+    var fenced = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
+    assertThat(fenced.attribute(TraceAttributes.APPEND_OUTCOME)).isEqualTo("FENCED");
+    assertThat(fenced.error).isNull();
+    assertThat(fenced.closed).isTrue();
   }
 }

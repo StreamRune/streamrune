@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -45,6 +46,8 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.saga.SagaForwardFencedException;
+import org.streamrune.core.saga.SagaOrigin;
 import org.streamrune.core.tracing.SpanAttributes;
 import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
@@ -120,6 +123,16 @@ import org.streamrune.runtime.GuardedTracing;
  * executions of one key the first to get the lock records it and the other finds the record. Each
  * entry carries the trace link of the event it was derived from (given entries: of the first
  * event), as on Postgres. There is no event audit yet.
+ *
+ * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
+ * String, SagaOrigin)} with a saga origin reads the saga's {@code saga_state} row inside the
+ * append's own write transaction, right after the inbox claim and before the offset reservation,
+ * and refuses the append ({@link SagaForwardFencedException}, transaction rolled back) when the row
+ * carries an episode stamp, is terminal, is of another saga type, or is absent ({@code SagaFence}).
+ * There is no fence lock: the write lock the append holds from its {@code BEGIN IMMEDIATE} to its
+ * commit is held by every write of a {@link SqliteSagaStore} too, so the append commits wholly
+ * before a write that takes the saga out of its forward phase, or begins after it and reads what it
+ * wrote. The rows are those of the database file {@link #sagaFenceStorageIdentity()} names.
  *
  * <p><b>Tracing.</b> With a {@link StreamRuneTracing} whose {@link TracingArea#EVENT_STORE} area is
  * on, the store starts the spans {@code PostgresEventStore} starts: {@value
@@ -204,6 +217,7 @@ public final class SqliteEventStore implements EventStore {
   private static final Object DISCARDED_SNAPSHOT = new Object();
 
   private final DataSource dataSource;
+  private final Path file;
   private final ObjectMapper objectMapper;
   private final EventTypeRegistry typeRegistry;
   private final UpcasterChain upcasterChain;
@@ -252,6 +266,7 @@ public final class SqliteEventStore implements EventStore {
       OutboxEventMapper outboxEventMapper,
       SqliteCommandInbox commandInbox) {
     this.dataSource = Objects.requireNonNull(database, "database is required").dataSource();
+    this.file = database.file();
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
     this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
     this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
@@ -812,8 +827,9 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}; a version
-   * conflict is the outcome {@code CONFLICT}, not an error.
+   * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}. A version
+   * conflict is the outcome {@code CONFLICT}, and a saga's forward command the fence refuses the
+   * outcome {@code FENCED}; neither is an error.
    */
   private <R> R tracedAppend(
       StreamId streamId,
@@ -842,6 +858,9 @@ public final class SqliteEventStore implements EventStore {
     } catch (OptimisticLockException conflict) {
       scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
       throw conflict;
+    } catch (SagaForwardFencedException fenced) {
+      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "FENCED");
+      throw fenced;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
@@ -957,10 +976,7 @@ public final class SqliteEventStore implements EventStore {
   /**
    * {@inheritDoc}
    *
-   * <p>Here the claim, the events, the backfill of their offsets into the key's row and the outbox
-   * entries are one write transaction on one connection (see the class javadoc). A key recorded
-   * before is answered from its row after the transaction is rolled back and its connection
-   * returned, so a claim loser never holds one connection while it borrows another.
+   * <p>The six-argument method with no saga origin: unfenced.
    */
   @Override
   public IdempotentAppendResult appendWithKey(
@@ -969,6 +985,35 @@ public final class SqliteEventStore implements EventStore {
       Version expectedVersion,
       IdempotencyKey idempotencyKey,
       String commandType) {
+    return appendWithKey(streamId, events, expectedVersion, idempotencyKey, commandType, null);
+  }
+
+  /**
+   * The database file this store appends to: the fence reads the {@code saga_state} rows of a
+   * {@link SqliteSagaStore} over the same file, whose {@code storageIdentity()} is that file.
+   */
+  @Override
+  public Object sagaFenceStorageIdentity() {
+    return file;
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Here the claim, the fence read ({@code SagaFence}, when {@code forwardOf} is given), the
+   * events, the backfill of their offsets into the key's row and the outbox entries are one write
+   * transaction on one connection (see the class javadoc). A key recorded before is answered from
+   * its row after the transaction is rolled back and its connection returned, without reading the
+   * fence, so a claim loser never holds one connection while it borrows another.
+   */
+  @Override
+  public IdempotentAppendResult appendWithKey(
+      StreamId streamId,
+      List<EventEnvelope> events,
+      Version expectedVersion,
+      IdempotencyKey idempotencyKey,
+      String commandType,
+      SagaOrigin forwardOf) {
     if (!traced
         || commandInbox == null
         || streamId == null
@@ -976,7 +1021,7 @@ public final class SqliteEventStore implements EventStore {
         || events.isEmpty()
         || expectedVersion == null) {
       return appendEventsWithKey(
-          streamId, events, expectedVersion, idempotencyKey, commandType, null, false);
+          streamId, events, expectedVersion, idempotencyKey, commandType, forwardOf, null, false);
     }
     // The rest of the arguments are checked before the outbox mapper, application code, sees the
     // events.
@@ -995,6 +1040,7 @@ public final class SqliteEventStore implements EventStore {
                 expectedVersion,
                 idempotencyKey,
                 commandType,
+                forwardOf,
                 outboxEntries,
                 true),
         result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
@@ -1036,8 +1082,10 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * The keyed append: claim, events, backfill, outbox entries, commit, in one write transaction.
+   * The keyed append: claim, fence, events, backfill, outbox entries, commit, in one write
+   * transaction.
    *
+   * @param forwardOf the saga whose forward command this is, or {@code null} for an unfenced append
    * @param mappedOutboxEntries the outbox entries of {@code events}, or {@code null} to derive them
    *     here
    * @param traced whether the append runs inside its span, so its serialization starts a child
@@ -1048,6 +1096,7 @@ public final class SqliteEventStore implements EventStore {
       Version expectedVersion,
       IdempotencyKey idempotencyKey,
       String commandType,
+      SagaOrigin forwardOf,
       List<OutboxEntry> mappedOutboxEntries,
       boolean traced) {
     if (commandInbox == null) {
@@ -1081,6 +1130,11 @@ public final class SqliteEventStore implements EventStore {
         if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
           claimLost = true;
         } else {
+          // A refusal throws here before anything else is written; the rollback below undoes the
+          // claim with the rest of the transaction.
+          if (forwardOf != null) {
+            SagaFence.requireForward(conn, forwardOf);
+          }
           // An empty command claims its key and appends nothing: like an empty append it does not
           // consult the stream's head.
           List<GlobalOffset> offsets =
