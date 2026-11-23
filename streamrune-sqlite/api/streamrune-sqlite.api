@@ -32,6 +32,13 @@ public final class org.streamrune.sqlite.SqliteEventStoreFactory implements org.
 
 public final class org.streamrune.sqlite.SqliteGuardException extends java.lang.IllegalStateException
 
+public final class org.streamrune.sqlite.SqliteOffsetStore implements org.streamrune.core.projection.OffsetStore
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.time.Clock)
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
 public enum org.streamrune.sqlite.SqliteSchemaSeries
   constants EVENT_STORE, READ_MODEL, CRYPTO
   public java.lang.String directory()
