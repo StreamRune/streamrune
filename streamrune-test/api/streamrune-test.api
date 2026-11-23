@@ -619,6 +619,7 @@ public final class org.streamrune.test.InMemoryDeadLetterQueue implements org.st
   public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
   public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
   public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public java.util.Optional<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> find(org.streamrune.core.types.CommandId)
   public long countAwaitingOperator(int, boolean, java.time.Instant)
   public long countPending()
   public void discard(org.streamrune.core.types.CommandId)

@@ -193,18 +193,18 @@ class InMemoryProjectionDeadLetterStoreTest {
 
   @Test
   void save_rejects_null_entry() {
-    assertThrows(NullPointerException.class, () -> store.save(null));
+    assertThrows(IllegalArgumentException.class, () -> store.save(null));
   }
 
   @Test
   void discard_rejects_null_projection_name() {
-    assertThrows(NullPointerException.class, () -> store.discard(null, GlobalOffset.of(1)));
+    assertThrows(IllegalArgumentException.class, () -> store.discard(null, GlobalOffset.of(1)));
   }
 
   @Test
   void discard_rejects_null_offset() {
     assertThrows(
-        NullPointerException.class,
+        IllegalArgumentException.class,
         () -> store.discard(ProjectionName.of("OrderProjection"), null));
   }
 }

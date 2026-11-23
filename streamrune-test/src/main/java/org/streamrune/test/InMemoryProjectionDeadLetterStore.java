@@ -2,7 +2,6 @@ package org.streamrune.test;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.projection.ProjectionDeadLetterEntry;
 import org.streamrune.core.projection.ProjectionDeadLetterStore;
@@ -22,9 +21,41 @@ public final class InMemoryProjectionDeadLetterStore implements ProjectionDeadLe
       new CopyOnWriteArrayList<>();
 
   @Override
-  public void save(ProjectionDeadLetterEntry entry) {
-    Objects.requireNonNull(entry, "entry is required");
+  public synchronized void save(ProjectionDeadLetterEntry entry) {
+    requireArgument(entry, "entry");
+    for (int i = 0; i < entries.size(); i++) {
+      ProjectionDeadLetterEntry stored = entries.get(i);
+      if (stored.projectionName().equals(entry.projectionName())
+          && stored.fromOffset().equals(entry.fromOffset())) {
+        // The same batch failed again: refresh it, keeping attempts monotonic like the upsert of
+        // the PostgreSQL store.
+        entries.set(
+            i,
+            new ProjectionDeadLetterEntry(
+                entry.projectionName(),
+                entry.fromOffset(),
+                entry.toOffset(),
+                entry.batchSize(),
+                entry.errorType(),
+                entry.errorMessage(),
+                Math.max(stored.attempts() + 1, entry.attempts()),
+                entry.failedAt()));
+        return;
+      }
+    }
     entries.add(entry);
+  }
+
+  private static void requireArgument(Object value, String name) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " is required");
+    }
+  }
+
+  private static void requirePositiveLimit(int limit) {
+    if (limit <= 0) {
+      throw new IllegalArgumentException("limit must be > 0");
+    }
   }
 
   private static final Comparator<ProjectionDeadLetterEntry> OLDEST_FIRST =
@@ -33,7 +64,8 @@ public final class InMemoryProjectionDeadLetterStore implements ProjectionDeadLe
 
   @Override
   public List<ProjectionDeadLetterEntry> read(ProjectionName projectionName, int limit) {
-    Objects.requireNonNull(projectionName, "projectionName is required");
+    requireArgument(projectionName, "projectionName");
+    requirePositiveLimit(limit);
     return entries.stream()
         .filter(e -> e.projectionName().equals(projectionName))
         .sorted(OLDEST_FIRST)
@@ -43,13 +75,14 @@ public final class InMemoryProjectionDeadLetterStore implements ProjectionDeadLe
 
   @Override
   public List<ProjectionDeadLetterEntry> readAll(int limit) {
+    requirePositiveLimit(limit);
     return entries.stream().sorted(OLDEST_FIRST).limit(limit).toList();
   }
 
   @Override
   public void discard(ProjectionName projectionName, GlobalOffset fromOffset) {
-    Objects.requireNonNull(projectionName, "projectionName is required");
-    Objects.requireNonNull(fromOffset, "fromOffset is required");
+    requireArgument(projectionName, "projectionName");
+    requireArgument(fromOffset, "fromOffset");
     entries.removeIf(
         e -> e.projectionName().equals(projectionName) && e.fromOffset().equals(fromOffset));
   }

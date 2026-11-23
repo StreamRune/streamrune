@@ -138,7 +138,7 @@ class InMemoryDeadLetterQueueTest {
             .map(DeadLetterQueue.DeadLetterEntry::commandId)
             .toList());
     assertTrue(queue.findByIdempotencyKey(IdempotencyKey.of("k-none")).isEmpty());
-    assertThrows(NullPointerException.class, () -> queue.findByIdempotencyKey(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.findByIdempotencyKey(null));
   }
 
   @Test

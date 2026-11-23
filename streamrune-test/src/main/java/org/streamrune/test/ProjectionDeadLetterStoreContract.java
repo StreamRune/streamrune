@@ -2,6 +2,7 @@ package org.streamrune.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
@@ -22,9 +23,9 @@ import org.streamrune.core.types.ProjectionName;
  * InMemoryProjectionDeadLetterStoreContractTest} and {@code
  * PostgresProjectionDeadLetterStoreContractTest}.
  *
- * <p>Deliberately not covered, because the interface leaves it open: saving a second entry for a
- * (projection, fromOffset) that is already stored, and the rejection of null arguments or a
- * non-positive limit.
+ * <p>Also pinned: saving a batch that is already stored refreshes it (the upsert, attempts never
+ * decreasing), and null arguments and non-positive limits fail with {@link
+ * IllegalArgumentException}.
  */
 public abstract class ProjectionDeadLetterStoreContract {
 
@@ -166,5 +167,71 @@ public abstract class ProjectionDeadLetterStoreContract {
     store.save(entry(STOCK, 1, T0));
 
     assertEquals(3, store.countPending());
+  }
+
+  @Test
+  void savingABatchTheStoreAlreadyHoldsRefreshesItAndKeepsAttemptsMonotonic() {
+    store.save(entry(ORDERS, 100, T0)); // attempts 3
+    Instant later = T0.plusSeconds(60);
+
+    store.save(
+        new ProjectionDeadLetterEntry(
+            ORDERS,
+            GlobalOffset.of(100),
+            GlobalOffset.of(149),
+            50,
+            "java.lang.Error",
+            null,
+            1,
+            later));
+
+    List<ProjectionDeadLetterEntry> stored = store.read(ORDERS, 10);
+    assertEquals(1, stored.size());
+    ProjectionDeadLetterEntry e = stored.getFirst();
+    assertEquals(GlobalOffset.of(149), e.toOffset());
+    assertEquals(50, e.batchSize());
+    assertEquals("java.lang.Error", e.errorType());
+    assertNull(e.errorMessage());
+    assertEquals(later, e.failedAt());
+    // stored attempts + 1 beats the caller's lower count
+    assertEquals(4, e.attempts());
+    assertEquals(1, store.countPending());
+
+    // a caller count above stored + 1 wins
+    store.save(
+        new ProjectionDeadLetterEntry(
+            ORDERS,
+            GlobalOffset.of(100),
+            GlobalOffset.of(149),
+            50,
+            "java.lang.Error",
+            null,
+            10,
+            later));
+    assertEquals(10, store.read(ORDERS, 10).getFirst().attempts());
+  }
+
+  @Test
+  void aBatchWithTheSameOffsetUnderAnotherProjectionIsAnotherEntry() {
+    store.save(entry(ORDERS, 100, T0));
+    store.save(entry(STOCK, 100, T0));
+
+    assertEquals(2, store.countPending());
+  }
+
+  @Test
+  void nullArgumentsAreRejectedWithIllegalArgumentException() {
+    assertThrows(IllegalArgumentException.class, () -> store.save(null));
+    assertThrows(IllegalArgumentException.class, () -> store.read(null, 10));
+    assertThrows(IllegalArgumentException.class, () -> store.discard(null, GlobalOffset.of(1)));
+    assertThrows(IllegalArgumentException.class, () -> store.discard(ORDERS, null));
+  }
+
+  @Test
+  void aNonPositiveLimitIsRejectedWithIllegalArgumentException() {
+    assertThrows(IllegalArgumentException.class, () -> store.read(ORDERS, 0));
+    assertThrows(IllegalArgumentException.class, () -> store.read(ORDERS, -1));
+    assertThrows(IllegalArgumentException.class, () -> store.readAll(0));
+    assertThrows(IllegalArgumentException.class, () -> store.readAll(-1));
   }
 }

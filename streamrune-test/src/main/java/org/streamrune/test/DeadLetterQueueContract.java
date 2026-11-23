@@ -3,6 +3,7 @@ package org.streamrune.test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.DeadLetterQueue;
 import org.streamrune.core.DeadLetterQueue.DeadLetterEntry;
 import org.streamrune.core.DeadLetterQueue.DeadLetterPublishRequest;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.CommandId;
@@ -31,9 +33,9 @@ import org.streamrune.core.types.UserId;
  * retention pruning. Run by {@code InMemoryDeadLetterQueueContractTest} and {@code
  * PostgresDeadLetterQueueContractTest}.
  *
- * <p>Deliberately not covered, because the interface leaves it open: what a second publish of an
- * already-stored {@code commandId} does ("implementations may reject a duplicate"), and the
- * rejection of null arguments.
+ * <p>Also pinned: a second publish of an already-stored {@code commandId} fails with {@link
+ * EventStoreException}, and null arguments and non-positive limits fail with {@link
+ * IllegalArgumentException}.
  *
  * <p>{@code publishedAt} is stamped by the queue, so tests that depend on the order of publishing
  * pause briefly between publishes ({@link #tick()}).
@@ -480,5 +482,40 @@ public abstract class DeadLetterQueueContract {
 
     assertEquals(2, queue.deleteOlderThan(later));
     assertEquals(0, queue.countPending());
+  }
+
+  // ---------------------------------------------------------------- duplicates and arguments
+
+  @Test
+  void publishingACommandIdTheQueueAlreadyHoldsIsRejectedAndLeavesTheEntryUnchanged() {
+    queue.publish(request("c-1", TYPE, stream("order-1"), null, T0));
+    DeadLetterEntry before = queue.find(CommandId.of("c-1")).orElseThrow();
+
+    assertThrows(
+        EventStoreException.class,
+        () -> queue.publish(request("c-1", "com.example.Other", stream("order-2"), null, T0)));
+
+    assertEquals(List.of(before), queue.read(10));
+    assertEquals(1, queue.countPending());
+  }
+
+  @Test
+  void nullArgumentsAreRejectedWithIllegalArgumentException() {
+    assertThrows(IllegalArgumentException.class, () -> queue.publish(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.find(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.findByIdempotencyKey(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.discard(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.updateAttempts(null, 1, T0));
+    assertThrows(
+        IllegalArgumentException.class, () -> queue.updateAttempts(CommandId.of("c-1"), 1, null));
+    assertThrows(IllegalArgumentException.class, () -> queue.deleteOlderThan(null));
+  }
+
+  @Test
+  void aNonPositiveLimitIsRejectedWithIllegalArgumentException() {
+    assertThrows(IllegalArgumentException.class, () -> queue.read(0));
+    assertThrows(IllegalArgumentException.class, () -> queue.read(-1));
+    assertThrows(IllegalArgumentException.class, () -> queue.readRetryable(3, 0, true, null));
+    assertThrows(IllegalArgumentException.class, () -> queue.readRetryable(3, -1, true, null));
   }
 }

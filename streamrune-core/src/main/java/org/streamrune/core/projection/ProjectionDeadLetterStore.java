@@ -13,9 +13,15 @@ import org.streamrune.core.types.ProjectionName;
 public interface ProjectionDeadLetterStore {
 
   /**
-   * Persists a dead-letter entry.
+   * Persists a dead-letter entry. An entry is identified by its projection name and {@code
+   * fromOffset}; saving one for a batch the store already holds (the batch failed again after a
+   * replay attempt) refreshes the stored entry instead of adding a second one: {@code toOffset},
+   * {@code batchSize}, {@code errorType}, {@code errorMessage} and {@code failedAt} take the new
+   * values, and {@code attempts} becomes the larger of the stored count plus one and the new
+   * entry's count, so it never decreases.
    *
    * @param entry the entry to save; must not be null
+   * @throws IllegalArgumentException if {@code entry} is null
    */
   void save(ProjectionDeadLetterEntry entry);
 
@@ -28,6 +34,8 @@ public interface ProjectionDeadLetterStore {
    * @param projectionName the name of the projection; must not be null or blank
    * @param limit maximum number of entries to return; must be > 0
    * @return an immutable list of matching entries; never null
+   * @throws IllegalArgumentException if {@code projectionName} is null or {@code limit} is not
+   *     positive
    */
   List<ProjectionDeadLetterEntry> read(ProjectionName projectionName, int limit);
 
@@ -39,6 +47,7 @@ public interface ProjectionDeadLetterStore {
    *
    * @param limit maximum number of entries to return; must be > 0
    * @return an immutable list of entries; never null
+   * @throws IllegalArgumentException if {@code limit} is not positive
    */
   List<ProjectionDeadLetterEntry> readAll(int limit);
 
@@ -47,6 +56,7 @@ public interface ProjectionDeadLetterStore {
    *
    * @param projectionName the name of the projection; must not be null or blank
    * @param fromOffset the start offset of the batch to discard; must not be null
+   * @throws IllegalArgumentException if {@code projectionName} or {@code fromOffset} is null
    */
   void discard(ProjectionName projectionName, GlobalOffset fromOffset);
 

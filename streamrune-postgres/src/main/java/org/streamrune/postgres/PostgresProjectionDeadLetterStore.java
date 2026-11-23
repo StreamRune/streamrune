@@ -90,6 +90,10 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
 
   @Override
   public List<ProjectionDeadLetterEntry> read(ProjectionName projectionName, int limit) {
+    if (projectionName == null) {
+      throw new IllegalArgumentException("projectionName is required");
+    }
+    requirePositiveLimit(limit);
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_BY_NAME)) {
       ps.setString(1, projectionName.value());
@@ -105,6 +109,7 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
 
   @Override
   public List<ProjectionDeadLetterEntry> readAll(int limit) {
+    requirePositiveLimit(limit);
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_ALL)) {
       ps.setInt(1, limit);
@@ -149,6 +154,12 @@ public final class PostgresProjectionDeadLetterStore implements ProjectionDeadLe
       return rs.next() ? rs.getLong(1) : 0L;
     } catch (SQLException e) {
       throw new EventStoreException("Failed to count projection dead letter entries", e);
+    }
+  }
+
+  private static void requirePositiveLimit(int limit) {
+    if (limit <= 0) {
+      throw new IllegalArgumentException("limit must be > 0");
     }
   }
 

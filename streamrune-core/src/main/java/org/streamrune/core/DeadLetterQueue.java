@@ -116,11 +116,13 @@ public interface DeadLetterQueue {
    * command payload, the exception type and message, and contextual metadata.
    *
    * <p>Callers must publish a given {@code commandId} at most once — the queue keeps one entry per
-   * command, and implementations may reject a duplicate (the PostgreSQL implementation has a
-   * primary key on the command ID). When a replayed entry fails again, update it via {@link
-   * #updateAttempts(CommandId, int, Instant)} instead of publishing it a second time; when a keyed
-   * command fails again under a key the queue holds an entry of the same command for ({@link
-   * #findByIdempotencyKey}), the command bus publishes nothing.
+   * command, and publishing a {@code commandId} the queue already holds fails with an {@link
+   * EventStoreException} and leaves the stored entry unchanged (the PostgreSQL implementation has a
+   * primary key on the command ID). The one exception is the keyed rule below, which decides first.
+   * When a replayed entry fails again, update it via {@link #updateAttempts(CommandId, int,
+   * Instant)} instead of publishing it a second time; when a keyed command fails again under a key
+   * the queue holds an entry of the same command for ({@link #findByIdempotencyKey}), the command
+   * bus publishes nothing.
    *
    * <p><b>One entry per command under a key.</b> A queue that overrides {@link
    * #findByIdempotencyKey} stores nothing for a keyed request when it already holds an entry of the
@@ -132,6 +134,8 @@ public interface DeadLetterQueue {
    * with a unique index.
    *
    * @param request the dead letter publish request containing all failure details
+   * @throws IllegalArgumentException if {@code request} is null
+   * @throws EventStoreException if an entry for the request's {@code commandId} is already queued
    */
   void publish(DeadLetterPublishRequest request);
 
@@ -225,6 +229,7 @@ public interface DeadLetterQueue {
    *
    * @param limit maximum number of entries to return
    * @return list of dead letter entries, may be empty
+   * @throws IllegalArgumentException if {@code limit} is not positive
    */
   List<DeadLetterEntry> read(int limit);
 
@@ -237,6 +242,7 @@ public interface DeadLetterQueue {
    *
    * @param commandId the command id of the entry to find
    * @return the matching entry, or empty if not present
+   * @throws IllegalArgumentException if {@code commandId} is null
    */
   default Optional<DeadLetterEntry> find(CommandId commandId) {
     return read(Integer.MAX_VALUE).stream()
@@ -262,6 +268,7 @@ public interface DeadLetterQueue {
    *
    * @param key the idempotency key the commands ran under
    * @return the entries stored under the key, oldest first; may be empty
+   * @throws IllegalArgumentException if {@code key} is null (when the lookup is supported)
    * @throws UnsupportedOperationException if the implementation does not look entries up by key
    */
   default List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
@@ -276,6 +283,7 @@ public interface DeadLetterQueue {
    * resolved, etc.). Discarding a {@code commandId} with no matching entry is a no-op.
    *
    * @param commandId the command ID of the entry to discard
+   * @throws IllegalArgumentException if {@code commandId} is null
    */
   void discard(CommandId commandId);
 
@@ -290,6 +298,8 @@ public interface DeadLetterQueue {
    * @param commandId the command ID of the entry to update
    * @param dlqAttempts the new total number of DLQ retry attempts
    * @param lastAttemptAt the timestamp of the most recent DLQ retry attempt
+   * @throws IllegalArgumentException if {@code commandId} or {@code lastAttemptAt} is null (when
+   *     retry tracking is supported)
    * @throws UnsupportedOperationException if the implementation does not track DLQ retry attempts
    */
   default void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
@@ -331,6 +341,8 @@ public interface DeadLetterQueue {
    * @param keyedFirstAttemptAtOrAfter the earliest {@code firstAttemptAt} of a keyed entry to
    *     return, or {@code null} to return keyed entries of any age
    * @return list of retryable dead letter entries, may be empty
+   * @throws IllegalArgumentException if {@code limit} is not positive (when retry tracking is
+   *     supported)
    * @throws UnsupportedOperationException if the implementation does not track DLQ retry attempts
    */
   default List<DeadLetterEntry> readRetryable(
@@ -403,6 +415,7 @@ public interface DeadLetterQueue {
    * @param cutoff entries with {@code publishedAt} strictly before this instant are eligible for
    *     deletion; entries at or after {@code cutoff} are retained
    * @return the number of entries deleted
+   * @throws IllegalArgumentException if {@code cutoff} is null (when pruning is supported)
    * @throws UnsupportedOperationException if the implementation does not support retention pruning
    */
   default int deleteOlderThan(Instant cutoff) {

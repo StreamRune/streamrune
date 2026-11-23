@@ -5,8 +5,10 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.streamrune.core.DeadLetterQueue;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.CommandId;
 import org.streamrune.core.types.IdempotencyKey;
 
@@ -63,7 +65,7 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public synchronized void publish(DeadLetterPublishRequest request) {
-    Objects.requireNonNull(request, "request is required");
+    requireArgument(request, "request");
     if (request.idempotencyKey() != null
         && entries.stream()
             .anyMatch(
@@ -72,6 +74,12 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
                         && request.commandType().equals(e.commandType())
                         && Objects.equals(request.streamId(), e.streamId()))) {
       return;
+    }
+    if (entries.stream().anyMatch(e -> e.commandId().equals(request.commandId()))) {
+      throw new EventStoreException(
+          "Failed to publish to dead letter queue: command "
+              + request.commandId().value()
+              + " is already queued");
     }
     entries.add(
         new DeadLetterEntry(
@@ -94,6 +102,7 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public List<DeadLetterEntry> read(int limit) {
+    requirePositiveLimit(limit);
     return entries.stream()
         .sorted(Comparator.comparing(DeadLetterEntry::publishedAt).reversed())
         .limit(limit)
@@ -101,8 +110,14 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   }
 
   @Override
+  public Optional<DeadLetterEntry> find(CommandId commandId) {
+    requireArgument(commandId, "commandId");
+    return entries.stream().filter(e -> e.commandId().equals(commandId)).findFirst();
+  }
+
+  @Override
   public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
-    Objects.requireNonNull(key, "key is required");
+    requireArgument(key, "key");
     return entries.stream()
         .filter(e -> key.equals(e.idempotencyKey()))
         .sorted(Comparator.comparing(DeadLetterEntry::publishedAt))
@@ -130,13 +145,14 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public void discard(CommandId commandId) {
-    Objects.requireNonNull(commandId, "commandId is required");
+    requireArgument(commandId, "commandId");
     entries.removeIf(e -> e.commandId().equals(commandId));
   }
 
   @Override
   public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
-    Objects.requireNonNull(commandId, "commandId is required");
+    requireArgument(commandId, "commandId");
+    requireArgument(lastAttemptAt, "lastAttemptAt");
     for (int i = 0; i < entries.size(); i++) {
       DeadLetterEntry e = entries.get(i);
       if (e.commandId().equals(commandId)) {
@@ -166,6 +182,7 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
   @Override
   public List<DeadLetterEntry> readRetryable(
       int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
+    requirePositiveLimit(limit);
     // Order by least-recently-active — the most recent of (lastAttemptAt,
     // publishedAt) — ascending, so the entries most likely to be past their backoff sort first and
     // a recently-attempted (still backing-off) entry never sits at the head starving due entries
@@ -193,10 +210,22 @@ public final class InMemoryDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public int deleteOlderThan(Instant cutoff) {
-    Objects.requireNonNull(cutoff, "cutoff is required");
+    requireArgument(cutoff, "cutoff");
     int before = entries.size();
     entries.removeIf(e -> e.publishedAt().isBefore(cutoff));
     return before - entries.size();
+  }
+
+  private static void requireArgument(Object value, String name) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " is required");
+    }
+  }
+
+  private static void requirePositiveLimit(int limit) {
+    if (limit <= 0) {
+      throw new IllegalArgumentException("limit must be > 0");
+    }
   }
 
   /** Returns all entries regardless of order. Use in test assertions. */
