@@ -72,8 +72,8 @@ public interface ProjectionDeadLetterStore {
    * counting is simply excluded from the depth gauge (the runners degrade gracefully after the
    * first throw, exactly like {@code DeadLetterQueue.countPending()} on the command DLQ);
    * dead-letter capture and replay are unaffected. Override it to enable the gauge. The framework's
-   * {@code PostgresProjectionDeadLetterStore} and {@code InMemoryProjectionDeadLetterStore} both
-   * override it.
+   * {@code PostgresProjectionDeadLetterStore}, {@code SqliteProjectionDeadLetterStore} and {@code
+   * InMemoryProjectionDeadLetterStore} all override it.
    *
    * @return the number of dead-letter entries across all projections (never negative)
    * @throws UnsupportedOperationException if the implementation does not support counting

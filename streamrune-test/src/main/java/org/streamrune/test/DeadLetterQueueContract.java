@@ -33,12 +33,12 @@ import org.streamrune.core.types.UserId;
  * {@code publish} stores and {@code read} returns, newest-first {@code read} order, {@code find},
  * {@code discard}, the retry bookkeeping ({@code updateAttempts}, {@code readRetryable}), the
  * counts, the lookup by idempotency key with its one-entry-per-command-under-a-key rule, and
- * retention pruning. Run by {@code InMemoryDeadLetterQueueContractTest} and {@code
- * PostgresDeadLetterQueueContractTest}.
+ * retention pruning. Run by {@code InMemoryDeadLetterQueueContractTest}, {@code
+ * PostgresDeadLetterQueueContractTest} and {@code SqliteDeadLetterQueueContractTest}.
  *
  * <p>Also pinned: a second publish of an already-stored {@code commandId} fails with {@link
- * EventStoreException}, and null arguments and non-positive limits fail with {@link
- * IllegalArgumentException}.
+ * EventStoreException}, null arguments and non-positive limits fail with {@link
+ * IllegalArgumentException}, and caller-supplied instants and the time bounds keep microseconds.
  *
  * <p>{@code publishedAt} is stamped by the queue, so tests that depend on the order of publishing
  * pause briefly between publishes ({@link #tick()}).
@@ -585,5 +585,47 @@ public abstract class DeadLetterQueueContract {
     DeadLetterEntry e = queue.find(CommandId.of("c-1")).orElseThrow();
     assertEquals(first, e.firstAttemptAt());
     assertEquals(last, e.lastAttemptAt());
+  }
+
+  @Test
+  void microsecondInstantsRoundTripUnchanged() {
+    Instant first = Instant.parse("2026-03-04T05:06:07.123456Z");
+    Instant last = Instant.parse("2026-03-04T05:06:09.654321Z");
+    queue.publish(request("c-1", TYPE, null, IdempotencyKey.of("k1"), first));
+
+    queue.updateAttempts(CommandId.of("c-1"), 1, last);
+
+    DeadLetterEntry e = queue.find(CommandId.of("c-1")).orElseThrow();
+    assertEquals(first, e.firstAttemptAt());
+    assertEquals(last, e.lastAttemptAt());
+    assertEquals(List.of(e), queue.findByIdempotencyKey(IdempotencyKey.of("k1")));
+  }
+
+  /** The keyed first-attempt bounds compare to the microsecond: at, just before, just after. */
+  @Test
+  void theKeyedFirstAttemptBoundsCompareToTheMicrosecond() {
+    Instant at = Instant.parse("2026-03-04T05:06:07.123456Z");
+    queue.publish(request("c-1", TYPE, null, IdempotencyKey.of("k1"), at));
+
+    Instant before = Instant.parse("2026-03-04T05:06:07.123455Z");
+    Instant after = Instant.parse("2026-03-04T05:06:07.123457Z");
+    assertEquals(List.of("c-1"), ids(queue.readRetryable(3, 10, false, at)));
+    assertEquals(List.of("c-1"), ids(queue.readRetryable(3, 10, false, before)));
+    assertTrue(queue.readRetryable(3, 10, false, after).isEmpty());
+    assertEquals(0, queue.countAwaitingOperator(3, false, at));
+    assertEquals(0, queue.countAwaitingOperator(3, false, before));
+    assertEquals(1, queue.countAwaitingOperator(3, false, after));
+  }
+
+  /** Retention compares the stamped {@code publishedAt} to the microsecond. */
+  @Test
+  void deleteOlderThanComparesPublishedAtToTheMicrosecond() {
+    publishAll("c-1");
+    Instant published = queue.find(CommandId.of("c-1")).orElseThrow().publishedAt();
+
+    assertEquals(0, queue.deleteOlderThan(published));
+    assertEquals(0, queue.deleteOlderThan(published.minusNanos(1_000)));
+    assertEquals(1, queue.deleteOlderThan(published.plusNanos(1_000)));
+    assertEquals(0, queue.countPending());
   }
 }

@@ -15,6 +15,20 @@ public final class org.streamrune.sqlite.SqliteDatabase implements java.lang.Aut
   public void migrate(org.streamrune.sqlite.SqliteSchemaSeries)
   public void validate(org.streamrune.sqlite.SqliteSchemaSeries)
 
+public final class org.streamrune.sqlite.SqliteDeadLetterQueue implements org.streamrune.core.DeadLetterQueue
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.time.Clock)
+  public int deleteOlderThan(java.time.Instant)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> findByIdempotencyKey(org.streamrune.core.types.IdempotencyKey)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> read(int)
+  public java.util.List<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> readRetryable(int, int, boolean, java.time.Instant)
+  public java.util.Optional<org.streamrune.core.DeadLetterQueue$DeadLetterEntry> find(org.streamrune.core.types.CommandId)
+  public long countAwaitingOperator(int, boolean, java.time.Instant)
+  public long countPending()
+  public void discard(org.streamrune.core.types.CommandId)
+  public void publish(org.streamrune.core.DeadLetterQueue$DeadLetterPublishRequest)
+  public void updateAttempts(org.streamrune.core.types.CommandId, int, java.time.Instant)
+
 public final class org.streamrune.sqlite.SqliteEventStore implements org.streamrune.core.EventStore
   public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
   public java.lang.Object sagaFenceStorageIdentity()
@@ -76,6 +90,14 @@ public final class org.streamrune.sqlite.SqliteOutboxStore implements org.stream
   public org.streamrune.core.outbox.OutboxStore$BlockageSample sampleBlockage()
   public void delete(org.streamrune.core.outbox.OutboxEntryId)
   public void save(org.streamrune.core.outbox.OutboxEntry)
+
+public final class org.streamrune.sqlite.SqliteProjectionDeadLetterStore implements org.streamrune.core.projection.ProjectionDeadLetterStore
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> read(org.streamrune.core.types.ProjectionName, int)
+  public java.util.List<org.streamrune.core.projection.ProjectionDeadLetterEntry> readAll(int)
+  public long countPending()
+  public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+  public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
 
 public final class org.streamrune.sqlite.SqliteSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(org.streamrune.sqlite.SqliteDatabase)

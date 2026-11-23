@@ -128,7 +128,26 @@ final class SqliteCrashPoints {
                   + " END",
               "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_update AFTER UPDATE ON"
                   + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
-                  + " END"));
+                  + " END"),
+          "dead_letter_queue",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_insert AFTER INSERT ON"
+                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                  + " END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_update AFTER UPDATE ON"
+                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                  + " END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_delete AFTER DELETE ON"
+                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                  + " END"),
+          "projection_dead_letters",
+          List.of(
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_insert AFTER INSERT ON"
+                  + " main.projection_dead_letters BEGIN"
+                  + " SELECT sr_crash_point('projection_dead_letters'); END",
+              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_update AFTER UPDATE ON"
+                  + " main.projection_dead_letters BEGIN"
+                  + " SELECT sr_crash_point('projection_dead_letters'); END"));
 
   private final Kill kill;
   private volatile Point armed;
