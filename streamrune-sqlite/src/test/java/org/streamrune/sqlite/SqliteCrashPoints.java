@@ -5,10 +5,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
@@ -22,10 +24,10 @@ import org.streamrune.test.EventStoreContract.CrashPoint;
  *
  * <p>A point before the write is durable is a temporary trigger on the table the write reaches
  * there, which calls the Java function {@code sr_crash_point} in the middle of the statement that
- * writes the row. A point after the write is durable is the {@code COMMIT} the store issues by
- * switching its connection back to autocommit: the commit runs, then the connection dies. The
- * triggers and the function are installed on a connection handed out while a point is armed; a
- * point fires once and disarms itself.
+ * writes the row. A point after the write is durable is the statement that makes the write durable:
+ * a {@code COMMIT}, or a write statement run in autocommit, which SQLite commits on its own; the
+ * statement runs, then the connection dies. The triggers and the function are installed on a
+ * connection handed out while a point is armed; a point fires once and disarms itself.
  *
  * <p>How the write dies depends on the {@link Kill}: {@link Kill#HALT_PROCESS} stops the JVM at
  * once with {@link Runtime#halt(int)}, a real process death that a forked JVM runs; {@link
@@ -123,6 +125,9 @@ final class SqliteCrashPoints {
     private final Connection physical;
     private volatile boolean dead;
 
+    /** Whether a BEGIN ran on the connection and no COMMIT or ROLLBACK after it. */
+    private boolean inTransaction;
+
     Session(Connection physical) {
       this.physical = physical;
     }
@@ -141,7 +146,30 @@ final class SqliteCrashPoints {
       throw new SQLException("killed inside the write of a " + table + " row");
     }
 
-    /** Called after a COMMIT returned. */
+    /**
+     * Whether {@code sql} makes a write durable when it returns: a {@code COMMIT}, or a write
+     * statement run outside a transaction, which SQLite commits on its own.
+     */
+    boolean endsWrite(String sql) {
+      String statement = sql.strip().toUpperCase(Locale.ROOT);
+      return statement.startsWith("COMMIT")
+          || (!inTransaction
+              && (statement.startsWith("INSERT")
+                  || statement.startsWith("UPDATE")
+                  || statement.startsWith("DELETE")));
+    }
+
+    /** Follows the transaction statements the connection runs. */
+    void ran(String sql) {
+      String statement = sql.strip().toUpperCase(Locale.ROOT);
+      if (statement.startsWith("BEGIN")) {
+        inTransaction = true;
+      } else if (statement.startsWith("COMMIT") || statement.startsWith("ROLLBACK")) {
+        inTransaction = false;
+      }
+    }
+
+    /** Called after a statement that made a write durable returned. */
     void committed() throws SQLException {
       if (armed != Point.AFTER_COMMIT) {
         return;
@@ -203,16 +231,47 @@ final class SqliteCrashPoints {
                   }
                   throw new SQLException("the connection died with its write");
                 }
-                boolean committing =
-                    name.equals("setAutoCommit")
-                        && Boolean.TRUE.equals(args[0])
-                        && !conn.getAutoCommit();
                 Object result = invoke(conn, method, args);
-                if (committing) {
-                  session.committed();
+                if (name.equals("createStatement")) {
+                  return statement(result, Statement.class, null, session);
+                }
+                if (name.equals("prepareStatement")) {
+                  return statement(result, PreparedStatement.class, (String) args[0], session);
                 }
                 return result;
               });
+    }
+
+    /**
+     * {@code target}, a statement of a wrapped connection, that reports each statement it runs to
+     * {@code session} and lets a write made durable die after it: the SQL of a prepared statement
+     * is {@code preparedSql}, that of a plain statement the argument of its execute call.
+     */
+    private Object statement(Object target, Class<?> type, String preparedSql, Session session) {
+      return Proxy.newProxyInstance(
+          type.getClassLoader(),
+          new Class<?>[] {type},
+          (proxy, method, args) -> {
+            if (session.dead) {
+              throw new SQLException("the connection died with its write");
+            }
+            boolean executing = method.getName().startsWith("execute");
+            String sql =
+                preparedSql != null
+                    ? preparedSql
+                    : args != null && args.length > 0 && args[0] instanceof String text
+                        ? text
+                        : null;
+            boolean endsWrite = executing && sql != null && session.endsWrite(sql);
+            Object result = invoke(target, method, args);
+            if (executing && sql != null) {
+              session.ran(sql);
+            }
+            if (endsWrite) {
+              session.committed();
+            }
+            return result;
+          });
     }
 
     private void install(Connection conn, Session session) throws SQLException {

@@ -838,7 +838,7 @@ public final class SqliteEventStore implements EventStore {
         // The single rollback point of every exit without a commit: a SQLException, the head
         // check's OptimisticLockException, any other Throwable.
         if (!committed) {
-          SqliteTransactions.rollbackOrAbort(conn, "append");
+          SqliteTransactions.rollback(conn, "append");
         }
       }
     } catch (SQLException e) {
