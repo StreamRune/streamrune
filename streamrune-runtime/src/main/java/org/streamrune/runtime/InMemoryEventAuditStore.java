@@ -2,7 +2,6 @@ package org.streamrune.runtime;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashSet;
@@ -189,7 +188,6 @@ public final class InMemoryEventAuditStore implements EventAuditStore, EventAudi
     }
 
     // Iterative BFS: traverse downstream via causationId links
-    List<EventAuditEntry> chain = new ArrayList<>();
     Set<String> visited = new HashSet<>();
     Deque<EventAuditEntry> queue = new ArrayDeque<>();
 
@@ -198,7 +196,6 @@ public final class InMemoryEventAuditStore implements EventAuditStore, EventAudi
 
     while (!queue.isEmpty()) {
       EventAuditEntry current = queue.poll();
-      chain.add(current);
 
       String currentEventId = current.eventId().value();
       // Find all entries whose causationId points to this event
@@ -211,7 +208,11 @@ public final class InMemoryEventAuditStore implements EventAuditStore, EventAudi
       }
     }
 
-    chain.sort(Comparator.comparing(EventAuditEntry::occurredAt));
-    return List.copyOf(chain);
+    // occurredAt, then the order of writing, as the other reads order: the search above is
+    // breadth-first, which is another order for entries with an equal timestamp.
+    return entries.stream()
+        .filter(e -> visited.contains(e.eventId().value()))
+        .sorted(Comparator.comparing(EventAuditEntry::occurredAt))
+        .toList();
   }
 }

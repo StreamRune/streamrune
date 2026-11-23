@@ -26,6 +26,11 @@ import org.streamrune.core.types.UserId;
  * OFFSET}). Paged results keep the fixed {@code occurredAt} ascending order, entries with an equal
  * timestamp in a stable order that does not change between pages; the {@link PageRequest#sort()}
  * component is ignored.
+ *
+ * <p>{@link Page#content()} and {@link Page#totalElements()} come from one view of the trail: an
+ * entry written while the page is read changes both or neither. A page beyond the last is empty and
+ * still carries the total. An entry appears on exactly one page of a window that receives no entry
+ * between the reads.
  */
 public interface EventAuditQuery {
 

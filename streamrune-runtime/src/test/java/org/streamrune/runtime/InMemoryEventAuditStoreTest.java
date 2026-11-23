@@ -163,6 +163,20 @@ class InMemoryEventAuditStoreTest {
     assertEquals("e4", chain.get(3).eventId().value());
   }
 
+  @Test
+  void traceFullCausationChain_ordersEqualTimestampsAsWritten() {
+    store.save(entry("r", "corr", "cmd-r", null, "s", null, T0));
+    store.save(entry("a", "corr", "cmd-a", "r", "s", null, T0));
+    store.save(entry("a1", "corr", "cmd-a1", "a", "s", null, T0));
+    store.save(entry("b", "corr", "cmd-b", "r", "s", null, T0));
+
+    assertEquals(
+        List.of("r", "a", "a1", "b"),
+        store.traceFullCausationChain(EventId.of("r")).stream()
+            .map(e -> e.eventId().value())
+            .toList());
+  }
+
   /** A leaf event (no children) produces a chain of 1 (itself). */
   @Test
   void traceFullCausationChainReturnsOnlyRootForLeafEvent() {

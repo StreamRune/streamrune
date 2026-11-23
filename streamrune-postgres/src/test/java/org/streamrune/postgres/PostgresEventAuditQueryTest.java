@@ -270,6 +270,7 @@ class PostgresEventAuditQueryTest {
       assertNotNull(
           ExplainPlans.findIndexScan(plan, "idx_event_audit_stream"), "plan was: " + plan);
       assertFalse(ExplainPlans.containsNodeType(plan, "Sort"), "plan was: " + plan);
+      assertFalse(ExplainPlans.containsNodeType(plan, "Incremental Sort"), "plan was: " + plan);
     }
   }
 
@@ -533,7 +534,7 @@ class PostgresEventAuditQueryTest {
                     + " aggregate_id, version, command_id, correlation_id, causation_id,"
                     + " occurred_at) VALUES (?, ?, 'Chain', ?, 'chain-stream', ?, 'chain-cmd',"
                     + " 'chain-corr', ?, ?)")) {
-      for (int i : new int[] {2, 3, 1}) {
+      for (int i : new int[] {3, 2, 1}) {
         ps.setLong(1, 2000 + i);
         ps.setString(2, "chain-" + i);
         ps.setString(3, TestStreams.TYPE.value());

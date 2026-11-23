@@ -81,7 +81,7 @@ jars. In brief:
   total in one statement, so they agree under concurrent writes, and a page beyond the last reads
   only the count. They order by `occurredAt` with the row id as tiebreak, so entries with an equal
   timestamp keep a fixed order and appear once across the pages of a window that receives no entry
-  between the reads. `findByCommandId` returns the later written of two entries with one timestamp.
+  between the reads. `CommandAuditQuery.findByCommandId` returns the later written of two entries with one timestamp.
 - **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
   integrations: a trusted gateway's `X-User-Id` header when
   `streamrune.security.trust-user-id-header=true`, otherwise the authenticated principal, otherwise
