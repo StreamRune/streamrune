@@ -376,7 +376,7 @@ own factory (`new PostgresEventStoreFactory(...).cryptoEngine(engine).create()`)
 Erase a subject: delete the key, then purge any read models holding their rows.
 
 ```java
-// stores: the application's BackendStores (the integration's bean, or PostgresBackend.open(...))
+// stores: the application's BackendStores (the integration's bean, or new PostgresBackend().open(...))
 ForgetSubjectService forget = ForgetSubjectService.builder()
     .cryptoEngine(engine)
     .auditStore(auditStore)                              // records the erasure in the audit log
@@ -569,7 +569,7 @@ snapshots.** One of its purgers must be a
 or the application must state `withoutSnapshotPurge()`; otherwise `build()` throws
 `IllegalStateException` with what to add. Both together are refused too. The backend's stores build
 the snapshot purger: `BackendStores.snapshotPurger(streamsForSubject)` (`stores` below: the
-integration's `BackendStores` bean, or the stores `PostgresBackend.open` returns without one). For
+integration's `BackendStores` bean, or the stores `new PostgresBackend().open(...)` returns without one). For
 `PostgresEventStore` it is a
 [`PostgresSnapshotStorePurger`](../../../streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
 which purges the snapshots of the subject's streams from `snapshot_store`:

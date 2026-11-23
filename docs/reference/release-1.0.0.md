@@ -997,7 +997,7 @@ license.
   (`5s`), `retry-max-attempts` (`10`), `retry-initial-delay` (`1s`), `retry-backoff-multiplier`
   (`2.0`). On
   all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
-  (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
+  (the message names the `BackendStores` form; the broker modules ship publishers only) or has neither
   an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
   event store writes; the messages are the same on the three, and say that an application
   whose outbox table an external relay reads sets `streamrune.outbox.enabled=false` (the property
@@ -1272,10 +1272,16 @@ property and the value; Spring and Micronaut refuse a duration property written 
 suffix, naming the key to set, and Quarkus every name its mapping does not declare — see
 [What the integrations refuse](../guide/configuration.md#what-the-integrations-refuse)):
 
-- The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
-  `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,
-  `LeaseBasedLeadership` + `JdbcProjectionRepository`, saga runners with `PostgresSagaStore` /
-  `PostgresSagaDeadLetterStore` and a `SagaCompensationRetrySweeper` per saga runner, the retention
+- The storage backend `streamrune.backend` names (`postgres`, the only one), opened once on the
+  `DataSource` and exposed as the `BackendStores` bean, which builds every store the integration
+  wires: the event store (through `BackendStores.eventStoreFactory`), a `VirtualThreadCommandBus`
+  with the backend's command inbox and audit store, the subscription leadership and the default
+  read-model store (named after the backend; `ReadModelStore.DEFAULT` is its alias), saga runners
+  with the backend's saga store and saga dead-letter store and a `SagaCompensationRetrySweeper` per
+  saga runner. The store beans are declared with their interface types. The application declares
+  its optional infrastructure from `BackendStores`: the outbox store, the command dead-letter queue
+  (no integration creates one; with one, a `DeadLetterRetryRunner` and its retention sweeper join),
+  the snapshot purger. Also: the retention
   sweepers, the outbox poller when `streamrune.outbox.enabled=true`, health, Micrometer metrics
   (`streamrune.metrics.enabled`, `streamrune.metrics.prefix`), the tracing of every area through the
   `OpenTelemetry` bean or the global OpenTelemetry (see below), the query cache, SSE, and the request filter that binds

@@ -186,14 +186,16 @@ Unreleased changes to how the integrations open their stores (Changed):
   its optional infrastructure from the bean: `stores.outboxStore(new OutboxOptions(...))`,
   `stores.deadLetterQueue()`, `stores.snapshotPurger(...)`. See the
   [configuration reference](docs/guide/configuration.md#backend).
-- **Store beans declared with their interface types.** The framework's command inbox
-  (`CommandInbox`), saga dead-letter store (`SagaDeadLetterStore`), event audit store and query
-  (`EventAuditStore`, `EventAuditQuery`), projection dead-letter store
-  (`ProjectionDeadLetterStore`), default read-model store (`ReadModelStore`) and offset store
-  (`OffsetStore`) beans are declared with the interface, not the PostgreSQL class, on all three
-  integrations. A lookup, an injection point or a bean condition by the PostgreSQL class does not
-  find them. On Quarkus the inbox, the event audit store and query and the projection dead-letter
-  store are one instance each, shared by every injection point.
+- **Store beans declared with their interface types.** On all three integrations the framework's
+  command inbox (`CommandInbox`), saga dead-letter store (`SagaDeadLetterStore`), event audit store
+  and query (`EventAuditStore`, `EventAuditQuery`) and projection dead-letter store
+  (`ProjectionDeadLetterStore`) beans are declared with the interface, not the PostgreSQL class. On
+  Spring the default read-model store (`ReadModelStore`) and the offset store (`OffsetStore`) are
+  too (Quarkus and Micronaut declared them so already), and on Micronaut the event store factory
+  `postgresEventStoreFactory` is declared as `EventStoreFactory`, not `PostgresEventStoreFactory`. A
+  lookup, an injection point or a bean condition by the PostgreSQL class does not find them. On
+  Quarkus the inbox, the saga dead-letter store, the event audit store and query and the projection
+  dead-letter store are one instance each, shared by every injection point.
 - **`ReadModelStore.DEFAULT`.** The default read-model store is named after the backend
   (`postgres`). `@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)`, the text `default`,
   routes a projection to it whatever that name is, and no store may be named `default`. The
@@ -215,6 +217,24 @@ Unreleased changes to how the integrations open their stores (Changed):
   `EventAuditStore` bean is wired into the event store whether or not `streamrune.event-audit-enabled`
   is set. On Spring and Quarkus an outbox store bean declared as `OutboxStore` now reaches the event
   store, not only one declared as `PostgresOutboxStore`.
+- **Retention sweepers follow the backend's stores.** The outbox retention sweeper runs for any
+  `OutboxStore` bean on all three integrations, so an outbox store built with
+  `stores.outboxStore(...)` and declared as `OutboxStore` is pruned; on Spring and Quarkus it ran
+  only for a bean declared as `PostgresOutboxStore`. On Spring, as on Quarkus and Micronaut, the
+  inbox and saga dead-letter sweepers sweep an application bean declared as `PostgresCommandInbox`
+  / `PostgresSagaDeadLetterStore`, and otherwise the backend's own store from `BackendStores`
+  whenever a `DataSource` exists: an application bean that returns `stores.commandInbox()` keeps
+  its sweeper, and an application store of another type is never swept. On Quarkus the WARN that
+  no saga dead-letter sweeper exists fires only without a `DataSource`, and names that case.
+- **Two unqualified inboxes on Quarkus.** With two unqualified `CommandInbox` beans on
+  Quarkus, the event store gets no inbox, as the command bus already did, instead of the
+  framework's PostgreSQL inbox.
+- **`CryptoBackend` bean.** With a crypto engine enabled, each integration declares a
+  `CryptoBackend` bean (`org.streamrune.crypto`) that builds the engine's stores for the selected
+  backend. An application bean of that type makes the injection ambiguous.
+- **Micronaut eager singletons.** With `eagerInitSingletons`, creating the default read-model store
+  bean now opens the `BackendStores` bundle and creates the crypto engine; the store itself is still
+  created only when the stores are selected, and opening the bundle touches no table.
 - **Outbox warning.** With only one of an `OutboxEventMapper` and an `OutboxStore` bean, the `WARN`
   now asks for "an OutboxStore" (it named "a PostgresOutboxStore"), and on Spring and Quarkus it
   also fires for an outbox store of another type without a mapper, which was silent.

@@ -797,7 +797,7 @@ Every outcome is logged (ids sanitized) and counted by `streamrune.saga.compensa
 
 **Null-saga entries can accumulate duplicate rows on PostgreSQL.** When `sagaId` could never be identified (e.g. `correlateByEventData`/`extractSagaId` itself threw), the entry's `saga_id` column is `NULL`. SQL's standard NULL-distinct semantics mean the idempotent-upsert-on-publish does *not* dedupe across repeated failed replays at the same offset — each re-quarantine can insert an additional row instead of updating one. `discard(null, eventOffset)` removes *all* matching null-saga rows at once; the duplicates of an entry nobody has resolved also age out through retention (below). This divergence from the in-memory test double is deliberate and accepted — see `PostgresSagaDeadLetterStoreTest`.
 
-A background `SagaDeadLetterRetentionSweeper` prunes `saga_dead_letters` rows **first** faulted before `streamrune.saga.dead-letter-retention-max-age` (default **7 days**), auto-configured across Spring, Quarkus, and Micronaut alongside the inbox/outbox sweepers whenever the framework's own PostgreSQL-backed store (`PostgresSagaDeadLetterStore`) is auto-configured — sagas enabled and a `DataSource` bean present. The cutoff compares `first_faulted_at`, which every re-quarantine keeps, not the `faulted_at` a failed replay refreshes — so a still-poison replay cannot extend an entry's life by another window.
+A background `SagaDeadLetterRetentionSweeper` prunes `saga_dead_letters` rows **first** faulted before `streamrune.saga.dead-letter-retention-max-age` (default **7 days**), auto-configured across Spring, Quarkus, and Micronaut alongside the inbox/outbox sweepers whenever sagas are enabled and a `DataSource` bean is present: it sweeps the backend's own saga dead-letter store (`BackendStores.sagaDeadLetterStore()`, a `PostgresSagaDeadLetterStore`), or an application bean declared as `PostgresSagaDeadLetterStore`. The cutoff compares `first_faulted_at`, which every re-quarantine keeps, not the `faulted_at` a failed replay refreshes — so a still-poison replay cannot extend an entry's life by another window.
 
 **Recovery handles are never pruned, whatever their age.** The sweep skips:
 
@@ -847,7 +847,7 @@ Command-inbox retention (shared with all effectively-once command dispatch, incl
 
 Do not shrink this below your actual redelivery window — a pruned key cannot prevent a genuine duplicate. Zero or negative disables pruning.
 
-Saga dead-letter retention is auto-configured via `SagaDeadLetterRetentionSweeper`, also swept hourly, whenever the framework's own `PostgresSagaDeadLetterStore` is auto-configured. Supplying your own `SagaDeadLetterStore` bean replaces that default and, with it, the framework's sweeper — retention for a store you own is yours to enforce (Quarkus logs a `WARN` naming this case):
+Saga dead-letter retention is auto-configured via `SagaDeadLetterRetentionSweeper`, also swept hourly, over the backend's own saga dead-letter store, or an application bean declared as `PostgresSagaDeadLetterStore`. A `SagaDeadLetterStore` bean of your own of another type replaces the framework's bean but is never swept — retention for a store you own is yours to enforce (without a `DataSource`, Quarkus logs a `WARN` that no sweeper exists):
 
 | Framework | Property | Default |
 |---|---|---|
