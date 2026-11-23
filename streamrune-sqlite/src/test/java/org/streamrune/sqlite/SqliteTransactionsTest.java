@@ -6,9 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
@@ -309,7 +311,9 @@ class SqliteTransactionsTest {
 
   /**
    * A ROLLBACK statement that fails (injected) makes the helper close the physical connection:
-   * SQLite rolls the transaction back and releases the lock, and the pool replaces the connection.
+   * SQLite rolls the transaction back and releases the lock. HikariCP evicts the closed connection
+   * at the first borrow that comes after its alive-bypass window (500 ms) and validates it; until
+   * then it would hand the closed connection out again.
    */
   @Test
   void aFailedRollbackClosesThePhysicalConnection() throws Exception {
@@ -383,6 +387,7 @@ class SqliteTransactionsTest {
           .isInstanceOf(SQLiteException.class);
       assertThat(statements)
           .containsExactly("BEGIN IMMEDIATE", "INSERT INTO scratch VALUES (NULL)", "ROLLBACK");
+      assertWriteLockFree(file);
 
       statements.clear();
       assertThat(SqliteTransactions.rollback(conn, "test"))
@@ -479,35 +484,63 @@ class SqliteTransactionsTest {
     }
   }
 
-  /** {@code conn} whose statements' SQL is appended to {@code statements}, as executed. */
+  /**
+   * {@code conn} whose statements' SQL is appended to {@code statements} as they run: every {@code
+   * execute*} and {@code addBatch} call of a plain statement (its SQL argument), and every {@code
+   * execute*} and {@code addBatch} call of a prepared statement (the SQL it was prepared with), so
+   * that no statement the helper could issue goes unrecorded.
+   */
   private static Connection recording(Connection conn, List<String> statements) {
     return (Connection)
         Proxy.newProxyInstance(
             Connection.class.getClassLoader(),
             new Class<?>[] {Connection.class},
             (proxy, method, args) -> {
-              try {
-                Object result = method.invoke(conn, args);
-                if (method.getName().equals("createStatement") && result instanceof Statement st) {
-                  return Proxy.newProxyInstance(
-                      Statement.class.getClassLoader(),
-                      new Class<?>[] {Statement.class},
-                      (p, m, a) -> {
-                        if (m.getName().equals("execute") && a != null && a[0] instanceof String) {
-                          statements.add((String) a[0]);
-                        }
-                        try {
-                          return m.invoke(st, a);
-                        } catch (InvocationTargetException e) {
-                          throw e.getCause();
-                        }
-                      });
-                }
-                return result;
-              } catch (InvocationTargetException e) {
-                throw e.getCause();
+              Object result = invokeUnwrapped(conn, method, args);
+              if (method.getName().equals("createStatement") && result instanceof Statement st) {
+                return recordingStatement(st, Statement.class, null, statements);
               }
+              if (method.getName().equals("prepareStatement")
+                  && result instanceof PreparedStatement ps) {
+                return recordingStatement(
+                    ps, PreparedStatement.class, (String) args[0], statements);
+              }
+              return result;
             });
+  }
+
+  /**
+   * {@code target} recording each {@code execute*} and {@code addBatch} call: the SQL of a prepared
+   * statement is {@code preparedSql}, that of a plain statement the call's SQL argument.
+   */
+  private static Object recordingStatement(
+      Statement target, Class<?> type, String preparedSql, List<String> statements) {
+    return Proxy.newProxyInstance(
+        type.getClassLoader(),
+        new Class<?>[] {type},
+        (proxy, method, args) -> {
+          String name = method.getName();
+          if ((name.startsWith("execute") && !name.equals("executeBatch"))
+              || name.equals("addBatch")) {
+            String sql =
+                args != null && args.length > 0 && args[0] instanceof String text
+                    ? text
+                    : preparedSql;
+            if (sql != null) {
+              statements.add(sql);
+            }
+          }
+          return invokeUnwrapped(target, method, args);
+        });
+  }
+
+  private static Object invokeUnwrapped(Object target, Method method, Object[] args)
+      throws Throwable {
+    try {
+      return method.invoke(target, args);
+    } catch (InvocationTargetException e) {
+      throw e.getCause();
+    }
   }
 
   @Test

@@ -38,11 +38,12 @@ import org.sqlite.SQLiteException;
  * is taken as rolled back. When the statement fails for any other reason, the physical connection
  * is closed: SQLite rolls back the open transaction and releases the lock as it does for a
  * connection that closes, or a process that dies, inside one. A connection pool does not learn of
- * the close when the caller returns its wrapper: HikariCP, for one, keeps handing the closed
- * connection out until its alive-bypass window (500 ms since the connection was last used), its
- * keepalive check or {@code maxLifetime} makes it validate the connection and replace it. Until
- * then every call on that connection fails cleanly with an exception, and the connection holds no
- * lock.
+ * the close when the caller returns its wrapper. HikariCP, for one, validates a connection on
+ * borrow only when it was last used longer ago than its alive-bypass window (500 ms), and evicts it
+ * then; a connection borrowed more often than that is handed out again until HikariCP's keepalive
+ * check validates it while it idles in the pool, or {@code maxLifetime} retires it (retirement
+ * closes it without validating). Until then every call on that connection fails cleanly with an
+ * exception, and the connection holds no lock.
  *
  * <p><b>Autocommit connections only.</b> A connection that arrives in manual-commit mode is refused
  * with {@link IllegalStateException}: such a connection holds the write lock while it is not in
@@ -181,10 +182,10 @@ final class SqliteTransactions {
   /**
    * Closes the physical SQLite connection under {@code conn}: SQLite rolls back its open
    * transaction and releases the write lock. The pool does not learn of it when the caller returns
-   * its wrapper: HikariCP keeps handing the closed connection out until its alive-bypass window
-   * (500 ms idle), its keepalive check or {@code maxLifetime} replaces it, and every call on it
-   * fails cleanly meanwhile; it holds no lock. Never throws a {@code SQLException} or {@code
-   * RuntimeException}.
+   * its wrapper: HikariCP evicts it when a borrow finds it unused for longer than the alive-bypass
+   * window (500 ms) and validates it, when its keepalive check validates it while it idles, or when
+   * {@code maxLifetime} retires it; until then every call on it fails cleanly and it holds no lock
+   * (see the class Javadoc). Never throws a {@code SQLException} or {@code RuntimeException}.
    */
   static void closePhysicalQuietly(Connection conn) {
     try {

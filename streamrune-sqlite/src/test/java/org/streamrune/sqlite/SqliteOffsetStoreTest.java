@@ -33,10 +33,14 @@ class SqliteOffsetStoreTest {
   @TempDir Path dir;
 
   private final List<SqliteDatabase> handles = new ArrayList<>();
+  private final List<SingleConnection> connections = new ArrayList<>();
 
   @AfterEach
-  void closeHandles() {
+  void closeHandles() throws SQLException {
     handles.forEach(SqliteDatabase::close);
+    for (SingleConnection connection : connections) {
+      connection.close();
+    }
   }
 
   private SqliteDatabase open(String file, String override) {
@@ -58,8 +62,9 @@ class SqliteOffsetStoreTest {
     Path file = dir.resolve("foreign.db");
     SqliteDatabase database = open("foreign.db", "");
     // One physical connection, so the store borrows the one the application left a BEGIN on.
-    SqliteDatabase single =
-        SqliteDatabase.open(new SingleConnection(TestDatabases.dataSource(file)));
+    SingleConnection connection = new SingleConnection(TestDatabases.dataSource(file));
+    connections.add(connection);
+    SqliteDatabase single = SqliteDatabase.open(connection);
     handles.add(single);
     SqliteOffsetStore store = new SqliteOffsetStore(single);
     try (Connection app = single.dataSource().getConnection();
@@ -167,73 +172,6 @@ class SqliteOffsetStoreTest {
         ResultSet rs = st.executeQuery("SELECT updated_at FROM subscription_checkpoint")) {
       rs.next();
       return SqliteTimestamps.fromMicros(rs.getLong(1));
-    }
-  }
-
-  /** A data source that hands out one connection and the same one again, never closing it. */
-  private static final class SingleConnection implements DataSource {
-    private final DataSource delegate;
-    private Connection shared;
-
-    SingleConnection(DataSource delegate) {
-      this.delegate = delegate;
-    }
-
-    @Override
-    public synchronized Connection getConnection() throws SQLException {
-      if (shared == null) {
-        shared = delegate.getConnection();
-      }
-      return (Connection)
-          java.lang.reflect.Proxy.newProxyInstance(
-              Connection.class.getClassLoader(),
-              new Class<?>[] {Connection.class},
-              (proxy, method, args) -> {
-                if (method.getName().equals("close")) {
-                  return null;
-                }
-                try {
-                  return method.invoke(shared, args);
-                } catch (java.lang.reflect.InvocationTargetException e) {
-                  throw e.getCause();
-                }
-              });
-    }
-
-    @Override
-    public Connection getConnection(String user, String password) throws SQLException {
-      return getConnection();
-    }
-
-    @Override
-    public java.io.PrintWriter getLogWriter() {
-      return null;
-    }
-
-    @Override
-    public void setLogWriter(java.io.PrintWriter out) {}
-
-    @Override
-    public void setLoginTimeout(int seconds) {}
-
-    @Override
-    public int getLoginTimeout() {
-      return 0;
-    }
-
-    @Override
-    public java.util.logging.Logger getParentLogger() {
-      return java.util.logging.Logger.getGlobal();
-    }
-
-    @Override
-    public <T> T unwrap(Class<T> iface) throws SQLException {
-      throw new SQLException("not a wrapper");
-    }
-
-    @Override
-    public boolean isWrapperFor(Class<?> iface) {
-      return false;
     }
   }
 }

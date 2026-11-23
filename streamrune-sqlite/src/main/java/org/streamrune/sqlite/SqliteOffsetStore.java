@@ -67,6 +67,7 @@ public final class SqliteOffsetStore implements OffsetStore {
    * Creates the store over {@code database}, stamping {@code updated_at} with {@link
    * Clock#systemUTC()}.
    *
+   * @param database the database whose {@code subscription_checkpoint} table the store keeps
    * @throws NullPointerException if {@code database} is {@code null}
    */
   public SqliteOffsetStore(SqliteDatabase database) {
@@ -76,6 +77,8 @@ public final class SqliteOffsetStore implements OffsetStore {
   /**
    * Creates the store over {@code database}, stamping {@code updated_at} with {@code clock}.
    *
+   * @param database the database whose {@code subscription_checkpoint} table the store keeps
+   * @param clock the clock that stamps {@code updated_at}
    * @throws NullPointerException if an argument is {@code null}
    */
   public SqliteOffsetStore(SqliteDatabase database, Clock clock) {
@@ -101,8 +104,12 @@ public final class SqliteOffsetStore implements OffsetStore {
    * Saves {@code offset} under the monotonic guard: a save at or below the stored offset is a
    * silent no-op. An intentional rewind is {@link #reset}, never a save.
    *
+   * @param projectionName the projection whose checkpoint is saved
+   * @param offset the last processed global offset
    * @throws EventStoreException if the save fails, including when SQLite's write lock is not
    *     granted within {@code busy_timeout} or the connection has a transaction open
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
@@ -121,7 +128,10 @@ public final class SqliteOffsetStore implements OffsetStore {
    * Rewinds the checkpoint to offset {@code 0}, bypassing the monotonic guard, and seeds the row at
    * {@code 0} for a projection never seen.
    *
+   * @param projectionName the projection whose checkpoint is rewound
    * @throws EventStoreException if the reset fails, as for {@link #saveOffset}
+   * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
+   *     written)
    */
   @Override
   public void reset(ProjectionName projectionName) {
