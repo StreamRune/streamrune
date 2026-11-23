@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
+import com.fasterxml.jackson.databind.util.RawValue;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -480,6 +481,26 @@ public abstract class ProjectionRepositoryQueryContract {
     assertEquals(List.of("q"), mapFilter(name, "v", "a\"b"));
     assertEquals(List.of("b"), mapFilter(name, "v", "a\\b"));
     assertEquals(List.of(), mapFilter(name, "v", "a\\\"b"));
+  }
+
+  /**
+   * A string written with JSON escapes ({@code \/}, &#92;u followed by four hex digits, {@code \n},
+   * {@code \t}, a control character) matches its decoded text, as {@code ->>} returns it, and never
+   * the escapes' own spelling; the text of a backslash followed by a slash is a value of its own.
+   */
+  @Test
+  public void jsonEscapesAndControlCharactersCompareDecoded() {
+    var name = freshName();
+    String decoded = "a/bé\n\t\u0001c";
+    saveMap(name, "e", "v", new RawValue("\"a\\/b\\u00e9\\n\\t\\u0001c\""), true);
+    saveMap(name, "p", "v", decoded, true);
+    saveMap(name, "s", "v", "a\\/b", true);
+
+    assertEquals(List.of("e", "p"), mapFilter(name, "v", decoded));
+    assertEquals(List.of(), mapFilter(name, "v", "a\\/b\\u00e9\\n\\t\\u0001c"));
+    assertEquals(List.of(), mapFilter(name, "v", "a/b\\u00e9\\n\\t\\u0001c"));
+    assertEquals(List.of("s"), mapFilter(name, "v", "a\\/b"));
+    assertEquals(List.of("e", "p", "s"), mapSort(name, "v", SortDirection.ASC));
   }
 
   /** Ids and values outside ASCII compare byte-wise, so by code point, not linguistically. */
