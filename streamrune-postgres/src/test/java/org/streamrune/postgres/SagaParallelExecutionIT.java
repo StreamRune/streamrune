@@ -55,7 +55,7 @@ class SagaParallelExecutionIT {
   private static final String SERIAL_SCHEMA = "serial_run";
   private static final int MAX_CYCLES = 2_000;
   private static final int HELD_STEPS = 6;
-  private static final Duration GATE_LIMIT = Duration.ofSeconds(10);
+  private static final Duration GATE_LIMIT = Duration.ofSeconds(30);
 
   static PGSimpleDataSource source;
   static PGSimpleDataSource serialSource;
@@ -181,7 +181,7 @@ class SagaParallelExecutionIT {
   /**
    * Sagas of five steps with a deadline of 200 ms and a timeout runner polling every 50 ms that
    * waits at most 20 ms for a step in flight: claims land while workers step. The first few third
-   * commands are held until their saga's row reads compensating or compensated (at most ten
+   * commands are held until their saga's row reads compensating or compensated (at most thirty
    * seconds), so the claim lands underneath that step whatever the speed of the machine; the claim
    * does not wait on the step, so the hold cannot deadlock. The forward command of a held step is
    * refused at its commit, which the test asserts happened. No saga is both compensated and
@@ -194,9 +194,25 @@ class SagaParallelExecutionIT {
     nodes.stepsToComplete = 5;
     sagas.forEach(id -> nodes.append(new Started(id)));
     RecordingStreamRuneMetrics metrics = new RecordingStreamRuneMetrics();
+    // A pool keeps the timeout runner's first poll — the claim and compensation of every saga not
+    // held — short on a slow machine: with a physical connection per statement it alone could
+    // outlast the gate limit before the poll reached a held saga.
+    HikariConfig config = new HikariConfig();
+    config.setDataSource(source);
+    config.setPoolName("par-exec-deadline-pool");
+    config.setMaximumPoolSize(24);
+    try (HikariDataSource pool = new HikariDataSource(config)) {
+      runTheDeadlineCase(sagas, metrics, pool);
+    }
+  }
+
+  private void runTheDeadlineCase(
+      List<String> sagas, RecordingStreamRuneMetrics metrics, HikariDataSource pool)
+      throws Exception {
     Node node =
         nodes.node(
             Options.defaults()
+                .withSource(pool)
                 .withMetrics(metrics)
                 .withParallelism(8)
                 .withDeadline(Duration.ofMillis(200), Clock.systemUTC(), Duration.ofMillis(50))
