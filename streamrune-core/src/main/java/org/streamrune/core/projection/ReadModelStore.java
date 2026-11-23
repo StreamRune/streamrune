@@ -19,10 +19,17 @@ package org.streamrune.core.projection;
 public interface ReadModelStore {
 
   /**
+   * The reserved alias of the backend's default read-model store. It is never a store's {@link
+   * #name()}: a backend names its default store after itself ({@code "postgres"}, {@code
+   * "sqlite"}), and {@link #of} refuses it.
+   */
+  String DEFAULT = "default";
+
+  /**
    * Stable, user-visible name ({@code "postgres"}, {@code "search"}, ...) for logs, health, errors
    * and explicit routing ({@link org.streamrune.core.ProjectionConfig#readModelStore()}).
    *
-   * @return the store's name; never blank
+   * @return the store's name; never blank, never {@link #DEFAULT}
    */
   String name();
 
@@ -63,13 +70,14 @@ public interface ReadModelStore {
   /**
    * A store from its parts.
    *
-   * @param name the store's name; never blank
+   * @param name the store's name; never blank, never {@link #DEFAULT}
    * @param repository the repository projections routed here write to
    * @param checkpoints the checkpoints of projections routed here, in the same store
    * @param processor commits a batch and advances {@code checkpoints}
    * @return the store
    * @throws NullPointerException if any argument is {@code null}
-   * @throws IllegalArgumentException if {@code name} is blank
+   * @throws IllegalArgumentException if {@code name} is blank or {@link #DEFAULT}, which is
+   *     reserved for the backend's default store
    */
   static ReadModelStore of(
       String name,

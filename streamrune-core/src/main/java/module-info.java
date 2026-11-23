@@ -6,6 +6,7 @@ open module org.streamrune.core {
 
   exports org.streamrune.core;
   exports org.streamrune.core.audit;
+  exports org.streamrune.core.backend;
   exports org.streamrune.core.crypto;
   exports org.streamrune.core.gdpr;
   exports org.streamrune.core.metrics;
