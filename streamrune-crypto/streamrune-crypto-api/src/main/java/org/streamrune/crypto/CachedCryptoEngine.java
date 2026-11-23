@@ -263,6 +263,9 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
   @Override
   public void deleteKey(SubjectId subjectId) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // Take the subject's stripe so this invalidate + delegate is mutually exclusive with a
     // concurrent decrypt cache-miss for the same subject — the decrypt cannot populate the cache
     // after we invalidate, and we cannot invalidate between its delegate call and its populate.
@@ -379,12 +382,18 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
   @Override
   public void reinstate(SubjectId subjectId) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // Reinstating only affects future encrypts on the delegate; there is nothing cached to touch.
     delegate.reinstate(subjectId);
   }
 
   @Override
   public boolean isKeyAvailable(SubjectId subjectId) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     // A cached decrypt result proves the key existed; the scan is bounded by maximumSize.
     for (CacheKey key : cache.asMap().keySet()) {
       if (key.subjectId().equals(subjectId)) {
