@@ -18,8 +18,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A second JVM running {@link GuardChild} on the test class path. Every wait has a timeout, and
- * {@link #close()} kills a child that is still running.
+ * A second JVM running {@link GuardChild}, or another test program, on the test class path. Every
+ * wait has a timeout, and {@link #close()} kills a child that is still running.
  */
 final class ForkedJvm implements AutoCloseable {
 
@@ -97,6 +97,20 @@ final class ForkedJvm implements AutoCloseable {
 
   private static ForkedJvm start(List<String> jvmArgs, String classPath, String mode, Path db)
       throws IOException {
+    return start(jvmArgs, classPath, GuardChild.class, List.of(mode, db.toString()));
+  }
+
+  /** Starts {@code main} with {@code args} on the test class path, with native access enabled. */
+  static ForkedJvm start(Class<?> main, String... args) throws IOException {
+    return start(
+        List.of("--enable-native-access=ALL-UNNAMED"),
+        System.getProperty("java.class.path"),
+        main,
+        List.of(args));
+  }
+
+  private static ForkedJvm start(
+      List<String> jvmArgs, String classPath, Class<?> main, List<String> args) throws IOException {
     String java =
         ProcessHandle.current()
             .info()
@@ -105,7 +119,8 @@ final class ForkedJvm implements AutoCloseable {
     List<String> command = new ArrayList<>();
     command.add(java);
     command.addAll(jvmArgs);
-    command.addAll(List.of("-cp", classPath, GuardChild.class.getName(), mode, db.toString()));
+    command.addAll(List.of("-cp", classPath, main.getName()));
+    command.addAll(args);
     ProcessBuilder builder = new ProcessBuilder(command);
     builder.redirectErrorStream(true);
     return new ForkedJvm(builder.start());

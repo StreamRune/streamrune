@@ -39,10 +39,13 @@ class ArchitectureTest {
           .resideInAnyPackage(
               "java..",
               "javax..",
+              "com.fasterxml.jackson..",
               "org.flywaydb..",
               "org.sqlite..",
               "org.slf4j..",
               "org.streamrune.core..",
+              "org.streamrune.runtime..",
+              "org.streamrune.crypto..",
               "org.streamrune.sqlite..");
 
   // ========== Naming Conventions ==========
@@ -53,7 +56,5 @@ class ArchitectureTest {
           .that()
           .implement("org.streamrune.core.EventStore")
           .should()
-          .haveNameMatching(".*Store$")
-          // Holds for any number of implementations, none included.
-          .allowEmptyShould(true);
+          .haveNameMatching(".*Store$");
 }

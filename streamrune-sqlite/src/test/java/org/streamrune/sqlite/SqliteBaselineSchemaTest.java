@@ -306,8 +306,17 @@ class SqliteBaselineSchemaTest {
         .hasMessageContaining("NOT NULL constraint failed: event_stream.created_at");
   }
 
+  /**
+   * Inserts an event row at {@code offset}, after raising the counter to it: the trigger
+   * event_stream_offset_from_counter refuses a row above the counter.
+   */
   private void insertEvent(long offset, String type, String id, Object version)
       throws SQLException {
+    execute(
+        ds,
+        "UPDATE global_offset_counter SET next_value = max(next_value, "
+            + offset
+            + ") WHERE id = 1");
     try (var connection = ds.getConnection();
         var statement =
             connection.prepareStatement(

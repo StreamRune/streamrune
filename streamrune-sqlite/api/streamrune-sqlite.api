@@ -9,6 +9,27 @@ public final class org.streamrune.sqlite.SqliteDatabase implements java.lang.Aut
   public void migrate(org.streamrune.sqlite.SqliteSchemaSeries)
   public void validate(org.streamrune.sqlite.SqliteSchemaSeries)
 
+public final class org.streamrune.sqlite.SqliteEventStore implements org.streamrune.core.EventStore
+  public boolean saveSnapshot(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, org.streamrune.core.AggregateState, int, long)
+  public java.util.List<org.streamrune.core.EventEnvelope> readGlobalStream(org.streamrune.core.types.GlobalOffset, int)
+  public java.util.List<org.streamrune.core.EventEnvelope> readStream(org.streamrune.core.types.StreamId, org.streamrune.core.types.Version, int)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId)
+  public org.streamrune.core.AggregateHistory load(org.streamrune.core.types.StreamId, int)
+  public org.streamrune.core.EventStore$AppendResult append(org.streamrune.core.types.StreamId, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.Version)
+  public org.streamrune.core.types.GlobalOffset lastGlobalOffset()
+
+public final class org.streamrune.sqlite.SqliteEventStoreFactory implements org.streamrune.core.EventStoreFactory
+  public <init>(org.streamrune.sqlite.SqliteDatabase, org.streamrune.core.EventTypeRegistry)
+  public org.streamrune.core.EventStore create()
+  public org.streamrune.sqlite.SqliteEventStoreFactory autoInitializeSchema(boolean)
+  public org.streamrune.sqlite.SqliteEventStoreFactory clock(java.time.Clock)
+  public org.streamrune.sqlite.SqliteEventStoreFactory cryptoEngine(org.streamrune.core.crypto.CryptoEngine)
+  public org.streamrune.sqlite.SqliteEventStoreFactory metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.sqlite.SqliteEventStoreFactory snapshotMigrations(java.util.List<org.streamrune.core.SnapshotMigration>)
+  public org.streamrune.sqlite.SqliteEventStoreFactory tracing(org.streamrune.core.tracing.StreamRuneTracing)
+  public org.streamrune.sqlite.SqliteEventStoreFactory upcasters(java.util.List<org.streamrune.core.upcasting.EventUpcaster>)
+  public org.streamrune.sqlite.SqliteEventStoreFactory validateSchema(boolean)
+
 public final class org.streamrune.sqlite.SqliteGuardException extends java.lang.IllegalStateException
 
 public enum org.streamrune.sqlite.SqliteSchemaSeries
@@ -21,3 +42,9 @@ public enum org.streamrune.sqlite.SqliteSchemaSeries
   public static final org.streamrune.sqlite.SqliteSchemaSeries READ_MODEL
   public static org.streamrune.sqlite.SqliteSchemaSeries valueOf(java.lang.String)
   public static org.streamrune.sqlite.SqliteSchemaSeries[] values()
+
+public final class org.streamrune.sqlite.SqliteSnapshotStorePurger implements org.streamrune.core.gdpr.SnapshotPurger
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.util.function.Function<org.streamrune.core.types.SubjectId, ? extends java.util.Collection<org.streamrune.core.types.StreamId>>)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.util.function.Function<org.streamrune.core.types.SubjectId, ? extends java.util.Collection<org.streamrune.core.types.StreamId>>, java.time.Clock)
+  public java.lang.String name()
+  public void purge(org.streamrune.core.types.SubjectId)

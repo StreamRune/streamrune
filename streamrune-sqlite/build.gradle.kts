@@ -1,4 +1,4 @@
-description = "StreamRune SQLite backend: the SqliteDatabase handle, its instance guard and schema series, for small single-instance services."
+description = "StreamRune SQLite backend: the SqliteDatabase handle, its instance guard and schema series, and the event store, for small single-instance services."
 
 dependencies {
     api(project(":streamrune-core"))
@@ -13,7 +13,19 @@ dependencies {
     // Flyway is told to log through SLF4J (see SqliteSchemaMigration), and SqliteDatabase.validate
     // logs warnings through it.
     implementation(libs.slf4j.api)
+    // The event store (de)serializes events and snapshots with Jackson, encrypts @Encrypted fields
+    // through the crypto module's CryptoShreddingModule and refuses an @Encrypted type without a
+    // crypto engine through its EncryptedTypeGuard, and guards its tracing with the runtime's
+    // GuardedTracing, as PostgresEventStore does. No public signature of this module names a type
+    // of these modules (CryptoEngine and the tracing SPI live in core), so implementation, not api.
+    implementation(project(":streamrune-runtime"))
+    implementation(project(":streamrune-crypto:streamrune-crypto-api"))
+    implementation(libs.jackson.databind)
+    implementation(libs.jackson.datatype.jsr310)
+    testImplementation(project(":streamrune-test"))
     testImplementation(libs.assertj.core)
+    // A real pool, so the concurrency tests run appends on connections that are really concurrent.
+    testImplementation(libs.hikaricp)
 }
 
 // The driver loads its native library and the instance guard calls flock(2) through the Foreign

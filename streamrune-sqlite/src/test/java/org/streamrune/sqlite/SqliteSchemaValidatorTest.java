@@ -126,6 +126,7 @@ class SqliteSchemaValidatorTest {
     db.migrate(SqliteSchemaSeries.EVENT_STORE);
     execute(
         ds,
+        "UPDATE global_offset_counter SET next_value = 5",
         "INSERT INTO event_stream (global_offset, aggregate_type, aggregate_id, version,"
             + " event_type, payload, metadata, created_at) VALUES (5, 'order', 'a', 1, 't', '{}',"
             + " '{}', 0)",
