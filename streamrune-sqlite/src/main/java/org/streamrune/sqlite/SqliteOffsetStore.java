@@ -86,8 +86,16 @@ public final class SqliteOffsetStore implements OffsetStore {
     this.clock = Objects.requireNonNull(clock, "clock is required");
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * @throws NullPointerException if {@code projectionName} is {@code null}, before any I/O, as on
+   *     Postgres
+   * @throws EventStoreException if the read fails
+   */
   @Override
   public GlobalOffset getLastOffset(ProjectionName projectionName) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_OFFSET)) {
       ps.setString(1, projectionName.value());
@@ -106,6 +114,7 @@ public final class SqliteOffsetStore implements OffsetStore {
    *
    * @param projectionName the projection whose checkpoint is saved
    * @param offset the last processed global offset
+   * @throws NullPointerException if an argument is {@code null}, before any I/O, as on Postgres
    * @throws EventStoreException if the save fails, including when SQLite's write lock is not
    *     granted within {@code busy_timeout} or the connection has a transaction open
    * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
@@ -113,6 +122,8 @@ public final class SqliteOffsetStore implements OffsetStore {
    */
   @Override
   public void saveOffset(ProjectionName projectionName, GlobalOffset offset) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
+    Objects.requireNonNull(offset, "offset is required");
     write(
         projectionName,
         "save",
@@ -129,12 +140,15 @@ public final class SqliteOffsetStore implements OffsetStore {
    * {@code 0} for a projection never seen.
    *
    * @param projectionName the projection whose checkpoint is rewound
+   * @throws NullPointerException if {@code projectionName} is {@code null}, before any I/O, as on
+   *     Postgres
    * @throws EventStoreException if the reset fails, as for {@link #saveOffset}
    * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
    *     written)
    */
   @Override
   public void reset(ProjectionName projectionName) {
+    Objects.requireNonNull(projectionName, "projectionName is required");
     write(
         projectionName,
         "reset",

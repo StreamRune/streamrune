@@ -158,6 +158,33 @@ class SqliteOffsetStoreTest {
     assertThat(updatedAt(database)).as("a reset restamps").isEqualTo(later);
   }
 
+  /**
+   * A null argument is a caller error, refused before any I/O with the exception the Postgres store
+   * throws for it (a NullPointerException), never wrapped as a storage failure.
+   */
+  @Test
+  void nullArgumentsAreRefusedBeforeAnyIoAsOnPostgres() {
+    SwitchableDataSource source =
+        new SwitchableDataSource(TestDatabases.dataSource(dir.resolve("nulls.db")));
+    SqliteDatabase database = SqliteDatabase.open(source);
+    handles.add(database);
+    var store = new SqliteOffsetStore(database);
+    source.failWith(() -> new IllegalStateException("no I/O expected"));
+
+    assertThatThrownBy(() -> store.getLastOffset(null))
+        .isExactlyInstanceOf(NullPointerException.class)
+        .hasMessage("projectionName is required");
+    assertThatThrownBy(() -> store.saveOffset(null, GlobalOffset.of(1)))
+        .isExactlyInstanceOf(NullPointerException.class)
+        .hasMessage("projectionName is required");
+    assertThatThrownBy(() -> store.saveOffset(P, null))
+        .isExactlyInstanceOf(NullPointerException.class)
+        .hasMessage("offset is required");
+    assertThatThrownBy(() -> store.reset(null))
+        .isExactlyInstanceOf(NullPointerException.class)
+        .hasMessage("projectionName is required");
+  }
+
   @Test
   void rejectsNullClock() {
     SqliteDatabase database = open("nullclock.db", "");
