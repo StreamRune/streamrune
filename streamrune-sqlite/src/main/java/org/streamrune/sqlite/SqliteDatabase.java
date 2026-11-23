@@ -20,12 +20,16 @@ import org.streamrune.core.types.LogSanitizer;
  *   <li>the data source does not produce SQLite connections;
  *   <li>the database is in-memory or temporary ({@code jdbc:sqlite::memory:}, {@code mode=memory},
  *       an empty file name): each pooled connection would get a private database;
+ *   <li>the connection has other databases attached ({@code ATTACH DATABASE}): their files would be
+ *       outside the instance guard;
  *   <li>the SQLite library is older than {@code 3.45.0};
  *   <li>a connection setting differs from what StreamRune requires: {@code journal_mode=WAL},
- *       {@code synchronous=FULL}, {@code foreign_keys=ON}, a {@code busy_timeout} above 0 (5000 ms
- *       is the documented value) and {@code transaction_mode=IMMEDIATE}. The application sets them
- *       in the pool's connection properties, for example as JDBC URL parameters;
- *   <li>another process holds the instance guard of the file ({@link SqliteGuardException}).
+ *       {@code synchronous=FULL} (or the stricter {@code EXTRA}), {@code foreign_keys=ON}, a {@code
+ *       busy_timeout} above 0 (5000 ms is the documented value) and {@code
+ *       transaction_mode=IMMEDIATE}. The application sets them in the pool's connection properties,
+ *       for example as JDBC URL parameters;
+ *   <li>the database file has more than one hard link, another process holds the instance guard of
+ *       the file, or the guard cannot be taken ({@link SqliteGuardException}).
  * </ul>
  *
  * <p><b>The instance guard.</b> A SQLite database serves exactly one application instance: a second
@@ -34,9 +38,20 @@ import org.streamrune.core.types.LogSanitizer;
  * file. Every handle on one file in this JVM shares the lock and counts as one reference to it; the
  * lock is released when the last handle closes, and the operating system releases it when the
  * process ends, so a crashed instance never blocks a restart. On Linux and macOS the lock is a
- * {@code flock(2)}, so other code that opens and closes the lock file does not release it. The lock
- * file is never deleted; deleting it while an instance runs would let a second instance lock a new
- * file.
+ * {@code flock(2)}, so other code that opens and closes the lock file does not release it.
+ *
+ * <p>The guard identifies a database by the canonical path it is opened under, so it cannot see
+ * through three setups, which therefore must not be used:
+ *
+ * <ul>
+ *   <li>deleting the lock file while an instance runs: a second instance would lock a new file of
+ *       that name. This JVM refuses to open the database again when it notices;
+ *   <li>hard links: a second name of the database file would get a lock file of its own. A file
+ *       with more than one link is refused on POSIX systems;
+ *   <li>mounting the database <em>file</em> on its own into two containers (a single-file bind
+ *       mount): each container would create its own lock file next to its mount point. Mount the
+ *       directory that holds the database instead. This cannot be detected.
+ * </ul>
  *
  * <p>{@link #close()} releases this handle's reference to the guard. It does not close the data
  * source, which belongs to the application.
@@ -62,8 +77,9 @@ public final class SqliteDatabase implements AutoCloseable {
    * @return the open handle; close it when the application stops
    * @throws IllegalArgumentException if {@code dataSource} is {@code null}
    * @throws IllegalStateException if the connections are not SQLite, the database is in-memory or
-   *     temporary, the SQLite library is older than {@code 3.45.0}, or a required connection
-   *     setting is wrong; the message names the setting and its expected value
+   *     temporary or has other databases attached, the SQLite library is older than {@code 3.45.0},
+   *     or a required connection setting is wrong; the message names the setting and its expected
+   *     value
    * @throws SqliteGuardException if another process holds the guard, or the lock file cannot be
    *     created, opened or locked
    * @throws EventStoreException if no connection can be borrowed or read
@@ -76,6 +92,7 @@ public final class SqliteDatabase implements AutoCloseable {
     try (Connection connection = dataSource.getConnection()) {
       SQLiteConnection sqlite = SqliteSetup.sqliteConnection(connection);
       file = SqliteSetup.databaseFile(sqlite);
+      SqliteSetup.refuseAttachedDatabases(sqlite);
       SqliteVersion.require(SqliteSetup.libraryVersion(sqlite));
       SqliteSetup.verify(sqlite);
     } catch (SQLException e) {

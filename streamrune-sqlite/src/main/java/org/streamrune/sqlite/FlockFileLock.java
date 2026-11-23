@@ -1,6 +1,7 @@
 package org.streamrune.sqlite;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 import java.io.IOException;
@@ -25,54 +26,39 @@ import java.nio.file.Path;
  * releases it. The descriptor is opened with {@code O_CLOEXEC}, so a program the JVM starts does
  * not inherit it and cannot keep the lock alive after this process has ended.
  *
- * <p>The JVM reports the first use of the restricted {@link Linker} methods with a warning unless
- * native access is enabled for this module ({@code --enable-native-access=ALL-UNNAMED} on the class
- * path); the sqlite-jdbc driver needs the same option for its native library.
+ * <p>The native calls need native access for this code ({@code --enable-native-access=ALL-UNNAMED}
+ * on the class path); the sqlite-jdbc driver needs it for its native library as well. The calls are
+ * bound on first use: when the JVM denies native access the lock fails with a {@link
+ * SqliteGuardException} that names the option, and nothing falls back to a weaker lock.
  */
 final class FlockFileLock implements ExclusiveFileLock {
+
+  /** The constants that differ between Linux and macOS, chosen by {@link LockPlatform}. */
+  record Constants(int oCloexec, int eWouldBlock) {}
+
+  /** The encoding the JDK uses for file names, so that the native call opens the same file. */
+  static final Charset FILE_NAME_ENCODING =
+      Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8"));
 
   private static final int O_RDONLY = 0;
   private static final int LOCK_EX = 2;
   private static final int LOCK_NB = 4;
   private static final int EINTR = 4;
 
-  /** The constants that differ between Linux (every architecture the JDK supports) and macOS. */
-  private record Platform(int oCloexec, int eWouldBlock) {}
-
-  private static final Platform PLATFORM =
-      System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("mac")
-          ? new Platform(0x1000000, 35)
-          : new Platform(02000000, 11);
-
-  /** The encoding the JDK uses for file names, so that the native call opens the same file. */
-  private static final Charset FILE_NAME_ENCODING =
-      Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8"));
-
-  private static final Linker LINKER = Linker.nativeLinker();
   private static final StructLayout CALL_STATE = Linker.Option.captureStateLayout();
   private static final VarHandle ERRNO =
       CALL_STATE.varHandle(MemoryLayout.PathElement.groupElement("errno"));
-  private static final MethodHandle OPEN =
-      downcall(
-          "open",
-          FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
-          Linker.Option.firstVariadicArg(2),
-          Linker.Option.captureCallState("errno"));
-  private static final MethodHandle FLOCK =
-      downcall(
-          "flock",
-          FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT),
-          Linker.Option.captureCallState("errno"));
-  private static final MethodHandle CLOSE =
-      downcall(
-          "close",
-          FunctionDescriptor.of(JAVA_INT, JAVA_INT),
-          Linker.Option.captureCallState("errno"));
-  private static final MethodHandle STRERROR =
-      downcall("strerror", FunctionDescriptor.of(ADDRESS, JAVA_INT));
+
+  /** The four C functions, bound on first use; see {@link #natives()}. */
+  private record Natives(
+      MethodHandle open, MethodHandle flock, MethodHandle close, MethodHandle strerror) {}
+
+  /** Written once, under the class lock, by {@link #natives()}. */
+  private static Natives bound;
 
   private final Path lockFile;
   private final int descriptor;
+  private boolean released;
 
   private FlockFileLock(Path lockFile, int descriptor) {
     this.lockFile = lockFile;
@@ -82,34 +68,40 @@ final class FlockFileLock implements ExclusiveFileLock {
   /**
    * Opens {@code lockFile}, which must exist, and tries to {@code flock} it without waiting.
    *
+   * @param constants the native constants of this operating system
+   * @param fileNameEncoding the encoding of file names on this system
    * @return the held lock, or {@code null} when another open file description holds it
    * @throws IOException when the file cannot be opened or locked; the message names the file and
    *     the error
+   * @throws SqliteGuardException when the JVM denies native access
    */
-  static FlockFileLock tryAcquire(Path lockFile) throws IOException {
+  static FlockFileLock tryAcquire(Path lockFile, Constants constants, Charset fileNameEncoding)
+      throws IOException {
+    Natives natives = natives();
     try (Arena arena = Arena.ofConfined()) {
       MemorySegment state = arena.allocate(CALL_STATE);
-      MemorySegment path = arena.allocateFrom(lockFile.toString(), FILE_NAME_ENCODING);
+      MemorySegment path = cString(arena, lockFile.toString(), fileNameEncoding);
       int descriptor;
       do {
-        descriptor = (int) OPEN.invokeExact(state, path, O_RDONLY | PLATFORM.oCloexec(), 0);
+        descriptor =
+            (int) natives.open().invokeExact(state, path, O_RDONLY | constants.oCloexec(), 0);
       } while (descriptor < 0 && errno(state) == EINTR);
       if (descriptor < 0) {
-        throw failure("cannot open the lock file " + lockFile, errno(state));
+        throw failure(natives, "cannot open the lock file " + lockFile, errno(state));
       }
       int result;
       do {
-        result = (int) FLOCK.invokeExact(state, descriptor, LOCK_EX | LOCK_NB);
+        result = (int) natives.flock().invokeExact(state, descriptor, LOCK_EX | LOCK_NB);
       } while (result != 0 && errno(state) == EINTR);
       if (result == 0) {
         return new FlockFileLock(lockFile, descriptor);
       }
       int error = errno(state);
-      int ignored = (int) CLOSE.invokeExact(state, descriptor);
-      if (error == PLATFORM.eWouldBlock()) {
+      int ignored = (int) natives.close().invokeExact(state, descriptor);
+      if (error == constants.eWouldBlock()) {
         return null;
       }
-      throw failure("cannot lock the lock file " + lockFile, error);
+      throw failure(natives, "cannot lock the lock file " + lockFile, error);
     } catch (IOException | RuntimeException | Error e) {
       throw e;
     } catch (Throwable e) {
@@ -117,26 +109,90 @@ final class FlockFileLock implements ExclusiveFileLock {
     }
   }
 
+  /**
+   * Closes the descriptor, which releases the lock. A second call does nothing: the descriptor
+   * number may already belong to another file of this process.
+   */
   @Override
-  public void release() throws IOException {
+  public synchronized void release() throws IOException {
+    if (released) {
+      return;
+    }
+    released = true;
+    Natives natives = natives();
     try (Arena arena = Arena.ofConfined()) {
       MemorySegment state = arena.allocate(CALL_STATE);
-      if ((int) CLOSE.invokeExact(state, descriptor) != 0) {
-        throw failure("cannot close the lock file " + lockFile, errno(state));
+      if ((int) natives.close().invokeExact(state, descriptor) != 0) {
+        throw failure(natives, "cannot close the lock file " + lockFile, errno(state));
       }
     } catch (IOException | RuntimeException | Error e) {
       throw e;
     } catch (Throwable e) {
       throw new IllegalStateException("native call failed for the lock file " + lockFile, e);
     }
+  }
+
+  /**
+   * {@code value} as a NUL-terminated C string in {@code charset}. Encoded here rather than through
+   * {@link Arena#allocateFrom(String, Charset)}, which accepts only the standard charsets, so that
+   * a system whose file names are, for example, ISO-8859-2 or EUC-JP can lock its files.
+   */
+  static MemorySegment cString(Arena arena, String value, Charset charset) {
+    byte[] bytes = value.getBytes(charset);
+    MemorySegment segment = arena.allocate(bytes.length + 1L);
+    MemorySegment.copy(bytes, 0, segment, JAVA_BYTE, 0, bytes.length);
+    return segment;
+  }
+
+  /**
+   * Binds the C functions on first use. Binding is a restricted operation: a JVM that denies native
+   * access to this code throws {@link IllegalCallerException}, and a JVM without a native linker
+   * for this system throws {@link UnsupportedOperationException}. Both become a {@link
+   * SqliteGuardException}; nothing is cached after a failure, and no weaker lock replaces this one.
+   */
+  private static synchronized Natives natives() {
+    if (bound == null) {
+      try {
+        Linker linker = Linker.nativeLinker();
+        bound =
+            new Natives(
+                downcall(
+                    linker,
+                    "open",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
+                    Linker.Option.firstVariadicArg(2),
+                    Linker.Option.captureCallState("errno")),
+                downcall(
+                    linker,
+                    "flock",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT),
+                    Linker.Option.captureCallState("errno")),
+                downcall(
+                    linker,
+                    "close",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_INT),
+                    Linker.Option.captureCallState("errno")),
+                downcall(linker, "strerror", FunctionDescriptor.of(ADDRESS, JAVA_INT)));
+      } catch (IllegalCallerException | UnsupportedOperationException e) {
+        throw new SqliteGuardException(
+            "The SQLite instance guard locks its lock file with flock(2) through the Foreign"
+                + " Function and Memory API, and this JVM does not allow it ("
+                + e.getMessage()
+                + "). Start the JVM with --enable-native-access=ALL-UNNAMED (or the name of the"
+                + " module that holds StreamRune); the sqlite-jdbc driver needs native access as"
+                + " well.",
+            e);
+      }
+    }
+    return bound;
   }
 
   private static int errno(MemorySegment state) {
     return (int) ERRNO.get(state, 0L);
   }
 
-  private static IOException failure(String what, int errno) throws Throwable {
-    MemorySegment message = (MemorySegment) STRERROR.invokeExact(errno);
+  private static IOException failure(Natives natives, String what, int errno) throws Throwable {
+    MemorySegment message = (MemorySegment) natives.strerror().invokeExact(errno);
     return new IOException(
         what
             + ": "
@@ -147,12 +203,12 @@ final class FlockFileLock implements ExclusiveFileLock {
   }
 
   private static MethodHandle downcall(
-      String name, FunctionDescriptor descriptor, Linker.Option... options) {
+      Linker linker, String name, FunctionDescriptor descriptor, Linker.Option... options) {
     MemorySegment symbol =
-        LINKER
+        linker
             .defaultLookup()
             .find(name)
             .orElseThrow(() -> new IllegalStateException("the C library has no " + name));
-    return LINKER.downcallHandle(symbol, descriptor, options);
+    return linker.downcallHandle(symbol, descriptor, options);
   }
 }

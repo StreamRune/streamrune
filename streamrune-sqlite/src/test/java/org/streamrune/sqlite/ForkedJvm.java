@@ -3,6 +3,7 @@ package org.streamrune.sqlite;
 import static org.assertj.core.api.Assertions.fail;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -58,22 +59,54 @@ final class ForkedJvm implements AutoCloseable {
     reader.start();
   }
 
-  /** Starts {@link GuardChild} with {@code mode} on {@code db}. */
+  /** Starts {@link GuardChild} with {@code mode} on {@code db}, with native access enabled. */
   static ForkedJvm start(String mode, Path db) throws IOException {
+    return start(
+        List.of("--enable-native-access=ALL-UNNAMED"),
+        System.getProperty("java.class.path"),
+        mode,
+        db);
+  }
+
+  /**
+   * Starts {@link GuardChild} with {@code mode} on {@code db} in a JVM that denies native access to
+   * the class path, where StreamRune runs, and allows it to the sqlite-jdbc driver alone: the
+   * driver connects, and the instance guard cannot bind {@code flock}. The driver is loaded as a
+   * named module for that, and slf4j-api with it, because a named module cannot read the class
+   * path.
+   */
+  static ForkedJvm startWithNativeAccessDenied(String mode, Path db) throws IOException {
+    List<String> modules = new ArrayList<>();
+    List<String> rest = new ArrayList<>();
+    for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
+      String name = Path.of(entry).getFileName().toString();
+      (name.startsWith("sqlite-jdbc") || name.startsWith("slf4j-api") ? modules : rest).add(entry);
+    }
+    return start(
+        List.of(
+            "--illegal-native-access=deny",
+            "--module-path",
+            String.join(File.pathSeparator, modules),
+            "--add-modules",
+            "org.xerial.sqlitejdbc,org.slf4j",
+            "--enable-native-access=org.xerial.sqlitejdbc"),
+        String.join(File.pathSeparator, rest),
+        mode,
+        db);
+  }
+
+  private static ForkedJvm start(List<String> jvmArgs, String classPath, String mode, Path db)
+      throws IOException {
     String java =
         ProcessHandle.current()
             .info()
             .command()
             .orElse(Path.of(System.getProperty("java.home"), "bin", "java").toString());
-    ProcessBuilder builder =
-        new ProcessBuilder(
-            java,
-            "--enable-native-access=ALL-UNNAMED",
-            "-cp",
-            System.getProperty("java.class.path"),
-            GuardChild.class.getName(),
-            mode,
-            db.toString());
+    List<String> command = new ArrayList<>();
+    command.add(java);
+    command.addAll(jvmArgs);
+    command.addAll(List.of("-cp", classPath, GuardChild.class.getName(), mode, db.toString()));
+    ProcessBuilder builder = new ProcessBuilder(command);
     builder.redirectErrorStream(true);
     return new ForkedJvm(builder.start());
   }
@@ -133,7 +166,9 @@ final class ForkedJvm implements AutoCloseable {
   public void close() throws InterruptedException {
     if (process.isAlive()) {
       process.destroyForcibly();
-      process.waitFor(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+      if (!process.waitFor(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+        fail("the forked JVM did not stop within %s after it was killed", TIMEOUT);
+      }
     }
   }
 }

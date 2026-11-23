@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
@@ -43,12 +45,23 @@ final class InstanceGuardRegistry {
   /** One held lock and the number of leases on it; mutated only under {@link #REGISTRY_LOCK}. */
   private static final class Entry {
     private final ExclusiveFileLock lock;
+
+    /**
+     * The identity of the locked lock file ({@link BasicFileAttributes#fileKey()}, the device and
+     * inode on POSIX); {@code null} where the file system has none.
+     */
+    private final Object fileKey;
+
     private int references;
 
-    private Entry(ExclusiveFileLock lock) {
+    private Entry(ExclusiveFileLock lock, Object fileKey) {
       this.lock = lock;
+      this.fileKey = fileKey;
     }
   }
+
+  /** The lock file as {@link #createAndResolve} found it. */
+  private record LockFileState(Path key, boolean created, Object fileKey) {}
 
   /**
    * One {@link SqliteDatabase}'s share of a guard. {@link #release()} gives it back once; later
@@ -88,23 +101,35 @@ final class InstanceGuardRegistry {
    *
    * @param databaseFile the database file, in any spelling; it must exist
    * @return the lease, which {@link Lease#release()} gives back
-   * @throws SqliteGuardException when another process holds the lock, or the database file cannot
-   *     be resolved, or its lock file cannot be created, opened or locked; the message names the
-   *     file and the cause
+   * @throws SqliteGuardException when another process holds the lock; when the database file cannot
+   *     be resolved or has more than one hard link; when its lock file cannot be created, opened or
+   *     locked; or when the lock file was deleted or replaced while this JVM holds its guard. The
+   *     message names the file and the cause
    */
   static Lease acquire(Path databaseFile) {
     Path database = realPath(databaseFile);
+    refuseHardLinks(database);
     Path lockFile = database.resolveSibling(database.getFileName() + ".lock");
     REGISTRY_LOCK.lock();
     try {
-      Path key = createAndResolve(database, lockFile);
-      Entry entry = ENTRIES.get(key);
+      LockFileState state = createAndResolve(database, lockFile);
+      Entry entry = ENTRIES.get(state.key());
       if (entry == null) {
-        entry = new Entry(lock(database, key));
-        ENTRIES.put(key, entry);
+        entry = new Entry(lock(database, state.key()), state.fileKey());
+        ENTRIES.put(state.key(), entry);
+      } else if (state.created() || !Objects.equals(entry.fileKey, state.fileKey())) {
+        throw new SqliteGuardException(
+            "The lock file "
+                + shown(state.key())
+                + " of the SQLite database "
+                + shown(database)
+                + " was deleted or replaced while this JVM holds its guard, so another process can"
+                + " now lock a new file of that name. The file is not locked again: stop every"
+                + " instance on the database and restart one. The lock file must never be deleted"
+                + " while the database is in use.");
       }
       entry.references++;
-      return new Lease(database, key);
+      return new Lease(database, state.key());
     } finally {
       REGISTRY_LOCK.unlock();
     }
@@ -112,8 +137,13 @@ final class InstanceGuardRegistry {
 
   /** The number of leases on the guard whose lock file is {@code lockFile}; 0 when none. */
   static int references(Path lockFile) {
-    Entry entry = ENTRIES.get(lockFile);
-    return entry == null ? 0 : entry.references;
+    REGISTRY_LOCK.lock();
+    try {
+      Entry entry = ENTRIES.get(lockFile);
+      return entry == null ? 0 : entry.references;
+    } finally {
+      REGISTRY_LOCK.unlock();
+    }
   }
 
   private static void release(Path key) {
@@ -143,18 +173,54 @@ final class InstanceGuardRegistry {
   }
 
   /**
-   * Creates the lock file when it does not exist and returns its real path. Runs under {@link
-   * #REGISTRY_LOCK}: creating a file opens and closes a descriptor on it.
+   * Refuses a database file with more than one hard link on a POSIX file system. The guard is keyed
+   * by path, so two names of one file would get two lock files, and two instances could each hold
+   * "the" guard of the same database.
    */
-  private static Path createAndResolve(Path database, Path lockFile) {
+  private static void refuseHardLinks(Path database) {
+    if (!database.getFileSystem().supportedFileAttributeViews().contains("unix")) {
+      return;
+    }
+    int links;
     try {
+      links = (Integer) Files.getAttribute(database, "unix:nlink");
+    } catch (IOException e) {
+      throw new SqliteGuardException(
+          "cannot read the link count of the SQLite database file " + shown(database) + ": " + e,
+          e);
+    }
+    if (links > 1) {
+      throw new SqliteGuardException(
+          "The SQLite database file "
+              + shown(database)
+              + " has "
+              + links
+              + " hard links. The instance guard locks <database-file>.lock next to the name it"
+              + " is opened under, so another name of the same file would get a lock file of its"
+              + " own and a second instance could open the database through it. Remove the other"
+              + " hard links and open the database under one name.");
+    }
+  }
+
+  /**
+   * Creates the lock file when it does not exist and returns its real path, whether this call
+   * created it, and its identity. Runs under {@link #REGISTRY_LOCK}: creating a file opens and
+   * closes a descriptor on it.
+   */
+  private static LockFileState createAndResolve(Path database, Path lockFile) {
+    try {
+      boolean created;
       try {
         Files.createFile(lockFile);
+        created = true;
       } catch (FileAlreadyExistsException alreadyThere) {
         // A lock file is never deleted: one left by an earlier run, or by another process, is the
         // file to lock.
+        created = false;
       }
-      return lockFile.toRealPath();
+      Path key = lockFile.toRealPath();
+      Object fileKey = Files.readAttributes(key, BasicFileAttributes.class).fileKey();
+      return new LockFileState(key, created, fileKey);
     } catch (IOException e) {
       throw new SqliteGuardException(
           "cannot guard the SQLite database "
@@ -187,7 +253,8 @@ final class InstanceGuardRegistry {
       throw new SqliteGuardException(
           "The SQLite database "
               + shown(database)
-              + " is in use by another process: its lock file "
+              + " is in use by another process, or by another class loader of this JVM: its lock"
+              + " file "
               + shown(lockFile)
               + " is locked. A SQLite database serves exactly one application instance; stop the"
               + " other instance or give this one its own database file.");

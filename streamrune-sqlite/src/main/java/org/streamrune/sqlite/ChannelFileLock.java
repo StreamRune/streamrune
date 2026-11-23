@@ -9,14 +9,21 @@ import java.nio.file.StandardOpenOption;
 
 /**
  * An {@link ExclusiveFileLock} held as a {@link FileLock} on a {@link FileChannel} of its own: the
- * lock on platforms other than Linux and macOS, where such a lock belongs to its handle.
+ * lock on Windows, where such a lock belongs to its handle.
  */
 final class ChannelFileLock implements ExclusiveFileLock {
 
   private final FileChannel channel;
 
-  private ChannelFileLock(FileChannel channel) {
+  /**
+   * Held so that the JVM's own table of file locks, which references a lock only weakly, keeps
+   * seeing it: a second lock attempt from this JVM then fails as an overlap.
+   */
+  private final FileLock lock;
+
+  private ChannelFileLock(FileChannel channel, FileLock lock) {
     this.channel = channel;
+    this.lock = lock;
   }
 
   /**
@@ -34,7 +41,7 @@ final class ChannelFileLock implements ExclusiveFileLock {
         channel.close();
         return null;
       }
-      return new ChannelFileLock(channel);
+      return new ChannelFileLock(channel, lock);
     } catch (OverlappingFileLockException e) {
       channel.close();
       throw new IOException(
@@ -47,6 +54,9 @@ final class ChannelFileLock implements ExclusiveFileLock {
 
   @Override
   public void release() throws IOException {
+    if (lock.isValid()) {
+      lock.release();
+    }
     channel.close();
   }
 }

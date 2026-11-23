@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 
 import java.io.FileInputStream;
 import java.lang.reflect.Proxy;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -153,7 +154,9 @@ class SqliteDatabaseTest {
   void sameFileDifferentSpellingsShareOneGuard() throws Exception {
     Path db = dir.resolve("db.sqlite");
     Path link = Files.createSymbolicLink(dir.resolve("link.sqlite"), db);
-    Path relative = Path.of("").toAbsolutePath().relativize(db.toAbsolutePath());
+    Path workingDirectory = Path.of("").toAbsolutePath();
+    assumeThat(workingDirectory.getRoot()).isEqualTo(db.toAbsolutePath().getRoot());
+    Path relative = workingDirectory.relativize(db.toAbsolutePath());
     List<String> urls =
         List.of(
             "jdbc:sqlite:" + db.toAbsolutePath() + "?" + TestDatabases.REQUIRED_SETTINGS,
@@ -212,6 +215,7 @@ class SqliteDatabaseTest {
 
   @Test
   void unwritableLockDirectoryFailsWithLockPath() throws Exception {
+    assumeThat(FileSystems.getDefault().supportedFileAttributeViews()).contains("posix");
     Path sub = Files.createDirectory(dir.resolve("read-only"));
     Path db = sub.resolve("db.sqlite");
     DataSource dataSource = TestDatabases.dataSource(db);
@@ -232,6 +236,81 @@ class SqliteDatabaseTest {
         Files.setPosixFilePermissions(sub, PosixFilePermissions.fromString("rwxr-xr-x"));
       }
     }
+  }
+
+  @Test
+  void hardLinkedDatabaseIsRefused() throws Exception {
+    assumeThat(FileSystems.getDefault().supportedFileAttributeViews()).contains("unix");
+    Path db = dir.resolve("db.sqlite");
+    SqliteDatabase.open(TestDatabases.dataSource(db)).close();
+    Path hard = Files.createLink(dir.resolve("hard.sqlite"), db);
+
+    for (Path name : List.of(db, hard)) {
+      assertThatThrownBy(() -> SqliteDatabase.open(TestDatabases.dataSource(name)))
+          .isInstanceOf(SqliteGuardException.class)
+          .hasMessageContaining("hard links")
+          .hasMessageContaining(realPath(name).toString());
+    }
+    assertThat(Files.exists(dir.resolve("hard.sqlite.lock"))).isFalse();
+  }
+
+  @Test
+  void attachedDatabasesAreRefused() {
+    Path db = dir.resolve("db.sqlite");
+    Path other = dir.resolve("other.sqlite");
+    DataSource attaching =
+        TestDatabases.withInitSql(
+            "jdbc:sqlite:" + db + "?" + TestDatabases.REQUIRED_SETTINGS,
+            "ATTACH DATABASE '" + other + "' AS other");
+
+    assertThatThrownBy(() -> SqliteDatabase.open(attaching))
+        .isInstanceOf(IllegalStateException.class)
+        .isNotInstanceOf(SqliteGuardException.class)
+        .hasMessageContaining("attached")
+        .hasMessageContaining("other.sqlite");
+    assertThat(Files.exists(lockFileOf(db))).isFalse();
+  }
+
+  @Test
+  void theTempDatabaseIsAllowed() {
+    Path db = dir.resolve("db.sqlite");
+    DataSource withTemp =
+        TestDatabases.withInitSql(
+            "jdbc:sqlite:" + db + "?" + TestDatabases.REQUIRED_SETTINGS,
+            "CREATE TEMP TABLE scratch (x INTEGER)");
+
+    try (SqliteDatabase database = SqliteDatabase.open(withTemp)) {
+      assertThat(database.file()).isEqualTo(realPath(db));
+    }
+  }
+
+  @Test
+  void openCloseChurnLeavesNoReference() throws Exception {
+    Path db = dir.resolve("db.sqlite");
+    SqliteDatabase.open(TestDatabases.dataSource(db)).close();
+    int threads = 6;
+    int rounds = 40;
+    CyclicBarrier barrier = new CyclicBarrier(threads);
+    try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+      List<Future<?>> loops = new ArrayList<>();
+      for (int i = 0; i < threads; i++) {
+        loops.add(
+            pool.submit(
+                () -> {
+                  barrier.await(ForkedJvm.TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+                  for (int round = 0; round < rounds; round++) {
+                    SqliteDatabase.open(TestDatabases.dataSource(db)).close();
+                  }
+                  return null;
+                }));
+      }
+      for (Future<?> loop : loops) {
+        loop.get(ForkedJvm.TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+      }
+    }
+
+    assertThat(InstanceGuardRegistry.references(lockFileOf(db))).isZero();
+    assertThat(ForkedJvm.probe(db)).startsWith(GuardChild.ACQUIRED);
   }
 
   @Test

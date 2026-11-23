@@ -2,6 +2,7 @@ package org.streamrune.sqlite;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -56,13 +57,32 @@ class SecondProcessGuardIT {
   @Test
   void killedHolderDoesNotBlockRestart() throws Exception {
     Path db = dir.resolve("db.sqlite");
-    ForkedJvm holder = ForkedJvm.start("hold", db);
-    holder.awaitLineStartingWith(GuardChild.READY);
+    try (ForkedJvm holder = ForkedJvm.start("hold", db)) {
+      holder.awaitLineStartingWith(GuardChild.READY);
 
-    holder.close();
+      holder.close();
+    }
 
     try (SqliteDatabase database = SqliteDatabase.open(TestDatabases.dataSource(db))) {
       assertThat(database.file()).isEqualTo(db.toRealPath());
     }
+  }
+
+  @Test
+  void deniedNativeAccessFailsAtOpenWithoutAWeakerLock() throws Exception {
+    assumeThat(LockPlatform.current().usesFlock()).isTrue();
+    Path db = dir.resolve("db.sqlite");
+
+    try (ForkedJvm child = ForkedJvm.startWithNativeAccessDenied("probe", db)) {
+      String verdict = child.awaitLineStartingWith(GuardChild.ACQUIRED, GuardChild.REFUSED);
+
+      // ACQUIRED would mean a lock without flock, which closing another descriptor drops.
+      assertThat(verdict)
+          .startsWith(GuardChild.REFUSED)
+          .contains("--enable-native-access=ALL-UNNAMED")
+          .contains("flock");
+      assertThat(child.awaitExit()).isZero();
+    }
+    assertThat(ForkedJvm.probe(db)).startsWith(GuardChild.ACQUIRED);
   }
 }

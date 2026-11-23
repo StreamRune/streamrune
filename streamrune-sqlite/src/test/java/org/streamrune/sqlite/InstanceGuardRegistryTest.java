@@ -6,11 +6,17 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.charset.Charset;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,7 +54,7 @@ class InstanceGuardRegistryTest {
 
   @Test
   void lockIsHeldUntilTheLastLeaseIsReleased() throws IOException {
-    assumeThat(ExclusiveFileLock.usesFlock()).as("flock conflicts inside one JVM").isTrue();
+    assumeThat(LockPlatform.current().usesFlock()).as("flock conflicts inside one JVM").isTrue();
     Path db = Files.createFile(dir.resolve("db.sqlite"));
     Path lockFile = SqliteDatabaseTest.lockFileOf(db);
     InstanceGuardRegistry.Lease first = InstanceGuardRegistry.acquire(db);
@@ -65,7 +71,7 @@ class InstanceGuardRegistryTest {
 
   @Test
   void lockSurvivesOtherDescriptorsOnTheLockFileBeingClosed() throws IOException {
-    assumeThat(ExclusiveFileLock.usesFlock()).as("flock conflicts inside one JVM").isTrue();
+    assumeThat(LockPlatform.current().usesFlock()).as("flock conflicts inside one JVM").isTrue();
     Path db = Files.createFile(dir.resolve("db.sqlite"));
     Path lockFile = SqliteDatabaseTest.lockFileOf(db);
     InstanceGuardRegistry.Lease lease = InstanceGuardRegistry.acquire(db);
@@ -116,7 +122,9 @@ class InstanceGuardRegistryTest {
   void spellingsOfOnePathShareOneEntry() throws IOException {
     Path db = Files.createFile(dir.resolve("db.sqlite"));
     Path link = Files.createSymbolicLink(dir.resolve("link.sqlite"), db);
-    Path relative = Path.of("").toAbsolutePath().relativize(db.toAbsolutePath());
+    Path workingDirectory = Path.of("").toAbsolutePath();
+    assumeThat(workingDirectory.getRoot()).isEqualTo(db.toAbsolutePath().getRoot());
+    Path relative = workingDirectory.relativize(db.toAbsolutePath());
     List<Path> spellings =
         List.of(
             db,
@@ -167,10 +175,15 @@ class InstanceGuardRegistryTest {
 
   @Test
   void flockOnAMissingFileFailsNamingIt() {
-    assumeThat(ExclusiveFileLock.usesFlock()).isTrue();
+    assumeThat(LockPlatform.current().usesFlock()).isTrue();
     Path missing = dir.resolve("absent.lock");
 
-    assertThatThrownBy(() -> FlockFileLock.tryAcquire(missing))
+    assertThatThrownBy(
+            () ->
+                FlockFileLock.tryAcquire(
+                    missing,
+                    LockPlatform.current().flockConstants(),
+                    FlockFileLock.FILE_NAME_ENCODING))
         .isInstanceOf(IOException.class)
         .hasMessageContaining(missing.toString())
         .hasMessageContaining("errno");
@@ -190,6 +203,8 @@ class InstanceGuardRegistryTest {
       lock.release();
     }
 
+    lock.release();
+
     ExclusiveFileLock again = ChannelFileLock.tryAcquire(lockFile);
     assertThat(again).isNotNull();
     again.release();
@@ -199,5 +214,95 @@ class InstanceGuardRegistryTest {
   void channelLockOnAMissingFileFails() {
     assertThatThrownBy(() -> ChannelFileLock.tryAcquire(dir.resolve("absent.lock")))
         .isInstanceOf(NoSuchFileException.class);
+  }
+
+  @Test
+  void hardLinkedDatabaseFileIsRefused() throws IOException {
+    assumeThat(FileSystems.getDefault().supportedFileAttributeViews()).contains("unix");
+    Path db = Files.createFile(dir.resolve("db.sqlite"));
+    Files.createLink(dir.resolve("hard.sqlite"), db);
+
+    assertThatThrownBy(() -> InstanceGuardRegistry.acquire(db))
+        .isInstanceOf(SqliteGuardException.class)
+        .hasMessageContaining(db.toRealPath().toString())
+        .hasMessageContaining("2 hard links");
+    assertThat(Files.exists(SqliteDatabaseTest.lockFileOf(db))).isFalse();
+  }
+
+  @Test
+  void lockFileDeletedUnderALiveGuardIsNotLockedAgain() throws IOException {
+    Path db = Files.createFile(dir.resolve("db.sqlite"));
+    Path lockFile = SqliteDatabaseTest.lockFileOf(db);
+    InstanceGuardRegistry.Lease lease = InstanceGuardRegistry.acquire(db);
+    try {
+      Files.delete(lockFile);
+
+      assertThatThrownBy(() -> InstanceGuardRegistry.acquire(db))
+          .isInstanceOf(SqliteGuardException.class)
+          .hasMessageContaining(lockFile.toString())
+          .hasMessageContaining("deleted or replaced");
+      assertThat(InstanceGuardRegistry.references(lockFile)).isEqualTo(1);
+    } finally {
+      lease.release();
+    }
+    InstanceGuardRegistry.acquire(db).release();
+  }
+
+  @Test
+  void lockFileReplacedUnderALiveGuardIsNotLockedAgain() throws IOException {
+    assumeThat(LockPlatform.current().usesFlock()).as("the lock file can be renamed over").isTrue();
+    Path db = Files.createFile(dir.resolve("db.sqlite"));
+    Path lockFile = SqliteDatabaseTest.lockFileOf(db);
+    InstanceGuardRegistry.Lease lease = InstanceGuardRegistry.acquire(db);
+    try {
+      // The held descriptor keeps the old file alive, so the replacement is a different file.
+      Path replacement = Files.createFile(dir.resolve("replacement"));
+      Files.move(replacement, lockFile, StandardCopyOption.REPLACE_EXISTING);
+
+      assertThatThrownBy(() -> InstanceGuardRegistry.acquire(db))
+          .isInstanceOf(SqliteGuardException.class)
+          .hasMessageContaining("deleted or replaced");
+      assertThat(InstanceGuardRegistry.references(lockFile)).isEqualTo(1);
+    } finally {
+      lease.release();
+    }
+  }
+
+  @Test
+  void flockReleaseIsIdempotent() throws IOException {
+    assumeThat(LockPlatform.current().usesFlock()).isTrue();
+    Path lockFile = Files.createFile(dir.resolve("flock.lock"));
+    ExclusiveFileLock lock = ExclusiveFileLock.tryAcquire(lockFile);
+    assertThat(lock).isNotNull();
+    lock.release();
+    // A descriptor opened now usually takes the closed descriptor's number; a second release must
+    // not close it.
+    try (FileChannel bystander = FileChannel.open(lockFile, StandardOpenOption.READ)) {
+      lock.release();
+
+      assertThat(bystander.size()).isZero();
+      assertThat(bystander.position(0).read(java.nio.ByteBuffer.allocate(1))).isEqualTo(-1);
+    }
+    ExclusiveFileLock again = ExclusiveFileLock.tryAcquire(lockFile);
+    assertThat(again).isNotNull();
+    again.release();
+  }
+
+  @Test
+  void pathsAreEncodedInAnyCharset() throws IOException {
+    Charset latin2 = Charset.forName("ISO-8859-2");
+    try (Arena arena = Arena.ofConfined()) {
+      MemorySegment encoded = FlockFileLock.cString(arena, "\u010d.lock", latin2);
+
+      assertThat(encoded.toArray(ValueLayout.JAVA_BYTE))
+          .containsExactly((byte) 0xE8, '.', 'l', 'o', 'c', 'k', 0);
+    }
+    assumeThat(LockPlatform.current().usesFlock()).isTrue();
+    Path lockFile = Files.createFile(dir.resolve("latin2.lock"));
+
+    FlockFileLock lock =
+        FlockFileLock.tryAcquire(lockFile, LockPlatform.current().flockConstants(), latin2);
+    assertThat(lock).isNotNull();
+    lock.release();
   }
 }

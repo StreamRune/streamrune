@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Statement;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 
@@ -35,10 +36,24 @@ final class TestDatabases {
    * settings.
    */
   static DataSource url(String url) {
+    return withInitSql(url, null);
+  }
+
+  /**
+   * A data source on exactly {@code url} that runs {@code initSql} on each new connection, as a
+   * pool's connection initialization does; {@code null} runs nothing.
+   */
+  static DataSource withInitSql(String url, String initSql) {
     return new DataSource() {
       @Override
       public Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(url);
+        Connection connection = DriverManager.getConnection(url);
+        if (initSql != null) {
+          try (Statement statement = connection.createStatement()) {
+            statement.execute(initSql);
+          }
+        }
+        return connection;
       }
 
       @Override

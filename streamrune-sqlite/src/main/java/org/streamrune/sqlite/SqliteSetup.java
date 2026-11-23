@@ -64,6 +64,29 @@ final class SqliteSetup {
     return Path.of(file);
   }
 
+  /**
+   * Refuses a connection with attached databases ({@code ATTACH DATABASE}, for example in a pool's
+   * connection initialization): their files would be written outside the instance guard. The {@code
+   * temp} database (sequence 1) is per connection and is allowed.
+   *
+   * @throws IllegalStateException naming the attached databases
+   */
+  static void refuseAttachedDatabases(SQLiteConnection connection) throws SQLException {
+    String attached =
+        queryString(
+            connection,
+            "SELECT group_concat(name || ' (' || file || ')', ', ') FROM pragma_database_list"
+                + " WHERE seq >= 2");
+    if (attached != null) {
+      throw new IllegalStateException(
+          "The SQLite connection has other databases attached: "
+              + LogSanitizer.sanitizeFreeText(attached)
+              + ". StreamRune guards one database file per SqliteDatabase, so an attached file"
+              + " would be written outside the instance guard. Remove the ATTACH DATABASE from the"
+              + " connection setup and open each database file as its own SqliteDatabase.");
+    }
+  }
+
   /** The version of the SQLite library the driver loaded. */
   static String libraryVersion(SQLiteConnection connection) throws SQLException {
     return queryString(connection, "select sqlite_version()");
@@ -86,7 +109,7 @@ final class SqliteSetup {
       throw wrong(
           "synchronous",
           Integer.toString(synchronous),
-          "synchronous=FULL (2) or EXTRA (3)",
+          "synchronous=FULL (or EXTRA)",
           "synchronous=FULL");
     }
     int foreignKeys = queryInt(connection, "PRAGMA foreign_keys");
