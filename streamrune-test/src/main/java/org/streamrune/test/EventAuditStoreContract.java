@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CyclicBarrier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditStore;
@@ -35,7 +36,7 @@ import org.streamrune.core.types.Version;
  * a no-op; null arguments fail with {@link NullPointerException}. The store is write-only, so
  * "persisted" is observed through the store's own duplicate rule: an eventId that was persisted
  * fails to save again, one that was not saves. What the entries read back as is pinned by {@link
- * EventAuditQueryContract}. There is no in-memory audit store: run by {@code
+ * EventAuditQueryContract}. Run by {@code InMemoryEventAuditStoreContractTest} and {@code
  * PostgresAuditContractsTest}.
  */
 public abstract class EventAuditStoreContract {
@@ -118,6 +119,7 @@ public abstract class EventAuditStoreContract {
 
   /** Two writers racing the same eventId: exactly one persists it, the other gets the error. */
   @Test
+  @Timeout(60)
   void twoConcurrentSavesOfOneEventIdPersistOneAndFailTheOther() throws Exception {
     for (int round = 0; round < 20; round++) {
       String id = "race-" + round;
@@ -209,12 +211,14 @@ public abstract class EventAuditStoreContract {
    * nothing.
    */
   @Test
+  @Timeout(60)
   void twoConcurrentBatchesSharingAnEventIdPersistExactlyOneWholeBatch() throws Exception {
     for (int r = 0; r < 20; r++) {
       int round = r;
       String shared = "shared-" + round;
       CyclicBarrier start = new CyclicBarrier(2);
       boolean[] succeeded = new boolean[2];
+      ConcurrentLinkedQueue<Throwable> failures = new ConcurrentLinkedQueue<>();
       List<Thread> threads = new ArrayList<>();
       for (int writer = 0; writer < 2; writer++) {
         int w = writer;
@@ -230,8 +234,8 @@ public abstract class EventAuditStoreContract {
                                 entry("own-" + round + "-" + w + "-a"),
                                 entry("own-" + round + "-" + w + "-b")));
                         succeeded[w] = true;
-                      } catch (Exception expectedForTheLoser) {
-                        succeeded[w] = false;
+                      } catch (Throwable t) {
+                        failures.add(t);
                       }
                     }));
       }
@@ -241,6 +245,8 @@ public abstract class EventAuditStoreContract {
       int winner = succeeded[0] ? 0 : 1;
       int loser = 1 - winner;
       assertTrue(succeeded[winner] ^ succeeded[loser], "round " + round + ": exactly one wins");
+      assertEquals(1, failures.size(), "round " + round + ": " + failures);
+      assertTrue(failures.peek() instanceof EventStoreException, () -> "" + failures.peek());
       assertTrue(persisted(shared), shared);
       assertTrue(persisted("own-" + round + "-" + winner + "-a"));
       assertTrue(persisted("own-" + round + "-" + winner + "-b"));

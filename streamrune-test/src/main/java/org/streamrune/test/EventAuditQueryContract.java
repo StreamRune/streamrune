@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
@@ -38,8 +39,8 @@ import org.streamrune.core.types.Version;
  * paged forms' slicing, total, and ignored sort; the {@code traceFullCausationChain} of an event
  * (itself plus every transitive descendant, none of its ancestors); {@code save} and {@code
  * saveAll} writing alike, and a failed batch leaving nothing to find; and null arguments failing
- * with {@link NullPointerException}. Every field of an entry reads back as written. There is no
- * in-memory audit store: run by {@code PostgresAuditContractsTest}.
+ * with {@link NullPointerException}. Every field of an entry reads back as written. Run by {@code
+ * InMemoryEventAuditStoreContractTest} and {@code PostgresAuditContractsTest}.
  */
 public abstract class EventAuditQueryContract {
 
@@ -197,6 +198,16 @@ public abstract class EventAuditQueryContract {
     writer.save(written);
 
     assertEquals(List.of(written), query.findByCorrelationId(CORRELATION));
+  }
+
+  @Test
+  void aMicrosecondInstantRoundTripsUnchanged() {
+    Instant micros = Instant.parse("2026-01-01T10:00:00.123456Z");
+    EventAuditEntry written = match("e-1", micros);
+    writer.save(written);
+
+    assertEquals(List.of(written), query.findByCorrelationId(CORRELATION));
+    assertEquals(micros, query.findByUserId(USER, FROM, TO).get(0).occurredAt());
   }
 
   @Test
@@ -455,6 +466,25 @@ public abstract class EventAuditQueryContract {
 
     assertFalse(query.traceFullCausationChain(EventId.of("root")).isEmpty());
     assertTrue(query.traceFullCausationChain(EventId.of("unknown")).isEmpty());
+  }
+
+  /** A causation cycle terminates the trace: each event appears once. */
+  @Test
+  @Timeout(30)
+  void theCausalChainTerminatesOnATwoEventCycle() {
+    writer.saveAll(
+        List.of(causedBy("a", "b", T0.plusSeconds(1)), causedBy("b", "a", T0.plusSeconds(2))));
+
+    assertEquals(List.of("a", "b"), ids(query.traceFullCausationChain(EventId.of("a"))));
+    assertEquals(List.of("a", "b"), ids(query.traceFullCausationChain(EventId.of("b"))));
+  }
+
+  @Test
+  @Timeout(30)
+  void theCausalChainTerminatesOnASelfReference() {
+    writer.save(causedBy("self", "self", T0));
+
+    assertEquals(List.of("self"), ids(query.traceFullCausationChain(EventId.of("self"))));
   }
 
   // ---------------------------------------------------------------- null arguments

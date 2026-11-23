@@ -27,8 +27,8 @@ import org.streamrune.core.types.UserId;
  * alike; the per-type breakdowns; {@code activityByUser} counts every action of a user and leaves
  * anonymous entries out; the range is inclusive at both ends and echoed in the report; {@code
  * generateForUser} scopes every figure to one user; an empty range or an unknown user yields zeros
- * and empty maps; and null arguments fail with {@link NullPointerException}. There is no in-memory
- * audit store: run by {@code PostgresAuditContractsTest}.
+ * and empty maps; and null arguments fail with {@link NullPointerException}. Run by {@code
+ * InMemoryComplianceReportQueryContractTest} and {@code PostgresAuditContractsTest}.
  */
 public abstract class ComplianceReportQueryContract {
 
@@ -151,6 +151,33 @@ public abstract class ComplianceReportQueryContract {
 
     assertEquals(2, report.totalCommands());
     assertEquals(1, report.totalFailures());
+  }
+
+  /** Every attempt of a retried command is an entry: a repeated command id counts each time. */
+  @Test
+  void aRepeatedCommandIdCountsEveryAttempt() {
+    CommandId id = CommandId.of("same");
+    for (int attempt = 0; attempt < 2; attempt++) {
+      writer.save(
+          new AuditEntry(
+              id,
+              "PlaceOrder",
+              AggregateType.of("order"),
+              AggregateId.of("order-1"),
+              U1,
+              FROM.plusSeconds(attempt),
+              attempt == 0 ? AuditOutcome.FAILURE : AuditOutcome.SUCCESS,
+              attempt == 0 ? "retry" : null,
+              attempt == 0 ? 0 : 1,
+              null));
+    }
+
+    ComplianceReport report = query.generate(FROM, TO);
+
+    assertEquals(2, report.totalCommands());
+    assertEquals(1, report.totalFailures());
+    assertEquals(Map.of("PlaceOrder", 2L), report.commandCountsByType());
+    assertEquals(Map.of("u1", 2L), report.activityByUser());
   }
 
   @Test

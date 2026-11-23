@@ -33,7 +33,7 @@ import org.streamrune.core.types.UserId;
  * ignores the request's sort, store-side paging with the total, the empty page, command and
  * query-origin entries returned alike, anonymous entries never returned by user; and that null
  * arguments fail with {@link NullPointerException}. Every field of an entry reads back as written.
- * There is no in-memory audit store: run by {@code PostgresAuditContractsTest}.
+ * There is no in-memory command audit store: run by {@code PostgresAuditContractsTest}.
  */
 public abstract class CommandAuditQueryContract {
 
@@ -213,6 +213,37 @@ public abstract class CommandAuditQueryContract {
     writer.save(entry("c-1", TYPE, USER, AuditOutcome.FAILURE, T0.plusMillis(1)));
 
     assertEquals(Optional.of(latest), query.findByCommandId(CommandId.of("c-1")));
+  }
+
+  /**
+   * Every attempt is kept: three entries under one command id, the latest written in the middle,
+   * are all stored, the latest answers findByCommandId, and a paged finder returns all three.
+   */
+  @Test
+  void everyAttemptUnderOneCommandIdIsKept() {
+    AuditEntry first = entry("c-1", TYPE, USER, AuditOutcome.FAILURE, T0);
+    AuditEntry latest = entry("c-1", TYPE, USER, AuditOutcome.SUCCESS, T0.plusMillis(2));
+    AuditEntry middle = entry("c-1", TYPE, USER, AuditOutcome.FAILURE, T0.plusMillis(1));
+    writer.save(first);
+    writer.save(latest);
+    writer.save(middle);
+
+    assertEquals(Optional.of(latest), query.findByCommandId(CommandId.of("c-1")));
+    Page<AuditEntry> page = query.findByUserId(USER, FROM, TO, PageRequest.of(0, 10));
+    assertEquals(3, page.totalElements());
+    assertEquals(List.of(first, middle, latest), page.content());
+  }
+
+  @Test
+  void aMicrosecondInstantRoundTripsUnchanged() {
+    Instant micros = Instant.parse("2026-01-01T10:00:00.123456Z");
+    AuditEntry written = entry("c-1", TYPE, USER, AuditOutcome.SUCCESS, micros);
+    writer.save(written);
+
+    assertEquals(Optional.of(written), query.findByCommandId(CommandId.of("c-1")));
+    assertEquals(
+        micros,
+        query.findByUserId(USER, FROM, TO, PageRequest.of(0, 1)).content().get(0).occurredAt());
   }
 
   @Test

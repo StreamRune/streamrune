@@ -177,6 +177,9 @@ public interface EventAuditQuery {
    * reachable via {@link EventAuditEntry#causationId()} links. Returns an empty list if no event
    * with the given ID exists.
    *
+   * <p>Each event appears at most once: a causation cycle (an event that is, directly or
+   * transitively, its own cause) or a self-reference terminates the trace instead of looping.
+   *
    * <p><b>Unbounded result.</b> The list grows with the size of the causal subtree and is not
    * paged. Causal chains are bounded by real causality (typically small), but a saga or projector
    * feedback loop can make them large — callers tracing events in such topologies should bound the

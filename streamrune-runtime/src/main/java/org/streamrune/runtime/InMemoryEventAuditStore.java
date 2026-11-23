@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.streamrune.core.EventStoreException;
 import org.streamrune.core.Internal;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditQuery;
@@ -23,8 +24,9 @@ import org.streamrune.core.types.UserId;
 /**
  * In-memory implementation of {@link EventAuditStore} and {@link EventAuditQuery} for unit tests.
  *
- * <p>Thread-safe via {@link CopyOnWriteArrayList}. Not suitable for production use — all entries
- * are held in memory and never evicted.
+ * <p>Thread-safe: reads use a {@link CopyOnWriteArrayList}, writes share one monitor. Duplicate
+ * eventIds are refused like the PostgreSQL store. Not suitable for production use — all entries are
+ * held in memory and never evicted.
  *
  * <p>All {@code find*} methods return results sorted by {@link EventAuditEntry#occurredAt()}
  * ascending. {@link #traceFullCausationChain(EventId)} uses iterative breadth-first search (BFS)
@@ -36,29 +38,48 @@ import org.streamrune.core.types.UserId;
 public final class InMemoryEventAuditStore implements EventAuditStore, EventAuditQuery {
 
   private final List<EventAuditEntry> entries = new CopyOnWriteArrayList<>();
+  private final Object writeLock = new Object();
 
   /**
    * Persists a single event audit entry.
    *
    * @param entry the event audit entry to save; must not be {@code null}
    * @throws NullPointerException if {@code entry} is {@code null}
+   * @throws EventStoreException if an entry with the same eventId already exists
    */
   @Override
   public void save(EventAuditEntry entry) {
     Objects.requireNonNull(entry, "entry is required");
-    entries.add(entry);
+    saveAll(List.of(entry));
   }
 
   /**
-   * Persists a batch of event audit entries.
+   * Persists a batch of event audit entries atomically: the whole batch is checked before anything
+   * is added, under one monitor, so a failed call persists nothing.
    *
-   * @param entries the list of event audit entries to save; must not be {@code null}
-   * @throws NullPointerException if {@code entries} is {@code null}
+   * @param entries the list of event audit entries to save; must not be {@code null} and must not
+   *     contain {@code null}
+   * @throws NullPointerException if {@code entries} is {@code null} or contains {@code null}
+   * @throws EventStoreException if an eventId already exists or repeats within the batch
    */
   @Override
   public void saveAll(List<EventAuditEntry> entries) {
     Objects.requireNonNull(entries, "entries is required");
-    this.entries.addAll(entries);
+    for (EventAuditEntry entry : entries) {
+      Objects.requireNonNull(entry, "entries must not contain null");
+    }
+    synchronized (writeLock) {
+      Set<String> known = new HashSet<>();
+      for (EventAuditEntry stored : this.entries) {
+        known.add(stored.eventId().value());
+      }
+      for (EventAuditEntry entry : entries) {
+        if (!known.add(entry.eventId().value())) {
+          throw new EventStoreException("Duplicate event audit entry: eventId already exists");
+        }
+      }
+      this.entries.addAll(entries);
+    }
   }
 
   /**

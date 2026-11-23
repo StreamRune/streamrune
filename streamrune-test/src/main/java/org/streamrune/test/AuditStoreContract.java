@@ -21,7 +21,7 @@ import org.streamrune.core.types.UserId;
  * outcome, a query-origin entry, an anonymous one, a subject entry, a repeated {@code commandId} (a
  * retry adds an entry), and that a {@code null} entry fails with {@link NullPointerException}. What
  * {@code save} stored, and how it reads back, is pinned by {@link CommandAuditQueryContract}. There
- * is no in-memory audit store: run by {@code PostgresAuditContractsTest}.
+ * is no in-memory command audit store: run by {@code PostgresAuditContractsTest}.
  */
 public abstract class AuditStoreContract {
 

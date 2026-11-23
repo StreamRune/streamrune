@@ -21,8 +21,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The shared audit contracts against the real SQL on the shipped baseline schema: the command and
- * event audit stores and the three queries over them. There is no in-memory audit store, so these
- * are the only runs of the contracts until the SQLite stores join.
+ * event audit stores and the three queries over them. The command side has no in-memory store, so
+ * its contracts run only here until the SQLite stores join.
  */
 @Testcontainers
 class PostgresAuditContractsTest {
