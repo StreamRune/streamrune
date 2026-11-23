@@ -25,6 +25,14 @@ import java.util.Optional;
 @ConfigMapping(prefix = "streamrune")
 public interface StreamRuneQuarkusProperties {
 
+  /**
+   * The storage backend every store is built on: {@code postgres} (the default) or {@code sqlite}
+   * ({@code streamrune.backend}). Any other value, or {@code sqlite} without the module {@code
+   * org.streamrune:streamrune-sqlite} on the classpath, fails the start.
+   */
+  @WithDefault("postgres")
+  String backend();
+
   /** Snapshot is taken every N events per aggregate. */
   @WithDefault("100")
   int snapshotEveryNEvents();

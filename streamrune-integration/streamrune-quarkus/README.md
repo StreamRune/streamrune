@@ -48,6 +48,9 @@ commented out. A `.properties` comment must
 start its own line — text after a value is part of the value.
 
 ```properties
+# the storage backend every store is built on: postgres or sqlite
+streamrune.backend=postgres
+
 # Commands, locking and retries
 streamrune.snapshot-every-n-events=100
 streamrune.retry-max-attempts=3
