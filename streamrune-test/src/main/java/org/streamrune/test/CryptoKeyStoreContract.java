@@ -3,10 +3,12 @@ package org.streamrune.test;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,15 +25,16 @@ import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 
 /**
- * What every key-store-backed {@link CryptoEngine} that records erasure durably (filesystem,
- * PostgreSQL, and any backend that persists keys and tombstones itself) must honour, taken from the
- * interface's Javadoc: per-subject keys minted on first use; a key and an erasure survive a
- * restart; {@code deleteKey} is terminal and idempotent (decrypting old ciphertext throws {@link
- * KeyNotFoundException}, encrypting throws {@link SubjectForgottenException}, even for a subject
- * that never had a key); {@code reinstate} lifts the refusal but never brings pre-erasure
- * ciphertext back (it keeps throwing {@link KeyNotFoundException}, also after a restart); subjects
- * are isolated; null arguments fail with {@link IllegalArgumentException}; the engine is safe for
- * concurrent use. Run by {@code PostgresCryptoEngineContractTest}.
+ * What every {@link CryptoEngine} that keeps per-subject keys and tombstones in its own store
+ * (filesystem, PostgreSQL, the in-memory double, a SQLite engine) must honour, taken from the
+ * interface's Javadoc: per-subject keys minted on first use; a key and an erasure survive a restart
+ * (when the engine is {@linkplain #durable() durable}); {@code deleteKey} is terminal and
+ * idempotent (decrypting old ciphertext throws {@link KeyNotFoundException}, encrypting throws
+ * {@link SubjectForgottenException}, even for a subject that never had a key); {@code reinstate}
+ * lifts the refusal but never brings pre-erasure ciphertext back (it keeps throwing {@link
+ * KeyNotFoundException}, also after a restart); subjects are isolated; null arguments fail with
+ * {@link IllegalArgumentException}; the engine is safe for concurrent use. Run by {@code
+ * PostgresCryptoEngineContractTest}.
  *
  * <p>The suite pins the PostgreSQL/filesystem rules for {@code reinstate}. A shared-key engine (AWS
  * KMS, Vault) documents other outcomes there and is not run against it.
@@ -47,10 +50,25 @@ public abstract class CryptoKeyStoreContract {
   protected abstract CryptoEngine newEngine();
 
   /**
+   * Whether keys and tombstones survive a restart (PostgreSQL, filesystem: yes; the in-memory
+   * double: no). A durable engine must also implement {@link #sameKeysNewInstance(CryptoEngine)};
+   * the restart cases are skipped for an engine that is not.
+   */
+  protected boolean durable() {
+    return true;
+  }
+
+  /**
    * A second engine over the same key storage as {@code engine}, as after a process restart:
-   * nothing held in the first engine's memory (cached keys, counters) carries over.
+   * nothing held in the first engine's memory (cached keys, counters) carries over. Called only
+   * when {@link #durable()} is true.
    */
   protected abstract CryptoEngine sameKeysNewInstance(CryptoEngine engine);
+
+  /** The engine as a reader sees it after a restart; the same engine when it is not durable. */
+  private CryptoEngine restarted() {
+    return durable() ? sameKeysNewInstance(engine) : engine;
+  }
 
   private CryptoEngine engine;
 
@@ -149,6 +167,7 @@ public abstract class CryptoKeyStoreContract {
 
   @Test
   void aKeySurvivesARestart() {
+    assumeTrue(durable(), "not durable: nothing survives a restart");
     var subject = subject();
     byte[] ciphertext = engine.encrypt(subject, bytes("before restart"));
 
@@ -206,6 +225,7 @@ public abstract class CryptoKeyStoreContract {
 
   @Test
   void erasureSurvivesARestart() {
+    assumeTrue(durable(), "not durable: nothing survives a restart");
     var subject = subject();
     var bystander = subject();
     byte[] ciphertext = engine.encrypt(subject, bytes("forget me"));
@@ -244,6 +264,7 @@ public abstract class CryptoKeyStoreContract {
 
   @Test
   void reinstateAndReMintSurviveARestart_andEarlierGenerationsStayRedacted() {
+    assumeTrue(durable(), "not durable: nothing survives a restart");
     var subject = subject();
     byte[] preForget = engine.encrypt(subject, bytes("old pii"));
     engine.deleteKey(subject);
@@ -272,6 +293,122 @@ public abstract class CryptoKeyStoreContract {
     engine.reinstate(subject);
     assertDoesNotThrow(() -> engine.reinstate(subject));
     assertDoesNotThrow(() -> engine.encrypt(subject, bytes("again")));
+  }
+
+  @Test
+  void tamperedCurrentGenerationCiphertextStillFailsLoudlyAfterReinstate() {
+    var subject = subject();
+    engine.encrypt(subject, bytes("old pii"));
+    engine.deleteKey(subject);
+    engine.reinstate(subject);
+    byte[] current = engine.encrypt(subject, bytes("new pii"));
+    byte[] tampered = current.clone();
+    tampered[tampered.length - 1] ^= 0x01;
+
+    assertThrows(CryptoOperationException.class, () -> engine.decrypt(subject, tampered));
+    assertArrayEquals(bytes("new pii"), engine.decrypt(subject, current));
+  }
+
+  @Test
+  void theErasedGenerationIsRecordedAcrossARestartBetweenDeleteAndReinstate() {
+    assumeTrue(durable(), "not durable: nothing survives a restart");
+    var subject = subject();
+    byte[] preForget = engine.encrypt(subject, bytes("old pii"));
+    engine.deleteKey(subject);
+
+    var restarted = sameKeysNewInstance(engine);
+    restarted.reinstate(subject);
+    byte[] current = restarted.encrypt(subject, bytes("new pii"));
+
+    assertThrows(KeyNotFoundException.class, () -> restarted.decrypt(subject, preForget));
+    assertArrayEquals(bytes("new pii"), restarted.decrypt(subject, current));
+  }
+
+  @Test
+  void aReinstateIsDurableAcrossARestartBeforeTheReMint() {
+    assumeTrue(durable(), "not durable: nothing survives a restart");
+    var subject = subject();
+    byte[] preForget = engine.encrypt(subject, bytes("old pii"));
+    engine.deleteKey(subject);
+    engine.reinstate(subject);
+
+    var restarted = sameKeysNewInstance(engine);
+    byte[] current = restarted.encrypt(subject, bytes("new pii"));
+
+    assertThrows(KeyNotFoundException.class, () -> restarted.decrypt(subject, preForget));
+    assertArrayEquals(bytes("new pii"), restarted.decrypt(subject, current));
+  }
+
+  @Test
+  void reinstateIsPerSubject_aSecondForgottenSubjectStaysForgotten() {
+    var reinstated = subject();
+    var bystander = subject();
+    engine.encrypt(reinstated, bytes("a"));
+    byte[] bystanders = engine.encrypt(bystander, bytes("b"));
+    engine.deleteKey(reinstated);
+    engine.deleteKey(bystander);
+
+    engine.reinstate(reinstated);
+
+    assertDoesNotThrow(() -> engine.encrypt(reinstated, bytes("a again")));
+    var reader = restarted();
+    assertThrows(SubjectForgottenException.class, () -> engine.encrypt(bystander, bytes("b")));
+    assertThrows(SubjectForgottenException.class, () -> reader.encrypt(bystander, bytes("b")));
+    assertThrows(KeyNotFoundException.class, () -> engine.decrypt(bystander, bystanders));
+    assertThrows(KeyNotFoundException.class, () -> reader.decrypt(bystander, bystanders));
+  }
+
+  @Test
+  @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  void anEncryptRacingDeleteKeyNeverLeavesARecoverableKeyOrCiphertext() throws Exception {
+    int encryptors = 4;
+    for (int round = 0; round < 20; round++) {
+      var subject = subject();
+      var barrier = new CyclicBarrier(encryptors + 1);
+      var failures = new ConcurrentLinkedQueue<Throwable>();
+      var ciphertexts = new ConcurrentLinkedQueue<byte[]>();
+      List<Thread> workers = new ArrayList<>();
+      for (int i = 0; i < encryptors; i++) {
+        workers.add(
+            Thread.ofPlatform()
+                .start(
+                    () -> {
+                      try {
+                        barrier.await();
+                        for (int n = 0; n < 50; n++) {
+                          ciphertexts.add(engine.encrypt(subject, bytes("pii-" + n)));
+                        }
+                      } catch (SubjectForgottenException expected) {
+                        // the erasure won: the only failure an encrypt may report
+                      } catch (Throwable t) {
+                        failures.add(t);
+                      }
+                    }));
+      }
+      workers.add(
+          Thread.ofPlatform()
+              .start(
+                  () -> {
+                    try {
+                      barrier.await();
+                      engine.deleteKey(subject);
+                    } catch (Throwable t) {
+                      failures.add(t);
+                    }
+                  }));
+      for (Thread worker : workers) {
+        worker.join();
+      }
+
+      assertTrue(failures.isEmpty(), "only SubjectForgottenException is allowed: " + failures);
+      assertFalse(engine.isKeyAvailable(subject), "no live key may survive the erasure");
+      assertThrows(SubjectForgottenException.class, () -> engine.encrypt(subject, bytes("x")));
+      var reader = restarted();
+      for (byte[] ciphertext : ciphertexts) {
+        assertThrows(KeyNotFoundException.class, () -> engine.decrypt(subject, ciphertext));
+        assertThrows(KeyNotFoundException.class, () -> reader.decrypt(subject, ciphertext));
+      }
+    }
   }
 
   @Test
@@ -330,12 +467,17 @@ public abstract class CryptoKeyStoreContract {
       }
 
       assertTrue(failures.isEmpty(), "no encryption may fail: " + failures);
-      var restarted = sameKeysNewInstance(engine);
+      var restarted = restarted();
       var readable = new ArrayList<String>();
       for (byte[] ciphertext : ciphertexts) {
         readable.add(new String(restarted.decrypt(subject, ciphertext), UTF_8));
       }
-      assertTrue(readable.size() == threads, "every ciphertext is readable with the stored key");
+      java.util.Collections.sort(readable);
+      var expected = new ArrayList<String>();
+      for (int i = 0; i < threads; i++) {
+        expected.add("pii-" + i);
+      }
+      assertEquals(expected, readable, "every ciphertext is readable with the one stored key");
     }
   }
 

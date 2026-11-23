@@ -21,14 +21,15 @@ import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.ForgottenSubjectStore;
 
 /**
- * What every {@link ForgottenSubjectStore} must honour, taken from the interface's Javadoc: a
- * tombstone is recorded idempotently and lifted idempotently; the first-forget instant and the
- * erased key's creation evidence belong to the tombstone and are first-write-wins (a repeated
- * erasure never overwrites them, a tombstone recorded without evidence stays without it); both
- * disappear with the tombstone; null arguments fail with {@link IllegalArgumentException}; the
- * store is safe for concurrent use. A durable store (see {@link #durable()}) also keeps all of it
- * across a restart. Run by {@code InMemoryForgottenSubjectStoreContractTest} and {@code
- * JdbcForgottenSubjectStoreContractTest}.
+ * What every {@link ForgottenSubjectStore} that tracks the first-forget instant and the erased
+ * key's creation evidence (both optional in the interface; every shipped store tracks them) must
+ * honour, taken from the interface's Javadoc: a tombstone is recorded idempotently and lifted
+ * idempotently; the first-forget instant and the erased key's creation evidence belong to the
+ * tombstone and are first-write-wins (a repeated erasure never overwrites them, a tombstone
+ * recorded without evidence stays without it); both disappear with the tombstone; null arguments
+ * fail with {@link IllegalArgumentException}; the store is safe for concurrent use. A durable store
+ * (see {@link #durable()}) also keeps all of it across a restart. Run by {@code
+ * InMemoryForgottenSubjectStoreContractTest} and {@code JdbcForgottenSubjectStoreContractTest}.
  *
  * <p>Every test uses subject ids of its own, so the store behind {@link #newStore()} may share its
  * storage between tests.
@@ -115,6 +116,20 @@ public abstract class ForgottenSubjectStoreContract {
 
     assertFalse(store.isForgotten(subject));
     assertTrue(store.isForgotten(forgotten));
+  }
+
+  @Test
+  void reinstateLiftsOnlyThatSubject_aForgottenBystanderStaysForgotten() {
+    var lifted = subject();
+    var bystander = subject();
+    store.forget(lifted, EVIDENCE);
+    store.forget(bystander, OTHER_EVIDENCE);
+
+    store.reinstate(lifted);
+
+    assertFalse(store.isForgotten(lifted));
+    assertTrue(store.isForgotten(bystander));
+    assertEquals(Optional.of(OTHER_EVIDENCE), store.keyCreatedAt(bystander));
   }
 
   @Test

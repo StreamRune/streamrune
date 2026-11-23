@@ -7,6 +7,7 @@ description = "StreamRune crypto: filesystem-backed per-subject key store for en
 dependencies {
     api(project(":streamrune-core"))
     implementation(libs.slf4j.api)
+    testImplementation(project(":streamrune-test"))
 
     // src/jmh: CryptoShreddingBenchmark (src/jmh/README.md) serializes events through the
     // ObjectMapper PostgresEventStore builds, so the benchmark measures the event store's own

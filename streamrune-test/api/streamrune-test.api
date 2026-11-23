@@ -150,6 +150,7 @@ public abstract class org.streamrune.test.ComplianceReportQueryContract
 public abstract class org.streamrune.test.CryptoKeyStoreContract
   protected abstract org.streamrune.core.crypto.CryptoEngine newEngine()
   protected abstract org.streamrune.core.crypto.CryptoEngine sameKeysNewInstance(org.streamrune.core.crypto.CryptoEngine)
+  protected boolean durable()
   public <init>()
 
 public abstract class org.streamrune.test.DeadLetterQueueContract
