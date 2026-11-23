@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.backend.OutboxOptions;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEntryId;
 import org.streamrune.core.outbox.OutboxOrderingMode;
@@ -100,8 +101,11 @@ public final class PostgresOutboxStore implements OutboxStore {
    * entry is held for a full claim lease instead of retrying on the fast transport cadence. Safe,
    * but slower than intended, and the {@code KafkaOutboxPublisher} builder WARNs about the inverted
    * tuning when it can see the producer config.
+   *
+   * <p>The value is {@link OutboxOptions#DEFAULT_CLAIM_LEASE}, the one source of the default every
+   * backend's outbox uses.
    */
-  static final Duration DEFAULT_CLAIM_LEASE = Duration.ofMinutes(4);
+  static final Duration DEFAULT_CLAIM_LEASE = OutboxOptions.DEFAULT_CLAIM_LEASE;
 
   // created_at uses NOW() server-side; entry.createdAt() is intentionally ignored so that
   // the database clock governs lease arithmetic (avoids clock-skew issues in distributed writers).

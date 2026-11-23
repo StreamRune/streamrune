@@ -287,6 +287,32 @@ class PostgresReadModelStoreTest {
     verifyNoInteractions(untouched);
   }
 
+  @Test
+  void theReservedDefaultNameIsRefusedAsReadModelStoreOfRefusesIt() {
+    DataSource untouched = mock(DataSource.class);
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                PostgresReadModelStore.create(
+                    ReadModelStore.DEFAULT, untouched, mapper, true, true));
+    var fromCore =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                ReadModelStore.of(
+                    ReadModelStore.DEFAULT,
+                    mock(org.streamrune.core.projection.ProjectionRepository.class),
+                    mock(org.streamrune.core.projection.OffsetStore.class),
+                    mock(org.streamrune.core.projection.AtomicBatchProcessor.class)));
+    assertEquals(fromCore.getMessage(), refused.getMessage());
+    assertEquals(
+        "'default' is reserved: it names the backend's default read-model store",
+        refused.getMessage());
+    verifyNoInteractions(untouched);
+  }
+
   record View(String id) {}
 
   // --- helpers ---
