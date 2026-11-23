@@ -87,6 +87,11 @@ final class InstanceGuardRegistry {
       return lockFile;
     }
 
+    /** Whether {@link #release()} has been called. */
+    boolean isReleased() {
+      return released.get();
+    }
+
     /** Gives this lease back; the last lease of a guard releases its lock. Idempotent. */
     void release() {
       if (released.compareAndSet(false, true)) {

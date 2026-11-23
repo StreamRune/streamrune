@@ -1,4 +1,4 @@
-description = "StreamRune SQLite backend: the SqliteDatabase handle and its instance guard, for small single-instance services."
+description = "StreamRune SQLite backend: the SqliteDatabase handle, its instance guard and schema series, for small single-instance services."
 
 dependencies {
     api(project(":streamrune-core"))
@@ -6,6 +6,13 @@ dependencies {
     // driver creates, and an application configures the driver's connection properties
     // (journal_mode, synchronous, transaction_mode, ...) through the driver's own types.
     api(libs.sqlite.jdbc)
+    // Flyway applies the schema series. Its SQLite support is part of flyway-core, so no
+    // flyway-database-* artifact is needed (Postgres needs flyway-database-postgresql). No public
+    // signature of this module names a Flyway type, so implementation, not api.
+    implementation(libs.flyway.core)
+    // Flyway is told to log through SLF4J (see SqliteSchemaMigration), and SqliteDatabase.validate
+    // logs warnings through it.
+    implementation(libs.slf4j.api)
     testImplementation(libs.assertj.core)
 }
 

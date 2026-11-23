@@ -39,6 +39,7 @@ class ArchitectureTest {
           .resideInAnyPackage(
               "java..",
               "javax..",
+              "org.flywaydb..",
               "org.sqlite..",
               "org.slf4j..",
               "org.streamrune.core..",

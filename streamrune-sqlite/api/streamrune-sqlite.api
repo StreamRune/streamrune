@@ -6,5 +6,18 @@ public final class org.streamrune.sqlite.SqliteDatabase implements java.lang.Aut
   public javax.sql.DataSource dataSource()
   public static org.streamrune.sqlite.SqliteDatabase open(javax.sql.DataSource)
   public void close()
+  public void migrate(org.streamrune.sqlite.SqliteSchemaSeries)
+  public void validate(org.streamrune.sqlite.SqliteSchemaSeries)
 
 public final class org.streamrune.sqlite.SqliteGuardException extends java.lang.IllegalStateException
+
+public enum org.streamrune.sqlite.SqliteSchemaSeries
+  constants EVENT_STORE, READ_MODEL, CRYPTO
+  public java.lang.String directory()
+  public java.lang.String historyTable()
+  public java.util.List<java.lang.String> scripts()
+  public static final org.streamrune.sqlite.SqliteSchemaSeries CRYPTO
+  public static final org.streamrune.sqlite.SqliteSchemaSeries EVENT_STORE
+  public static final org.streamrune.sqlite.SqliteSchemaSeries READ_MODEL
+  public static org.streamrune.sqlite.SqliteSchemaSeries valueOf(java.lang.String)
+  public static org.streamrune.sqlite.SqliteSchemaSeries[] values()

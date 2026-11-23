@@ -3,7 +3,10 @@ package org.streamrune.sqlite;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.List;
 import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.sqlite.SQLiteConnection;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.LogSanitizer;
@@ -53,10 +56,16 @@ import org.streamrune.core.types.LogSanitizer;
  *       directory that holds the database instead. This cannot be detected.
  * </ul>
  *
+ * <p><b>Schema.</b> {@link #migrate(SqliteSchemaSeries)} applies a schema series with Flyway and
+ * {@link #validate(SqliteSchemaSeries)} checks it; both run on this handle's data source, under the
+ * instance guard.
+ *
  * <p>{@link #close()} releases this handle's reference to the guard. It does not close the data
  * source, which belongs to the application.
  */
 public final class SqliteDatabase implements AutoCloseable {
+
+  private static final Logger log = LoggerFactory.getLogger(SqliteDatabase.class);
 
   private final DataSource dataSource;
   private final InstanceGuardRegistry.Lease guard;
@@ -118,6 +127,61 @@ public final class SqliteDatabase implements AutoCloseable {
    */
   public Path file() {
     return guard.databaseFile();
+  }
+
+  /**
+   * Applies {@code series} to this database: every script of the series that its history table does
+   * not record yet. Running it again applies nothing. The series is recorded in its own history
+   * table, so several series and the application's own tables share one file.
+   *
+   * <p>Each script runs in one transaction with the history row that records it, so a script that
+   * fails or is interrupted leaves nothing behind and the next run applies it again from its start.
+   *
+   * @param series the series to apply
+   * @throws IllegalArgumentException if {@code series} is {@code null}
+   * @throws IllegalStateException if this handle is closed, or a script of the series is not on the
+   *     class path (nothing is written then)
+   * @throws EventStoreException if the migration fails; the message names the history table
+   */
+  public void migrate(SqliteSchemaSeries series) {
+    requireOpen(series);
+    SqliteSchemaMigration.migrate(series, dataSource);
+  }
+
+  /**
+   * Checks that this database holds {@code series}: its tables, the columns the runtime reads and
+   * writes, the global-offset counter row of the event store, and the version its history table
+   * records. Warnings (a missing history table, a schema ahead of this build) are logged.
+   *
+   * @param series the series to check
+   * @throws IllegalArgumentException if {@code series} is {@code null}
+   * @throws IllegalStateException if this handle is closed, or the schema is missing a table, a
+   *     column or the counter row, or is behind this build; the message lists every such issue
+   */
+  public void validate(SqliteSchemaSeries series) {
+    requireOpen(series);
+    List<SqliteSchemaValidator.Issue> issues = SqliteSchemaValidator.validate(dataSource, series);
+    boolean failed = false;
+    for (SqliteSchemaValidator.Issue issue : issues) {
+      if (issue.severity() == SqliteSchemaValidator.Severity.WARNING) {
+        log.warn("Schema validation warning [{}]: {}", issue.table(), issue.message());
+      } else {
+        failed = true;
+      }
+    }
+    if (failed) {
+      throw new IllegalStateException(SqliteSchemaValidator.failureMessage(issues));
+    }
+  }
+
+  private void requireOpen(SqliteSchemaSeries series) {
+    if (series == null) {
+      throw new IllegalArgumentException("series must not be null");
+    }
+    if (guard.isReleased()) {
+      throw new IllegalStateException(
+          this + " is closed; open a new handle to migrate or validate its schema");
+    }
   }
 
   /**
