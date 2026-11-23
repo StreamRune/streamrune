@@ -106,13 +106,14 @@ public interface CryptoEngine {
    * a key is still tombstoned by every backend shipped with StreamRune, so a later {@link
    * #encrypt(SubjectId, byte[])} for that id is refused until {@link #reinstate(SubjectId)}: erase
    * only subject ids known to exist. Terminal-erasure enforcement is backend-specific (see the
-   * class documentation): filesystem and PostgreSQL delete the per-subject key and record a
-   * persistent tombstone directly; Vault and AWS KMS record a persistent tombstone in a pluggable
-   * {@code ForgottenSubjectStore} (Vault also deletes its transit key; AWS KMS has no per-subject
-   * key to delete, since one shared CMK serves every subject). On every backend shipped with
-   * StreamRune, once this method returns, a later {@link #encrypt(SubjectId, byte[])} for the
-   * subject throws {@link SubjectForgottenException} instead of resurrecting the key, and
-   * decrypting the subject's old ciphertext throws {@link KeyNotFoundException}.
+   * class documentation): an engine that keeps per-subject keys and tombstones in its own store
+   * (for example filesystem, PostgreSQL) deletes the per-subject key and records a persistent
+   * tombstone directly; Vault and AWS KMS record a persistent tombstone in a pluggable {@code
+   * ForgottenSubjectStore} (Vault also deletes its transit key; AWS KMS has no per-subject key to
+   * delete, since one shared CMK serves every subject). On every backend shipped with StreamRune,
+   * once this method returns, a later {@link #encrypt(SubjectId, byte[])} for the subject throws
+   * {@link SubjectForgottenException} instead of resurrecting the key, and decrypting the subject's
+   * old ciphertext throws {@link KeyNotFoundException}.
    *
    * @param subjectId the data subject whose key to delete; must not be null
    * @throws IllegalArgumentException if {@code subjectId} is null

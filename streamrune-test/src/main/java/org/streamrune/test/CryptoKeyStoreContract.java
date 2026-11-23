@@ -34,10 +34,11 @@ import org.streamrune.core.types.SubjectId;
  * lifts the refusal but never brings pre-erasure ciphertext back (it keeps throwing {@link
  * KeyNotFoundException}, also after a restart); subjects are isolated; null arguments fail with
  * {@link IllegalArgumentException}; the engine is safe for concurrent use. Run by {@code
- * PostgresCryptoEngineContractTest}.
+ * PostgresCryptoEngineContractTest}, {@code FileSystemCryptoEngineContractTest}, {@code
+ * InMemoryCryptoEngineContractTest} and {@code CachedCryptoEngineContractTest}.
  *
- * <p>The suite pins the PostgreSQL/filesystem rules for {@code reinstate}. A shared-key engine (AWS
- * KMS, Vault) documents other outcomes there and is not run against it.
+ * <p>The suite pins the key-store rules for {@code reinstate}. A shared-key engine (AWS KMS, Vault)
+ * documents other outcomes there and is not run against it.
  *
  * <p>Every test uses subject ids of its own, so the engines behind {@link #newEngine()} may share
  * their storage between tests.
@@ -362,8 +363,13 @@ public abstract class CryptoKeyStoreContract {
   @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void anEncryptRacingDeleteKeyNeverLeavesARecoverableKeyOrCiphertext() throws Exception {
     int encryptors = 4;
+    int roundsWithCiphertext = 0;
     for (int round = 0; round < 20; round++) {
       var subject = subject();
+      // Even rounds race a live key (encrypts are fast, the erasure may land mid-stream); odd
+      // rounds race the first mint (the key is created while the erasure runs).
+      byte[] preMinted = round % 2 == 0 ? engine.encrypt(subject, bytes("pre")) : null;
+      long delayNanos = round * 25_000L;
       var barrier = new CyclicBarrier(encryptors + 1);
       var failures = new ConcurrentLinkedQueue<Throwable>();
       var ciphertexts = new ConcurrentLinkedQueue<byte[]>();
@@ -391,6 +397,11 @@ public abstract class CryptoKeyStoreContract {
                   () -> {
                     try {
                       barrier.await();
+                      // The erasure thread is the one the barrier releases first; staggering it by
+                      // a
+                      // growing delay lets the rounds cover erasures before, during and after the
+                      // encrypts.
+                      java.util.concurrent.locks.LockSupport.parkNanos(delayNanos);
                       engine.deleteKey(subject);
                     } catch (Throwable t) {
                       failures.add(t);
@@ -404,11 +415,20 @@ public abstract class CryptoKeyStoreContract {
       assertFalse(engine.isKeyAvailable(subject), "no live key may survive the erasure");
       assertThrows(SubjectForgottenException.class, () -> engine.encrypt(subject, bytes("x")));
       var reader = restarted();
+      if (preMinted != null) {
+        ciphertexts.add(preMinted);
+      }
+      if (ciphertexts.size() > (preMinted == null ? 0 : 1)) {
+        roundsWithCiphertext++;
+      }
       for (byte[] ciphertext : ciphertexts) {
         assertThrows(KeyNotFoundException.class, () -> engine.decrypt(subject, ciphertext));
         assertThrows(KeyNotFoundException.class, () -> reader.decrypt(subject, ciphertext));
       }
     }
+    assertTrue(
+        roundsWithCiphertext > 0,
+        "the race was never exercised: the erasure won every round before any encrypt returned");
   }
 
   @Test
