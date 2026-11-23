@@ -26,16 +26,23 @@ import org.streamrune.core.crypto.CryptoEngine;
  *
  * <p><b>Why {@link #keyStoreEngine} returns a built engine.</b> The three integrations configure
  * the backend's own key-store engine with three things only: the {@code DataSource}, the key-table
- * name ({@code streamrune.crypto.postgres.table-name}) and the metrics. They wrap the engine in a
- * {@link CachedCryptoEngine} themselves, with the cache settings and the {@link
+ * name (for Postgres, {@code streamrune.crypto.postgres.table-name}) and the metrics. They wrap the
+ * engine in a {@link CachedCryptoEngine} themselves, with the cache settings and the {@link
  * #forgetSignal(DataSource) forget signal}, outside the engine's builder. A backend-neutral {@link
  * KeyStoreEngineSettings} record carries those settings, and the backend turns it into a {@link
  * CryptoEngine}. The integrations so name no backend type and need no cast. Returning the backend's
  * builder instead would need either a builder interface every backend builder implements, for three
  * setters, or a type parameter that makes the integrations name the backend's builder type.
  *
- * <p>Implementations are stateless factories: each call builds a new instance over the given {@code
- * DataSource}, and the caller owns and closes what it gets.
+ * <p><b>What the caller closes, and what a backend must therefore not hold.</b> Implementations are
+ * stateless factories: each call builds a new instance over the given {@code DataSource}. The
+ * caller closes only the {@linkplain #forgetSignal(DataSource) forget signal}, the one product that
+ * is {@link AutoCloseable}. The forgotten-subject store and the key-store engine have no close:
+ * {@link CachedCryptoEngine} never closes its delegate, and a Vault or AWS KMS engine keeps its
+ * store out of the caller's reach. So a backend's forgotten-subject store and key-store engine must
+ * hold nothing that needs releasing; they work over the caller's {@code DataSource}, which the
+ * caller owns. A backend that needs to verify or guard something on a call opens what it needs for
+ * that only briefly and closes it before the call returns.
  */
 public interface CryptoBackend {
 
@@ -53,7 +60,9 @@ public interface CryptoBackend {
    * instant, as {@link ForgottenSubjectStore} describes.
    *
    * @param dataSource the application's {@code DataSource} on this backend's database
-   * @return a new store over {@code dataSource}
+   * @return a new store over {@code dataSource} that holds nothing that needs releasing, so the
+   *     caller never closes it; whatever the backend opens on this call to verify or guard
+   *     something is closed before it returns (see the class Javadoc)
    * @throws IllegalArgumentException if {@code dataSource} is {@code null}
    */
   ForgottenSubjectStore forgottenSubjects(DataSource dataSource);
@@ -65,7 +74,8 @@ public interface CryptoBackend {
    * Supplier)}.
    *
    * @param dataSource the application's {@code DataSource} on this backend's database
-   * @return a new signal over {@code dataSource}; the caller closes it
+   * @return a new signal over {@code dataSource}; the caller closes it, the only product of this
+   *     interface it closes (see the class Javadoc)
    * @throws IllegalArgumentException if {@code dataSource} is {@code null}
    */
   CryptoForgetSignal forgetSignal(DataSource dataSource);
@@ -75,12 +85,19 @@ public interface CryptoBackend {
    * signal listens on, for a {@code DataSource} the backend cannot open that connection from, such
    * as a pool that keeps its URL in a configuration object (the Quarkus integration passes one for
    * Agroal). The factory runs at most once, when the signal first starts listening; the signal owns
-   * what it returns. A backend whose signal holds no dedicated connection never calls it, and
-   * returns what {@link #forgetSignal(DataSource)} returns.
+   * what it returns.
+   *
+   * <p>What the factory has to return is the selected backend's requirement. For Postgres, see
+   * {@code PostgresCryptoForgetSignal}: a pool dedicated to the signal, holding at most one
+   * connection, that validates a connection when it is borrowed, and never the application's own
+   * pool. A backend whose signal holds no listening connection never calls the factory and returns
+   * what {@link #forgetSignal(DataSource)} returns, so an integration may pass a factory written
+   * for another backend's database.
    *
    * @param dataSource the application's {@code DataSource} on this backend's database
    * @param listenDataSourceFactory opens the dedicated pool the signal listens on
-   * @return a new signal over {@code dataSource}; the caller closes it
+   * @return a new signal over {@code dataSource}; the caller closes it, the only product of this
+   *     interface it closes (see the class Javadoc)
    * @throws IllegalArgumentException if either argument is {@code null}
    */
   CryptoForgetSignal forgetSignal(
@@ -88,21 +105,28 @@ public interface CryptoBackend {
 
   /**
    * This backend's own key-store engine: per-subject keys and tombstones kept in this backend's
-   * database, built from {@code settings}. Enabled by {@code streamrune.crypto.<backend>.enabled}.
-   * The engine is not cached; the integration wraps it in a {@link CachedCryptoEngine} when the
-   * cache is enabled.
+   * database, built from {@code settings}. The integrations enable it with {@code
+   * streamrune.crypto.<backend>.enabled}. The engine is not cached; the integration wraps it in a
+   * {@link CachedCryptoEngine} when the cache is enabled.
    *
    * @param dataSource the application's {@code DataSource} on this backend's database
    * @param settings the key-table name and metrics
-   * @return a new engine over {@code dataSource}
+   * @return a new engine over {@code dataSource} that holds nothing that needs releasing, so the
+   *     caller never closes it; whatever the backend opens on this call to verify or guard
+   *     something is closed before it returns (see the class Javadoc)
    * @throws IllegalArgumentException if an argument is {@code null}, or the table name is not a
-   *     valid identifier for this backend
+   *     valid identifier for this backend (see {@link KeyStoreEngineSettings} for the message)
    */
   CryptoEngine keyStoreEngine(DataSource dataSource, KeyStoreEngineSettings settings);
 
   /**
    * What {@link #keyStoreEngine(DataSource, KeyStoreEngineSettings)} builds the key-store engine
    * with.
+   *
+   * <p>An integration with no table-name property for the selected backend passes {@code null}. A
+   * backend's message for a rejected table name names its own table-name property if it has one
+   * (Postgres: {@code streamrune.crypto.postgres.table-name}), and otherwise names only the
+   * rejected value, never another backend's property.
    *
    * @param tableName the key table's name, or {@code null} for the backend's default key table; a
    *     blank name also means the default and is stored as {@code null}. Any other value is passed
