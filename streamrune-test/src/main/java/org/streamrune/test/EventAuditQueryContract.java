@@ -40,7 +40,8 @@ import org.streamrune.core.types.Version;
  * (itself plus every transitive descendant, none of its ancestors); {@code save} and {@code
  * saveAll} writing alike, and a failed batch leaving nothing to find; and null arguments failing
  * with {@link NullPointerException}. Every field of an entry reads back as written. Run by {@code
- * InMemoryEventAuditStoreContractTest} and {@code PostgresAuditContractsTest}.
+ * InMemoryEventAuditStoreContractTest}, {@code PostgresAuditContractsTest} and {@code
+ * SqliteAuditContractsTest}.
  */
 public abstract class EventAuditQueryContract {
 
@@ -272,6 +273,30 @@ public abstract class EventAuditQueryContract {
     }
   }
 
+  /**
+   * The bounds compare to the microsecond: an entry at .123456 is inside a window starting at
+   * .123455 or ending at .123456, and outside one starting at .123457 or ending at .123455.
+   */
+  @Test
+  void theTimeWindowOfStreamAndUserComparesToTheMicrosecond() {
+    Instant at = Instant.parse("2026-01-01T10:00:00.123456Z");
+    Instant microBefore = Instant.parse("2026-01-01T10:00:00.123455Z");
+    Instant microAfter = Instant.parse("2026-01-01T10:00:00.123457Z");
+    writer.save(match("micro", at));
+    PageRequest request = PageRequest.of(0, 10);
+
+    for (Finder finder : WINDOWED) {
+      assertEquals(List.of("micro"), ids(finder.all(query, microBefore, TO)));
+      assertEquals(List.of("micro"), ids(finder.all(query, FROM, at)));
+      assertEquals(List.of(), ids(finder.all(query, microAfter, TO)));
+      assertEquals(List.of(), ids(finder.all(query, FROM, microBefore)));
+      assertEquals(List.of("micro"), ids(finder.page(query, microBefore, TO, request)));
+      assertEquals(List.of("micro"), ids(finder.page(query, FROM, at, request)));
+      assertEquals(List.of(), ids(finder.page(query, microAfter, TO, request)));
+      assertEquals(0, finder.page(query, FROM, microBefore, request).totalElements());
+    }
+  }
+
   @Test
   void aWindowHoldingNoEntryYieldsAnEmptyResult() {
     writer.save(match("m-1", T0.plusSeconds(1)));
@@ -495,9 +520,13 @@ public abstract class EventAuditQueryContract {
     assertTrue(query.traceFullCausationChain(EventId.of("unknown")).isEmpty());
   }
 
-  /** A causation cycle terminates the trace: each event appears once. */
+  /**
+   * A causation cycle terminates the trace: each event appears once. The timeout runs the case on a
+   * thread of its own, so a query that loops fails the case instead of hanging the build (a JDBC
+   * call ignores interrupts).
+   */
   @Test
-  @Timeout(30)
+  @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void theCausalChainTerminatesOnATwoEventCycle() {
     writer.saveAll(
         List.of(causedBy("a", "b", T0.plusSeconds(1)), causedBy("b", "a", T0.plusSeconds(2))));
@@ -507,7 +536,7 @@ public abstract class EventAuditQueryContract {
   }
 
   @Test
-  @Timeout(30)
+  @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void theCausalChainTerminatesOnASelfReference() {
     writer.save(causedBy("self", "self", T0));
 

@@ -36,8 +36,8 @@ import org.streamrune.core.types.Version;
  * a no-op; null arguments fail with {@link NullPointerException}. The store is write-only, so
  * "persisted" is observed through the store's own duplicate rule: an eventId that was persisted
  * fails to save again, one that was not saves. What the entries read back as is pinned by {@link
- * EventAuditQueryContract}. Run by {@code InMemoryEventAuditStoreContractTest} and {@code
- * PostgresAuditContractsTest}.
+ * EventAuditQueryContract}. Run by {@code InMemoryEventAuditStoreContractTest}, {@code
+ * PostgresAuditContractsTest} and {@code SqliteAuditContractsTest}.
  */
 public abstract class EventAuditStoreContract {
 
@@ -119,7 +119,7 @@ public abstract class EventAuditStoreContract {
 
   /** Two writers racing the same eventId: exactly one persists it, the other gets the error. */
   @Test
-  @Timeout(60)
+  @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void twoConcurrentSavesOfOneEventIdPersistOneAndFailTheOther() throws Exception {
     for (int round = 0; round < 20; round++) {
       String id = "race-" + round;
@@ -211,7 +211,7 @@ public abstract class EventAuditStoreContract {
    * nothing.
    */
   @Test
-  @Timeout(60)
+  @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
   void twoConcurrentBatchesSharingAnEventIdPersistExactlyOneWholeBatch() throws Exception {
     for (int r = 0; r < 20; r++) {
       int round = r;

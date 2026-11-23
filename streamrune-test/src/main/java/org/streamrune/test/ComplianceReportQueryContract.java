@@ -28,7 +28,8 @@ import org.streamrune.core.types.UserId;
  * anonymous entries out; the range is inclusive at both ends and echoed in the report; {@code
  * generateForUser} scopes every figure to one user; an empty range or an unknown user yields zeros
  * and empty maps; and null arguments fail with {@link NullPointerException}. Run by {@code
- * InMemoryComplianceReportQueryContractTest} and {@code PostgresAuditContractsTest}.
+ * InMemoryComplianceReportQueryContractTest}, {@code PostgresAuditContractsTest} and {@code
+ * SqliteAuditContractsTest}.
  */
 public abstract class ComplianceReportQueryContract {
 
@@ -205,6 +206,41 @@ public abstract class ComplianceReportQueryContract {
     assertEquals(Map.of("PlaceOrder", 2L), all.commandCountsByType());
     assertEquals(Map.of("u1", 2L), all.activityByUser());
     assertEquals(2, forUser.totalCommands());
+  }
+
+  /**
+   * The range compares to the microsecond: an entry at .123456 counts in a range starting at
+   * .123455 or ending at .123456, and not in one starting at .123457 or ending at .123455.
+   */
+  @Test
+  void theRangeComparesToTheMicrosecond() {
+    Instant at = Instant.parse("2026-01-01T10:00:00.123456Z");
+    Instant microBefore = Instant.parse("2026-01-01T10:00:00.123455Z");
+    Instant microAfter = Instant.parse("2026-01-01T10:00:00.123457Z");
+    command("PlaceOrder", U1, AuditOutcome.FAILURE, at);
+
+    for (ComplianceReport inside :
+        java.util.List.of(
+            query.generate(microBefore, TO),
+            query.generate(FROM, at),
+            query.generateForUser(U1, microBefore, TO),
+            query.generateForUser(U1, FROM, at))) {
+      assertEquals(1, inside.totalCommands());
+      assertEquals(1, inside.totalFailures());
+      assertEquals(Map.of("PlaceOrder", 1L), inside.commandCountsByType());
+      assertEquals(Map.of("u1", 1L), inside.activityByUser());
+    }
+    for (ComplianceReport outside :
+        java.util.List.of(
+            query.generate(microAfter, TO),
+            query.generate(FROM, microBefore),
+            query.generateForUser(U1, microAfter, TO),
+            query.generateForUser(U1, FROM, microBefore))) {
+      assertEquals(0, outside.totalCommands());
+      assertEquals(0, outside.totalFailures());
+      assertTrue(outside.commandCountsByType().isEmpty());
+      assertTrue(outside.activityByUser().isEmpty());
+    }
   }
 
   @Test

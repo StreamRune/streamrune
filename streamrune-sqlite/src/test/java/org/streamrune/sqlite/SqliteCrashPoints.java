@@ -91,63 +91,82 @@ final class SqliteCrashPoints {
    * the armed point's table gets them, so a database that lacks another table can be armed too.
    */
   private static final Map<String, List<String>> TRIGGERS =
-      Map.of(
-          "global_offset_counter",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_counter AFTER UPDATE ON"
-                  + " main.global_offset_counter BEGIN SELECT"
-                  + " sr_crash_point('global_offset_counter'); END"),
-          "event_stream",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_event AFTER INSERT ON main.event_stream"
-                  + " BEGIN SELECT sr_crash_point('event_stream'); END"),
-          "snapshot_store",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_insert AFTER INSERT ON"
-                  + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_update AFTER UPDATE ON"
-                  + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END"),
-          "command_inbox",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_inbox AFTER INSERT ON main.command_inbox"
-                  + " BEGIN SELECT sr_crash_point('command_inbox'); END"),
-          "outbox_events",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_outbox AFTER INSERT ON"
-                  + " main.outbox_events BEGIN SELECT sr_crash_point('outbox_events'); END"),
-          "saga_state",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_insert AFTER INSERT ON"
-                  + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_update AFTER UPDATE ON"
-                  + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END"),
-          "saga_dead_letters",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_insert AFTER INSERT ON"
-                  + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
-                  + " END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_update AFTER UPDATE ON"
-                  + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
-                  + " END"),
-          "dead_letter_queue",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_insert AFTER INSERT ON"
-                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
-                  + " END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_update AFTER UPDATE ON"
-                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
-                  + " END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_delete AFTER DELETE ON"
-                  + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
-                  + " END"),
-          "projection_dead_letters",
-          List.of(
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_insert AFTER INSERT ON"
-                  + " main.projection_dead_letters BEGIN"
-                  + " SELECT sr_crash_point('projection_dead_letters'); END",
-              "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_update AFTER UPDATE ON"
-                  + " main.projection_dead_letters BEGIN"
-                  + " SELECT sr_crash_point('projection_dead_letters'); END"));
+      Map.ofEntries(
+          Map.entry(
+              "global_offset_counter",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_counter AFTER UPDATE ON"
+                      + " main.global_offset_counter BEGIN SELECT"
+                      + " sr_crash_point('global_offset_counter'); END")),
+          Map.entry(
+              "event_stream",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_event AFTER INSERT ON main.event_stream"
+                      + " BEGIN SELECT sr_crash_point('event_stream'); END")),
+          Map.entry(
+              "snapshot_store",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_insert AFTER INSERT ON"
+                      + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_snapshot_update AFTER UPDATE ON"
+                      + " main.snapshot_store BEGIN SELECT sr_crash_point('snapshot_store'); END")),
+          Map.entry(
+              "command_inbox",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_inbox AFTER INSERT ON main.command_inbox"
+                      + " BEGIN SELECT sr_crash_point('command_inbox'); END")),
+          Map.entry(
+              "outbox_events",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_outbox AFTER INSERT ON"
+                      + " main.outbox_events BEGIN SELECT sr_crash_point('outbox_events'); END")),
+          Map.entry(
+              "saga_state",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_insert AFTER INSERT ON"
+                      + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_saga_update AFTER UPDATE ON"
+                      + " main.saga_state BEGIN SELECT sr_crash_point('saga_state'); END")),
+          Map.entry(
+              "saga_dead_letters",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_insert AFTER INSERT ON"
+                      + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
+                      + " END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dead_letter_update AFTER UPDATE ON"
+                      + " main.saga_dead_letters BEGIN SELECT sr_crash_point('saga_dead_letters');"
+                      + " END")),
+          Map.entry(
+              "dead_letter_queue",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_insert AFTER INSERT ON"
+                      + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                      + " END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_update AFTER UPDATE ON"
+                      + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                      + " END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_dlq_delete AFTER DELETE ON"
+                      + " main.dead_letter_queue BEGIN SELECT sr_crash_point('dead_letter_queue');"
+                      + " END")),
+          Map.entry(
+              "audit_log",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_audit_insert AFTER INSERT ON"
+                      + " main.audit_log BEGIN SELECT sr_crash_point('audit_log'); END")),
+          Map.entry(
+              "event_audit_log",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_event_audit_insert AFTER INSERT ON"
+                      + " main.event_audit_log BEGIN SELECT sr_crash_point('event_audit_log'); END")),
+          Map.entry(
+              "projection_dead_letters",
+              List.of(
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_insert AFTER INSERT ON"
+                      + " main.projection_dead_letters BEGIN"
+                      + " SELECT sr_crash_point('projection_dead_letters'); END",
+                  "CREATE TEMP TRIGGER IF NOT EXISTS sr_crash_projection_dlq_update AFTER UPDATE ON"
+                      + " main.projection_dead_letters BEGIN"
+                      + " SELECT sr_crash_point('projection_dead_letters'); END")));
 
   private final Kill kill;
   private volatile Point armed;

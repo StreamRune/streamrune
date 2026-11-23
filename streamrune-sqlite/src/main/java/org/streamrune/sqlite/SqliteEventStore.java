@@ -41,6 +41,7 @@ import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.UnknownEventTypeException;
+import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
@@ -122,7 +123,15 @@ import org.streamrune.runtime.GuardedTracing;
  * CommandInbox.InboxResult#requireBoundTo}). The write lock serializes the claims, so of two
  * executions of one key the first to get the lock records it and the other finds the record. Each
  * entry carries the trace link of the event it was derived from (given entries: of the first
- * event), as on Postgres. There is no event audit yet.
+ * event), as on Postgres.
+ *
+ * <p><b>Event audit, in the append transaction.</b> With a {@link SqliteEventAuditStore} the
+ * append, keyed or not, writes one {@code event_audit_log} row per event on its own connection,
+ * inside its own write transaction, after the events and the outbox entries, as on Postgres: the
+ * rows commit with the events or not at all, and an append that writes no event (an empty one, a
+ * refused one, a key recorded before) writes none. Each row's stream and version are the append's
+ * own arguments, as the event row's are, never the envelope's; its ids and instant come from the
+ * event's metadata.
  *
  * <p><b>The saga forward fence.</b> {@link #appendWithKey(StreamId, List, Version, IdempotencyKey,
  * String, SagaOrigin)} with a saga origin reads the saga's {@code saga_state} row inside the
@@ -229,6 +238,7 @@ public final class SqliteEventStore implements EventStore {
   private final SqliteOutboxStore outboxStore;
   private final OutboxEventMapper outboxEventMapper;
   private final SqliteCommandInbox commandInbox;
+  private final SqliteEventAuditStore eventAuditStore;
 
   // The legacy-snapshot probe of an IGNORE_SNAPSHOT load runs at most once per store instance.
   private final AtomicBoolean legacySnapshotProbed = new AtomicBoolean(false);
@@ -252,6 +262,8 @@ public final class SqliteEventStore implements EventStore {
    *     together with {@code outboxEventMapper}
    * @param outboxEventMapper derives the outbox entries of each event, or {@code null} for none
    * @param commandInbox the inbox a keyed append claims its key in, or {@code null} for none
+   * @param eventAuditStore the store the append writes its event audit rows to, or {@code null} for
+   *     none
    */
   SqliteEventStore(
       SqliteDatabase database,
@@ -264,7 +276,8 @@ public final class SqliteEventStore implements EventStore {
       Clock clock,
       SqliteOutboxStore outboxStore,
       OutboxEventMapper outboxEventMapper,
-      SqliteCommandInbox commandInbox) {
+      SqliteCommandInbox commandInbox,
+      SqliteEventAuditStore eventAuditStore) {
     this.dataSource = Objects.requireNonNull(database, "database is required").dataSource();
     this.file = database.file();
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
@@ -280,6 +293,7 @@ public final class SqliteEventStore implements EventStore {
     this.outboxStore = outboxStore;
     this.outboxEventMapper = outboxEventMapper;
     this.commandInbox = commandInbox;
+    this.eventAuditStore = eventAuditStore;
   }
 
   /**
@@ -898,7 +912,7 @@ public final class SqliteEventStore implements EventStore {
   /**
    * The append: serialize (any {@code @Encrypted} field encrypted) before a connection is borrowed,
    * then one write transaction that reserves the offsets, checks the head, inserts the rows, writes
-   * the outbox entries and commits.
+   * the outbox entries and the event audit rows, and commits.
    *
    * @param traced whether the append runs inside its span, so its serialization starts a child
    */
@@ -950,6 +964,7 @@ public final class SqliteEventStore implements EventStore {
         if (!outboxEntries.isEmpty()) {
           outboxStore.saveAll(outboxEntries, conn);
         }
+        writeAuditEntries(conn, streamId, events, expectedVersion);
         SqliteTransactions.commit(conn);
         committed = true;
         result =
@@ -1082,8 +1097,39 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * The keyed append: claim, fence, events, backfill, outbox entries, commit, in one write
-   * transaction.
+   * Writes the event audit rows of {@code events} on {@code conn}, inside the append's open write
+   * transaction; nothing without an event audit store or without events. The stream and the
+   * versions are the append's arguments, as the inserted events' are, never the envelope's, so the
+   * audit rows mirror event_stream even when a caller's envelopes name another stream or version.
+   */
+  private void writeAuditEntries(
+      Connection conn, StreamId streamId, List<EventEnvelope> events, Version expectedVersion) {
+    if (eventAuditStore == null || events.isEmpty()) {
+      return;
+    }
+    List<EventAuditEntry> entries = new ArrayList<>(events.size());
+    long version = expectedVersion.value();
+    for (EventEnvelope envelope : events) {
+      version++;
+      EventMetadata metadata = envelope.metadata();
+      entries.add(
+          new EventAuditEntry(
+              metadata.eventId(),
+              envelope.eventType(),
+              streamId,
+              new Version(version),
+              metadata.commandId(),
+              metadata.correlationId(),
+              metadata.causationId(),
+              metadata.userId(),
+              metadata.timestamp()));
+    }
+    eventAuditStore.saveAll(entries, conn);
+  }
+
+  /**
+   * The keyed append: claim, fence, events, backfill, outbox entries, event audit rows, commit, in
+   * one write transaction.
    *
    * @param forwardOf the saga whose forward command this is, or {@code null} for an unfenced append
    * @param mappedOutboxEntries the outbox entries of {@code events}, or {@code null} to derive them
@@ -1143,6 +1189,7 @@ public final class SqliteEventStore implements EventStore {
           if (!outboxEntries.isEmpty()) {
             outboxStore.saveAll(outboxEntries, conn);
           }
+          writeAuditEntries(conn, streamId, events, expectedVersion);
           SqliteTransactions.commit(conn);
           committed = true;
           result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);

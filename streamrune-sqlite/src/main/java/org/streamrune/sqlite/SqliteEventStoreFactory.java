@@ -38,10 +38,11 @@ import org.streamrune.runtime.GuardedTracing;
  * connection's {@code busy_timeout}. And {@link #clock(Clock)} sets the clock that stamps {@code
  * created_at}, which on Postgres the database's clock stamps.
  *
- * <p>The outbox and the command inbox are this backend's own stores ({@link SqliteOutboxStore},
- * {@link SqliteCommandInbox}), built over the same database file: the store writes their rows on
- * its own append connection, inside its append transaction, so a store of another type could not
- * join it, and one over another file would keep rows the relay or the inbox never reads.
+ * <p>The outbox, the command inbox and the event audit store are this backend's own stores ({@link
+ * SqliteOutboxStore}, {@link SqliteCommandInbox}, {@link SqliteEventAuditStore}), built over the
+ * same database file: the store writes their rows on its own append connection, inside its append
+ * transaction, so a store of another type could not join it, and one over another file would keep
+ * rows the relay, the inbox or the audit queries never read.
  *
  * <p>The database handle is used as given and not closed by the factory or the stores: close it
  * after every store built over it has stopped.
@@ -64,6 +65,7 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   private SqliteOutboxStore outboxStore;
   private OutboxEventMapper outboxEventMapper;
   private SqliteCommandInbox commandInbox;
+  private SqliteEventAuditStore eventAuditStore;
 
   /**
    * Creates a new factory.
@@ -218,6 +220,19 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   }
 
   /**
+   * Sets the event audit store the store writes one row per appended event to, in the append's
+   * transaction. Optional; without one no event audit row is written.
+   *
+   * @param eventAuditStore the event audit store, over the same database file, or {@code null} for
+   *     none
+   * @return this factory for method chaining
+   */
+  public SqliteEventStoreFactory eventAuditStore(SqliteEventAuditStore eventAuditStore) {
+    this.eventAuditStore = eventAuditStore;
+    return this;
+  }
+
+  /**
    * Creates a new event store: refuses an {@code @Encrypted} type without a crypto engine before it
    * touches the database, applies the schema series and validates them (each unless switched off),
    * and builds the store. Every call builds a new store over the same database.
@@ -229,7 +244,7 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
    * @throws UnsupportedOperationException if no crypto engine is set and the registry does not
    *     implement {@link EventTypeRegistry#registeredTypes()}
    * @throws IllegalArgumentException if the snapshot migrations are inconsistent, or the outbox
-   *     store or the command inbox is built over another database file
+   *     store, the command inbox or the event audit store is built over another database file
    */
   @Override
   public EventStore create() {
@@ -245,6 +260,9 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
     }
     if (commandInbox != null) {
       requireSameFile("commandInbox", commandInbox.file());
+    }
+    if (eventAuditStore != null) {
+      requireSameFile("eventAuditStore", eventAuditStore.file());
     }
     SqliteEventStore.validateCryptoConfig(typeRegistry, cryptoEngine);
     // Validated before anything is migrated: a bad migration set is a configuration error.
@@ -275,7 +293,8 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
         clock,
         outboxStore,
         outboxEventMapper,
-        commandInbox);
+        commandInbox,
+        eventAuditStore);
   }
 
   /**

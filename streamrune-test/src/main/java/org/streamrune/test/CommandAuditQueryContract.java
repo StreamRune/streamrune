@@ -33,7 +33,8 @@ import org.streamrune.core.types.UserId;
  * ignores the request's sort, store-side paging with the total, the empty page, command and
  * query-origin entries returned alike, anonymous entries never returned by user; and that null
  * arguments fail with {@link NullPointerException}. Every field of an entry reads back as written.
- * There is no in-memory command audit store: run by {@code PostgresAuditContractsTest}.
+ * There is no in-memory command audit store: run by {@code PostgresAuditContractsTest} and {@code
+ * SqliteAuditContractsTest}.
  */
 public abstract class CommandAuditQueryContract {
 
@@ -346,6 +347,27 @@ public abstract class CommandAuditQueryContract {
       assertEquals(
           List.of("at-from", "inside", "at-to"),
           ids(finder.find(query, FROM, TO, PageRequest.of(0, 10))));
+    }
+  }
+
+  /**
+   * The bounds compare to the microsecond: an entry at .123456 is inside a window starting at
+   * .123455 or ending at .123456, and outside one starting at .123457 or ending at .123455.
+   */
+  @Test
+  void theTimeWindowComparesToTheMicrosecond() {
+    Instant at = Instant.parse("2026-01-01T10:00:00.123456Z");
+    Instant microBefore = Instant.parse("2026-01-01T10:00:00.123455Z");
+    Instant microAfter = Instant.parse("2026-01-01T10:00:00.123457Z");
+    writer.save(match("micro", at));
+    PageRequest request = PageRequest.of(0, 10);
+
+    for (Finder finder : FINDERS) {
+      assertEquals(List.of("micro"), ids(finder.find(query, microBefore, TO, request)));
+      assertEquals(List.of("micro"), ids(finder.find(query, FROM, at, request)));
+      assertEquals(List.of(), ids(finder.find(query, microAfter, TO, request)));
+      assertEquals(List.of(), ids(finder.find(query, FROM, microBefore, request)));
+      assertEquals(0, finder.find(query, FROM, microBefore, request).totalElements());
     }
   }
 
