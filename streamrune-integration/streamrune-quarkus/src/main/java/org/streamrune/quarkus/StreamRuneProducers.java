@@ -376,20 +376,20 @@ public class StreamRuneProducers {
    * repository, or (transactional, with no write target of its own) has no other transactional
    * store to go to.
    *
-   * <p>Creating the store runs the backend's check of the {@code DataSource} ({@code
-   * StreamRuneBackend.verify}: on Postgres the product and the server version), applies the
-   * backend's read-model migration series when {@code streamrune.read-model.schema.auto-initialize}
-   * — unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
-   * read-model schema. Arc creates a {@code @Singleton} bean when it is first injected or looked
-   * up, and only {@link #readModelStores} looks it up — when the stores are first selected — so the
-   * database is touched when the first bean that needs the stores is created: in an application
-   * with projection runners, the runners' producers on the startup event (or the {@link
-   * ProjectionIndexDeclarer}, earlier on the same event, when index beans exist).
+   * <p>Creating the store checks the server version (on Postgres; any other backend verified the
+   * {@code DataSource} when its stores were opened), applies the backend's read-model migration
+   * series when {@code streamrune.read-model.schema.auto-initialize} — unset, {@code
+   * streamrune.event-store.schema.auto-initialize} — is on, and validates the read-model schema.
+   * Arc creates a {@code @Singleton} bean when it is first injected or looked up, and only {@link
+   * #readModelStores} looks it up — when the stores are first selected — so the database is touched
+   * when the first bean that needs the stores is created: in an application with projection
+   * runners, the runners' producers on the startup event (or the {@link ProjectionIndexDeclarer},
+   * earlier on the same event, when index beans exist).
    *
    * <p>Quarkus always provides a {@code DataSource} bean, so this store is produced even in an
-   * application that uses no database: when the check fails (no usable database of the backend),
-   * the failure says that such an application produces its own {@code ReadModelStore} named after
-   * the backend. A Postgres server whose version is read and too old fails with {@link
+   * application that uses no database: when the Postgres server version cannot be read (no usable
+   * database), the failure says that such an application produces its own {@code ReadModelStore}
+   * named after the backend. A Postgres server whose version is read and too old fails with {@link
    * org.streamrune.postgres.UnsupportedServerVersionException}, unwrapped.
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if present) through
@@ -405,7 +405,7 @@ public class StreamRuneProducers {
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
    *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT — or the
-   *     backend's check of the {@code DataSource} fails (no usable database of the backend)
+   *     Postgres server version cannot be read (no usable database)
    * @throws org.streamrune.postgres.UnsupportedServerVersionException if the server is older than
    *     StreamRune supports
    */
@@ -413,14 +413,16 @@ public class StreamRuneProducers {
   @Singleton
   @DefaultBean
   @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE_BEAN)
-  public ReadModelStore postgresReadModelStore(
-      DataSource dataSource, BackendStores stores, StreamRuneBackend backend) {
-    // The backend's own check of the DataSource (on Postgres the product and the server version,
-    // read once more inside create); run first here, its failure — no usable database behind the
-    // DataSource Quarkus always provides — gets the hint below. A readable but unsupported
-    // Postgres version is a real, old server: rethrown as is.
+  public ReadModelStore postgresReadModelStore(DataSource dataSource, BackendStores stores) {
+    if (!"postgres".equals(stores.backendName())) {
+      // Any other backend verified the DataSource when the bundle was opened, at startup.
+      return stores.defaultReadModelStore();
+    }
+    // The version check runs once more inside create; run first here, its "cannot read the server
+    // version" failure — no usable database behind the DataSource Quarkus always provides — gets
+    // the hint below. A readable but unsupported version is a real, old server: rethrown as is.
     try {
-      backend.verify(dataSource);
+      org.streamrune.postgres.PostgresServerVersion.requireSupported(dataSource);
     } catch (org.streamrune.postgres.UnsupportedServerVersionException e) {
       throw e;
     } catch (RuntimeException e) {
@@ -428,9 +430,7 @@ public class StreamRuneProducers {
           "The default read-model store '"
               + stores.backendName()
               + "' cannot be created on the application's DataSource, which is not a usable"
-              + " database of the '"
-              + backend.name()
-              + "' backend ("
+              + " PostgreSQL database ("
               + e.getMessage()
               + "). Quarkus always provides a DataSource bean, so this store is produced even when"
               + " the application uses no database: an application without a database produces"

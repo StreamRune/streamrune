@@ -2402,4 +2402,62 @@ class StreamRuneProducersTest {
         "a CachingUserRoleResolver wrap would serve Alice's cached roles to Bob — cross-principal"
             + " authorization bypass");
   }
+
+  // ── the default read-model store's DataSource check ──────────────────────────────────────
+
+  /**
+   * On Postgres the producer keeps today's check, the server version only: a Postgres-compatible
+   * driver that reports another product name starts as it did before the SQLite backend existed.
+   */
+  @Test
+  void thePostgresDefaultStoreChecksTheVersionOnly_notTheProductName() throws Exception {
+    var dataSource = mock(javax.sql.DataSource.class);
+    var connection = mock(java.sql.Connection.class);
+    var meta = mock(java.sql.DatabaseMetaData.class);
+    when(dataSource.getConnection()).thenReturn(connection);
+    when(connection.getMetaData()).thenReturn(meta);
+    when(meta.getDatabaseProductName()).thenReturn("A Postgres-compatible database");
+    when(meta.getDatabaseMajorVersion()).thenReturn(17);
+    when(meta.getDatabaseProductVersion()).thenReturn("17.2");
+    var stores = mock(org.streamrune.core.backend.BackendStores.class);
+    var store = mock(org.streamrune.core.projection.ReadModelStore.class);
+    when(stores.backendName()).thenReturn("postgres");
+    when(stores.defaultReadModelStore()).thenReturn(store);
+
+    assertSame(store, new StreamRuneProducers().postgresReadModelStore(dataSource, stores));
+    verify(meta, never()).getDatabaseProductName();
+  }
+
+  /** On Postgres an unreadable server keeps today's "not a usable PostgreSQL database" hint. */
+  @Test
+  void thePostgresDefaultStoreKeepsTodaysNoDatabaseHint() {
+    var stores = mock(org.streamrune.core.backend.BackendStores.class);
+    when(stores.backendName()).thenReturn("postgres");
+
+    var e =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                new StreamRuneProducers()
+                    .postgresReadModelStore(mock(javax.sql.DataSource.class), stores));
+    assertTrue(
+        e.getMessage().contains("which is not a usable PostgreSQL database ("), e.getMessage());
+    verify(stores, never()).defaultReadModelStore();
+  }
+
+  /**
+   * Any other backend verified the DataSource when its stores were opened, at startup: the producer
+   * borrows no second connection.
+   */
+  @Test
+  void aSqliteDefaultStoreIsNotCheckedAgain() {
+    var dataSource = mock(javax.sql.DataSource.class);
+    var stores = mock(org.streamrune.core.backend.BackendStores.class);
+    var store = mock(org.streamrune.core.projection.ReadModelStore.class);
+    when(stores.backendName()).thenReturn("sqlite");
+    when(stores.defaultReadModelStore()).thenReturn(store);
+
+    assertSame(store, new StreamRuneProducers().postgresReadModelStore(dataSource, stores));
+    verifyNoInteractions(dataSource);
+  }
 }

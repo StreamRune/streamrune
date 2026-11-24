@@ -170,7 +170,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.core.projection.OffsetStore offsetStore(org.streamrune.core.backend.BackendStores)
   public org.streamrune.core.projection.ProjectionDeadLetterStore postgresProjectionDeadLetterStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
-  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.core.backend.BackendStores, org.streamrune.core.backend.StreamRuneBackend)
+  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.core.backend.BackendStores)
   public org.streamrune.core.saga.SagaDeadLetterStore sagaDeadLetterStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.core.saga.SagaStore sagaStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(jakarta.enterprise.inject.Instance<org.streamrune.core.backend.BackendStores>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
