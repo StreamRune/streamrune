@@ -71,8 +71,8 @@ public final class SqliteReadModelStore implements ReadModelStore {
    * @return the store
    * @throws IllegalArgumentException if an argument is {@code null}, or {@code name} is blank or
    *     {@link ReadModelStore#DEFAULT}
-   * @throws IllegalStateException if {@code database} is closed and a schema step is on, or
-   *     validation finds the schema missing a table or column or behind this build
+   * @throws IllegalStateException if {@code database} is closed (whatever the flags), or validation
+   *     finds the schema missing a table or column or behind this build
    * @throws org.streamrune.core.EventStoreException if the migration fails
    */
   public static SqliteReadModelStore create(
@@ -94,6 +94,9 @@ public final class SqliteReadModelStore implements ReadModelStore {
     if (objectMapper == null) {
       throw new IllegalArgumentException("objectMapper is required");
     }
+    // With both flags off nothing else would notice a closed handle, and the store would write
+    // without the instance guard.
+    database.requireOpen();
     if (migrate) {
       database.migrate(SqliteSchemaSeries.READ_MODEL);
     }

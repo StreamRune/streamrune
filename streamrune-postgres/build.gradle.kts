@@ -62,6 +62,10 @@ dependencies {
     testImplementation(libs.bundles.testcontainers.pg)
     testImplementation(libs.assertj.core)
     testImplementation(libs.mockito.core)
+    // PostgresBackendTest checks that the foreign-store refusal names a SQLite store's backend
+    // ('sqlite'), with a real SqliteEventAuditStore. Test scope only: streamrune-sqlite's own tests
+    // depend on this module the same way, and neither main source set sees the other.
+    testImplementation(project(":streamrune-sqlite"))
     // Crash tests drive a ContinuousProjectionRunner on a virtual thread and wait for its checkpoint.
     testImplementation(libs.awaitility)
     // Log-assertion tests pin operator-facing log lines, whose only observable effect IS the line,
@@ -158,4 +162,10 @@ val sagaStateWriteRatchetTest =
     }
 
 tasks.named<Test>("test") { filter { excludeTestsMatching(sagaStateWriteRatchetClass) } }
+
+// PostgresBackendTest opens a SQLite database: the driver loads its native library and the
+// instance guard calls flock(2) through the Foreign Function and Memory API. Enabling native
+// access keeps the JVM's restricted-method warnings out of the test output, as streamrune-sqlite
+// does for its own tests.
+tasks.withType<Test>().configureEach { jvmArgs("--enable-native-access=ALL-UNNAMED") }
 tasks.named("check") { dependsOn(sagaStateWriteRatchetTest) }

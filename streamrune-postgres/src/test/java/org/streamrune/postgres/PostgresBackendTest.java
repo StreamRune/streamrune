@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import java.io.PrintWriter;
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
@@ -24,6 +25,7 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
@@ -57,7 +59,8 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubscriptionName;
 import org.streamrune.core.types.Version;
 import org.streamrune.runtime.InMemoryEventAuditStore;
-import org.streamrune.sqlite.OtherBackendEventAuditStore;
+import org.streamrune.sqlite.SqliteDatabase;
+import org.streamrune.sqlite.SqliteEventAuditStore;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryCryptoEngine;
 import org.streamrune.test.InMemoryOutboxStore;
@@ -396,17 +399,29 @@ class PostgresBackendTest {
                 + " event store's transaction; build it from this backend's BackendStores");
   }
 
+  /** A SQLite store, on a database file of its own, is named by its backend, not its class. */
   @Test
-  void theRefusalNamesTheBackendThatOwnsTheStore() {
+  void theRefusalNamesTheBackendThatOwnsTheStore(@TempDir Path dir) {
     BackendStores stores = open(dataSource);
-    assertThatThrownBy(
-            () ->
-                stores.eventStoreFactory(
-                    options(null, null, null, new OtherBackendEventAuditStore(), null)))
-        .isExactlyInstanceOf(IllegalArgumentException.class)
-        .hasMessage(
-            "event audit store of backend 'sqlite' cannot share the 'postgres' event store's"
-                + " transaction; build it from this backend's BackendStores");
+    // The connection settings SqliteDatabase requires; SQLiteDataSource takes them from its
+    // SQLiteConfig, not from URL parameters.
+    var config = new org.sqlite.SQLiteConfig();
+    config.setJournalMode(org.sqlite.SQLiteConfig.JournalMode.WAL);
+    config.setSynchronous(org.sqlite.SQLiteConfig.SynchronousMode.FULL);
+    config.enforceForeignKeys(true);
+    config.setBusyTimeout(5000);
+    config.setTransactionMode(org.sqlite.SQLiteConfig.TransactionMode.IMMEDIATE);
+    var sqlite = new org.sqlite.SQLiteDataSource(config);
+    sqlite.setUrl("jdbc:sqlite:" + dir.resolve("other-backend.db"));
+    try (SqliteDatabase database = SqliteDatabase.open(sqlite)) {
+      var sqliteAudit = new SqliteEventAuditStore(database);
+      assertThatThrownBy(
+              () -> stores.eventStoreFactory(options(null, null, null, sqliteAudit, null)))
+          .isExactlyInstanceOf(IllegalArgumentException.class)
+          .hasMessage(
+              "event audit store of backend 'sqlite' cannot share the 'postgres' event store's"
+                  + " transaction; build it from this backend's BackendStores");
+    }
   }
 
   @Test

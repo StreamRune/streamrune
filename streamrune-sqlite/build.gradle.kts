@@ -28,6 +28,10 @@ dependencies {
     testImplementation(libs.assertj.core)
     // A real pool, so the concurrency tests run appends on connections that are really concurrent.
     testImplementation(libs.hikaricp)
+    // SqliteBackendTest checks that the foreign-store refusal names a Postgres store's backend
+    // ('postgres'), with a real PostgresEventAuditStore. Test scope only: streamrune-postgres's own
+    // tests depend on this module the same way, and neither main source set sees the other.
+    testImplementation(project(":streamrune-postgres"))
 }
 
 // The driver loads its native library and the instance guard calls flock(2) through the Foreign

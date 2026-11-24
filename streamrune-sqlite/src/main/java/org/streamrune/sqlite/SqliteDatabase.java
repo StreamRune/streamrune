@@ -108,19 +108,35 @@ public final class SqliteDatabase implements AutoCloseable {
     }
     Path file;
     try (Connection connection = dataSource.getConnection()) {
-      SQLiteConnection sqlite = SqliteSetup.sqliteConnection(connection);
-      file = SqliteSetup.databaseFile(sqlite);
-      SqliteSetup.refuseAttachedDatabases(sqlite);
-      SqliteVersion.require(SqliteSetup.libraryVersion(sqlite));
-      SqliteSetup.verify(sqlite);
-      if (!connection.getAutoCommit()) {
-        throw new IllegalStateException(MANUAL_COMMIT_POOL);
-      }
+      file = checkSetup(connection);
     } catch (SQLException e) {
       throw new EventStoreException(
           "Cannot open the SQLite database: " + LogSanitizer.sanitizeFreeText(e.getMessage()), e);
     }
     return new SqliteDatabase(dataSource, InstanceGuardRegistry.acquire(file));
+  }
+
+  /**
+   * Runs every check of {@link #open(DataSource)} on {@code connection}, reading only, and returns
+   * the database file; takes no guard. {@code SqliteBackend.verify} runs the same checks, so a
+   * startup check needs no handle.
+   *
+   * @param connection a connection borrowed from the application's data source
+   * @return the file of the {@code main} database, as SQLite resolved it
+   * @throws IllegalStateException as {@link #open(DataSource)} documents, except the guard's
+   *     refusals
+   * @throws SQLException if the connection cannot be read
+   */
+  static Path checkSetup(Connection connection) throws SQLException {
+    SQLiteConnection sqlite = SqliteSetup.sqliteConnection(connection);
+    Path file = SqliteSetup.databaseFile(sqlite);
+    SqliteSetup.refuseAttachedDatabases(sqlite);
+    SqliteVersion.require(SqliteSetup.libraryVersion(sqlite));
+    SqliteSetup.verify(sqlite);
+    if (!connection.getAutoCommit()) {
+      throw new IllegalStateException(MANUAL_COMMIT_POOL);
+    }
+    return file;
   }
 
   /**
@@ -193,6 +209,19 @@ public final class SqliteDatabase implements AutoCloseable {
     if (guard.isReleased()) {
       throw new IllegalStateException(
           this + " is closed; open a new handle to migrate or validate its schema");
+    }
+  }
+
+  /**
+   * Refuses a closed handle: a store built on it would write without the instance guard, even when
+   * no schema step would notice that the handle is closed.
+   *
+   * @throws IllegalStateException if this handle is closed
+   */
+  void requireOpen() {
+    if (guard.isReleased()) {
+      throw new IllegalStateException(
+          this + " is closed; open a new handle to build a store on it");
     }
   }
 

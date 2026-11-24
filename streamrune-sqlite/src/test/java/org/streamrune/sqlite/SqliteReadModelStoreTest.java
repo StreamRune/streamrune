@@ -168,15 +168,19 @@ class SqliteReadModelStoreTest {
     }
   }
 
-  /** A migration on a closed handle is refused by the handle, before anything is written. */
+  /**
+   * A closed handle is refused before anything is written, whatever the flags: with both off, a
+   * store built on it would write without the instance guard.
+   */
   @Test
-  void aClosedHandleIsRefusedWhenTheSchemaIsMigratedOrValidated() throws SQLException {
+  void aClosedHandleIsRefusedWhateverTheFlags() throws SQLException {
     SqliteDatabase database = open("closed.db");
     database.close();
 
-    for (boolean migrate : new boolean[] {true, false}) {
+    for (boolean[] flags :
+        new boolean[][] {{true, true}, {true, false}, {false, true}, {false, false}}) {
       assertThatThrownBy(
-              () -> SqliteReadModelStore.create("sqlite", database, mapper, migrate, !migrate))
+              () -> SqliteReadModelStore.create("sqlite", database, mapper, flags[0], flags[1]))
           .isInstanceOf(IllegalStateException.class)
           .hasMessageContaining("is closed");
     }
