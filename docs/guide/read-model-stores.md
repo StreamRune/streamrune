@@ -432,7 +432,8 @@ batch or a dead-letter replay holds it from its `BEGIN IMMEDIATE` to its `COMMIT
 one projection waits for an open batch of any other projection on the same file, and the other way
 round. It succeeds once that batch commits within the connection's `busy_timeout` and fails with
 the write-lock message otherwise, so `busy_timeout` must exceed the longest batch or replay the
-file runs. Reads never wait.
+file runs. A read does not wait, except the first read of a read model whose table does not exist
+yet, which creates it.
 
 A read-model store on a second SQLite file opens its own `SqliteDatabase` handle on that file, which
 takes that file's instance guard, and is built with `SqliteReadModelStore.create(name, database,

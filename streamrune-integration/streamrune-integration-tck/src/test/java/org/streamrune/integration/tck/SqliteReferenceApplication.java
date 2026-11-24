@@ -28,7 +28,6 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.BackendSelection;
 import org.streamrune.integration.ProjectionStoreRouting;
-import org.streamrune.integration.tck.MultiReadModelStoreScenario.DefaultStoreProjection;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.runtime.SubscriptionHealthContributor;
@@ -73,6 +72,19 @@ final class SqliteReferenceApplication implements Application {
     this.failure = refusal;
   }
 
+  /**
+   * Builds a constructor-injected bean as a container does: through its public constructor that
+   * takes the application's {@code ProjectionRepository}.
+   */
+  private static Object injected(Class<?> beanClass, ProjectionRepository repository) {
+    try {
+      return beanClass.getConstructor(ProjectionRepository.class).newInstance(repository);
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalArgumentException(
+          beanClass.getName() + " needs a public constructor taking a ProjectionRepository", e);
+    }
+  }
+
   static Application start(
       DataSource dataSource, Map<String, String> properties, Set<Class<?>> extraBeans) {
     return new SqliteReferenceApplication(dataSource, properties, extraBeans);
@@ -98,10 +110,10 @@ final class SqliteReferenceApplication implements Application {
     ReadModelStore defaultStore = stores.defaultReadModelStore();
     beans.add(defaultStore.repository());
     for (Class<?> beanClass : extraBeans) {
-      // The one constructor-injected bean of the scenario takes the default store's repository.
+      // A constructor-injected bean of the scenario takes the default store's repository.
       beans.add(
-          beanClass == DefaultStoreProjection.class
-              ? new DefaultStoreProjection(defaultStore.repository())
+          ContractBeans.injected(beanClass)
+              ? injected(beanClass, defaultStore.repository())
               : ContractBeans.create(beanClass));
     }
 

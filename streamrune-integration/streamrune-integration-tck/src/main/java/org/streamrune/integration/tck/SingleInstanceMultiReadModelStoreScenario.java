@@ -34,20 +34,25 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.ProjectionConfig;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.projection.BaseProjection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
 import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.projection.ReadModelStore;
+import org.streamrune.core.types.ProjectionName;
 import org.streamrune.integration.BackendSelection;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.MultiReadModelStoreScenario.AmbiguousProjection;
+import org.streamrune.integration.tck.MultiReadModelStoreScenario.AppliedEvent;
 import org.streamrune.integration.tck.MultiReadModelStoreScenario.AppliedEventProjection;
 import org.streamrune.integration.tck.MultiReadModelStoreScenario.ContractEventTypes;
 import org.streamrune.integration.tck.MultiReadModelStoreScenario.DefaultStoreProjection;
@@ -81,6 +86,10 @@ import org.streamrune.sqlite.SqliteReadModelStore;
  *   <li>{@code p3} ({@link UnroutedProjection}) is {@code AT_LEAST_ONCE_IDEMPOTENT} with no write
  *       target: the event store's subscription checkpoint.
  * </ul>
+ *
+ * <p>Two more projections, each on the application's {@code ProjectionRepository}, run in tests of
+ * their own, on file A alone: {@link LookupProjection}, whose updater looks {@code p1}'s read model
+ * up through that repository.
  *
  * <p>Leadership is {@code NOOP}, the only one the backend has: no lease is taken and every
  * checkpoint row keeps the epoch {@code 0}. So there is no takeover and no fencing case: the
@@ -308,6 +317,50 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
   }
 
   /**
+   * After a restart, a batch whose updater looks another projection's read model up through the
+   * application's {@code ProjectionRepository} applies, even when that lookup is the first touch of
+   * the other projection's table in the new process. The first application fills {@code p1}'s read
+   * model; the second runs {@link LookupProjection} alone, so nothing but its batches reads {@code
+   * p1}'s table: each batch finds the table the first process created, without waiting for the
+   * write lock the batch itself holds, and records what it looked up.
+   */
+  @Test
+  public void afterARestartABatchLooksAnotherProjectionsReadModelUp() {
+    DataSource a = newDatabaseFile();
+    long top;
+    try (Application first =
+        start(
+            a,
+            PROPERTIES,
+            Set.of(
+                ContractEventTypes.class,
+                DefaultStoreProjection.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(first);
+      top = appendEvents(first, a, "looked-up", 3);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, ON_DEFAULT, top);
+    }
+
+    // The container closed file A's pool with the first application: the second opens a new one.
+    a = databases().reopen(a);
+    try (Application second =
+        start(
+            a,
+            PROPERTIES,
+            Set.of(
+                ContractEventTypes.class,
+                LookupProjection.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(second);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, LookupProjection.NAME, top);
+      assertEquals(
+          onceEach(eventOffsets(a)),
+          LookupProjection.lookedUp(second.bean(ProjectionRepository.class)),
+          "each batch looked p1's row of its event up: applied once by the first application");
+    }
+  }
+
+  /**
    * With two transactional stores, a {@code TRANSACTIONAL_LOCAL} projection that exposes no {@code
    * writeTarget()} and declares no store cannot be routed: the start is refused, and the refusal
    * names the projection and both stores.
@@ -416,6 +469,64 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
     /** A projection on the current start's secondary store. */
     public SecondaryFileProjection() {
       super(SecondaryFile.store().repository(), NAME);
+    }
+  }
+
+  /** What {@link LookupProjection} keeps per event: what it found in {@code p1}'s read model. */
+  public record LookedUp(long offset, int applications) {}
+
+  /**
+   * A {@code TRANSACTIONAL_LOCAL} projection on the application's {@code ProjectionRepository}
+   * whose updater looks another projection's read model up, {@code p1}'s, through that injected
+   * repository, and keeps what it found: one {@link LookedUp} per event, with how often {@code p1}
+   * applied the event ({@code 0} when {@code p1} has no row for it).
+   */
+  @ProjectionConfig(
+      name = LookupProjection.NAME,
+      deliveryMode = ProjectionDeliveryMode.TRANSACTIONAL_LOCAL)
+  public static final class LookupProjection extends BaseProjection {
+
+    /** The projection's name. */
+    public static final String NAME = "p4_lookup";
+
+    private final ProjectionRepository repository;
+
+    /**
+     * A projection on the application's repository.
+     *
+     * @param repository the application's {@code ProjectionRepository} bean
+     */
+    public LookupProjection(ProjectionRepository repository) {
+      super(repository, NAME);
+      this.repository = repository;
+    }
+
+    @Override
+    public void process(List<EventEnvelope> batch) {
+      for (EventEnvelope envelope : batch) {
+        long offset = envelope.globalOffset().value();
+        String id = Long.toString(offset);
+        int found =
+            repository
+                .findById(ProjectionName.of(ON_DEFAULT), id, AppliedEvent.class)
+                .map(AppliedEvent::applications)
+                .orElse(0);
+        save(id, new LookedUp(offset, found));
+      }
+    }
+
+    /**
+     * What the projection looked up, read from {@code repository}.
+     *
+     * @param repository the application's {@code ProjectionRepository} bean
+     * @return {@code p1}'s applications by global offset, as the batches found them
+     */
+    static Map<Long, Integer> lookedUp(ProjectionRepository repository) {
+      Map<Long, Integer> lookedUp = new TreeMap<>();
+      for (LookedUp row : repository.findAll(ProjectionName.of(NAME), LookedUp.class)) {
+        lookedUp.put(row.offset(), row.applications());
+      }
+      return lookedUp;
     }
   }
 

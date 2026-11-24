@@ -84,6 +84,8 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * with an {@link IllegalArgumentException}. A table is created by the first read or write of its
  * name through this repository, by {@link #declareIndex} or by {@link #prepareReadModel}; a
  * checkpoint commit alone creates none. Creating it is a write: it waits for SQLite's write lock.
+ * Finding it is not: a table that exists is found with a plain read of the schema, so the first
+ * read or write of a projection after a process start creates nothing and takes no lock for it.
  *
  * <p><b>Query semantics: PostgreSQL's text.</b> PostgreSQL filters and sorts on {@code
  * data->>'field'}, the JSON value as text. The paged reads here compare the same text ({@link
@@ -125,14 +127,15 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * runs out, with the operation's connection-failure message and the pool's exception as its cause.
  * So the lock is not per projection as on PostgreSQL: a dead-letter replay of one projection waits
  * for an open batch of any other, and the other way round; {@code busy_timeout} must exceed the
- * longest batch or replay the file runs. Reads do not wait: in WAL mode a read sees the last
- * committed state. An updater must therefore write through the repository it is handed; a write
- * through this repository itself, or any other writer of the file, from inside the updater waits
- * for the updater's own transaction and fails after {@code busy_timeout}. There is one exception,
- * and it is why such a write is never safe: once SQLite has rolled the updater's transaction back
- * on its own ({@code SQLITE_FULL}, an I/O error), the write lock is released, so such a write does
- * not wait and commits at once, on its own, outside the batch (which still throws and rolls back).
- * The abort of a batch on a failed statement covers the handed repository only.
+ * longest batch or replay the file runs. A read does not wait: in WAL mode it sees the last
+ * committed state. The one read that does is the first read of a projection whose table does not
+ * exist yet, which creates the table. An updater must therefore write through the repository it is
+ * handed; a write through this repository itself, or any other writer of the file, from inside the
+ * updater waits for the updater's own transaction and fails after {@code busy_timeout}. There is
+ * one exception, and it is why such a write is never safe: once SQLite has rolled the updater's
+ * transaction back on its own ({@code SQLITE_FULL}, an I/O error), the write lock is released, so
+ * such a write does not wait and commits at once, on its own, outside the batch (which still throws
+ * and rolls back). The abort of a batch on a failed statement covers the handed repository only.
  *
  * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}. No mode makes
  * an effect outside this database exactly-once.
@@ -197,6 +200,10 @@ public final class SqliteProjectionRepository
   // Every schema object of the name, whatever its letter case: SQLite's names are case-insensitive.
   private static final String SCHEMA_OBJECT =
       "SELECT type, tbl_name FROM sqlite_schema WHERE name = ? COLLATE NOCASE";
+
+  // A table or a view of the name, whatever its letter case: what CREATE TABLE IF NOT EXISTS finds.
+  private static final String TABLE_EXISTS =
+      "SELECT 1 FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE";
 
   /**
    * The deepest nesting SQLite's JSON functions accept ({@code json_valid} of a document nested
@@ -1210,16 +1217,23 @@ public final class SqliteProjectionRepository
   // ---- tables ----
 
   /**
-   * Creates {@code projectionName}'s table if it does not exist, committed before it returns, and
-   * remembers it. The {@code CREATE TABLE IF NOT EXISTS} runs under SQLite's write lock, which
-   * every writer of the file takes, so it sees any table another connection or process committed
-   * and cannot lose a creation race; one waiting for another's creation proceeds once that commits.
+   * Makes sure {@code projectionName}'s table exists, and remembers it. A table that exists is
+   * found with a plain read of the schema ({@link #tableExists}), which takes no lock: so the first
+   * read of a projection after a process start does not wait for a writer. Only a table that is
+   * missing is created, committed before this returns: the {@code CREATE TABLE IF NOT EXISTS} runs
+   * under SQLite's write lock, which every writer of the file takes, so it sees any table another
+   * connection or process committed since the probe and cannot lose a creation race; one waiting
+   * for another's creation proceeds once that commits.
    */
   private void ensureTableExists(ProjectionName projectionName) {
     if (tablesChecked.contains(projectionName)) {
       return;
     }
     String table = tableName(projectionName); // reject a name outside the rule before any I/O
+    if (tableExists(table)) {
+      tablesChecked.add(projectionName);
+      return;
+    }
     synchronized (this) {
       if (tablesChecked.contains(projectionName)) {
         return;
@@ -1234,6 +1248,25 @@ public final class SqliteProjectionRepository
             return null;
           });
       tablesChecked.add(projectionName);
+    }
+  }
+
+  /**
+   * Whether the committed schema holds a table (or a view) named {@code table}, whatever its letter
+   * case: exactly what makes {@code CREATE TABLE IF NOT EXISTS} do nothing. One read in autocommit
+   * on a borrowed connection; in WAL mode it never waits for a writer.
+   *
+   * @throws EventStoreException if the schema cannot be read
+   */
+  private boolean tableExists(String table) {
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(TABLE_EXISTS)) {
+      ps.setString(1, table);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next();
+      }
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to look up projection table: " + table, e);
     }
   }
 

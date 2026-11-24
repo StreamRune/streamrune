@@ -1011,9 +1011,10 @@ class SqliteProjectionRepositoryTest {
       assertThatThrownBy(() -> borrowing.delete(name, "a"))
           .isExactlyInstanceOf(EventStoreException.class)
           .hasMessage("Failed to delete projection: borrow/a");
+      // The probe for the table comes first, on a connection of its own.
       assertThatThrownBy(() -> borrowing.prepareReadModel(ProjectionName.of("fresh")))
           .isExactlyInstanceOf(EventStoreException.class)
-          .hasMessage("Failed to create projection table: fresh_view");
+          .hasMessage("Failed to look up projection table: fresh_view");
       assertThatThrownBy(
               () ->
                   borrowing.declareIndex(

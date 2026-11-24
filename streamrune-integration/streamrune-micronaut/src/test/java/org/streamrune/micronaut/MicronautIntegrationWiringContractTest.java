@@ -60,6 +60,7 @@ import org.streamrune.integration.tck.ContractHttp;
 import org.streamrune.integration.tck.HttpResponse;
 import org.streamrune.integration.tck.IntegrationWiringContract;
 import org.streamrune.integration.tck.MultiReadModelStoreScenario.DefaultStoreProjection;
+import org.streamrune.integration.tck.SingleInstanceMultiReadModelStoreScenario.LookupProjection;
 import org.streamrune.runtime.DeciderRegistration;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.test.InMemoryEventStore;
@@ -169,6 +170,12 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   /**
+   * The property that declares the {@link ApplicationBeans#lookupProjection} of a start: a
+   * constructor-injected bean of the single-instance scenario.
+   */
+  static final String LOOKUP_PROJECTION = "contract.lookup-projection";
+
+  /**
    * The property that declares the {@link ApplicationBeans#backendOutboxStore} of a start: the
    * contract's {@link ContractBeans.BackendOutboxStore}, an outbox store built from the {@code
    * BackendStores} bean.
@@ -221,6 +228,12 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
     @Requires(property = DEFAULT_STORE_PROJECTION, value = "true")
     DefaultStoreProjection defaultStoreProjection(ProjectionRepository repository) {
       return new DefaultStoreProjection(repository);
+    }
+
+    @Singleton
+    @Requires(property = LOOKUP_PROJECTION, value = "true")
+    LookupProjection lookupProjection(ProjectionRepository repository) {
+      return new LookupProjection(repository);
     }
 
     @Singleton
@@ -363,6 +376,8 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
         configuration.put(DISPATCHING_ROUTE, "true");
       } else if (beanClass == DefaultStoreProjection.class) {
         configuration.put(DEFAULT_STORE_PROJECTION, "true");
+      } else if (beanClass == LookupProjection.class) {
+        configuration.put(LOOKUP_PROJECTION, "true");
       } else if (beanClass == ContractBeans.BackendOutboxStore.class) {
         configuration.put(BACKEND_OUTBOX_STORE, "true");
       } else if (ContractBeans.injected(beanClass)) {

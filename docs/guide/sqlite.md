@@ -250,7 +250,10 @@ SQLite allows one writer at a time per database file. Every StreamRune write tra
 write lock from its `BEGIN IMMEDIATE` to its `COMMIT`, so writes of every kind (appends, saga steps,
 outbox claims, projection batches, retention sweeps) run one after another. A writer waits for the
 lock at most the connection's `busy_timeout`, then fails with an `EventStoreException` saying the
-write lock was not granted. Reads never wait: in WAL mode a read sees the last committed state.
+write lock was not granted. A read does not wait: in WAL mode it sees the last committed state. The
+one read that does is the first read of a projection whose read-model table does not exist yet: it
+creates the table, which is a write. A table that exists is found without the lock, so after a
+restart the first read of each projection's read model does not wait either.
 
 The consequences:
 
