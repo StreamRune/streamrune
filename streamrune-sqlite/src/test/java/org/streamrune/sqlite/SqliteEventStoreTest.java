@@ -756,8 +756,8 @@ class SqliteEventStoreTest {
   /**
    * An engine that needs crypto tables makes the factory apply the crypto series, whose scripts
    * streamrune-sqlite-crypto ships (refused here, naming it, where that module is absent); with
-   * auto-initialization off it refuses a database without the tables, naming them; once they exist,
-   * the store is built. streamrune-sqlite-crypto checks the migrated case.
+   * auto-initialization off it refuses a database without the tables or their columns, naming them;
+   * once they exist, the store is built. streamrune-sqlite-crypto checks the migrated case.
    */
   @Test
   void anEngineThatNeedsCryptoTablesRequiresThem() throws Exception {
@@ -774,6 +774,13 @@ class SqliteEventStoreTest {
         .hasMessageContaining("forgotten_subjects")
         .hasMessageContaining("CRYPTO");
     execute(database, "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY)");
+    assertThatThrownBy(
+            () -> factory(database).cryptoEngine(needsTables).autoInitializeSchema(false).create())
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("[forgotten_subjects] Missing column: forgotten_at")
+        .hasMessageContaining("[forgotten_subjects] Missing column: key_created_at");
+    execute(database, "ALTER TABLE forgotten_subjects ADD COLUMN forgotten_at INTEGER");
+    execute(database, "ALTER TABLE forgotten_subjects ADD COLUMN key_created_at INTEGER");
     assertThat(factory(database).cryptoEngine(needsTables).autoInitializeSchema(false).create())
         .isNotNull();
     assertThat(

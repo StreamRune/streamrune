@@ -271,6 +271,91 @@ class SqliteWriteTransactionTest {
     assertThat(held.get().toString()).contains(database.file().toString());
   }
 
+  /**
+   * A reference kept past the updater is ended: it refuses to hand out the connection, which has
+   * gone back to the pool, and to abort or probe a transaction that is over. It ends when the
+   * updater throws too.
+   */
+  @Test
+  void aTransactionKeptPastItsUpdaterIsEnded() {
+    var kept = new AtomicReference<SqliteWriteTransaction>();
+    repo.executeAtomically(
+        P,
+        List.of(),
+        GlobalOffset.of(1),
+        0L,
+        tx -> kept.set(SqliteWriteTransaction.heldOn(database.file())),
+        checkpoints);
+    var keptFromAFailure = new AtomicReference<SqliteWriteTransaction>();
+    assertThatThrownBy(
+            () ->
+                repo.executeReplay(
+                    P,
+                    List.of(),
+                    tx -> {
+                      keptFromAFailure.set(SqliteWriteTransaction.heldOn(database.file()));
+                      throw new IllegalStateException("updater fails");
+                    }))
+        .hasMessage("updater fails");
+
+    for (SqliteWriteTransaction ended : List.of(kept.get(), keptFromAFailure.get())) {
+      assertThatThrownBy(ended::connection)
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("has ended");
+      assertThatThrownBy(() -> ended.abort(new SQLException("late")))
+          .isExactlyInstanceOf(IllegalStateException.class);
+      assertThatThrownBy(ended::requireOpen).isExactlyInstanceOf(IllegalStateException.class);
+    }
+  }
+
+  /**
+   * The binding answers on the thread that published it only. A thread that carries the binding by
+   * inheritance (a fork of a structured task scope opened in the updater) gets {@code null}, so it
+   * never runs statements on the batch's connection beside the updater; here the inherited binding
+   * is reproduced by binding the published transaction on another thread.
+   */
+  @Test
+  void anotherThreadCarryingTheBindingDoesNotSeeTheTransaction() throws Exception {
+    var held = new AtomicReference<SqliteWriteTransaction>();
+    var seenByAnotherThread = new AtomicReference<Object>("not run");
+    @SuppressWarnings("unchecked")
+    ScopedValue<SqliteWriteTransaction> binding =
+        (ScopedValue<SqliteWriteTransaction>) bindingOfTheClass();
+
+    repo.executeAtomically(
+        P,
+        List.of(),
+        GlobalOffset.of(1),
+        0L,
+        tx -> {
+          held.set(SqliteWriteTransaction.heldOn(database.file()));
+          Thread other =
+              Thread.ofPlatform()
+                  .start(
+                      () ->
+                          ScopedValue.where(binding, held.get())
+                              .run(
+                                  () ->
+                                      seenByAnotherThread.set(
+                                          SqliteWriteTransaction.heldOn(database.file()))));
+          try {
+            other.join();
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        },
+        checkpoints);
+
+    assertThat(held.get()).isNotNull();
+    assertThat(seenByAnotherThread.get()).isNull();
+  }
+
+  private static Object bindingOfTheClass() throws ReflectiveOperationException {
+    var field = SqliteWriteTransaction.class.getDeclaredField("CURRENT");
+    field.setAccessible(true);
+    return field.get(null);
+  }
+
   private static void insertSide(Connection conn, String id) {
     try (var ps = conn.prepareStatement("INSERT INTO side (id) VALUES (?)")) {
       ps.setString(1, id);

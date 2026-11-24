@@ -26,6 +26,23 @@ import org.streamrune.core.ScopedValueReads;
  * {@link #heldOn(Path)} returns it only for that file and only on the thread that runs the updater,
  * while it runs. A component on another file never sees it.
  *
+ * <p><b>The updater's thread only.</b> A {@code ScopedValue} binding is inherited by the threads a
+ * {@code StructuredTaskScope} opened inside the updater forks; {@link #heldOn(Path)} checks the
+ * thread that published the transaction and answers {@code null} on any other, so a forked thread
+ * never runs statements on the batch's connection concurrently with the updater. Such a thread
+ * works on connections of its own: a read proceeds, a write waits {@code busy_timeout} for the lock
+ * the batch holds.
+ *
+ * <p><b>One binding per thread.</b> A batch on another file started inside the updater publishes
+ * its own transaction for the time its updater runs, and that binding shadows the outer one: a
+ * component on the outer file then finds no transaction and uses connections of its own (a write
+ * waits {@code busy_timeout}). No StreamRune path nests batches.
+ *
+ * <p><b>Only while it runs.</b> Once the updater has returned or thrown, the transaction is ended:
+ * {@link #connection()}, {@link #abort(SQLException)} and {@link #requireOpen()} of a reference
+ * kept past it throw {@link IllegalStateException} instead of touching a connection the pool has
+ * taken back.
+ *
  * <p><b>The joining component's duties.</b> It runs its statements on {@link #connection()} and
  * never begins, commits or rolls back: what it writes commits and rolls back with the batch. It
  * reports every {@link SQLException} of a statement it ran there through {@link
@@ -43,11 +60,14 @@ public final class SqliteWriteTransaction {
   private final Path file;
   private final Connection connection;
   private final Consumer<SQLException> abort;
+  private final Thread owner;
+  private volatile boolean ended;
 
   private SqliteWriteTransaction(Path file, Connection connection, Consumer<SQLException> abort) {
     this.file = file;
     this.connection = connection;
     this.abort = abort;
+    this.owner = Thread.currentThread();
   }
 
   /** Work run while the transaction is published. */
@@ -67,17 +87,23 @@ public final class SqliteWriteTransaction {
   static void publishWhile(
       Path file, Connection connection, Consumer<SQLException> abort, Work work)
       throws SQLException {
-    ScopedValue.where(CURRENT, new SqliteWriteTransaction(file, connection, abort))
-        .call(
-            () -> {
-              work.run();
-              return null;
-            });
+    var published = new SqliteWriteTransaction(file, connection, abort);
+    try {
+      ScopedValue.where(CURRENT, published)
+          .call(
+              () -> {
+                work.run();
+                return null;
+              });
+    } finally {
+      published.ended = true;
+    }
   }
 
   /**
    * The write transaction the current thread holds on {@code file} while a projection batch or
-   * replay runs its updater, or {@code null} when it holds none there.
+   * replay runs its updater, or {@code null} when it holds none there: on another file, on a thread
+   * the updater forked, or with no batch running.
    *
    * @param file the canonical database file ({@link SqliteDatabase#file()})
    * @return the transaction, or {@code null}
@@ -88,7 +114,9 @@ public final class SqliteWriteTransaction {
       throw new IllegalArgumentException("file must not be null");
     }
     SqliteWriteTransaction current = ScopedValueReads.valueOrNull(CURRENT);
-    return current != null && current.file.equals(file) ? current : null;
+    return current != null && current.owner == Thread.currentThread() && current.file.equals(file)
+        ? current
+        : null;
   }
 
   /**
@@ -105,8 +133,10 @@ public final class SqliteWriteTransaction {
    * never begin, commit, roll back or close it.
    *
    * @return the connection
+   * @throws IllegalStateException once the updater has returned or thrown
    */
   public Connection connection() {
+    requireNotEnded();
     return connection;
   }
 
@@ -117,11 +147,13 @@ public final class SqliteWriteTransaction {
    *
    * @param failure the failure of the statement
    * @throws IllegalArgumentException if {@code failure} is {@code null}
+   * @throws IllegalStateException once the updater has returned or thrown
    */
   public void abort(SQLException failure) {
     if (failure == null) {
       throw new IllegalArgumentException("failure must not be null");
     }
+    requireNotEnded();
     abort.accept(failure);
   }
 
@@ -129,11 +161,23 @@ public final class SqliteWriteTransaction {
    * Refuses to go on when the connection has no transaction open any more (SQLite rolled it back by
    * itself, for one): a statement run then would commit on its own, outside the batch.
    *
-   * @throws IllegalStateException if no transaction is open on {@link #connection()}
+   * @throws IllegalStateException if no transaction is open on {@link #connection()}, or once the
+   *     updater has returned or thrown
    * @throws SQLException if the check itself fails
    */
   public void requireOpen() throws SQLException {
+    requireNotEnded();
     SqliteTransactions.requireOpenTransaction(connection);
+  }
+
+  private void requireNotEnded() {
+    if (ended) {
+      throw new IllegalStateException(
+          this
+              + " has ended: the batch's updater returned, and its connection went back to the"
+              + " pool. Look the transaction up with heldOn(file) while the updater runs; never keep"
+              + " it.");
+    }
   }
 
   @Override

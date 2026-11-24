@@ -8,6 +8,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
@@ -40,6 +41,7 @@ final class SqliteSchemaValidator {
   record Issue(Severity severity, String table, String message) {}
 
   private static final String COUNTER_TABLE = "global_offset_counter";
+  private static final String FORGOTTEN_SUBJECTS = "forgotten_subjects";
   private static final String EVENT_TABLE = "event_stream";
 
   /** The triggers that keep event_stream.global_offset at or below the counter (V001). */
@@ -49,8 +51,11 @@ final class SqliteSchemaValidator {
   /**
    * The tables of each series and the columns the runtime reads and writes: the Postgres lists,
    * without the lease table (leadership is a no-op on SQLite) and with {@code
-   * global_offset_counter} for {@code global_offset_sequence}. The crypto series requires the three
-   * tables its baseline creates, the key table under its default name.
+   * global_offset_counter} for {@code global_offset_sequence}. The crypto series requires {@code
+   * forgotten_subjects} alone, which every crypto setup on the database uses; its other two tables
+   * (see {@link #CRYPTO_COLUMNS}) belong to the key-store engine, which reports them through {@code
+   * requiredCryptoTables()} (see {@link #validateCryptoTables}), so a tombstone-only Vault or AWS
+   * KMS setup validates. When they are present, their columns are checked too.
    */
   private static final Map<SqliteSchemaSeries, SortedMap<String, SortedSet<String>>> REQUIRED =
       Map.of(
@@ -184,13 +189,24 @@ final class SqliteSchemaValidator {
           sorted(Map.of("readmodel_checkpoint", Set.of("projection_name", "last_offset", "epoch"))),
           SqliteSchemaSeries.CRYPTO,
           sorted(
-              Map.of(
-                  "encryption_keys",
-                  Set.of("subject_id", "key_bytes", "created_at", "key_version"),
-                  "forgotten_subjects",
-                  Set.of("subject_id", "forgotten_at", "key_created_at"),
-                  "erased_key_generations",
-                  Set.of("subject_id", "max_erased_version"))));
+              Map.of(FORGOTTEN_SUBJECTS, Set.of("subject_id", "forgotten_at", "key_created_at"))));
+
+  /** The columns of the key table, whatever the engine names it. */
+  private static final Set<String> KEY_TABLE_COLUMNS =
+      Set.of("subject_id", "key_bytes", "created_at", "key_version");
+
+  /**
+   * The columns of every table of the crypto series, the key table under its default name: what
+   * {@link #validateCryptoTables} checks for a table a crypto engine requires.
+   */
+  private static final Map<String, Set<String>> CRYPTO_COLUMNS =
+      Map.of(
+          "encryption_keys",
+          KEY_TABLE_COLUMNS,
+          FORGOTTEN_SUBJECTS,
+          Set.of("subject_id", "forgotten_at", "key_created_at"),
+          "erased_key_generations",
+          Set.of("subject_id", "max_erased_version"));
 
   private SqliteSchemaValidator() {}
 
@@ -209,10 +225,14 @@ final class SqliteSchemaValidator {
           issues.add(new Issue(Severity.ERROR, table, "Required table missing"));
           continue;
         }
-        Set<String> actual = columns(connection, table);
-        for (String column : entry.getValue()) {
-          if (!actual.contains(column)) {
-            issues.add(new Issue(Severity.ERROR, table, "Missing column: " + column));
+        checkColumns(connection, table, entry.getValue(), issues);
+      }
+      if (series == SqliteSchemaSeries.CRYPTO) {
+        // The key-store engine's tables are required by the engine, not by the series; a present
+        // one is still checked.
+        for (String table : new TreeSet<>(CRYPTO_COLUMNS.keySet())) {
+          if (!table.equals(FORGOTTEN_SUBJECTS) && tableExists(connection, table)) {
+            checkColumns(connection, table, CRYPTO_COLUMNS.get(table), issues);
           }
         }
       }
@@ -249,6 +269,45 @@ final class SqliteSchemaValidator {
               Severity.ERROR, "<connection>", "Failed to connect to database: " + e.getMessage()));
     }
     return List.copyOf(issues);
+  }
+
+  /**
+   * Validates the crypto tables a crypto engine requires ({@code requiredCryptoTables()}): each
+   * must exist with the columns of its role, a name other than the series' fixed ones being the
+   * engine's key table. The tables are checked in name order; the history table is not.
+   *
+   * @return every issue found; empty when every required table is complete. A database that cannot
+   *     be read yields one ERROR for the table {@code <connection>}
+   */
+  static List<Issue> validateCryptoTables(DataSource dataSource, Set<String> requiredTables) {
+    List<Issue> issues = new ArrayList<>();
+    try (Connection connection = dataSource.getConnection()) {
+      for (String table : new TreeSet<>(requiredTables)) {
+        if (!tableExists(connection, table)) {
+          issues.add(new Issue(Severity.ERROR, table, "Required table missing"));
+          continue;
+        }
+        Set<String> expected =
+            CRYPTO_COLUMNS.getOrDefault(table.toLowerCase(Locale.ROOT), KEY_TABLE_COLUMNS);
+        checkColumns(connection, table, expected, issues);
+      }
+    } catch (SQLException e) {
+      issues.add(
+          new Issue(
+              Severity.ERROR, "<connection>", "Failed to connect to database: " + e.getMessage()));
+    }
+    return List.copyOf(issues);
+  }
+
+  private static void checkColumns(
+      Connection connection, String table, Set<String> expected, List<Issue> issues)
+      throws SQLException {
+    Set<String> actual = columns(connection, table);
+    for (String column : new TreeSet<>(expected)) {
+      if (!actual.contains(column)) {
+        issues.add(new Issue(Severity.ERROR, table, "Missing column: " + column));
+      }
+    }
   }
 
   /** The message an invalid schema fails with: every ERROR, one per line, as on Postgres. */

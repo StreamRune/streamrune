@@ -87,6 +87,46 @@ class SqliteCryptoCrashPointsTest {
     assertErased(subject, ciphertext);
   }
 
+  /**
+   * deleteKey: the erased-generation upsert itself fails, as the first statement that writes; for a
+   * first erasure it inserts the row, for a later one it raises the recorded generation. Nothing
+   * remains either way, and the reruns converge on the right generation.
+   */
+  @Test
+  void anErasureThatDiesAtTheGenerationUpsertLeavesNothing_andTheRerunErases() throws Exception {
+    var subject = SubjectId.of("erase-at-generation");
+    byte[] first = engine.encrypt(subject, PLAINTEXT);
+    failBefore("INSERT ON erased_key_generations");
+
+    assertThatThrownBy(() -> engine.deleteKey(subject))
+        .isExactlyInstanceOf(CryptoOperationException.class);
+    assertThat(engine.decrypt(subject, first)).isEqualTo(PLAINTEXT);
+    assertThat(count("erased_key_generations")).isZero();
+    assertThat(count("forgotten_subjects")).isZero();
+
+    heal();
+    engine.deleteKey(subject);
+    assertErased(subject, first);
+
+    engine.reinstate(subject);
+    byte[] second = engine.encrypt(subject, PLAINTEXT);
+    failBefore("UPDATE ON erased_key_generations");
+    assertThatThrownBy(() -> engine.deleteKey(subject))
+        .isExactlyInstanceOf(CryptoOperationException.class);
+    assertThat(engine.decrypt(subject, second)).isEqualTo(PLAINTEXT);
+    assertThat(
+            SqliteFiles.query(dataSource, "SELECT max_erased_version FROM erased_key_generations"))
+        .containsExactly(List.of(1));
+
+    heal();
+    engine.deleteKey(subject);
+    assertThat(
+            SqliteFiles.query(dataSource, "SELECT max_erased_version FROM erased_key_generations"))
+        .containsExactly(List.of(2));
+    assertThatThrownBy(() -> engine.decrypt(subject, second))
+        .isExactlyInstanceOf(KeyNotFoundException.class);
+  }
+
   /** deleteKey: the key delete fails after the generation was recorded; that record goes too. */
   @Test
   void anErasureThatDiesAtTheKeyDeleteLeavesNoGeneration_andTheRerunErases() throws Exception {

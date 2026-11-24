@@ -7,6 +7,7 @@ import static org.streamrune.sqlite.SqliteSchemaSeriesTest.execute;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -246,38 +247,69 @@ class SqliteSchemaValidatorTest {
   }
 
   /**
-   * The crypto series requires the three tables its baseline creates and their columns; its scripts
-   * ship in streamrune-sqlite-crypto, where the migrated case is checked.
+   * The crypto series requires {@code forgotten_subjects}, which every crypto setup uses, so a
+   * tombstone-only Vault or AWS KMS database validates; the key-store engine's two tables are
+   * checked when present. Its scripts ship in streamrune-sqlite-crypto, where the migrated case is
+   * checked.
    */
   @Test
-  void theCryptoSeriesRequiresItsThreeTablesAndColumns() throws Exception {
+  void theCryptoSeriesRequiresTheTombstoneTable_andChecksTheEnginesTablesWhenPresent()
+      throws Exception {
+    Issue noHistory =
+        new Issue(
+            Severity.WARNING,
+            "flyway_schema_history_crypto",
+            "Flyway history table not found — schema may not be managed by Flyway");
     assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.CRYPTO))
         .containsExactly(
-            new Issue(Severity.ERROR, "encryption_keys", "Required table missing"),
-            new Issue(Severity.ERROR, "erased_key_generations", "Required table missing"),
-            new Issue(Severity.ERROR, "forgotten_subjects", "Required table missing"),
-            new Issue(
-                Severity.WARNING,
-                "flyway_schema_history_crypto",
-                "Flyway history table not found — schema may not be managed by Flyway"));
+            new Issue(Severity.ERROR, "forgotten_subjects", "Required table missing"), noHistory);
 
     execute(
         ds,
-        "CREATE TABLE encryption_keys (subject_id TEXT PRIMARY KEY, key_bytes BLOB,"
-            + " created_at INTEGER, key_version INTEGER)",
-        "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY, forgotten_at INTEGER)",
-        "CREATE TABLE erased_key_generations (subject_id TEXT PRIMARY KEY,"
-            + " max_erased_version INTEGER)");
+        "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY, forgotten_at INTEGER,"
+            + " key_created_at INTEGER)");
+    assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.CRYPTO))
+        .as("a tombstone-only setup")
+        .containsExactly(noHistory);
+
+    execute(
+        ds,
+        "CREATE TABLE encryption_keys (subject_id TEXT PRIMARY KEY, key_bytes BLOB)",
+        "CREATE TABLE erased_key_generations (subject_id TEXT PRIMARY KEY)");
     assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.CRYPTO))
         .containsExactly(
-            new Issue(Severity.ERROR, "forgotten_subjects", "Missing column: key_created_at"),
+            new Issue(Severity.ERROR, "encryption_keys", "Missing column: created_at"),
+            new Issue(Severity.ERROR, "encryption_keys", "Missing column: key_version"),
             new Issue(
-                Severity.WARNING,
-                "flyway_schema_history_crypto",
-                "Flyway history table not found — schema may not be managed by Flyway"));
+                Severity.ERROR, "erased_key_generations", "Missing column: max_erased_version"),
+            noHistory);
+  }
 
-    execute(ds, "ALTER TABLE forgotten_subjects ADD COLUMN key_created_at INTEGER");
-    assertThatCode(() -> db.validate(SqliteSchemaSeries.CRYPTO)).doesNotThrowAnyException();
+  /**
+   * The tables a crypto engine requires are checked by role: the fixed tables with their columns,
+   * any other name as the engine's key table; the history table is not looked at.
+   */
+  @Test
+  void theTablesACryptoEngineRequiresAreCheckedByRole() throws Exception {
+    assertThat(
+            SqliteSchemaValidator.validateCryptoTables(
+                ds, Set.of("tenant_keys", "forgotten_subjects")))
+        .containsExactly(
+            new Issue(Severity.ERROR, "forgotten_subjects", "Required table missing"),
+            new Issue(Severity.ERROR, "tenant_keys", "Required table missing"));
+
+    execute(
+        ds,
+        "CREATE TABLE tenant_keys (subject_id TEXT PRIMARY KEY, key_bytes BLOB, created_at"
+            + " INTEGER)",
+        "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY, forgotten_at INTEGER,"
+            + " key_created_at INTEGER)");
+    assertThat(
+            SqliteSchemaValidator.validateCryptoTables(
+                ds, Set.of("tenant_keys", "forgotten_subjects")))
+        .containsExactly(new Issue(Severity.ERROR, "tenant_keys", "Missing column: key_version"));
+    assertThat(SqliteSchemaValidator.validateCryptoTables(ds, Set.of("forgotten_subjects")))
+        .isEmpty();
   }
 
   @Test
@@ -292,6 +324,16 @@ class SqliteSchemaValidatorTest {
               assertThat(issue.table()).isEqualTo("<connection>");
               assertThat(issue.message()).startsWith("Failed to connect to database: ");
             });
+  }
+
+  @Test
+  void anUnreachableDatabaseIsAConnectionErrorOfTheCryptoTableCheckToo() {
+    DataSource broken = TestDatabases.url("jdbc:sqlite:" + dir.resolve("missing/dir/x.db"));
+
+    assertThat(SqliteSchemaValidator.validateCryptoTables(broken, Set.of("forgotten_subjects")))
+        .singleElement()
+        .extracting(Issue::table)
+        .isEqualTo("<connection>");
   }
 
   @Test

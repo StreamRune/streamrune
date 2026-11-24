@@ -1,16 +1,12 @@
 package org.streamrune.sqlite;
 
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.SQLException;
 import java.time.Clock;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import org.streamrune.core.EventStore;
-import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SnapshotMigration;
@@ -315,39 +311,27 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
   }
 
   /**
-   * Refuses a database without a table the crypto engine needs, naming each, so a missing crypto
-   * series fails here instead of on the first {@code @Encrypted} operation or GDPR forget.
+   * Refuses a database without a table the crypto engine needs, or a table without a column its
+   * role needs, naming each, so a missing crypto series fails here instead of on the first
+   * {@code @Encrypted} operation or GDPR forget. The engine's own list decides: a tombstone-only
+   * engine (Vault, AWS KMS) needs {@code forgotten_subjects} alone.
    */
   private void requireCryptoTables(Set<String> required) {
     if (required.isEmpty()) {
       return;
     }
-    List<String> missing = new ArrayList<>();
-    try (Connection conn = database.dataSource().getConnection();
-        var ps =
-            conn.prepareStatement(
-                "SELECT 1 FROM pragma_table_list WHERE schema = 'main' AND name = ?"
-                    + " COLLATE NOCASE")) {
-      for (String table : new TreeSet<>(required)) {
-        ps.setString(1, table);
-        try (var rs = ps.executeQuery()) {
-          if (!rs.next()) {
-            missing.add(table);
-          }
-        }
-      }
-    } catch (SQLException e) {
-      throw new EventStoreException("Cannot check the crypto tables of " + database, e);
-    }
-    if (!missing.isEmpty()) {
+    List<SqliteSchemaValidator.Issue> issues =
+        SqliteSchemaValidator.validateCryptoTables(database.dataSource(), required);
+    if (!issues.isEmpty()) {
       throw new IllegalStateException(
-          "Schema validation failed: the crypto engine needs the table(s) "
-              + missing
-              + ", which "
+          SqliteSchemaValidator.failureMessage(issues)
+              + "\nThe crypto engine needs the table(s) "
+              + new TreeSet<>(required)
+              + " in "
               + database
-              + " does not have. Apply the SQLite crypto schema series"
-              + " (SqliteSchemaSeries.CRYPTO, whose scripts streamrune-sqlite-crypto ships), or"
-              + " create the tables before the event store is built.");
+              + ". Apply the SQLite crypto schema series (SqliteSchemaSeries.CRYPTO, whose"
+              + " scripts streamrune-sqlite-crypto ships), or create the tables before the event"
+              + " store is built.");
     }
   }
 }
