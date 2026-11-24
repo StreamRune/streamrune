@@ -1314,7 +1314,10 @@ public final class SqliteProjectionRepository
    *       projection's checkpoint row and applies the epoch fence and the first-offset overlap
    *       guard, before the updater writes anything;
    *   <li>the updater runs with a repository bound to the transaction's connection; it never
-   *       borrows a second connection, so a pool of one connection cannot deadlock;
+   *       borrows a second connection, so a pool of one connection cannot deadlock. While it runs,
+   *       the transaction is published on this thread for this file ({@link
+   *       SqliteWriteTransaction}), so a SQLite crypto key store on the same file reads and mints
+   *       keys inside it, and its keys commit and roll back with the batch;
    *   <li>the advance moves the checkpoint to {@code newOffset} under the monotonic guard and
    *       stamps {@code max(stored, fencingEpoch)} as the epoch.
    * </ol>
@@ -1389,7 +1392,7 @@ public final class SqliteProjectionRepository
           // The lock, the advance and the updater's writes in ONE transaction: the fence checks
           // run under the write lock this transaction holds until its COMMIT.
           checkpointFence.lockForBatch(conn, projectionName, fencingEpoch, firstOffset);
-          projectionUpdater.update(transactionScopedRepository);
+          runUpdater(conn, transactionScopedRepository, projectionUpdater);
           // A statement that failed inside the updater aborted the transaction, even if the
           // updater caught it: never advance or commit past it.
           transactionScopedRepository.requireNotAborted();
@@ -1447,9 +1450,33 @@ public final class SqliteProjectionRepository
         (conn, transactionScopedRepository) -> {
           // The lock a batch takes, with no check and no checkpoint write.
           checkpointFence.lockForReplay(conn, projectionName);
-          projectionUpdater.update(transactionScopedRepository);
+          runUpdater(conn, transactionScopedRepository, projectionUpdater);
           transactionScopedRepository.requireNotAborted();
         });
+  }
+
+  /**
+   * Runs the application's updater with the transaction published on this thread for this file
+   * ({@link SqliteWriteTransaction}): the SQLite crypto key store on the same file then mints a key
+   * on the transaction's connection, inside the transaction, instead of waiting for the write lock
+   * this thread holds. A failure it reports aborts the transaction as a failed statement of the
+   * handed repository does.
+   */
+  private void runUpdater(
+      Connection conn,
+      TransactionScopedRepository transactionScopedRepository,
+      ProjectionUpdater projectionUpdater)
+      throws SQLException {
+    SqliteWriteTransaction.publishWhile(
+        file,
+        conn,
+        failure ->
+            transactionScopedRepository.abort(
+                new EventStoreException(
+                    "A statement run on the projection transaction's connection by a component"
+                        + " joining it failed",
+                    failure)),
+        () -> projectionUpdater.update(transactionScopedRepository));
   }
 
   /**
@@ -1620,9 +1647,10 @@ public final class SqliteProjectionRepository
    * write transaction, so the updater's writes commit or roll back with the checkpoint advance. It
    * never borrows a connection; a table it needs is created on the bound connection, inside the
    * transaction. Its rows share one {@code updated_at}, the transaction's, as PostgreSQL's {@code
-   * NOW()} does. The read models are (de)serialized while the transaction is open, so a crypto
-   * engine that needs this database's write lock cannot run inside a batch. Its first failed
-   * statement aborts the transaction (see {@link #requireNotAborted}).
+   * NOW()} does. The read models are (de)serialized while the transaction is open; a SQLite crypto
+   * key store on the same file joins the transaction for that ({@link SqliteWriteTransaction}). Its
+   * first failed statement, or one a joining component reports, aborts the transaction (see {@link
+   * #requireNotAborted}).
    */
   private final class TransactionScopedRepository implements ProjectionRepository {
 

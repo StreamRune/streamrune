@@ -10,6 +10,7 @@ import org.sqlite.SQLiteConnection;
 import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.Internal;
 
 /**
  * How the SQLite stores run a write transaction on a borrowed connection: with SQL statements, on a
@@ -51,8 +52,14 @@ import org.streamrune.core.EventStoreException;
  * with {@link IllegalStateException}: such a connection holds the write lock while it is not in
  * use, and a transaction on it is not this helper's to commit. {@link SqliteDatabase#open} refuses
  * a data source that hands one out; the check here also catches a connection that changed later.
+ *
+ * <p>Public for {@code streamrune-sqlite-crypto}, whose key store runs its writes the same way: one
+ * implementation of the begin, commit and rollback rules for every SQLite store.
+ *
+ * @hidden
  */
-final class SqliteTransactions {
+@Internal
+public final class SqliteTransactions {
 
   private static final Logger log = LoggerFactory.getLogger(SqliteTransactions.class);
 
@@ -84,9 +91,20 @@ final class SqliteTransactions {
 
   private SqliteTransactions() {}
 
-  /** Work run inside one write transaction by {@link #inTransaction}. */
+  /**
+   * Work run inside one write transaction by {@link #inTransaction}.
+   *
+   * @param <T> the work's result
+   */
   @FunctionalInterface
-  interface Work<T> {
+  public interface Work<T> {
+    /**
+     * Runs the work on the transaction's connection.
+     *
+     * @param conn the connection of the open transaction
+     * @return the work's result
+     * @throws SQLException if a statement fails
+     */
     T run(Connection conn) throws SQLException;
   }
 
@@ -143,11 +161,16 @@ final class SqliteTransactions {
    * Runs {@code work} in one write transaction on {@code conn} and commits it; any exit without the
    * commit rolls the transaction back through {@link #rollback}.
    *
+   * @param conn the connection, in autocommit mode
    * @param transaction what the work is, for the log record of a failed rollback (a constant, never
    *     an id)
+   * @param work the work to run in the transaction
+   * @param <T> the work's result
+   * @return the work's result
    * @throws IllegalStateException if {@code conn} is in manual-commit mode
+   * @throws SQLException if the begin, a statement of the work or the commit fails (rolled back)
    */
-  static <T> T inTransaction(Connection conn, String transaction, Work<T> work)
+  public static <T> T inTransaction(Connection conn, String transaction, Work<T> work)
       throws SQLException {
     begin(conn);
     boolean committed = false;
