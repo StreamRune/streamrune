@@ -1452,13 +1452,20 @@ public final class SqliteEventStore implements EventStore {
     return null;
   }
 
-  /** The message of a write that waited for SQLite's write lock longer than busy_timeout. */
+  /**
+   * The message of a write that waited for SQLite's write lock longer than busy_timeout. The likely
+   * cause comes first: StreamRune's stores never join an application's transaction, so one the
+   * application holds on the same file (a Spring {@code @Transactional} method, for example) keeps
+   * every store write waiting until busy_timeout runs out.
+   */
   static String busyMessage(String what) {
     return "SQLite's write lock was not granted within the connection's busy_timeout, so the "
         + what
-        + " stored nothing. Another connection of this process held the lock that long: a long"
-        + " transaction of the application's own, a schema migration or a stalled write. Retry"
-        + " later, or raise busy_timeout.";
+        + " stored nothing. Most likely an application transaction on the same database file holds"
+        + " the write lock: StreamRune's stores never join an application's transaction (for"
+        + " example a Spring @Transactional method on the same DataSource), so call them outside"
+        + " it. Otherwise another connection of this process held the lock that long: a schema"
+        + " migration or a stalled write. Retry later, or raise busy_timeout.";
   }
 
   private static String globalOffsetDesyncMessage(String shownStream) {

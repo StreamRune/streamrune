@@ -56,6 +56,9 @@ dependencies {
     // published POM gains no SQLite dependency; an application adds the modules itself.
     testImplementation(project(":streamrune-sqlite"))
     testImplementation(project(":streamrune-crypto:streamrune-sqlite-crypto"))
+    // SpringSqliteApplicationTransactionTest runs a @Transactional method (DataSourceTransactionManager,
+    // JdbcTemplate) on the SQLite DataSource the stores use. Test scope only.
+    testImplementation(libs.spring.boot.starter.jdbc)
     testRuntimeOnly(libs.hibernate.validator)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

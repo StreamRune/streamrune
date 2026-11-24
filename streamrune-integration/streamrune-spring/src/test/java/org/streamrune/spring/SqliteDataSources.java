@@ -21,11 +21,16 @@ final class SqliteDataSources {
 
   /** A data source on {@code file}, with WAL, synchronous=FULL, foreign keys and IMMEDIATE. */
   static SQLiteDataSource file(Path file) {
+    return file(file, 5000);
+  }
+
+  /** {@link #file(Path)} with the given busy_timeout. */
+  static SQLiteDataSource file(Path file, int busyTimeoutMillis) {
     var config = new SQLiteConfig();
     config.setJournalMode(SQLiteConfig.JournalMode.WAL);
     config.setSynchronous(SQLiteConfig.SynchronousMode.FULL);
     config.enforceForeignKeys(true);
-    config.setBusyTimeout(5000);
+    config.setBusyTimeout(busyTimeoutMillis);
     config.setTransactionMode(SQLiteConfig.TransactionMode.IMMEDIATE);
     var dataSource = new SQLiteDataSource(config);
     dataSource.setUrl("jdbc:sqlite:" + file);
