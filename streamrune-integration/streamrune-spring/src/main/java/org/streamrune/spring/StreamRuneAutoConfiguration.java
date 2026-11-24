@@ -902,7 +902,10 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
   static class HealthIndicatorConfiguration {
 
-    /** Registers a health indicator that pings the PostgreSQL DataSource. */
+    /**
+     * Registers a health indicator that pings the DataSource and reports the head of the event
+     * stream through the application's {@link EventStore}, the same on every backend.
+     */
     @Bean
     @ConditionalOnBean(DataSource.class)
     @ConditionalOnMissingBean(StreamRuneHealthIndicator.class)
@@ -910,11 +913,13 @@ public class StreamRuneAutoConfiguration {
         DataSource dataSource,
         ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor>
             healthContributorProvider,
+        ObjectProvider<EventStore> eventStoreProvider,
         ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>
             relayHealthContributorProvider) {
       return new StreamRuneHealthIndicator(
           dataSource,
           healthContributorProvider.getIfAvailable(),
+          eventStoreProvider.getIfAvailable(),
           relayHealthContributorProvider.getIfAvailable());
     }
   }

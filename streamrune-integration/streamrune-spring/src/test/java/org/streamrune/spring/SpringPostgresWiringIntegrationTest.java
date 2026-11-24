@@ -142,7 +142,7 @@ class SpringPostgresWiringIntegrationTest {
         new PostgresEventStoreFactory(dataSource, typeRegistry)
             .cryptoEngine(new InMemoryCryptoEngine())
             .create();
-    var indicator = new StreamRuneHealthIndicator(dataSource);
+    var indicator = new StreamRuneHealthIndicator(dataSource, null, store, null);
 
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {
@@ -167,7 +167,7 @@ class SpringPostgresWiringIntegrationTest {
     var health = indicator.health();
     assertThat(health.getStatus()).isEqualTo(Status.UP);
     assertThat(health.getDetails()).containsEntry("eventStore.lastGlobalOffset", headOffset);
-    assertThat(health.getDetails()).containsKey("eventStore.lastEventTimestamp");
+    assertThat(health.getDetails()).doesNotContainKey("eventStore.error");
   }
 
   @Test

@@ -302,6 +302,12 @@ Changed
   metrics and the tracing are resolved at startup instead of at the first use of a store. On
   PostgreSQL no database is touched. Micronaut checks the stores in a startup listener after its
   validators; Spring creates the bean with the other singletons.
+- **Spring health reads the head through the `EventStore` bean.** `StreamRuneHealthIndicator` reports
+  `eventStore.lastGlobalOffset` from `EventStore.lastGlobalOffset()`, as the Quarkus and Micronaut
+  checks do, instead of querying `event_stream` itself, so the detail is the same on every backend.
+  The detail `eventStore.lastEventTimestamp` is gone, on PostgreSQL too, and without an `EventStore`
+  bean the check reports no `eventStore.*` detail. The constructor that took the relay contributor
+  third now takes the `EventStore` third and the relay contributor fourth.
 - **Backend-neutral messages.** The WARN of all three integrations when a cached crypto engine has
   no forget signal asks for "a DataSource on the selected backend's database"; the Quarkus failure
   to build the key-store engine names the backend ("Failed to build the postgres key-store

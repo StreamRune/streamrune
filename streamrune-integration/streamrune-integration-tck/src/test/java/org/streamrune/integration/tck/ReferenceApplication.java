@@ -118,6 +118,7 @@ final class ReferenceApplication implements Application {
     DEAD_LETTER_RETENTION,
     FAIL_CLOSED_IDENTITY,
     HEALTH_DETAILS,
+    HEALTH_READS_THE_HEAD,
     UNGATED_SAGA_WARNING,
     RUNNERS_STOP_FIRST,
     DOCUMENTED_DEFAULTS,
@@ -880,7 +881,12 @@ final class ReferenceApplication implements Application {
   @Override
   public Map<String, Object> health() {
     Map<String, Object> details = new LinkedHashMap<>();
-    details.put("eventStore.lastGlobalOffset", 0L);
+    if (keeps(Rule.HEALTH_READS_THE_HEAD)) {
+      details.put("eventStore.lastGlobalOffset", eventStore.lastGlobalOffset().value());
+    } else {
+      // An application that reads the head with one backend's SQL: on another it reports an error.
+      details.put("eventStore.error", "not implemented by this database's driver");
+    }
     if (keeps(Rule.HEALTH_DETAILS) && !beansOf(ContractProjection.class).isEmpty()) {
       // The runner's role under its lease: on by default with a database of a backend that takes
       // one, where the only replica leads; SQLite takes none.

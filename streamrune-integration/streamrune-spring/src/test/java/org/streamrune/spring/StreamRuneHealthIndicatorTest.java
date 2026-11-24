@@ -6,11 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import javax.sql.DataSource;
 import org.assertj.core.api.InstanceOfAssertFactories;
@@ -39,33 +35,16 @@ class StreamRuneHealthIndicatorTest {
     return ds;
   }
 
-  /** Stubs the head probe to return one row with the given offset and timestamp. */
-  private static void stubLatestEvent(DataSource ds, long offset, OffsetDateTime createdAt)
-      throws SQLException {
-    Connection conn = ds.getConnection();
-    PreparedStatement ps = mock(PreparedStatement.class);
-    ResultSet rs = mock(ResultSet.class);
-    when(conn.prepareStatement(StreamRuneHealthIndicator.LATEST_EVENT_QUERY)).thenReturn(ps);
-    when(ps.executeQuery()).thenReturn(rs);
-    when(rs.next()).thenReturn(true);
-    when(rs.getLong("global_offset")).thenReturn(offset);
-    when(rs.getObject("created_at", OffsetDateTime.class)).thenReturn(createdAt);
-  }
-
-  /** Stubs the head probe to return an empty result (no events appended yet). */
-  private static void stubEmptyEventStream(DataSource ds) throws SQLException {
-    Connection conn = ds.getConnection();
-    PreparedStatement ps = mock(PreparedStatement.class);
-    ResultSet rs = mock(ResultSet.class);
-    when(conn.prepareStatement(anyString())).thenReturn(ps);
-    when(ps.executeQuery()).thenReturn(rs);
-    when(rs.next()).thenReturn(false);
+  /** An event store whose head is {@code offset}. */
+  private static EventStore eventStoreAt(long offset) {
+    EventStore eventStore = mock(EventStore.class);
+    when(eventStore.lastGlobalOffset()).thenReturn(GlobalOffset.of(offset));
+    return eventStore;
   }
 
   @Test
   void shouldReturnUpWhenDatabaseIsAvailable() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var indicator = new StreamRuneHealthIndicator(ds);
     Health health = indicator.health();
@@ -99,25 +78,34 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
-  void shouldReportLatestGlobalOffsetAndTimestamp() throws Exception {
+  void shouldReportTheHeadOfTheEventStore() throws Exception {
     DataSource ds = validDataSource();
-    stubLatestEvent(ds, 42L, OffsetDateTime.of(2026, 4, 23, 10, 0, 0, 0, ZoneOffset.UTC));
 
-    var indicator = new StreamRuneHealthIndicator(ds);
+    var indicator = new StreamRuneHealthIndicator(ds, null, eventStoreAt(42L), null);
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.UP);
     assertThat(health.getDetails()).containsEntry("eventStore.lastGlobalOffset", 42L);
-    assertThat(health.getDetails())
-        .containsEntry("eventStore.lastEventTimestamp", "2026-04-23T10:00:00Z");
+    assertThat(health.getDetails()).doesNotContainKey("eventStore.error");
+  }
+
+  /** The head is read through the event store alone: the indicator runs no SQL of its own. */
+  @Test
+  void shouldReadTheHeadThroughTheEventStoreAndRunNoStatement() throws Exception {
+    DataSource ds = validDataSource();
+    Connection conn = ds.getConnection();
+
+    new StreamRuneHealthIndicator(ds, null, eventStoreAt(7L), null).health();
+
+    verify(conn, never()).prepareStatement(anyString());
+    verify(conn, never()).createStatement();
   }
 
   @Test
   void shouldReportZeroOffsetWhenEventStreamIsEmpty() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
-    var indicator = new StreamRuneHealthIndicator(ds);
+    var indicator = new StreamRuneHealthIndicator(ds, null, eventStoreAt(0L), null);
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.UP);
@@ -125,12 +113,38 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
+  void shouldReportZeroOffsetForAStoreWithoutAGlobalHead() throws Exception {
+    DataSource ds = validDataSource();
+    EventStore eventStore = mock(EventStore.class);
+    when(eventStore.lastGlobalOffset()).thenThrow(new UnsupportedOperationException("no head"));
+
+    Health health = new StreamRuneHealthIndicator(ds, null, eventStore, null).health();
+
+    assertThat(health.getStatus()).isEqualTo(Status.UP);
+    assertThat(health.getDetails()).containsEntry("eventStore.lastGlobalOffset", 0L);
+    assertThat(health.getDetails()).doesNotContainKey("eventStore.error");
+  }
+
+  @Test
+  void shouldReportNoEventStoreDetailWithoutAnEventStore() throws Exception {
+    DataSource ds = validDataSource();
+
+    Health health = new StreamRuneHealthIndicator(ds).health();
+
+    assertThat(health.getStatus()).isEqualTo(Status.UP);
+    assertThat(health.getDetails())
+        .doesNotContainKey("eventStore.lastGlobalOffset")
+        .doesNotContainKey("eventStore.error");
+  }
+
+  @Test
   void shouldStayUpAndReportErrorWhenHeadProbeFails() throws Exception {
     DataSource ds = validDataSource();
-    when(ds.getConnection().prepareStatement(anyString()))
-        .thenThrow(new SQLException("relation \"event_stream\" does not exist"));
+    EventStore eventStore = mock(EventStore.class);
+    when(eventStore.lastGlobalOffset())
+        .thenThrow(new IllegalStateException("relation \"event_stream\" does not exist"));
 
-    var indicator = new StreamRuneHealthIndicator(ds);
+    var indicator = new StreamRuneHealthIndicator(ds, null, eventStore, null);
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.UP);
@@ -139,9 +153,21 @@ class StreamRuneHealthIndicatorTest {
   }
 
   @Test
+  void shouldNameTheExceptionWhenTheHeadProbeFailsWithoutAMessage() throws Exception {
+    DataSource ds = validDataSource();
+    EventStore eventStore = mock(EventStore.class);
+    when(eventStore.lastGlobalOffset()).thenThrow(new IllegalStateException());
+
+    Health health = new StreamRuneHealthIndicator(ds, null, eventStore, null).health();
+
+    assertThat(health.getStatus()).isEqualTo(Status.UP);
+    assertThat(health.getDetails())
+        .containsEntry("eventStore.error", IllegalStateException.class.getName());
+  }
+
+  @Test
   void shouldIncludeSubscriptionHealthWhenContributorPresent() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var contributor = mock(SubscriptionHealthContributor.class);
     when(contributor.health())
@@ -166,7 +192,6 @@ class StreamRuneHealthIndicatorTest {
   @Test
   void rendersTheRoleOfEachSubscription() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
     var contributor = mock(SubscriptionHealthContributor.class);
     when(contributor.health())
         .thenReturn(
@@ -200,7 +225,6 @@ class StreamRuneHealthIndicatorTest {
   @Test
   void rendersTheStoreOfAProjection_andNoneForAnEntryWithout() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
     var contributor = mock(SubscriptionHealthContributor.class);
     when(contributor.health())
         .thenReturn(
@@ -234,7 +258,6 @@ class StreamRuneHealthIndicatorTest {
   @Test
   void shouldReturnDownWhenSubscriptionIsDown() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var contributor = mock(SubscriptionHealthContributor.class);
     when(contributor.health())
@@ -249,12 +272,12 @@ class StreamRuneHealthIndicatorTest {
                     LeaseRole.NOT_REPORTED)));
     when(contributor.overallStatus()).thenReturn(SubscriptionHealth.Status.DOWN);
 
-    var indicator = new StreamRuneHealthIndicator(ds, contributor);
+    var indicator = new StreamRuneHealthIndicator(ds, contributor, eventStoreAt(3L), null);
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.DOWN);
-    // Event store details from the head probe are retained alongside the DOWN status
-    assertThat(health.getDetails()).containsKey("eventStore.lastGlobalOffset");
+    // The head of the event store is retained alongside the DOWN status
+    assertThat(health.getDetails()).containsEntry("eventStore.lastGlobalOffset", 3L);
   }
 
   /**
@@ -281,7 +304,6 @@ class StreamRuneHealthIndicatorTest {
     // one a readiness probe consults, so lag must not turn it DOWN: it is reported as a DEGRADED
     // detail (and through the streamrune.subscriptions.lag gauge) instead.
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var indicator = new StreamRuneHealthIndicator(ds, contributorWithOrdersAt(50_000, 0));
     Health health = indicator.health();
@@ -296,7 +318,6 @@ class StreamRuneHealthIndicatorTest {
   @Test
   void aTerminallyHaltedSubscriptionTurnsTheCheckDown() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
     var contributor = contributorWithOrdersAt(10, 10);
     contributor.markTerminalError(SubscriptionName.of("orders"));
 
@@ -313,7 +334,6 @@ class StreamRuneHealthIndicatorTest {
     // The contributor computes health afresh on every call; the check reads it once, so it can
     // never be UP while its own details show a DOWN subscription (or the reverse).
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
     var contributor = mock(SubscriptionHealthContributor.class);
     when(contributor.health())
         .thenReturn(
@@ -355,11 +375,10 @@ class StreamRuneHealthIndicatorTest {
     // A started relay whose poll thread died must flip /health to DOWN and expose
     // details.
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var indicator =
         new StreamRuneHealthIndicator(
-            ds, null, relayContributor(BackgroundRelayHealthContributor.Status.DOWN));
+            ds, null, null, relayContributor(BackgroundRelayHealthContributor.Status.DOWN));
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.DOWN);
@@ -369,11 +388,10 @@ class StreamRuneHealthIndicatorTest {
   @Test
   void shouldStayUpAndReportRelayDetailsWhenBackgroundRelayIsHealthy() throws Exception {
     DataSource ds = validDataSource();
-    stubEmptyEventStream(ds);
 
     var indicator =
         new StreamRuneHealthIndicator(
-            ds, null, relayContributor(BackgroundRelayHealthContributor.Status.UP));
+            ds, null, null, relayContributor(BackgroundRelayHealthContributor.Status.UP));
     Health health = indicator.health();
 
     assertThat(health.getStatus()).isEqualTo(Status.UP);

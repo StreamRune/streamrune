@@ -240,7 +240,7 @@ public class org.streamrune.spring.StreamRuneFailureAnalyzer extends org.springf
 public class org.streamrune.spring.StreamRuneHealthIndicator implements org.springframework.boot.health.contributor.HealthIndicator
   public <init>(javax.sql.DataSource)
   public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor)
-  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.runtime.BackgroundRelayHealthContributor)
+  public <init>(javax.sql.DataSource, org.streamrune.runtime.SubscriptionHealthContributor, org.streamrune.core.EventStore, org.streamrune.runtime.BackgroundRelayHealthContributor)
   public org.springframework.boot.health.contributor.Health health()
 
 public final record org.streamrune.spring.StreamRuneProperties

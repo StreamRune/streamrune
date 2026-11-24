@@ -104,6 +104,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case DEAD_LETTER_RETENTION -> this::deadLetterRetentionAboveInboxRetentionRefusesStart;
       case FAIL_CLOSED_IDENTITY -> this::failClosedIdentityAnswers403WithoutAnIdentity;
       case HEALTH_DETAILS -> this::healthCarriesTheDocumentedNameAndKeys;
+      case HEALTH_READS_THE_HEAD -> this::healthReportsTheHeadOfTheEventStoreWithoutAnError;
       case UNGATED_SAGA_WARNING -> this::sagaRunnerWithoutLeadershipLogsTheDocumentedWarn;
       case RUNNERS_STOP_FIRST -> this::shutdownStopsRunnersBeforeTheEventStoreCloses;
       case DOCUMENTED_DEFAULTS -> this::configurationDefaultsEqualTheOracle;

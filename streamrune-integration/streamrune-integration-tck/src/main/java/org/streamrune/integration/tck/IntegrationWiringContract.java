@@ -650,6 +650,40 @@ public abstract class IntegrationWiringContract {
   }
 
   /**
+   * The health check reports the head of the event store on every backend. Once a command has
+   * stored an event, {@code eventStore.lastGlobalOffset} is the offset the application's {@code
+   * EventStore} reports as its last, and the check carries no {@code eventStore.error}: the head is
+   * read through the event store, never with the SQL of one backend.
+   */
+  @Test
+  public void healthReportsTheHeadOfTheEventStoreWithoutAnError() {
+    try (Application application =
+        start(database(), Map.of(), Set.of(ContractCommandRegistration.class))) {
+      assertStarted(application);
+      application.bean(VirtualThreadCommandBus.class).execute(new ContractCommand("head-1"));
+      long head = application.bean(EventStore.class).lastGlobalOffset().value();
+      assertTrue(head > 0, "the command stored an event: the head is " + head);
+
+      Map<String, Object> health =
+          awaitHealth(
+              application,
+              details ->
+                  String.valueOf(head)
+                      .equals(String.valueOf(details.get("eventStore.lastGlobalOffset"))));
+      Map<String, Object> details = details(health);
+      assertFalse(
+          details.containsKey("eventStore.error"),
+          () -> "the check must read the head of the event store without an error: " + health);
+      assertEquals(
+          String.valueOf(head),
+          String.valueOf(details.get("eventStore.lastGlobalOffset")),
+          () -> "the check must report the head of the event store: " + health);
+      assertEquals(
+          "UP", String.valueOf(health.get("status")), () -> "the check must be UP: " + health);
+    }
+  }
+
+  /**
    * With a real {@code SubscriptionLeadership} bean, a {@code SagaRunner} that carries no lease
    * delivers its saga type on every replica, and the start logs the {@code WARN} the production
    * guide quotes, naming the saga type. The runner is reported, not refused.
