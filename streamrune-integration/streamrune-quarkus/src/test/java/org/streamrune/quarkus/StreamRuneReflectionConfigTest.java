@@ -56,7 +56,9 @@ class StreamRuneReflectionConfigTest {
     }
     Map<String, JsonNode> byType = new LinkedHashMap<>();
     for (JsonNode entry : metadata.path("reflection")) {
-      byType.put(entry.path("type").toString(), entry);
+      if (!entry.path("type").asText().startsWith("org.streamrune.")) {
+        byType.put(entry.path("type").toString(), entry);
+      }
     }
 
     assertThat(
@@ -119,6 +121,58 @@ class StreamRuneReflectionConfigTest {
         .contains(
             "db/streamrune-migration/V001__streamrune_baseline.sql",
             "db/crypto-migration/V001__crypto_baseline.sql");
+  }
+
+  /**
+   * {@code streamrune.backend=sqlite}: {@code BackendSelection} creates the SQLite backend and its
+   * crypto half by class name through their public no-argument constructors (registered, by name,
+   * since this module has no SQLite dependency), the SQLite series' scripts are read by name, and
+   * the instance guard calls {@code open}, {@code flock}, {@code close} and {@code strerror}
+   * through the Foreign Function and Memory API.
+   */
+  @Test
+  void registersTheSqliteBackendClassesScriptsAndForeignDowncalls() throws Exception {
+    JsonNode metadata;
+    try (InputStream in =
+        StreamRuneReflectionConfig.class.getResourceAsStream(HIKARI_METADATA_RESOURCE)) {
+      assertThat(in).as(HIKARI_METADATA_RESOURCE).isNotNull();
+      metadata = new ObjectMapper().readTree(in);
+    }
+    List<String> constructors = new java.util.ArrayList<>();
+    for (JsonNode entry : metadata.path("reflection")) {
+      if (entry.path("type").asText().startsWith("org.streamrune.")) {
+        assertThat(entry.path("methods").toString())
+            .as("constructor only: %s", entry)
+            .isEqualTo("[{\"name\":\"<init>\",\"parameterTypes\":[]}]");
+        constructors.add(entry.path("type").asText());
+      }
+    }
+    assertThat(constructors)
+        .containsExactly(
+            org.streamrune.integration.BackendSelection.SQLITE_BACKEND_CLASS,
+            org.streamrune.integration.BackendSelection.SQLITE_CRYPTO_BACKEND_CLASS);
+    for (String className : constructors) {
+      assertThat(Class.forName(className).getConstructor()).isNotNull();
+    }
+
+    List<java.nio.file.PathMatcher> globs = new java.util.ArrayList<>();
+    for (JsonNode entry : metadata.path("resources")) {
+      globs.add(
+          java.nio.file.FileSystems.getDefault()
+              .getPathMatcher("glob:" + entry.path("glob").asText()));
+    }
+    List<String> scripts =
+        ShippedMigrationScripts.onClassPath(
+            getClass().getClassLoader(), ShippedMigrationScripts.SQLITE_DIRECTORIES);
+    assertThat(scripts).hasSizeGreaterThanOrEqualTo(3);
+    for (String name : scripts) {
+      assertThat(globs.stream().anyMatch(glob -> glob.matches(java.nio.file.Path.of(name))))
+          .as("%s is registered as a native resource", name)
+          .isTrue();
+    }
+
+    assertThat(SqliteForeignDowncalls.of(metadata)).isEqualTo(SqliteForeignDowncalls.EXPECTED);
+    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
   }
 
   /**

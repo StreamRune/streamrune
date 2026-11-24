@@ -117,7 +117,8 @@ public class SagaEventPathRetentionConfigurer
     SagaForwardFenceSetting fence = SagaForwardFenceSetting.parse(properties.sagaForwardFence());
     boolean singleActiveConsumer =
         org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-            properties.subscriptionSingleActiveConsumerEnabled());
+            properties.subscriptionSingleActiveConsumerEnabled(),
+            org.streamrune.integration.BackendSelection.parse(properties.backend()));
     boolean fenceOn = fence.enabled(singleActiveConsumer);
     int fenced = SagaForwardFenceDefault.applyDefault(runners, fenceOn);
     if (fenced > 0) {

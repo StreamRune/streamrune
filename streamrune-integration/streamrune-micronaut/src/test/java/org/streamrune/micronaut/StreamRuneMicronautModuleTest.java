@@ -495,6 +495,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
+            null,
             null);
     assertNotNull(factory);
   }
@@ -656,6 +657,7 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             List.of(),
             auditStore,
+            null,
             null,
             null,
             null);
@@ -1370,6 +1372,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
+            null,
             null);
     assertNotNull(factory);
   }
@@ -1390,6 +1393,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             null,
+            null,
             null);
     assertNotNull(factory);
   }
@@ -1405,6 +1409,7 @@ class StreamRuneMicronautModuleTest {
             StreamRuneMicronautProperties.withDefaults(),
             List.of(),
             List.of(migration),
+            null,
             null,
             null,
             null,
@@ -1463,7 +1468,9 @@ class StreamRuneMicronautModuleTest {
           @Override
           public BackendStores open(BackendContext context) {
             opened.set(context);
-            return mock(BackendStores.class);
+            BackendStores stores = mock(BackendStores.class);
+            when(stores.backendName()).thenReturn("postgres");
+            return stores;
           }
         };
 
@@ -1525,6 +1532,7 @@ class StreamRuneMicronautModuleTest {
                     null,
                     null,
                     null,
+                    null,
                     null));
     assertSame(refusal, ex);
   }
@@ -1544,6 +1552,7 @@ class StreamRuneMicronautModuleTest {
             null,
             outboxMapper,
             outboxStore,
+            null,
             null);
     assertNotNull(factory);
   }
@@ -1562,6 +1571,7 @@ class StreamRuneMicronautModuleTest {
             List.of(),
             null,
             outboxMapper,
+            null,
             null,
             null);
     assertNotNull(factory);
@@ -1582,6 +1592,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             outboxStore,
+            null,
             null);
     assertNotNull(factory);
   }
@@ -1624,6 +1635,7 @@ class StreamRuneMicronautModuleTest {
         null,
         null,
         null,
+        null,
         null);
   }
 
@@ -1649,6 +1661,7 @@ class StreamRuneMicronautModuleTest {
                     null,
                     mock(OutboxEventMapper.class),
                     new org.streamrune.test.InMemoryOutboxStore(),
+                    null,
                     null));
     // The backend's foreign-store refusal, as in the Spring and Quarkus integrations.
     assertEquals(
@@ -1671,6 +1684,7 @@ class StreamRuneMicronautModuleTest {
             null,
             null,
             new org.streamrune.test.InMemoryOutboxStore(),
+            null,
             null);
     assertNotNull(factory);
   }

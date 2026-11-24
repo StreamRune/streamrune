@@ -126,6 +126,7 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
     CryptoPropertiesConfiguration.class,
     FileSystemCryptoEngineConfiguration.class,
     PostgresCryptoEngineConfiguration.class,
+    SqliteCryptoEngineConfiguration.class,
     VaultCryptoEngineConfiguration.class,
     AwsKmsCryptoEngineConfiguration.class
   })
@@ -139,6 +140,7 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
           CryptoPropertiesConfiguration.class.getName(),
           FileSystemCryptoEngineConfiguration.class.getName(),
           PostgresCryptoEngineConfiguration.class.getName(),
+          SqliteCryptoEngineConfiguration.class.getName(),
           VaultCryptoEngineConfiguration.class.getName(),
           AwsKmsCryptoEngineConfiguration.class.getName());
 

@@ -528,10 +528,11 @@ public interface StreamRuneQuarkusProperties {
        * through {@link org.streamrune.integration.SingleActiveConsumerSetting#enabled} — by the
        * leadership producer and the saga forward fence's {@code auto} alike, with the spellings
        * Spring and Micronaut accept. An unknown spelling fails startup ({@link
-       * StreamRuneConfigValidator}), naming the property.
+       * StreamRuneConfigValidator}), naming the property. Unset, it follows {@code
+       * streamrune.backend}: on for {@code postgres}, off for {@code sqlite} (single-instance),
+       * where an explicit on fails startup.
        */
-      @WithDefault("true")
-      String enabled();
+      java.util.Optional<String> enabled();
 
       /**
        * How long a granted lease stays live before another replica may take it over — the upper

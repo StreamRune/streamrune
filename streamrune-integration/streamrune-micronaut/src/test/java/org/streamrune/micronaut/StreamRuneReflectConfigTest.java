@@ -58,12 +58,50 @@ class StreamRuneReflectConfigTest {
         .isEmpty();
   }
 
-  /** Parses the {@code "name"} entries of reflect-config.json into loaded classes. */
+  /**
+   * {@code streamrune.backend=sqlite}: {@code BackendSelection} creates the SQLite backend and its
+   * crypto half by class name through their public no-argument constructors, registered by name
+   * (this module has no SQLite dependency); the instance guard's foreign downcalls, which the
+   * legacy files cannot express, are in the module's reachability metadata.
+   */
+  @Test
+  void registersTheSqliteBackendConstructorsAndTheGuardsForeignDowncalls() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    List<String> constructors = new java.util.ArrayList<>();
+    for (var entry : mapper.readTree(readReflectConfig())) {
+      String name = entry.path("name").asText();
+      if (name.startsWith("org.streamrune.sqlite.") || name.startsWith("org.streamrune.crypto.")) {
+        assertThat(entry.path("methods").toString())
+            .as("constructor only: %s", entry)
+            .isEqualTo("[{\"name\":\"<init>\",\"parameterTypes\":[]}]");
+        assertThat(Class.forName(name).getConstructor()).isNotNull();
+        constructors.add(name);
+      }
+    }
+    assertThat(constructors)
+        .containsExactly(
+            org.streamrune.integration.BackendSelection.SQLITE_BACKEND_CLASS,
+            org.streamrune.integration.BackendSelection.SQLITE_CRYPTO_BACKEND_CLASS);
+
+    String foreign =
+        "/META-INF/native-image/org.streamrune/streamrune-micronaut-sqlite/reachability-metadata.json";
+    try (InputStream in = getClass().getResourceAsStream(foreign)) {
+      assertThat(in).as(foreign).isNotNull();
+      assertThat(SqliteForeignDowncalls.of(mapper.readTree(in)))
+          .isEqualTo(SqliteForeignDowncalls.EXPECTED);
+    }
+    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
+  }
+
+  /** Parses the top-level {@code "name"} entries of reflect-config.json into loaded classes. */
   private Set<Class<?>> registeredTypes() {
     var types = new LinkedHashSet<Class<?>>();
     Matcher matcher = NAME_ENTRY.matcher(readReflectConfig());
     while (matcher.find()) {
       String className = matcher.group(1);
+      if (className.equals("<init>")) {
+        continue;
+      }
       try {
         types.add(Class.forName(className, false, getClass().getClassLoader()));
       } catch (ClassNotFoundException e) {

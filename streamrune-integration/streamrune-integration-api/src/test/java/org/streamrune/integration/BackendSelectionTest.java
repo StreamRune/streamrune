@@ -75,6 +75,38 @@ class BackendSelectionTest {
     }
   }
 
+  /** Loaded by name, but reports another backend's name. */
+  public static final class MisnamedBackend extends StubBackend {
+    public MisnamedBackend() {
+      super("postgres");
+    }
+  }
+
+  /** The crypto half's stand-in: integration-api cannot see the crypto-api's CryptoBackend. */
+  public interface CryptoHalf {
+    String name();
+  }
+
+  /** A crypto half loaded by name, like the SQLite crypto backend. */
+  public static final class LoadableCryptoHalf implements CryptoHalf {
+    public LoadableCryptoHalf() {}
+
+    @Override
+    public String name() {
+      return "sqlite";
+    }
+  }
+
+  /** A crypto half loaded by name that reports another backend's name. */
+  public static final class MisnamedCryptoHalf implements CryptoHalf {
+    public MisnamedCryptoHalf() {}
+
+    @Override
+    public String name() {
+      return "postgres";
+    }
+  }
+
   private static String binaryName(Class<?> type) {
     return type.getName();
   }
@@ -216,6 +248,118 @@ class BackendSelectionTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageStartingWith("Cannot load " + name + ": ")
         .hasCauseInstanceOf(ExceptionInInitializerError.class);
+  }
+
+  @Test
+  void resolve_sqlite_aClassReportingAnotherName_isRefusedNamingBoth() {
+    String name = binaryName(MisnamedBackend.class);
+
+    assertThatThrownBy(
+            () -> BackendSelection.resolve("sqlite", () -> new StubBackend("postgres"), name))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            name
+                + " reports the backend name 'postgres', but streamrune.backend=sqlite selected"
+                + " it");
+  }
+
+  @Test
+  void resolve_postgres_aSupplierOfAnotherNamedBackend_isRefused() {
+    assertThatThrownBy(() -> BackendSelection.resolve("postgres", () -> new StubBackend("sqlite")))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            StubBackend.class.getName()
+                + " reports the backend name 'sqlite', but streamrune.backend=postgres selected"
+                + " it");
+  }
+
+  // ---------- resolveCrypto ----------
+
+  @Test
+  void resolveCrypto_postgres_isTheSuppliedCryptoBackend() {
+    CryptoHalf postgres = () -> "postgres";
+
+    assertThat(
+            BackendSelection.resolveCrypto(
+                "postgres", CryptoHalf.class, CryptoHalf::name, () -> postgres))
+        .isSameAs(postgres);
+  }
+
+  @Test
+  void resolveCrypto_sqlite_withoutTheModule_namesTheCryptoModule() {
+    assertThatThrownBy(
+            () ->
+                BackendSelection.resolveCrypto(
+                    "sqlite",
+                    CryptoHalf.class,
+                    CryptoHalf::name,
+                    () -> {
+                      throw new AssertionError("postgres is not selected");
+                    }))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "streamrune.backend=sqlite with a crypto engine enabled needs the module"
+                + " org.streamrune:streamrune-sqlite-crypto on the classpath")
+        .hasCauseInstanceOf(ClassNotFoundException.class);
+  }
+
+  @Test
+  void resolveCrypto_sqlite_loadsTheClassByName() {
+    CryptoHalf crypto =
+        BackendSelection.resolveCrypto(
+            "sqlite",
+            CryptoHalf.class,
+            CryptoHalf::name,
+            () -> null,
+            binaryName(LoadableCryptoHalf.class));
+
+    assertThat(crypto).isInstanceOf(LoadableCryptoHalf.class);
+  }
+
+  @Test
+  void resolveCrypto_sqlite_aClassOfAnotherTypeOrName_isRefused() {
+    String notCrypto = binaryName(LoadableBackend.class);
+    assertThatThrownBy(
+            () ->
+                BackendSelection.resolveCrypto(
+                    "sqlite", CryptoHalf.class, CryptoHalf::name, () -> null, notCrypto))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(notCrypto + " is not a " + CryptoHalf.class.getName());
+
+    String misnamed = binaryName(MisnamedCryptoHalf.class);
+    assertThatThrownBy(
+            () ->
+                BackendSelection.resolveCrypto(
+                    "sqlite", CryptoHalf.class, CryptoHalf::name, () -> null, misnamed))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            misnamed
+                + " reports the backend name 'postgres', but streamrune.backend=sqlite selected"
+                + " it");
+  }
+
+  @Test
+  void resolveCrypto_refusesNullsAndUnparsedNames() {
+    assertThatThrownBy(
+            () -> BackendSelection.resolveCrypto("postgres", null, CryptoHalf::name, () -> null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("type is required");
+    assertThatThrownBy(
+            () -> BackendSelection.resolveCrypto("postgres", CryptoHalf.class, null, () -> null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("nameOf is required");
+    assertThatThrownBy(
+            () ->
+                BackendSelection.resolveCrypto(
+                    "postgres", CryptoHalf.class, CryptoHalf::name, () -> null))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("postgres must supply a backend");
+    assertThatThrownBy(
+            () ->
+                BackendSelection.resolveCrypto(
+                    "oracle", CryptoHalf.class, CryptoHalf::name, () -> null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageStartingWith("name must be a parsed backend name");
   }
 
   @Test

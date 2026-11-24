@@ -94,6 +94,62 @@ class StreamRuneRuntimeHintsTest {
             "db/crypto-migration/V001__crypto_baseline.sql");
   }
 
+  /**
+   * {@code streamrune.backend=sqlite} reads the SQLite series' scripts by name: the SQLite modules
+   * are on this test class path, so their scripts are listed from it.
+   */
+  @Test
+  void registersEverySqliteMigrationScriptAsAResource() {
+    ClassLoader classLoader = getClass().getClassLoader();
+    List<String> expected =
+        ShippedMigrationScripts.onClassPath(
+            classLoader, ShippedMigrationScripts.SQLITE_DIRECTORIES);
+
+    assertThat(expected)
+        .contains(
+            "db/sqlite-migration/V001__baseline.sql",
+            "db/sqlite-readmodel-migration/V001__readmodel_baseline.sql",
+            "db/sqlite-crypto-migration/V001__crypto.sql");
+    for (String name : expected) {
+      assertThat(resource().forResource(name)).as("%s is a native resource", name).accepts(hints);
+    }
+  }
+
+  /**
+   * {@code BackendSelection} creates the SQLite backend and its crypto half by class name, through
+   * their public no-argument constructors: both constructors are registered for invocation.
+   */
+  @Test
+  void registersTheSqliteBackendConstructorsThatSelectionInvokesByName() throws Exception {
+    for (String className :
+        List.of(
+            org.streamrune.integration.BackendSelection.SQLITE_BACKEND_CLASS,
+            org.streamrune.integration.BackendSelection.SQLITE_CRYPTO_BACKEND_CLASS)) {
+      var constructor = Class.forName(className).getConstructor();
+      assertThat(reflection().onConstructorInvocation(constructor))
+          .as("%s() is invocable reflectively", className)
+          .accepts(hints);
+    }
+  }
+
+  /**
+   * The instance guard's FFM downcalls, which {@code RuntimeHints} cannot express, are registered
+   * in this module's reachability metadata, one descriptor per {@code FlockFileLock} downcall.
+   */
+  @Test
+  void registersTheInstanceGuardsForeignDowncalls() throws Exception {
+    String path =
+        "META-INF/native-image/org.streamrune/streamrune-spring-sqlite/reachability-metadata.json";
+    com.fasterxml.jackson.databind.JsonNode metadata;
+    try (var in = getClass().getClassLoader().getResourceAsStream(path)) {
+      assertThat(in).as(path).isNotNull();
+      metadata = new com.fasterxml.jackson.databind.ObjectMapper().readTree(in);
+    }
+    assertThat(SqliteForeignDowncalls.of(metadata)).isEqualTo(SqliteForeignDowncalls.EXPECTED);
+    // The condition names the guard class itself: a rename must fail here, not in the image.
+    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
+  }
+
   @Test
   void registerSerializableTypesRegistersAccessorMethodsForRecordComponents() {
     var appHints = new RuntimeHints();

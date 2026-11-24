@@ -88,7 +88,7 @@ public static class org.streamrune.quarkus.StreamRuneCryptoProducers$AwsKmsCrypt
 
 public static class org.streamrune.quarkus.StreamRuneCryptoProducers$CryptoBackendProducer
   public <init>()
-  public org.streamrune.crypto.CryptoBackend streamRuneCryptoBackend(org.streamrune.core.backend.StreamRuneBackend)
+  public org.streamrune.crypto.CryptoBackend streamRuneCryptoBackend(org.streamrune.core.backend.StreamRuneBackend, org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties)
 
 public static class org.streamrune.quarkus.StreamRuneCryptoProducers$FileSystemCryptoProducer
   public <init>()
@@ -98,6 +98,11 @@ public static class org.streamrune.quarkus.StreamRuneCryptoProducers$FileSystemC
 public static class org.streamrune.quarkus.StreamRuneCryptoProducers$PostgresCryptoProducer
   public <init>()
   public org.streamrune.core.crypto.CryptoEngine postgresCryptoEngine(org.streamrune.crypto.CryptoBackend, javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
+  public void disposeCryptoEngine(org.streamrune.core.crypto.CryptoEngine)
+
+public static class org.streamrune.quarkus.StreamRuneCryptoProducers$SqliteCryptoProducer
+  public <init>()
+  public org.streamrune.core.crypto.CryptoEngine sqliteCryptoEngine(org.streamrune.crypto.CryptoBackend, javax.sql.DataSource, org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public void disposeCryptoEngine(org.streamrune.core.crypto.CryptoEngine)
 
 public static final record org.streamrune.quarkus.StreamRuneCryptoProducers$StreamRuneKmsClient implements java.lang.AutoCloseable
@@ -151,7 +156,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.AggregateLocker aggregateLocker(org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.core.tracing.StreamRuneTracing, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>)
   public org.streamrune.core.CommandInbox commandInbox(org.streamrune.core.backend.BackendStores)
   public org.streamrune.core.EventStore eventStore(org.streamrune.core.EventStoreFactory)
-  public org.streamrune.core.EventStoreFactory postgresEventStoreFactory(org.streamrune.core.backend.BackendStores, org.streamrune.core.EventTypeRegistry, org.streamrune.quarkus.StreamRuneQuarkusProperties, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, jakarta.enterprise.inject.Instance<org.streamrune.core.audit.EventAuditStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxEventMapper>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.CommandInbox>)
+  public org.streamrune.core.EventStoreFactory postgresEventStoreFactory(org.streamrune.core.backend.BackendStores, org.streamrune.core.EventTypeRegistry, org.streamrune.quarkus.StreamRuneQuarkusProperties, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, jakarta.enterprise.inject.Instance<org.streamrune.core.audit.EventAuditStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxEventMapper>, jakarta.enterprise.inject.Instance<org.streamrune.core.outbox.OutboxStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.CommandInbox>, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>)
   public org.streamrune.core.EventTypeRegistry eventTypeRegistry()
   public org.streamrune.core.QueryBus queryBus(org.streamrune.runtime.SimpleQueryBus, jakarta.enterprise.inject.Instance<org.streamrune.runtime.CachingQueryBus>, jakarta.enterprise.inject.Instance<org.streamrune.core.audit.AuditStore>)
   public org.streamrune.core.StreamRuneMetrics micrometerStreamRuneMetrics(jakarta.enterprise.inject.Instance<io.micrometer.core.instrument.MeterRegistry>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
@@ -165,7 +170,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint(org.streamrune.core.projection.OffsetStore)
   public org.streamrune.core.projection.OffsetStore offsetStore(org.streamrune.core.backend.BackendStores)
   public org.streamrune.core.projection.ProjectionDeadLetterStore postgresProjectionDeadLetterStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
-  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.core.backend.BackendStores)
+  public org.streamrune.core.projection.ReadModelStore postgresReadModelStore(javax.sql.DataSource, org.streamrune.core.backend.BackendStores, org.streamrune.core.backend.StreamRuneBackend)
   public org.streamrune.core.saga.SagaDeadLetterStore sagaDeadLetterStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.core.saga.SagaStore sagaStore(org.streamrune.core.backend.BackendStores, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public org.streamrune.core.subscription.SubscriptionLeadership subscriptionLeadership(jakarta.enterprise.inject.Instance<org.streamrune.core.backend.BackendStores>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
@@ -203,6 +208,7 @@ public interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties
   public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$CacheConfig cache()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$FileSystemConfig filesystem()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$PostgresConfig postgres()
+  public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$SqliteConfig sqlite()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$VaultConfig vault()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$AwsConfig
@@ -228,6 +234,9 @@ public static interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties
 public static interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$PostgresConfig
   public abstract boolean enabled()
   public abstract java.lang.String tableName()
+
+public static interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$SqliteConfig
+  public abstract boolean enabled()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$VaultConfig
   public abstract boolean enabled()
@@ -344,8 +353,8 @@ public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$Subsc
   public abstract long lagThreshold()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$SubscriptionConfig$SingleActiveConsumerConfig
-  public abstract java.lang.String enabled()
   public abstract java.time.Duration leaseTtl()
+  public abstract java.util.Optional<java.lang.String> enabled()
 
 public static interface org.streamrune.quarkus.StreamRuneQuarkusProperties$TracingConfig
   public abstract boolean enabled()

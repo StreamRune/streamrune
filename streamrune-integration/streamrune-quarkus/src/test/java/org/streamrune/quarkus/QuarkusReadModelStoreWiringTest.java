@@ -192,7 +192,8 @@ class QuarkusReadModelStoreWiringTest {
             properties,
             cryptoEngine,
             unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP));
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP),
+        new org.streamrune.postgres.PostgresBackend());
   }
 
   // ── in a real Arc container ─────────────────────────────────────────────────────
@@ -631,6 +632,7 @@ class QuarkusReadModelStoreWiringTest {
     java.sql.DatabaseMetaData meta = Mockito.mock(java.sql.DatabaseMetaData.class);
     Mockito.when(old.getConnection()).thenReturn(connection);
     Mockito.when(connection.getMetaData()).thenReturn(meta);
+    Mockito.when(meta.getDatabaseProductName()).thenReturn("PostgreSQL");
     Mockito.when(meta.getDatabaseMajorVersion()).thenReturn(15);
     Mockito.when(meta.getDatabaseProductVersion()).thenReturn("15.4");
 

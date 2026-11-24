@@ -74,6 +74,18 @@ dependencies {
     // store checks the server version and migrates the schema when it is built).
     testImplementation(libs.postgresql)
     testImplementation(libs.bundles.testcontainers.pg)
+    // MicronautSqliteSelectionTest boots the integration on streamrune.backend=sqlite. Test scope
+    // only: the integration loads the SQLite backend by name and names no SQLite type, so the
+    // published POM gains no SQLite dependency; an application adds the modules itself.
+    testImplementation(project(":streamrune-sqlite"))
+    testImplementation(project(":streamrune-crypto:streamrune-sqlite-crypto"))
+}
+
+// streamrune-sqlite's driver loads its native library and its instance guard calls flock(2)
+// through the Foreign Function and Memory API; enabling native access keeps the JVM's
+// restricted-method warnings out of the test output.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // A test JVM without OpenTelemetry: opentelemetry-api is compileOnly, so an application that does
@@ -93,9 +105,29 @@ val openTelemetryAbsentTest =
         filter { includeTestsMatching(openTelemetryAbsentTestClass) }
     }
 
-tasks.named<Test>("test") { filter { excludeTestsMatching(openTelemetryAbsentTestClass) } }
+// A test JVM without streamrune-sqlite-crypto: streamrune.backend=sqlite with a crypto engine
+// enabled must fail naming the module. BackendSelection loads the class with its own class loader,
+// so the module leaves the classpath.
+val sqliteCryptoAbsentTestClass = "org.streamrune.micronaut.MicronautSqliteCryptoAbsentTest"
 
-tasks.named("check") { dependsOn(openTelemetryAbsentTest) }
+val sqliteCryptoAbsentTest =
+    tasks.register<Test>("sqliteCryptoAbsentTest") {
+        group = "verification"
+        description = "Boots streamrune.backend=sqlite with a crypto engine and no streamrune-sqlite-crypto."
+        testClassesDirs = testSourceSet.output.classesDirs
+        classpath =
+            testSourceSet.runtimeClasspath.filter { !it.path.contains("streamrune-sqlite-crypto") }
+        filter { includeTestsMatching(sqliteCryptoAbsentTestClass) }
+    }
+
+tasks.named<Test>("test") {
+    filter {
+        excludeTestsMatching(openTelemetryAbsentTestClass)
+        excludeTestsMatching(sqliteCryptoAbsentTestClass)
+    }
+}
+
+tasks.named("check") { dependsOn(openTelemetryAbsentTest, sqliteCryptoAbsentTest) }
 
 // ConfigurationDocLintTest reads the guides, this module's README, the pages listed in
 // gradle/doc-lint-pages.txt (declared by the root build) and the main sources of this module and of

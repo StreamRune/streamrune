@@ -68,5 +68,7 @@
   {"name": "org.streamrune.core.saga.SagaStatus", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.backend.BackendContext", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
   {"name": "org.streamrune.core.backend.EventStoreOptions", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
-  {"name": "org.streamrune.core.backend.OutboxOptions", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true}
+  {"name": "org.streamrune.core.backend.OutboxOptions", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true},
+  {"name": "org.streamrune.sqlite.SqliteBackend", "methods": [{"name": "<init>", "parameterTypes": []}]},
+  {"name": "org.streamrune.crypto.sqlite.SqliteCryptoBackend", "methods": [{"name": "<init>", "parameterTypes": []}]}
 ]

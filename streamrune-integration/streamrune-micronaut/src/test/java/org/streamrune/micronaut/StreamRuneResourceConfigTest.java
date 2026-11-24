@@ -48,6 +48,15 @@ class StreamRuneResourceConfigTest {
         .contains(
             "db/streamrune-migration/V001__streamrune_baseline.sql",
             "db/crypto-migration/V001__crypto_baseline.sql");
+    List<String> sqlite =
+        ShippedMigrationScripts.onClassPath(
+            classLoader, ShippedMigrationScripts.SQLITE_DIRECTORIES);
+    assertThat(sqlite).hasSizeGreaterThanOrEqualTo(3);
+    for (String name : sqlite) {
+      assertThat(includes.stream().anyMatch(include -> include.matcher(name).matches()))
+          .as("%s is registered as a native resource", name)
+          .isTrue();
+    }
     assertThat(
             includes.stream()
                 .anyMatch(include -> include.matcher("db/migration/V1__app.sql").matches()))

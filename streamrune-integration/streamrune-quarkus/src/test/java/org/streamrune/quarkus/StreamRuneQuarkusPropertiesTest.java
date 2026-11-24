@@ -114,7 +114,12 @@ class StreamRuneQuarkusPropertiesTest {
   void singleActiveConsumerEnabledByDefault() {
     assertTrue(
         org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-            TestProperties.defaults().subscription().singleActiveConsumer().enabled()));
+            TestProperties.defaults().subscription().singleActiveConsumer().enabled().orElse(null),
+            "postgres"));
+    assertFalse(
+        org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+            TestProperties.defaults().subscription().singleActiveConsumer().enabled().orElse(null),
+            "sqlite"));
   }
 
   @Test
@@ -158,7 +163,7 @@ class StreamRuneQuarkusPropertiesTest {
             Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
     assertFalse(
         org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-            p.subscription().singleActiveConsumer().enabled()));
+            p.subscription().singleActiveConsumer().enabled().orElse(null), "postgres"));
   }
 
   @Test

@@ -1349,7 +1349,9 @@ public class org.streamrune.test.ScriptedSubscriptionLeadership implements org.s
 
 public final class org.streamrune.test.ShippedMigrationScripts
   public static final java.util.List<java.lang.String> DIRECTORIES
+  public static final java.util.List<java.lang.String> SQLITE_DIRECTORIES
   public static java.util.List<java.lang.String> onClassPath(java.lang.ClassLoader)
+  public static java.util.List<java.lang.String> onClassPath(java.lang.ClassLoader, java.util.List<java.lang.String>)
 
 public final class org.streamrune.test.UnregisteredSealedTypes
   public static java.lang.Class<?> sealedInterface(java.lang.invoke.MethodHandles$Lookup)

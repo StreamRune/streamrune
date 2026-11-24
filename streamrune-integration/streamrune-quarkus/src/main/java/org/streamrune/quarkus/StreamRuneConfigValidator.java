@@ -182,10 +182,12 @@ public class StreamRuneConfigValidator {
     // streamrune.subscription.single-active-consumer.enabled is bound as text and parsed where it
     // is read — the leadership producer, which runs only when something injects the leadership,
     // and the saga forward fence. Parsing it here makes an unknown spelling fail every startup,
-    // with or without a DataSource, as binding does on Spring and Micronaut.
+    // with or without a DataSource, as binding does on Spring and Micronaut; an explicit on with
+    // streamrune.backend=sqlite fails here too (IllegalStateException: SQLite is single-instance).
     try {
       org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-          properties.subscription().singleActiveConsumer().enabled());
+          properties.subscription().singleActiveConsumer().enabled().orElse(null),
+          org.streamrune.integration.BackendSelection.parse(properties.backend()));
     } catch (IllegalArgumentException e) {
       throw new IllegalStateException(e.getMessage(), e);
     }

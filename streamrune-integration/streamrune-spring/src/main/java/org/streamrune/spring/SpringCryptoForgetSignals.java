@@ -55,8 +55,8 @@ final class SpringCryptoForgetSignals {
         "No DataSource available to wire the cross-replica crypto-forget channel for the {} crypto"
             + " backend; after a GDPR erasure, peer replicas will keep serving a forgotten subject's"
             + " cached plaintext for up to the cache write-TTL ceiling ({}) — the only cross-replica"
-            + " erasure bound. Provide a Postgres DataSource for prompt (LISTEN/NOTIFY) cross-replica"
-            + " eviction.",
+            + " erasure bound. Provide a DataSource on the selected backend's database so its forget"
+            + " signal evicts promptly.",
         backend,
         writeTtl);
     return CryptoForgetSignal.NOOP;

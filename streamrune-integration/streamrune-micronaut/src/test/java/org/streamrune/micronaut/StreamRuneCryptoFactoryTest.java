@@ -625,19 +625,31 @@ class StreamRuneCryptoFactoryTest {
   void theCryptoBackendOfPostgresIsPostgresCryptoBackend() {
     assertInstanceOf(
         PostgresCryptoBackend.class,
-        StreamRuneCryptoFactory.cryptoBackendOf(new org.streamrune.postgres.PostgresBackend()));
+        StreamRuneCryptoFactory.cryptoBackendOf(
+            new org.streamrune.postgres.PostgresBackend(), true, false));
   }
 
   @Test
-  void anotherBackendHasNoCryptoBackendInThisIntegration() {
+  void theSqliteBackendGetsTheSqliteCryptoBackendLoadedByName() {
+    var backend = mock(org.streamrune.core.backend.StreamRuneBackend.class);
+    org.mockito.Mockito.when(backend.name()).thenReturn("sqlite");
+    assertEquals(
+        org.streamrune.integration.BackendSelection.SQLITE_CRYPTO_BACKEND_CLASS,
+        StreamRuneCryptoFactory.cryptoBackendOf(backend, false, true).getClass().getName());
+  }
+
+  @Test
+  void thePostgresKeyStoreEngineIsRefusedOnSqlite() {
     var backend = mock(org.streamrune.core.backend.StreamRuneBackend.class);
     org.mockito.Mockito.when(backend.name()).thenReturn("sqlite");
     var ex =
         assertThrows(
-            IllegalStateException.class, () -> StreamRuneCryptoFactory.cryptoBackendOf(backend));
-    assertEquals(
-        "streamrune.backend=sqlite has no crypto backend in the Micronaut integration; only"
-            + " postgres has one",
+            IllegalStateException.class,
+            () -> StreamRuneCryptoFactory.cryptoBackendOf(backend, true, false));
+    assertTrue(
+        ex.getMessage()
+            .startsWith(
+                "streamrune.crypto.postgres.enabled=true enables the PostgreSQL key-store engine"),
         ex.getMessage());
   }
 

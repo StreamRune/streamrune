@@ -66,6 +66,7 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
+            unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
   }
@@ -101,6 +102,7 @@ class StreamRuneProducersTest {
         properties,
         List.of(),
         List.of(),
+        unsatisfied(),
         unsatisfied(),
         unsatisfied(),
         unsatisfied(),
@@ -520,6 +522,7 @@ class StreamRuneProducersTest {
             satisfied(store),
             unsatisfied(),
             unsatisfied(),
+            unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
   }
@@ -539,6 +542,7 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
+            unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
   }
@@ -555,6 +559,7 @@ class StreamRuneProducersTest {
             TestProperties.defaults(),
             List.of(),
             List.of(migration),
+            unsatisfied(),
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
@@ -685,6 +690,7 @@ class StreamRuneProducersTest {
                     unsatisfied(),
                     unsatisfied(),
                     unsatisfied(),
+                    unsatisfied(),
                     unsatisfied()));
     assertSame(refusal, thrown);
   }
@@ -705,6 +711,7 @@ class StreamRuneProducersTest {
             unsatisfied(),
             satisfied(mapper),
             satisfied(outboxStore),
+            unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
   }
@@ -725,6 +732,7 @@ class StreamRuneProducersTest {
             List.of(),
             unsatisfied(),
             satisfied(mapper),
+            unsatisfied(),
             unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
@@ -747,6 +755,7 @@ class StreamRuneProducersTest {
             unsatisfied(),
             unsatisfied(),
             satisfied(outboxStore),
+            unsatisfied(),
             unsatisfied());
     assertNotNull(factory);
   }
