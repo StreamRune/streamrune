@@ -169,6 +169,21 @@ class SpringBackendWiringTest {
         });
   }
 
+  /** An unknown backend fails the start even in a context without a DataSource. */
+  @Test
+  void anUnknownBackendFailsTheStartWithoutADataSource() {
+    new ApplicationContextRunner()
+        .withPropertyValues(SpringTestMocks.NO_SNAPSHOTS, "streamrune.backend=oracle")
+        .withConfiguration(AutoConfigurations.of(StreamRuneAutoConfiguration.class))
+        .run(
+            ctx -> {
+              assertThat(ctx).hasFailed();
+              assertThat(ctx.getStartupFailure())
+                  .hasStackTraceContaining(
+                      "streamrune.backend='oracle' is not a backend; valid values: postgres, sqlite");
+            });
+  }
+
   @Test
   void anUnknownBackendFailsTheStartWithTheSelectionMessage() {
     runner

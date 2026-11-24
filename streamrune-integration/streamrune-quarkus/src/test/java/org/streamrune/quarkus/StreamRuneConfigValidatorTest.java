@@ -118,6 +118,19 @@ class StreamRuneConfigValidatorTest {
     assertTrue(ex.getMessage().contains("SQLite is single-instance"), ex.getMessage());
   }
 
+  /** An unknown {@code streamrune.backend} fails startup at the validator, without a DataSource. */
+  @Test
+  void anUnknownBackendFailsStartupWithoutADataSource() {
+    var props = TestProperties.of(Map.of("streamrune.backend", "oracle"));
+    var validator = new StreamRuneConfigValidator(props, unsatisfied(), unsatisfied());
+    var ex =
+        assertThrows(
+            IllegalStateException.class, () -> validator.validate(mock(StartupEvent.class)));
+    assertEquals(
+        "streamrune.backend='oracle' is not a backend; valid values: postgres, sqlite",
+        ex.getMessage());
+  }
+
   /** An unknown {@code streamrune.gdpr.snapshot-purge} fails startup, crypto engine or not. */
   @Test
   void unknownSnapshotPurgeValueFailsStartup() {
