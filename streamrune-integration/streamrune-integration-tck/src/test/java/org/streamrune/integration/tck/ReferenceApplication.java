@@ -63,6 +63,7 @@ import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SagaParallelismSetting;
+import org.streamrune.integration.SingleActiveConsumerSetting;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
@@ -147,7 +148,8 @@ final class ReferenceApplication implements Application {
     KNOWN_SAGA_SUBSCRIPTIONS,
     BACKEND_STORES_EXPOSED,
     DEFAULT_ALIAS_ROUTED,
-    OUTBOX_IN_THE_APPEND
+    OUTBOX_IN_THE_APPEND,
+    SINGLE_INSTANCE_REFUSES_A_LEASE
   }
 
   /** The durations among the keys the contract sets, read as an integration binds them. */
@@ -258,6 +260,12 @@ final class ReferenceApplication implements Application {
   }
 
   private void validate() {
+    if (dataSource != null
+        && "sqlite".equals(backend())
+        && keeps(Rule.SINGLE_INSTANCE_REFUSES_A_LEASE)) {
+      SingleActiveConsumerSetting.enabled(
+          properties.get(SingleActiveConsumerSetting.PROPERTY), backend());
+    }
     List<String> spelling = new ArrayList<>();
     if (keeps(Rule.MISSPELLED_NAMES)) {
       spelling.addAll(MisspelledPropertyNames.problems(DURATION_KEYS, properties::containsKey));

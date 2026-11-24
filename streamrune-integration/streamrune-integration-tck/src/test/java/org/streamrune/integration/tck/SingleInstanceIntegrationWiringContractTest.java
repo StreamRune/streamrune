@@ -19,18 +19,20 @@ import org.streamrune.integration.tck.IntegrationWiringContractTest.StubDataSour
  * every start with a database, {@link #supportsMultiInstance()} {@code false}, the backend name
  * {@code sqlite} — against {@link ReferenceApplication}, which reads the selection: each inherited
  * test passes. The tests declared here show that the single-instance cases still fail an
- * application that does not run on the selected backend.
+ * application that does not run on the selected backend, or that starts on SQLite with an explicit
+ * single-active-consumer lease.
  */
 class SingleInstanceIntegrationWiringContractTest extends IntegrationWiringContract {
 
   private boolean selectsSqlite = true;
+  private Set<ReferenceApplication.Rule> broken = Set.of();
 
   @Override
   protected Application start(
       DataSource dataSource, Map<String, String> properties, Set<Class<?>> extraBeans) {
     Map<String, String> configuration =
         selectsSqlite ? SqliteTestDatabases.onSqlite(dataSource, properties) : properties;
-    return ReferenceApplication.start(dataSource, configuration, extraBeans, Set.of());
+    return ReferenceApplication.start(dataSource, configuration, extraBeans, broken);
   }
 
   @Override
@@ -78,6 +80,16 @@ class SingleInstanceIntegrationWiringContractTest extends IntegrationWiringContr
     var failure =
         assertThrows(AssertionFailedError.class, this::healthCarriesTheDocumentedNameAndKeys);
     assertTrue(failure.getMessage().contains("UNGATED"), failure.getMessage());
+  }
+
+  @Test
+  void anApplicationThatStartsWithAnExplicitLeaseOnSqliteFailsTheHealthTest() {
+    broken = Set.of(ReferenceApplication.Rule.SINGLE_INSTANCE_REFUSES_A_LEASE);
+    var failure =
+        assertThrows(AssertionFailedError.class, this::healthCarriesTheDocumentedNameAndKeys);
+    assertTrue(
+        failure.getMessage().contains("the integration must refuse the start"),
+        failure.getMessage());
   }
 
   @Test

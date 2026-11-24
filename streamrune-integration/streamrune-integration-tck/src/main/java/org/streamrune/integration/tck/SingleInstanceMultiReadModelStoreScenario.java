@@ -423,10 +423,16 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
 
   /**
    * Asserts that another process cannot open {@code file}: a forked JVM on this class path runs
-   * {@link GuardProbe} on it and is refused with {@code SqliteGuardException}. Inside this JVM
-   * every handle shares the guard, so only another process can tell that it is held.
+   * {@link GuardProbe} on it and is refused with the {@code SqliteGuardException} that says the
+   * database {@value GuardProbe#HELD}. Inside this JVM every handle shares the guard, so only
+   * another process can tell that it is held. A guard refusal of another kind (the child may not
+   * call flock(2), the lock file cannot be opened, the file has more than one hard link) fails the
+   * assertion: it says nothing about whether the file is held.
+   *
+   * @param file the database file
+   * @param which what the file is, for the failure message
    */
-  static void assertGuardHeld(Path file, String which) {
+  public static void assertGuardHeld(Path file, String which) {
     List<String> output = probe(file);
     assertTrue(
         output.contains(GuardProbe.REFUSED),
@@ -474,13 +480,17 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
 
   /**
    * Another process that tries to open a SQLite file: prints {@value #REFUSED} when its instance
-   * guard is held elsewhere, {@value #OPENED} when the file opened (it is closed again at once), or
-   * the failure otherwise.
+   * guard is held elsewhere (the refusal says the database {@value #HELD}), {@value #OPENED} when
+   * the file opened (it is closed again at once), or the failure otherwise, a guard refusal of
+   * another kind included, with its message.
    */
   public static final class GuardProbe {
 
     /** Printed when another process holds the guard. */
     public static final String REFUSED = "REFUSED";
+
+    /** What the guard's refusal says when another process holds it. */
+    public static final String HELD = "is in use by another process";
 
     /** Printed when the file opened: no other process held the guard. */
     public static final String OPENED = "OPENED";
@@ -499,8 +509,10 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
       try (HikariDataSource pool = new HikariDataSource(config)) {
         try (SqliteDatabase database = SqliteDatabase.open(pool)) {
           System.out.println(OPENED);
-        } catch (SqliteGuardException held) {
-          System.out.println(REFUSED);
+        } catch (SqliteGuardException refused) {
+          String message = String.valueOf(refused.getMessage());
+          System.out.println(message.contains(HELD) ? REFUSED : "GUARD REFUSED OTHERWISE");
+          System.out.println(message);
         }
       } catch (RuntimeException e) {
         System.out.println("FAILED " + e);

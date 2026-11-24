@@ -589,7 +589,9 @@ public abstract class IntegrationWiringContract {
    *
    * <p>On a single-instance backend ({@link #supportsMultiInstance()} {@code false}) there is no
    * lease to lead under: the {@code LEADING} case is left out, and with the default properties the
-   * runner reports {@code UNGATED}, since the lease is off by default there.
+   * runner reports {@code UNGATED}, since the lease is off by default there. An explicit {@code
+   * streamrune.subscription.single-active-consumer.enabled=true} asks for a lease the backend
+   * cannot give, so the start is refused, and the refusal says that SQLite is single-instance.
    */
   @Test
   public void healthCarriesTheDocumentedNameAndKeys() {
@@ -605,6 +607,13 @@ public abstract class IntegrationWiringContract {
       assertTheProjectionReports("LEADING", Map.of());
     } else {
       assertTheProjectionReports("UNGATED", Map.of());
+      try (Application application =
+          start(
+              database(),
+              Map.of("streamrune.subscription.single-active-consumer.enabled", "true"),
+              Set.of(ContractProjection.class))) {
+        assertRefused(application, "SQLite is single-instance");
+      }
     }
     assertTheProjectionReports(
         "UNGATED", Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));

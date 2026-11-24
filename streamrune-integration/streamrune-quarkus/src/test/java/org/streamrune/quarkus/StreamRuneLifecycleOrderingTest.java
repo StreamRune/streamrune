@@ -435,10 +435,11 @@ class StreamRuneLifecycleOrderingTest {
   }
 
   /**
-   * The bundle is opened strictly after every startup validator and strictly before the runner
-   * starters: a configuration a validator refuses is reported before a database is opened (on
-   * SQLite, before its instance guard is taken), and the runners start on opened stores. Arc reads
-   * an observer's priority from its event parameter, as {@link
+   * The explicit opener of the bundle runs strictly after every startup validator and strictly
+   * before the runner starters, so the runners start on opened stores. It does not promise that no
+   * database is touched before a validator refuses: a validator that resolves a store opens the
+   * stores itself, within {@code LIBRARY_BEFORE}, in an order CDI leaves unspecified. Arc reads an
+   * observer's priority from its event parameter, as {@link
    * #arcResolvesObserverPriorityFromTheEventParameter_notTheMethod} shows; this reads the same
    * annotation, so it needs no container with the producers' dependencies.
    */
@@ -456,7 +457,7 @@ class StreamRuneLifecycleOrderingTest {
             ProjectionIndexDeclarer.class)) {
       assertTrue(
           startupPriority(validator) < open,
-          () -> validator.getSimpleName() + " must run before the stores are opened");
+          () -> validator.getSimpleName() + " must run before the explicit opener of the stores");
     }
     for (Class<?> runnerStarter :
         List.of(

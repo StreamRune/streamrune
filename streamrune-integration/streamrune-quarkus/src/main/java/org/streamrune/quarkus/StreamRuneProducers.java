@@ -219,9 +219,12 @@ public class StreamRuneProducers {
    * of an application that runs no projection or saga. On SQLite, opening verifies the DataSource
    * (a SQLite database with the required connection setup) and takes the instance guard of the
    * file, so another process on the same file fails the start; on Postgres it touches no database.
-   * Observed at {@code LIBRARY_BEFORE + 50}: strictly after the startup validators ({@code
-   * LIBRARY_BEFORE}), so a configuration they refuse is reported before any database is opened, and
-   * before {@link StreamRuneLifecycle} starts the runners ({@code LIBRARY_BEFORE + 100}).
+   * Observed at {@code LIBRARY_BEFORE + 50}: the explicit opener runs after the startup validators
+   * ({@code LIBRARY_BEFORE}) and before {@link StreamRuneLifecycle} starts the runners ({@code
+   * LIBRARY_BEFORE + 100}). It does not keep every database access behind the validators: an
+   * observer at {@code LIBRARY_BEFORE} that resolves a store (the request-identity validator builds
+   * the command buses, the projection index declarer writes through the repositories) opens the
+   * stores itself, and CDI leaves the order within {@code LIBRARY_BEFORE} unspecified.
    *
    * @param event the startup event
    * @param stores the stores, resolvable when a {@code DataSource} is

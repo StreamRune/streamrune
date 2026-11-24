@@ -53,8 +53,15 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
     return Duration.ofSeconds(2);
   }
 
+  /**
+   * Every rule but the single-instance one, whose test asserts it only on a single-instance
+   * backend: {@link SingleInstanceIntegrationWiringContractTest} breaks that one.
+   */
   @ParameterizedTest
-  @EnumSource(Rule.class)
+  @EnumSource(
+      value = Rule.class,
+      mode = EnumSource.Mode.EXCLUDE,
+      names = "SINGLE_INSTANCE_REFUSES_A_LEASE")
   void theTestOfARuleFailsOnAnApplicationThatBreaksIt(Rule rule) {
     broken = Set.of(rule);
     assertThrows(AssertionFailedError.class, testOf(rule));
@@ -131,6 +138,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case BACKEND_STORES_EXPOSED -> this::backendStoresBeanIsExposed;
       case DEFAULT_ALIAS_ROUTED -> this::defaultAliasRoutesToDefaultStore;
       case OUTBOX_IN_THE_APPEND -> this::userOutboxFromBackendStoresSharesTheAppendTransaction;
+      case SINGLE_INSTANCE_REFUSES_A_LEASE -> this::healthCarriesTheDocumentedNameAndKeys;
     };
   }
 
