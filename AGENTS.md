@@ -52,7 +52,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 | Command | What it runs | Typical wall time |
 |---|---|---|
-| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the seven modules listed as Docker-free in the root build script (`dockerFreeModules`), every doc-lint test and the public API check (`verifyApiSurface`, section 3). No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
+| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the nine modules listed as Docker-free in the root build script (`dockerFreeModules`), every doc-lint test and the public API check (`verifyApiSurface`, section 3). No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime and SQLite tests run, under a minute when they are up to date |
 | `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates, `spotlessCheck` and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
 | `./gradlew :streamrune-core:test` | One module's tests | |
 | `./gradlew :streamrune-core:test --tests "DeadLetterRetryPolicyTest"` | One test class; `--tests` also takes a pattern such as `"*RetryPolicy*"` | |
