@@ -273,9 +273,10 @@ public class StreamRuneAutoConfiguration {
   /**
    * The stores of the backend ({@link BackendConfiguration#BACKEND}), opened once on the {@code
    * DataSource}: every store bean below that the framework builds is taken from it, so they all
-   * share one backend. Opening builds nothing and touches no database; each store is built on first
-   * use and memoized by the bundle. The bundle is closed when the context closes (its destroy
-   * method), which closes the leadership it built.
+   * share one backend. Opening builds no store: each store is built on first use and memoized by
+   * the bundle. On Postgres opening touches no database; on SQLite it verifies the DataSource,
+   * checks the connection setup and takes the file's instance guard (see below). The bundle is
+   * closed when the context closes (its destroy method), which closes the leadership it built.
    *
    * <p>The bundle is opened through {@link org.streamrune.integration.BackendStartup#open}: a
    * backend other than Postgres is verified against the {@code DataSource} first (a SQLite backend
@@ -343,11 +344,12 @@ public class StreamRuneAutoConfiguration {
    * org.streamrune.core.outbox.OutboxEventMapper} bean, only when both exist. The crypto engine,
    * metrics and tracing come with the {@link #streamRuneBackendStores} bundle.
    *
+   * <p>On SQLite, which has no statement timeout, a {@code
+   * streamrune.event-store.statement-timeout} the application set is ignored and logged once as a
+   * WARN.
+   *
    * @throws IllegalArgumentException if one of those store beans is not the backend's own type: the
    *     store could not share the event store's transaction
-   *     <p>On SQLite, which has no statement timeout, a {@code
-   *     streamrune.event-store.statement-timeout} the application set is ignored and logged once as
-   *     a WARN.
    * @throws IllegalStateException if {@code streamrune.event-store.statement-timeout} is a value
    *     the backend cannot honour
    */

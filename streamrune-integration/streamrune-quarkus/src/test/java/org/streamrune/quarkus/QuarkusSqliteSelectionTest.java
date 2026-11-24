@@ -397,9 +397,9 @@ class QuarkusSqliteSelectionTest {
    * The bundle is closed only after the application's {@code @ApplicationScoped} beans that use its
    * stores were destroyed: a SQLite store keeps writing the file after its bundle released the
    * instance guard. Arc destroys the application context before the singleton context, where the
-   * bundle lives; within the singleton context it destroys producer products (the bundle and every
-   * framework store) before class beans, so an application {@code @Singleton} bean must not write
-   * through a store in its {@code @PreDestroy} (see the bundle producer's Javadoc).
+   * bundle lives. The destroy order within the singleton context is unspecified, so an application
+   * {@code @Singleton} bean must not write through a store in its {@code @PreDestroy} (see the
+   * bundle producer's Javadoc).
    */
   @Test
   void theBundleClosesAfterEveryUserOfItsStores() throws Exception {

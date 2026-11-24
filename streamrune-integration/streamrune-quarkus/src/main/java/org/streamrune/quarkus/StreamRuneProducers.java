@@ -145,9 +145,10 @@ public class StreamRuneProducers {
   /**
    * The stores of the {@link #streamRuneBackend backend}, opened once on the application's {@code
    * DataSource}: every store these producers build is taken from it, so they all share one backend.
-   * Opening builds nothing and touches no database; each store is built on first use and memoized
-   * by the bundle. {@link #closeBackendStores} closes the bundle when the container shuts down,
-   * which closes the leadership it built.
+   * Opening builds no store: each store is built on first use and memoized by the bundle. On
+   * Postgres opening touches no database; on SQLite it verifies the DataSource, checks the
+   * connection setup and takes the file's instance guard (see below). {@link #closeBackendStores}
+   * closes the bundle when the container shuts down, which closes the leadership it built.
    *
    * <p>The bundle is opened through {@link org.streamrune.integration.BackendStartup#open}: a
    * backend other than Postgres is verified against the {@code DataSource} first, and SQLite's
@@ -159,9 +160,10 @@ public class StreamRuneProducers {
    * StreamRuneLifecycle}), before Arc destroys any bean, and a retention sweeper's close waits for
    * a sweep in flight. Arc then destroys the application context before the singleton context the
    * bundle lives in, so an {@code @ApplicationScoped} application bean's {@code @PreDestroy} runs
-   * before the bundle closes. Within the singleton context Arc destroys producer products, the
-   * bundle among them, before class beans: an application {@code @Singleton} bean must not write
-   * through a store in its {@code @PreDestroy}; it observes the shutdown event instead.
+   * before the bundle closes. The order in which Arc destroys the beans of the singleton context is
+   * unspecified: an application {@code @Singleton} bean must not write through a store in its
+   * {@code @PreDestroy}, because the bundle may already be closed; it observes the shutdown event
+   * instead.
    *
    * <p>The bundle's context carries the {@link CryptoEngine} bean (if present), which the event
    * store, the saga store and the default read-model store wire into their ObjectMappers through
