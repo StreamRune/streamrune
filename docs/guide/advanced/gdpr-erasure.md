@@ -61,7 +61,7 @@ default void reinstate(SubjectId subjectId);      // default throws UnsupportedO
 boolean isKeyAvailable(SubjectId subjectId);
 ```
 
-Four production backends ship, each obtained via `builder()`. All four enforce **terminal**
+Five production backends ship, each obtained via `builder()`. All five enforce **terminal**
 erasure: after `deleteKey(subjectId)`, `encrypt` for that subject throws `SubjectForgottenException`
 and `decrypt` of old ciphertext throws `KeyNotFoundException` (mapped to `[REDACTED]` by
 `CryptoShreddingModule`).
@@ -70,6 +70,7 @@ and `decrypt` of old ciphertext throws `KeyNotFoundException` (mapped to `[REDAC
 |---|---|---|---|
 | filesystem | `org.streamrune.crypto.filesystem.FileSystemCryptoEngine` | `.keyDirectory(Path)` | AES-256-GCM; `deleteKey` writes a disk tombstone, deletes the key **file** and sweeps stray `*.tmp` hard links left by a crashed mint (see Caveats) — the key material is gone for good. Each erasure step is fsynced before the next, and the delete before `deleteKey` returns; a freshly minted key is fsynced before `encrypt` uses it (see Caveats). `encrypt` re-checks the tombstone **after** claiming a freshly minted key file, so an erasure completing in another process mid-mint is refused instead of resurrected (see Caveats — the guarantee is POSIX-local; NFS caveat). Every key/tombstone existence probe fails **closed**: if the key directory becomes unreadable or its volume unavailable, operations throw `CryptoOperationException` rather than reporting the key as absent (which would read as a completed erasure and redact live PII into read models) |
 | postgres | `org.streamrune.crypto.postgres.PostgresCryptoEngine` | `.dataSource(DataSource)` | keys in `encryption_keys`, tombstones in `forgotten_subjects`; `deleteKey` deletes the key row and writes the tombstone in one transaction — the key material is gone for good |
+| sqlite | `org.streamrune.crypto.sqlite.SqliteCryptoEngine` | `.database(SqliteDatabase)` | the PostgreSQL engine's semantics on one SQLite file (`streamrune-sqlite-crypto`, for `streamrune.backend=sqlite`): keys in `encryption_keys`, tombstones in `forgotten_subjects`, destroyed generations in `erased_key_generations`, all in the application's SQLite file; `deleteKey` records the generation, deletes the key row and writes the tombstone in one transaction. SQLite's write lock serializes a mint, an erasure and a reinstate, for every subject. Inside a projection batch a mint joins the batch's transaction and an erasure is refused (see *On the SQLite backend*) |
 | vault | `org.streamrune.crypto.vault.VaultCryptoEngine` | `.vaultAddress(...).token(...).httpClient(...).forgottenSubjectStore(...)` | HashiCorp Vault transit engine; `deleteKey` deletes the Vault transit key **and** records a durable tombstone (Vault would otherwise silently re-mint the key on the next `encrypt`) — terminal, matching filesystem/postgres/aws-kms. `deleteKey` sets `deletion_allowed=true` on the key before deleting it, so the Vault token needs `update` on `<mount>/keys/+/config` as well as `delete` on `<mount>/keys/+` (full policy in the [module README](../../../streamrune-crypto/streamrune-vault-crypto/README.md)); without them the forget fails and the error names the missing capability. `encrypt` re-checks the tombstone **after** the Vault call and deletes a key that an in-flight encrypt racing the erasure resurrected (see Caveats). **`forgottenSubjectStore(...)` is mandatory** — see below |
 | aws-kms | `org.streamrune.crypto.aws.AwsKmsCryptoEngine` | `.kmsKeyId(...)` plus `.kmsClient(...)` or `.region(...)`, `.forgottenSubjectStore(...)` | envelope encryption under a **single shared** Customer Managed Key (CMK): each value is encrypted locally with AES-256-GCM under a data key from KMS `GenerateDataKey`, wrapped under the subject's encryption context and stored in the ciphertext, so values of any size are encrypted (KMS `Encrypt` itself refuses more than 4,096 bytes) and a cached data key serves many values. There is no per-subject key to delete: `deleteKey` records a durable per-subject **tombstone** (it does **not** throw, and the CMK itself is never touched) and drops the subject's cached data keys; every `encrypt` and `decrypt` reads the tombstone before it uses a cached data key or calls KMS, so a data key another replica still caches is never used for a forgotten subject, and expired keys are swept from heap at the next cache store, `deleteKey` or (at most once a second) lookup. The integrations size the data-key cache with `streamrune.crypto.aws.data-key-cache.maximum-size` (default `1000`, `0` disables it) and `.expire-after-write` (default 5 minutes), and turn it off when `streamrune.crypto.cache.enabled=false`. `encrypt` re-checks the tombstone **after** encrypting and discards the ciphertext if the erasure completed mid-flight — the CMK is never destroyed, so such a ciphertext would otherwise stay decryptable forever. A value longer than `AwsKmsCryptoEngine.MAX_PLAINTEXT_LENGTH` (the Java array limit less the envelope) is refused with `CryptoMappingException`, the deterministic type no classifier retries. A missing or inaccessible CMK is an **infrastructure fault**, never an erasure: `decrypt` and `isKeyAvailable` fail closed with `CryptoOperationException` instead of reporting every subject as erased. **`forgottenSubjectStore(...)` is mandatory** — see below |
 
@@ -217,9 +218,13 @@ per-subject key, `Builder#build()` on both engines **fails closed**: it throws
 - `InMemoryForgottenSubjectStore` is process-local — acceptable for tests/ephemeral use only. Its
   tombstones vanish on restart, silently un-forgetting subjects.
 - `JdbcForgottenSubjectStore` (in `streamrune-postgres-crypto`) persists tombstones in the shared
-  `forgotten_subjects` table and survives restarts. The Spring/Micronaut/Quarkus auto-configs
-  auto-wire it automatically whenever a `DataSource` bean is present; with no `DataSource`, the
-  engine bean fails to build instead of silently falling back to an in-memory store.
+  `forgotten_subjects` table and survives restarts; `SqliteForgottenSubjectStore` (in
+  `streamrune-sqlite-crypto`) does the same in the SQLite file. The Spring/Micronaut/Quarkus
+  auto-configs take the forgotten-subject store of Vault and AWS KMS, and the forget signal of
+  **every** engine (filesystem and the backend's key-store engine included), from the selected
+  backend's `CryptoBackend` whenever a `DataSource` bean is present: the PostgreSQL ones with
+  `streamrune.backend=postgres`, the SQLite ones with `sqlite`. With no `DataSource`, the Vault and
+  AWS KMS engine beans fail to build instead of silently falling back to an in-memory store.
 - `forgotten_subjects` (and, for postgres, `encryption_keys` and `erased_key_generations`) live in
   the opt-in `db/crypto-migration` Flyway location. When schema auto-initialization is on (the default) and the
   configured `CryptoEngine` reports it needs crypto tables (`CryptoEngine.requiredCryptoTables()`),
@@ -249,7 +254,18 @@ The cache always applies a bounded TTL (default `CachedCryptoEngine.DEFAULT_EXPI
 multi-replica deployment, also wire a `CryptoForgetSignal` (e.g. `PostgresCryptoForgetSignal`) via
 `CachedCryptoEngine.Builder#forgetSignal(...)` so a `deleteKey` on one replica promptly evicts the
 forgotten subject's cached plaintext on peer replicas, instead of relying solely on the TTL. The
-framework auto-configs wire this automatically for all four backends when a `DataSource` is present.
+framework auto-configs wire the selected backend's signal automatically for every engine when a
+`DataSource` is present: `PostgresCryptoForgetSignal` on PostgreSQL, and on SQLite an in-process
+signal (one instance has no peer to tell). The rest of this section concerns the PostgreSQL signal.
+
+**A cache miss waits at most 250 ms for its subject's lock stripe.** `CachedCryptoEngine` makes a
+cache-miss decrypt and a `deleteKey` of the same subject exclusive on a lock stripe, so a decrypt
+cannot cache a value the erasure has just invalidated. `deleteKey` holds the stripe across the
+backend's erasure, which may itself wait for a lock the decrypting thread holds: on SQLite an
+erasure waits for the database's write lock, which a projection batch holds while its updater
+decrypts. So a cache-miss decrypt waits at most 250 ms for the stripe; past that it calls the
+backend without the stripe and caches nothing, so it cannot leave a forgotten subject's plaintext in
+the cache. An interrupted wait takes the same uncached path and keeps the thread's interrupt status.
 
 **What a replica that cannot hear does.** A replica hears its peers' forgets only while its `LISTEN`
 is in effect. Before the first one takes effect, and while its LISTEN connection is lost and being
@@ -841,6 +857,42 @@ erasure request in your own store before calling `forget(...)`, and mark it done
 `fullyErased()` returned `true`; re-call every request still open. See the production guide's
 runbook for the audit-log queries.
 
+## On the SQLite backend
+
+With `streamrune.backend=sqlite` every engine works: the SQLite key-store engine
+(`streamrune.crypto.sqlite.enabled=true`, keys in the application's SQLite file), the filesystem
+engine, and Vault and AWS KMS with their tombstones in `forgotten_subjects` of the SQLite file. `streamrune.crypto.postgres.enabled=true` with `sqlite` fails the start, and so does
+`streamrune.crypto.sqlite.enabled=true` with `postgres`. Without an integration, build the engine
+from `new SqliteCryptoBackend().keyStoreEngine(dataSource, settings)` before you open the backend's
+stores, as the [SQLite guide](../sqlite.md#plain-java) shows.
+
+SQLite has one write lock per database file, and a projection batch holds it while the projection's
+updater runs. That decides where an erasure may run:
+
+- **Never inside a projection batch.** The SQLite engine's `deleteKey` and `reinstate`, and
+  `SqliteForgottenSubjectStore`'s `forget` and `reinstate` (which Vault and AWS KMS write through),
+  refuse with `IllegalStateException` when the current thread runs a projection batch or replay on
+  the same file. An erasure that committed or rolled back with the batch would not be durable when
+  it returns: a rollback would bring the key back, after a cache or a key backend had acted on the
+  erasure. Call `ForgetSubjectService.forget` from a command handler, a saga step or other
+  application code, never from a projection's updater.
+- **A key minted inside a batch commits with it.** A projection writing an `@Encrypted` field of a
+  subject without a key makes the SQLite engine mint one, on the batch's own connection, inside the
+  batch's transaction: the key commits with the batch, or rolls back with it and with every value
+  encrypted under it, and the rerun mints it again. After such a rollback a `CachedCryptoEngine`
+  keeps the plaintext it cached for a ciphertext that no row holds, unreachable, until the cache's
+  write TTL; and while the batch is open, `isKeyAvailable` on another connection does not see the
+  key, so treat it as advisory.
+- **Not inside an application transaction on the same file.** StreamRune never joins one, so a mint
+  waits `busy_timeout` for the write lock that transaction holds and fails, saying so.
+- **An erasure attempted inside a batch can also fail a concurrent one.** The engine refuses it, but
+  through a `CachedCryptoEngine` it first waits for its subject's lock stripe; when another thread's
+  erasure of a subject on the same stripe holds that stripe while it waits for the write lock the
+  batch holds, that other erasure fails after `busy_timeout`. The cure is the first rule.
+
+With the SQLite key-store engine the keys sit in the same file as the ciphertext, so a backup of the
+file holds them too; see [Backup and restore](../sqlite.md#backup-and-restore).
+
 ## Configuration
 
 | Setting | Where | Effect |
@@ -851,7 +903,7 @@ runbook for the audit-log queries.
 | `streamrune.crypto.cache.enabled` | Spring/Quarkus/Micronaut property (default `true`) | when `false`, the `CachedCryptoEngine` wrapper is skipped entirely on all three integrations, and the AWS KMS engine's data-key cache is off too, so neither decrypted PII nor a key that decrypts it is ever retained in heap — the deliberate no-cache GDPR posture, stronger than shortening the TTL |
 | `streamrune.crypto.aws.data-key-cache.maximum-size` / `.expire-after-write` | Spring/Quarkus/Micronaut properties (defaults `1000` and 5 minutes) | the AWS KMS engine's cache of plaintext data keys: entries per map (`0` disables it) and how long a key lives after it was stored; ignored size when `streamrune.crypto.cache.enabled=false` |
 | `ForgetSubjectService.builder().queryCache(bus)` | auto-wired by the integrations when `streamrune.query-cache.enabled=true` | every `forget(...)` evicts the `CachingQueryBus` after its last purger, in this process (see *Cached query answers are evicted*) |
-| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget purges the subject's snapshots (`PostgresSnapshotStorePurger` for `snapshot_store`, which keeps each row without a state), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
+| `SnapshotPurger` among `purgers(...)`, or `withoutSnapshotPurge()` | required by `ForgetSubjectService.Builder.build()` | the forget purges the subject's snapshots (`BackendStores.snapshotPurger(...)`: `PostgresSnapshotStorePurger` or `SqliteSnapshotStorePurger` for `snapshot_store`, which keeps each row without a state), or the application states it has never stored one; neither, or both, is refused (see *Aggregate snapshots*) |
 | `streamrune.gdpr.snapshot-purge` | Spring/Quarkus/Micronaut property: `required` (default) or `none` | `required`: the auto-configured `ForgetSubjectService` needs a `SnapshotPurger` bean or startup fails; `none`: built with `withoutSnapshotPurge()` (refused beside a `SnapshotPurger` bean) |
 
 ### Startup fail-fast

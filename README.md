@@ -116,6 +116,9 @@ The other modules in the [Modules](#modules) table use the same group and versio
   CI (the broker end-to-end suite on 18 only), nothing older is tested, and the runtime refuses an
   older server at startup — see
   [Production Deployment](docs/guide/production.md#postgresql-setup).
+- **Or one SQLite file**, when you use `streamrune-sqlite` (`streamrune.backend=sqlite`): a small
+  service that runs as one instance, with no database server. The driver bundles SQLite, and the
+  runtime refuses a library older than 3.45.0 — see [SQLite backend](docs/guide/sqlite.md).
 
 ## Quick Start
 
@@ -127,8 +130,8 @@ repository, licensed under the Apache License 2.0 — wires all three frameworks
 Quarkus, Micronaut) end to end.
 
 Read models can live in more than one store: each projection checkpoints beside the read model it
-writes, in the default PostgreSQL store or in a store you add (a second database, for instance), and
-startup routes every projection to its store. See the
+writes, in the default store (PostgreSQL, or SQLite) or in a store you add (a second database, for
+instance), and startup routes every projection to its store. See the
 [read-model stores guide](docs/guide/read-model-stores.md).
 
 ## Modules
@@ -140,6 +143,7 @@ Each row is a published artifact, `org.streamrune:<module>`.
 | [streamrune-core](streamrune-core/README.md) | Core API: EventStore contracts, aggregate types, upcasting |
 | [streamrune-runtime](streamrune-runtime/README.md) | Runtime: command bus, projections, locker |
 | [streamrune-postgres](streamrune-postgres/README.md) | PostgreSQL-backed EventStore and read-model store |
+| [streamrune-sqlite](docs/guide/sqlite.md) | SQLite-backed EventStore, every other store and the read-model store, on one file for one instance |
 | [streamrune-test](streamrune-test/README.md) | Test support: in-memory store, fixtures |
 | [streamrune-spring](streamrune-integration/streamrune-spring/README.md) | Spring Boot auto-configuration |
 | [streamrune-spring-boot-starter](streamrune-integration/streamrune-spring-boot-starter/README.md) | Single-dependency setup for Spring Boot: auto-configuration, PostgreSQL store and runtime |
@@ -149,6 +153,7 @@ Each row is a published artifact, `org.streamrune:<module>`.
 | [streamrune-crypto-api](streamrune-crypto/streamrune-crypto-api/README.md) | Encryption at rest for event payloads: the crypto-shredding Jackson module and the caching engine |
 | [streamrune-filesystem-crypto](streamrune-crypto/streamrune-filesystem-crypto/README.md) | Crypto engine with keys in a directory |
 | [streamrune-postgres-crypto](streamrune-crypto/streamrune-postgres-crypto/README.md) | Crypto engine with keys in PostgreSQL |
+| [streamrune-sqlite-crypto](docs/guide/sqlite.md#crypto-and-gdpr-erasure) | Crypto engine with keys in the SQLite file, and the SQLite forgotten-subject store |
 | [streamrune-vault-crypto](streamrune-crypto/streamrune-vault-crypto/README.md) | Crypto engine on the HashiCorp Vault transit engine |
 | [streamrune-aws-kms-crypto](streamrune-crypto/streamrune-aws-kms-crypto/README.md) | Crypto engine on an AWS KMS key |
 | [streamrune-kafka-outbox](streamrune-outbox/README.md) | Transactional outbox publisher for Kafka |

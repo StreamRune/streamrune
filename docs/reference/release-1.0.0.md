@@ -145,6 +145,29 @@ license.
   interceptor runs; the canonical constructors are the decode path for values read back from
   storage. Exception messages quote ids, names and configuration text sanitized.
 
+## SQLite backend — one file, one instance
+
+- `streamrune-sqlite` implements every store `streamrune-postgres` does on one SQLite file, for a
+  small service that runs as one instance: the event store and snapshots, offsets, sagas and saga
+  dead letters, outbox, command inbox, the command and projection dead-letter stores, audit stores
+  and queries, and `SqliteReadModelStore` (default store `sqlite`). Each store passes the contract
+  suite the PostgreSQL store passes. `streamrune-sqlite-crypto` adds a key-store engine in the same
+  file, the SQLite forgotten-subject store and an in-process forget signal.
+- `SqliteBackend` is selected by `streamrune.backend=sqlite` in the three integrations, or opened
+  directly in plain Java (`new SqliteBackend().open(context)`). Every store is built on one
+  `SqliteDatabase` handle, which verifies the connection settings at startup (`journal_mode=WAL`,
+  `synchronous=FULL`, `foreign_keys`, a `busy_timeout`, `transaction_mode=IMMEDIATE`, autocommit
+  connections, a UTF-8 file, SQLite 3.45 or newer) and refuses in-memory databases and attached
+  ones.
+- An instance guard, an operating-system lock on `<database-file>.lock` held for the life of the
+  process, makes a second process on the file fail its start; a crashed process releases it.
+- Global offsets are gap-free and appear in commit order. Writes serialize on SQLite's one write
+  lock per file, which is also the saga forward fence; read-model queries return PostgreSQL's rows
+  in PostgreSQL's order. There is no leadership, no statement timeout and no push subscription.
+- Native image: the backend classes, the schema scripts and the guard's foreign downcalls are
+  registered; end-to-end native verification on SQLite has not been done. See
+  [SQLite backend](../guide/sqlite.md).
+
 ## Snapshots, schema evolution and upcasting
 
 - `SnapshotPolicy.never()` or `SnapshotPolicy.everyNEvents(n, snapshotVersion)` (`everyNEvents(n)` is
@@ -1272,7 +1295,7 @@ property and the value; Spring and Micronaut refuse a duration property written 
 suffix, naming the key to set, and Quarkus every name its mapping does not declare — see
 [What the integrations refuse](../guide/configuration.md#what-the-integrations-refuse)):
 
-- The storage backend `streamrune.backend` names (`postgres`, the only one), opened once on the
+- The storage backend `streamrune.backend` names (`postgres`, the default, or `sqlite`), opened once on the
   `DataSource` and exposed as the `BackendStores` bean, which builds every store the integration
   wires: the event store (through `BackendStores.eventStoreFactory`), a `VirtualThreadCommandBus`
   with the backend's command inbox and audit store, the subscription leadership and the default

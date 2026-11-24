@@ -1,5 +1,10 @@
 # Production Deployment Guide
 
+Most of this guide concerns PostgreSQL. An application on the SQLite backend
+(`streamrune.backend=sqlite`) reads [SQLite setup](#sqlite-setup) below and the
+[SQLite guide](sqlite.md); the metrics, tracing and health sections and the runbooks apply to it as
+well, except where they name a PostgreSQL feature (leases, `LISTEN`, a PostgreSQL table query).
+
 ## PostgreSQL setup
 
 StreamRune requires **PostgreSQL 17 or newer**. Every PostgreSQL-backed test suite of the default build runs against PostgreSQL 18 (the `postgres:18-alpine` Testcontainers image) and again against PostgreSQL 17 (`postgres:17-alpine`) in the `postgres-17` CI job (the `@Tag("broker")` end-to-end suite, run by its own workflow, only on 18); no older server is tested, so none is supported.
@@ -36,7 +41,7 @@ spring.datasource.hikari.keepalive-time=60000
 
 On Quarkus the same budget is `quarkus.datasource.jdbc.max-size` / `min-size` (Agroal); on Micronaut, `datasources.default.maximum-pool-size` / `minimum-idle`.
 
-> **Pool auto-commit mode: either setting works.** The stores do not depend on the pool handing out `autoCommit=true` connections. Multi-statement writes (an append with its inbox, outbox and audit rows; a saga dead-letter publish with its shield; the projection batch commit) have always run as explicit transactions. Every single-statement write — an outbox claim or `markDelivered`, a projection offset, a projection read-model row written outside a batch, a projection table creation, a fencing-epoch stamp, a snapshot, a dead-letter row, a saga state row, a lease acquire or renew, an audit row, a retention `DELETE`, a crypto tombstone, a `pg_notify` — checks the borrowed connection's mode: with `autoCommit=true` the statement commits itself, with `autoCommit=false` (for example `spring.datasource.hikari.auto-commit=false`, the usual Hibernate tuning, or a Quarkus/Micronaut pool configured the same way) the store commits after the statement and rolls back on failure. The pool's setting itself is never changed. `LISTEN` on a pooled connection is committed the same way, so push notifications arrive whichever mode the pool uses. Reads leave an `autoCommit=false` connection's implicit transaction to the pool's rollback-on-return, which is what the pool does with any read-only transaction.
+> **Pool auto-commit mode on PostgreSQL: either setting works** (SQLite needs autocommit connections; see [SQLite setup](#sqlite-setup)). The stores do not depend on the pool handing out `autoCommit=true` connections. Multi-statement writes (an append with its inbox, outbox and audit rows; a saga dead-letter publish with its shield; the projection batch commit) have always run as explicit transactions. Every single-statement write — an outbox claim or `markDelivered`, a projection offset, a projection read-model row written outside a batch, a projection table creation, a fencing-epoch stamp, a snapshot, a dead-letter row, a saga state row, a lease acquire or renew, an audit row, a retention `DELETE`, a crypto tombstone, a `pg_notify` — checks the borrowed connection's mode: with `autoCommit=true` the statement commits itself, with `autoCommit=false` (for example `spring.datasource.hikari.auto-commit=false`, the usual Hibernate tuning, or a Quarkus/Micronaut pool configured the same way) the store commits after the statement and rolls back on failure. The pool's setting itself is never changed. `LISTEN` on a pooled connection is committed the same way, so push notifications arrive whichever mode the pool uses. Reads leave an `autoCommit=false` connection's implicit transaction to the pool's rollback-on-return, which is what the pool does with any read-only transaction.
 >
 > Call the stores, the command bus and the operator APIs (outbox replay or skip, dead-letter discard) **outside** any transaction your framework manages: not from a Quarkus `@Transactional` method, nor anywhere else a JTA or framework transaction owns the `DataSource`'s connections. A store commits its own writes on the connection it borrows, and a pool that has enlisted that connection in the surrounding transaction refuses the commit, which fails the write and breaks the surrounding transaction. Start the call outside the transaction, or on its own thread.
 
@@ -85,6 +90,42 @@ The ways out, in that order: a dedicated lock pool (`PgAdvisoryLocker.withDedica
 The integrations read the pool's maximum size from HikariCP (an unstarted pool with no size set counts as HikariCP's default of 10) and, on Quarkus, from Agroal. A pool whose size they cannot read is neither refused nor warned about.
 
 Give the saga's subscription a fetch size of at least 4 × `parallelism`: the page is the unit that runs in parallel, so a smaller page leaves workers idle. A growing subscription lag with a low `streamrune.saga.page.effective_parallelism` says the page waits for one long saga; a lag with `streamrune.saga.steps.in_flight` at the parallelism limit and `streamrune.saga.page.pending` above zero says the steps, not the number of sagas, limit the page. See [Parallel steps](advanced/saga.md#parallel-steps) in the saga guide.
+
+## SQLite setup
+
+The SQLite backend is for a small service that runs as **one instance** on one database file. The
+[SQLite guide](sqlite.md) has the connection settings and every difference from PostgreSQL; these
+are the points that matter in production:
+
+- **One instance per file, enforced.** The instance guard locks `<database-file>.lock` for the life
+  of the process, and a second process on the file fails its start. A rolling deployment that starts
+  the new instance before the old one stops therefore fails; stop the old one first (on Kubernetes,
+  `strategy: Recreate`). Never delete the lock file, rename or move the database file, give it a
+  second hard link, or bind-mount the file on its own while an instance runs: each lets a second
+  instance in. Keep the file on a local disk, never on NFS or SMB.
+- **The connection settings are checked at startup.** `journal_mode=WAL`, `synchronous=FULL`,
+  `foreign_keys=true`, a `busy_timeout` above 0 (5000 ms is the documented value) and
+  `transaction_mode=IMMEDIATE`, as JDBC URL parameters, on a pool that hands out autocommit
+  connections; anything else fails the start naming the setting.
+- **One write lock for the whole file.** Every write transaction holds it from `BEGIN IMMEDIATE` to
+  `COMMIT`, so writes run one after another and a writer waits at most `busy_timeout`. Size
+  `busy_timeout` above the longest projection batch or dead-letter replay; a dead-letter replay
+  waits behind an open batch of any projection.
+- **No application transaction around StreamRune calls.** The stores never join one, and on SQLite
+  a framework transaction on the same file holds the write lock from its start, so a store write
+  inside it waits `busy_timeout` and fails.
+- **No statement timeout, no leadership, polling only.** `streamrune.event-store.statement-timeout`
+  is ignored (one WARN at startup when set), single-active-consumer leadership is off and refused
+  when set to `true`, and subscriptions poll.
+- **Native access.** Start the JVM with `--enable-native-access=ALL-UNNAMED`: the instance guard and
+  the driver use native code. Native image support is registered, not yet verified end-to-end.
+- **Shutdown takes up to 30 seconds per retention sweeper** that is mid-sweep: a sweeper's
+  `close()` waits for its sweep so nothing writes after the guard is released.
+- **Back up with `VACUUM INTO` or SQLite's online backup API**, never by copying the database file
+  without its `-wal` file; see [Backup and restore](sqlite.md#backup-and-restore).
+
+The multi-replica sections below (the aggregate lock across replicas, write capacity across
+replicas, single-active-consumer leadership, connection-pooling proxies) do not apply to SQLite.
 
 ## Flyway in production
 
@@ -1174,6 +1215,9 @@ Because a dead-lettered range does not halt the projection, there is nothing to 
 
 ## Multi-replica deployment
 
+This section concerns PostgreSQL: a SQLite database serves one instance (see
+[SQLite setup](#sqlite-setup)).
+
 Running more than one instance of the same application is fully supported, and the framework **enforces** single-active-consumer per projection name — and for the command dead-letter retry runner and the saga compensation retry sweeper — via a persisted, DB-clocked lease (`LeaseBasedLeadership`) instead of only documenting it as a requirement. Event subscriptions, saga subscriptions included, are not gated (see below).
 
 > **Read-side scales horizontally; the write-side global append does not.** Adding instances scales
@@ -1742,6 +1786,12 @@ reads the system property of that name, or takes
 `VirtualThreadCommandBus.Builder.allowGraalJit(true)`. Set the flags instead.
 
 ## Backup, restore and disaster recovery
+
+On the SQLite backend all of StreamRune's durable state lives in one database file, with its `-wal`
+file. Back it up while the application runs with `VACUUM INTO` or SQLite's online backup API, which
+copy every table at one point in time; the [SQLite guide](sqlite.md#backup-and-restore) has the
+steps. The invariants below hold for that file as they do for PostgreSQL, and the drill applies to
+it too. The rest of this section is about PostgreSQL.
 
 All of StreamRune's durable state lives in PostgreSQL — apart from key material that the Vault, AWS
 KMS or filesystem crypto backends keep outside it — so its recovery story is PostgreSQL's. **The
