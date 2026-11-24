@@ -162,7 +162,10 @@ public class StreamRuneMicronautModule {
   /**
    * The stores of the selected backend on the application's {@code DataSource}: one bundle per
    * context, which every store bean below takes its store from, closed with the context ({@code
-   * preDestroy}). Opening it touches no database; each store is built when first asked for.
+   * preDestroy}). Opening it builds no store; each store is built when first asked for. On Postgres
+   * opening touches no database; on SQLite it verifies the DataSource, checks the connection setup
+   * and takes the file's instance guard, through {@link
+   * org.streamrune.integration.BackendStartup#open}.
    *
    * <p>The {@link CryptoEngine} bean (if exactly one is present) is the engine the event store, the
    * saga store and the default read-model store encrypt {@code @Encrypted} fields with. Micronaut

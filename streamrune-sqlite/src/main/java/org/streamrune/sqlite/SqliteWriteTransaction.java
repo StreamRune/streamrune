@@ -30,8 +30,10 @@ import org.streamrune.core.ScopedValueReads;
  * {@code StructuredTaskScope} opened inside the updater forks; {@link #heldOn(Path)} checks the
  * thread that published the transaction and answers {@code null} on any other, so a forked thread
  * never runs statements on the batch's connection concurrently with the updater. Such a thread
- * works on connections of its own: a read proceeds, a write waits {@code busy_timeout} for the lock
- * the batch holds.
+ * works on connections of its own, borrowed from the pool while the batch holds its connection: a
+ * read proceeds once it has a connection (on a pool of one connection it waits for the pool's
+ * connection timeout, because the batch holds the only one), and a write also waits {@code
+ * busy_timeout} for the lock the batch holds.
  *
  * <p><b>One binding per thread.</b> A batch on another file started inside the updater publishes
  * its own transaction for the time its updater runs, and that binding shadows the outer one: a
