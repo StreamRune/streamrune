@@ -310,6 +310,16 @@ class SqliteProjectionRepositoryAbortTest {
   }
 
   /**
+   * A read model that serializes to two root documents ({@code {} {}}) is not JSON either:
+   * PostgreSQL's {@code jsonb} refuses the trailing document, so the re-read does too, instead of
+   * storing the first document and dropping the rest.
+   */
+  @Test
+  void aRootDocumentFollowedByAnotherAbortsTheBatch() throws SQLException {
+    assertAbortedBatch(repo, tx -> tx.save(P, "b", new RawValue("{} {}")));
+  }
+
+  /**
    * The abort covers the handed repository only. After SQLITE_FULL, SQLite has already rolled the
    * batch's transaction back and released the write lock, so a write the updater makes through
    * another repository of the file (here the outer repository) does not wait for the batch: it

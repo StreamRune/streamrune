@@ -246,6 +246,9 @@ public final class SqliteProjectionRepository
                       StreamWriteConstraints.builder().maxNestingDepth(MAX_NESTING_DEPTH).build())
                   .build())
           .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+          // jsonb refuses text with anything after the document ({} {}), so the re-read does too
+          // instead of keeping the first document.
+          .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
           .disable(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES)
           .build();
 

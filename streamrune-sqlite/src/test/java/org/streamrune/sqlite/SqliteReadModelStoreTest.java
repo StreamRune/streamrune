@@ -32,6 +32,12 @@ import org.streamrune.core.types.ProjectionName;
  */
 class SqliteReadModelStoreTest {
 
+  /**
+   * The guard's refusal when another process holds the file: a probe refused for any other reason
+   * (a hard link, an unreadable lock file) does not count as the guard being held.
+   */
+  private static final String HELD_BY_ANOTHER_PROCESS = "is in use by another process";
+
   record View(String id) {
     @JsonCreator
     View(@JsonProperty("id") String id) {
@@ -269,8 +275,12 @@ class SqliteReadModelStoreTest {
         assertThat(tableExists(readModelsDb.dataSource(), "event_stream")).isFalse();
         assertThat(Files.exists(Path.of(fileB.toRealPath() + ".lock"))).isTrue();
 
-        assertThat(ForkedJvm.probe(fileA)).startsWith(GuardChild.REFUSED);
-        assertThat(ForkedJvm.probe(fileB)).startsWith(GuardChild.REFUSED);
+        assertThat(ForkedJvm.probe(fileA))
+            .startsWith(GuardChild.REFUSED)
+            .contains(HELD_BY_ANOTHER_PROCESS);
+        assertThat(ForkedJvm.probe(fileB))
+            .startsWith(GuardChild.REFUSED)
+            .contains(HELD_BY_ANOTHER_PROCESS);
       } finally {
         readModelsDb.close();
       }
@@ -279,7 +289,8 @@ class SqliteReadModelStoreTest {
           .startsWith(GuardChild.ACQUIRED);
       assertThat(ForkedJvm.probe(fileA))
           .as("A's guard stays held by A's handle")
-          .startsWith(GuardChild.REFUSED);
+          .startsWith(GuardChild.REFUSED)
+          .contains(HELD_BY_ANOTHER_PROCESS);
     }
   }
 
@@ -297,7 +308,9 @@ class SqliteReadModelStoreTest {
       var store = SqliteReadModelStore.create("sqlite", database, mapper, true, true);
       store.repository().save(ProjectionName.of("owned"), "o", new View("o"));
 
-      assertThat(ForkedJvm.probe(file)).startsWith(GuardChild.REFUSED);
+      assertThat(ForkedJvm.probe(file))
+          .startsWith(GuardChild.REFUSED)
+          .contains(HELD_BY_ANOTHER_PROCESS);
     } finally {
       database.close();
     }
