@@ -172,9 +172,12 @@ public final class DeadLetterRetentionSweeper implements RetentionSweeper {
   }
 
   /**
-   * Interrupts the background thread, waits for a sweep in flight to return (at most 30 s, then
-   * logs a WARN), and resets the started guard so start() may be called again. Once it returns
-   * without that WARN, no sweep of this sweeper runs, so nothing of it touches the store.
+   * Interrupts the background thread, waits for a sweep in flight to return, and resets the started
+   * guard so start() may be called again. It returns once the sweep thread has ended, so nothing of
+   * this sweeper touches the store any more, with two exceptions: the wait timed out after 30 s or
+   * the closing thread was interrupted while it waited (both log a WARN, and the sweep may still be
+   * running), or close() ran on the sweep thread itself, from a store calling back, which returns
+   * at once without a WARN while that sweep finishes.
    */
   @Override
   public void close() {
