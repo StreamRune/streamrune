@@ -328,17 +328,20 @@ class SqliteProjectionRepositoryTest {
     assertThat(rawData("limits_view", "key")).isEqualTo("{\"" + longKey + "\":\"v\"}");
 
     // SQLite's JSON parser nests at most 1000 deep (the document's own object included), a limit
-    // of SQLite's that PostgreSQL does not share; Jackson's re-read adds none below it.
+    // of SQLite's that PostgreSQL does not share; the re-read refuses a deeper document before any
+    // statement, at any depth (no StackOverflowError in the checks that walk the tree).
     String deep = "[".repeat(999) + "]".repeat(999);
     repo.save(name, "deep", Map.of("v", new RawValue(deep)));
     assertThat(rawData("limits_view", "deep")).isEqualTo("{\"v\":" + deep + "}");
-    String tooDeep = "[".repeat(1_000) + "]".repeat(1_000);
-    assertThatThrownBy(() -> repo.save(name, "too_deep", Map.of("v", new RawValue(tooDeep))))
-        .isExactlyInstanceOf(EventStoreException.class)
-        .hasMessage("Failed to save projection: limits/too_deep")
-        .hasRootCauseMessage(
-            "[SQLITE_CONSTRAINT_CHECK] A CHECK constraint failed (CHECK constraint failed:"
-                + " json_valid(data))");
+    for (int depth : new int[] {1_000, 9_999}) {
+      String tooDeep = "[".repeat(depth) + "]".repeat(depth);
+      assertThatThrownBy(() -> repo.save(name, "too_deep", Map.of("v", new RawValue(tooDeep))))
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessage(
+              "Failed to save projection: limits/too_deep: the document nests deeper than 1000"
+                  + " levels, the most SQLite's JSON functions accept");
+    }
+    assertThat(rawData("limits_view", "too_deep")).isNull();
 
     repo.save(name, "big", Map.of("v", new RawValue("1E+10000")));
     assertThat(rawData("limits_view", "big")).isEqualTo("{\"v\":1" + "0".repeat(10_000) + "}");
@@ -360,6 +363,65 @@ class SqliteProjectionRepositoryTest {
                   + " numeric stores (131072 before the decimal point, 16383 after)");
     }
     assertThat(rawData("limits_view", "o")).isNull();
+  }
+
+  /**
+   * PostgreSQL's {@code numeric} refuses a number whose written exponent is beyond ±1073741823,
+   * whatever its digits ("value overflows numeric format", probed on PostgreSQL 17 and 18): a zero
+   * with such an exponent is refused, not stored as {@code 0}, and an exponent beyond Java's int
+   * range is refused the same way, never leaking a {@link NumberFormatException}. The edge itself
+   * is stored, as PostgreSQL stores it, also when the zero has fraction digits.
+   */
+  @Test
+  void aNumberWhoseExponentNumericRefusesIsRefused() throws Exception {
+    var name = ProjectionName.of("exponents");
+    for (String edge :
+        List.of("0E+1073741823", "-0E+1073741823", "0e+01073741823", "0.0E+1073741823")) {
+      repo.save(name, "edge", Map.of("v", new RawValue(edge)));
+      assertThat(rawData("exponents_view", "edge")).as(edge).isEqualTo("{\"v\":0}");
+    }
+
+    for (String refused :
+        List.of(
+            "0E+1073741824",
+            "0.000E+1073741824",
+            "0E-1073741824",
+            "0E+2147483648",
+            "1E+2147483648",
+            "1.5e-2147483649",
+            "0E+99999999999999999999")) {
+      assertThatThrownBy(() -> repo.save(name, "o", Map.of("v", new RawValue(refused))))
+          .as(refused)
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessage(
+              "Failed to save projection: exponents/o: a number's exponent is beyond ±1073741823,"
+                  + " which PostgreSQL's numeric refuses (value overflows numeric format)");
+    }
+    assertThat(rawData("exponents_view", "o")).isNull();
+  }
+
+  /**
+   * Text a {@link RawValue} writes that is not JSON is refused before anything is written, as
+   * PostgreSQL's {@code jsonb} input refuses it, never as the table's {@code json_valid} check
+   * failing.
+   */
+  @Test
+  void aReadModelThatSerializesToInvalidJsonIsRefused() throws Exception {
+    var name = ProjectionName.of("invalid");
+
+    for (String notJson : List.of("{", "nope", "1.", "NaN")) {
+      assertThatThrownBy(() -> repo.save(name, "i", Map.of("v", new RawValue(notJson))))
+          .as(notJson)
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessage(
+              "Failed to save projection: invalid/i: the read model serializes to text that is"
+                  + " not JSON, which PostgreSQL's jsonb refuses")
+          .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
+      assertThatThrownBy(() -> repo.save(name, "i", Map.of("v", new RawValue(notJson)), 0))
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessageStartingWith("Failed to save projection with version check: invalid/i: ");
+    }
+    assertThat(rawData("invalid_view", "i")).isNull();
   }
 
   @Test

@@ -2,9 +2,12 @@ package org.streamrune.sqlite;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.core.StreamWriteConstraints;
+import com.fasterxml.jackson.core.exc.StreamConstraintsException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +19,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.util.RawValue;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.io.IOException;
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -97,10 +101,13 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * the JSON a read model serializes to is parsed and written again with every number in that plain
  * spelling (and, as {@code jsonb} does, the last of two equal keys kept). The text compared by the
  * reads, and the document read back, are then the ones PostgreSQL holds. What {@code jsonb} refuses
- * is refused here too, before anything is written: a string or a key holding U+0000, and a number
- * with more than 131072 digits before the decimal point or 16383 after it. One limit is SQLite's
- * own: its JSON parser nests at most 1000 levels deep, so a deeper document (which Jackson's
- * default writer does not produce either) fails the table's {@code json_valid} check.
+ * is refused here too, before anything is written: text that is not JSON (a {@code RawValue} can
+ * write it), a string or a key holding U+0000, a number whose written exponent is beyond
+ * &plusmn;1073741823 (even a zero), and a number with more than 131072 digits before the decimal
+ * point or 16383 after it. One limit is SQLite's own: its JSON functions nest at most 1000 levels
+ * deep, so a deeper document (which Jackson's default writer does not produce either) is refused
+ * too. In a batch each of these refusals aborts the transaction, as the failed INSERT does on
+ * PostgreSQL.
  *
  * <p><b>The checkpoint and the fence.</b> Checkpoints live in {@code readmodel_checkpoint} of the
  * same database file, the table {@link SqliteReadModelCheckpoints} reads; a repository built over
@@ -121,7 +128,11 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * longest batch or replay the file runs. Reads do not wait: in WAL mode a read sees the last
  * committed state. An updater must therefore write through the repository it is handed; a write
  * through this repository itself, or any other writer of the file, from inside the updater waits
- * for the updater's own transaction and fails after {@code busy_timeout}.
+ * for the updater's own transaction and fails after {@code busy_timeout}. There is one exception,
+ * and it is why such a write is never safe: once SQLite has rolled the updater's transaction back
+ * on its own ({@code SQLITE_FULL}, an I/O error), the write lock is released, so such a write does
+ * not wait and commits at once, on its own, outside the batch (which still throws and rolls back).
+ * The abort of a batch on a failed statement covers the handed repository only.
  *
  * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}. No mode makes
  * an effect outside this database exactly-once.
@@ -188,10 +199,38 @@ public final class SqliteProjectionRepository
       "SELECT type, tbl_name FROM sqlite_schema WHERE name = ? COLLATE NOCASE";
 
   /**
+   * The deepest nesting SQLite's JSON functions accept ({@code json_valid} of a document nested
+   * deeper is false), the document's own object or array included. PostgreSQL's {@code jsonb} has
+   * no such limit.
+   */
+  private static final int MAX_NESTING_DEPTH = 1000;
+
+  /**
+   * The largest magnitude of a number's written exponent PostgreSQL's {@code numeric} reads ({@code
+   * INT_MAX / 2}); beyond it, it refuses the number as "value overflows numeric format", even a
+   * zero.
+   */
+  private static final long NUMERIC_EXPONENT = 1_073_741_823L;
+
+  private static final String DEPTH_REFUSAL =
+      "the document nests deeper than "
+          + MAX_NESTING_DEPTH
+          + " levels, the most SQLite's JSON functions accept";
+
+  private static final String EXPONENT_REFUSAL =
+      "a number's exponent is beyond ±"
+          + NUMERIC_EXPONENT
+          + ", which PostgreSQL's numeric refuses (value overflows numeric format)";
+
+  private static final String NOT_JSON_REFUSAL =
+      "the read model serializes to text that is not JSON, which PostgreSQL's jsonb refuses";
+
+  /**
    * Re-reads the JSON a read model serializes to and writes it back: every decimal number kept as
    * written (a {@code BigDecimal}, trailing zeros included), and no limit on the length of a
-   * string, a number or a key, or on the nesting depth: PostgreSQL's {@code jsonb} has none this
-   * short. Its limits on numbers are applied by {@link #jsonbRefusal}.
+   * string, a number or a key: PostgreSQL's {@code jsonb} has none this short. The nesting depth is
+   * bounded by {@link #MAX_NESTING_DEPTH}, SQLite's own limit, which also bounds the recursion of
+   * the checks that walk the tree. Its limits on numbers are applied by {@link #jsonbText}.
    */
   private static final ObjectMapper JSONB =
       JsonMapper.builder(
@@ -201,10 +240,10 @@ public final class SqliteProjectionRepository
                           .maxStringLength(Integer.MAX_VALUE)
                           .maxNumberLength(Integer.MAX_VALUE)
                           .maxNameLength(Integer.MAX_VALUE)
-                          .maxNestingDepth(Integer.MAX_VALUE)
+                          .maxNestingDepth(MAX_NESTING_DEPTH)
                           .build())
                   .streamWriteConstraints(
-                      StreamWriteConstraints.builder().maxNestingDepth(Integer.MAX_VALUE).build())
+                      StreamWriteConstraints.builder().maxNestingDepth(MAX_NESTING_DEPTH).build())
                   .build())
           .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
           .disable(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES)
@@ -881,58 +920,113 @@ public final class SqliteProjectionRepository
   // ---- (de)serialization, kept apart from every connection scope ----
 
   /**
-   * The JSON stored for {@code readModel}: what {@link #objectMapper} writes, parsed and written
-   * again as PostgreSQL's {@code jsonb} would print it (numbers in plain notation with their scale,
-   * the last of two equal keys). A document {@code jsonb} refuses is refused ({@link
-   * #jsonbRefusal}).
+   * The JSON stored for {@code readModel}: what {@link #objectMapper} writes ({@link #serialized}),
+   * read again as PostgreSQL's {@code jsonb} reads it ({@link #jsonbText}).
    */
   private String toJson(
       Object readModel, String failure, ProjectionName projectionName, String id) {
-    JsonNode tree = toTree(readModel, failure, projectionName, id);
-    EventStoreException refusal = jsonbRefusal(tree, failure, projectionName, id);
-    if (refusal != null) {
-      throw refusal;
-    }
-    return toText(tree, failure, projectionName, id);
+    return jsonbText(
+        serialized(readModel, failure, projectionName, id), failure, projectionName, id);
   }
 
-  /** What {@link #objectMapper} writes for {@code readModel}, re-read as a tree. */
-  private JsonNode toTree(
+  /**
+   * What {@link #objectMapper} writes for {@code readModel}. Its failure is the application's
+   * error, raised before any statement, as the PostgreSQL repository's mapper raises it: it never
+   * aborts a batch.
+   */
+  private String serialized(
       Object readModel, String failure, ProjectionName projectionName, String id) {
     try {
-      return JSONB.readTree(objectMapper.writeValueAsString(readModel));
+      return objectMapper.writeValueAsString(readModel);
     } catch (JsonProcessingException e) {
       throw new EventStoreException(failure + shown(projectionName, id), e);
     }
   }
 
   /**
-   * The refusal of a tree PostgreSQL's {@code jsonb} cannot store, or {@code null}: a string or a
-   * key holding U+0000, or a number with more digits than {@code numeric} holds (131072 before the
-   * decimal point, 16383 after), which PostgreSQL refuses as "value overflows numeric format".
+   * {@code json}, the text a read model serialized to, as PostgreSQL's {@code jsonb} would store
+   * it: parsed and written again with every number in plain notation with its scale, and the last
+   * of two equal keys kept. What PostgreSQL refuses when it casts the text to {@code jsonb} is
+   * refused here, before anything is written: text that is not JSON (which a {@link RawValue} can
+   * write), a string or a key holding U+0000, a number whose written exponent is beyond
+   * &plusmn;{@value #NUMERIC_EXPONENT}, and a number with more digits than {@code numeric} stores.
+   * So is a document nested deeper than {@value #MAX_NESTING_DEPTH} levels, which SQLite's JSON
+   * functions cannot store. Every failure here is the database refusing the document, the failed
+   * INSERT on PostgreSQL, so the transaction-scoped repository aborts its batch on it.
+   *
+   * @throws EventStoreException on every refusal and every failure, naming the read model
    */
-  private static EventStoreException jsonbRefusal(
-      JsonNode tree, String failure, ProjectionName projectionName, String id) {
+  private static String jsonbText(
+      String json, String failure, ProjectionName projectionName, String id) {
+    String what = failure + shown(projectionName, id);
+    boolean exponentRefused;
+    JsonNode tree = null;
+    try {
+      exponentRefused = exponentBeyondNumeric(json);
+      if (!exponentRefused) {
+        tree = JSONB.readTree(json);
+      }
+    } catch (StreamConstraintsException e) {
+      throw new EventStoreException(what + ": " + DEPTH_REFUSAL, e);
+    } catch (IOException | RuntimeException e) {
+      throw new EventStoreException(what + ": " + NOT_JSON_REFUSAL, e);
+    }
     String reason =
-        holdsNul(tree)
-            ? "a string holds U+0000, which PostgreSQL jsonb cannot store"
-            : overflowsNumeric(tree)
-                ? "a number has more digits than PostgreSQL's numeric stores (131072 before the"
-                    + " decimal point, 16383 after)"
-                : null;
-    return reason == null
-        ? null
-        : new EventStoreException(failure + shown(projectionName, id) + ": " + reason);
-  }
-
-  /** {@code tree} as the text stored in {@code data}: every decimal in plain notation. */
-  private static String toText(
-      JsonNode tree, String failure, ProjectionName projectionName, String id) {
+        exponentRefused
+            ? EXPONENT_REFUSAL
+            : holdsNul(tree)
+                ? "a string holds U+0000, which PostgreSQL jsonb cannot store"
+                : overflowsNumeric(tree)
+                    ? "a number has more digits than PostgreSQL's numeric stores (131072 before"
+                        + " the decimal point, 16383 after)"
+                    : null;
+    if (reason != null) {
+      throw new EventStoreException(what + ": " + reason);
+    }
     try {
       return JSONB.writeValueAsString(plainNumbers(tree));
-    } catch (JsonProcessingException e) {
-      throw new EventStoreException(failure + shown(projectionName, id), e);
+    } catch (JsonProcessingException | RuntimeException e) {
+      throw new EventStoreException(what, e);
     }
+  }
+
+  /**
+   * Whether a number of {@code json} has a written exponent PostgreSQL's {@code numeric} refuses:
+   * one whose magnitude exceeds {@value #NUMERIC_EXPONENT}, whatever the number's digits ({@code
+   * 0E+1073741824} is refused, {@code 0.0E+1073741823} stored as {@code 0}). Only the number's text
+   * shows its exponent, so the tokens are scanned before the tree is built; no number is converted
+   * here, so an exponent beyond Java's {@code int} range throws nothing.
+   *
+   * @throws IOException if {@code json} is not JSON or nests deeper than {@value
+   *     #MAX_NESTING_DEPTH} levels
+   */
+  private static boolean exponentBeyondNumeric(String json) throws IOException {
+    try (JsonParser parser = JSONB.createParser(json)) {
+      for (JsonToken token = parser.nextToken(); token != null; token = parser.nextToken()) {
+        if (token == JsonToken.VALUE_NUMBER_FLOAT
+            && literalExponentBeyondNumeric(parser.getText())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Whether the JSON number {@code number} has an exponent beyond {@link #NUMERIC_EXPONENT}. */
+  private static boolean literalExponentBeyondNumeric(String number) {
+    int marker = Math.max(number.indexOf('e'), number.indexOf('E'));
+    if (marker < 0) {
+      return false;
+    }
+    int start = marker + 1;
+    if (number.charAt(start) == '+' || number.charAt(start) == '-') {
+      start++;
+    }
+    while (start < number.length() - 1 && number.charAt(start) == '0') {
+      start++;
+    }
+    String digits = number.substring(start);
+    return digits.length() > 10 || Long.parseLong(digits) > NUMERIC_EXPONENT;
   }
 
   private static boolean holdsNul(JsonNode node) {
@@ -1235,8 +1329,11 @@ public final class SqliteProjectionRepository
    * once the updater returns, even if it caught the failure, the batch throws that exception before
    * the advance, and rolls back. So a batch never commits without a write that failed, and after
    * SQLite rolled a transaction back on its own ({@code SQLITE_FULL}, an I/O error) no later write
-   * of the updater runs, and autocommits, outside the batch. An {@link OptimisticLockException} (no
-   * row of the expected version) does not abort, as on PostgreSQL.
+   * of the updater through the handed repository runs, and autocommits, outside the batch. The
+   * abort covers the handed repository only: a write the updater makes through another repository
+   * of the file (this one itself, for instance) after such a rollback finds the write lock released
+   * and commits at once, on its own. An {@link OptimisticLockException} (no row of the expected
+   * version) does not abort, as on PostgreSQL.
    *
    * <p><b>Failures.</b> Every exit before the {@code COMMIT} rolls the transaction back. A fence
    * rejection, and an exception or {@link Error} of the updater, propagates unchanged. A {@link
@@ -1577,18 +1674,19 @@ public final class SqliteProjectionRepository
     }
 
     /**
-     * The JSON to store for {@code readModel}, as {@link SqliteProjectionRepository#toJson}; a read
-     * model PostgreSQL's {@code jsonb} refuses aborts the transaction, as the refused INSERT does
-     * there.
+     * The JSON to store for {@code readModel}, as {@link SqliteProjectionRepository#toJson}. A
+     * document the re-read refuses, or any failure of the re-read, aborts the transaction, as the
+     * refused INSERT does on PostgreSQL; a failure of the application's mapper does not, as it
+     * comes before any statement there too.
      */
     private String storedJson(
         Object readModel, String failure, ProjectionName projectionName, String id) {
-      JsonNode tree = toTree(readModel, failure, projectionName, id);
-      EventStoreException refusal = jsonbRefusal(tree, failure, projectionName, id);
-      if (refusal != null) {
+      String json = serialized(readModel, failure, projectionName, id);
+      try {
+        return jsonbText(json, failure, projectionName, id);
+      } catch (EventStoreException refusal) {
         throw abort(refusal);
       }
-      return toText(tree, failure, projectionName, id);
     }
 
     /** Queues {@code action} to run once this transaction has committed; a rollback discards it. */

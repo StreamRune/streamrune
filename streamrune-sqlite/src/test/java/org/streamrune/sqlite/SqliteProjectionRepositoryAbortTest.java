@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.util.RawValue;
 import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -21,6 +22,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
@@ -283,6 +286,62 @@ class SqliteProjectionRepositoryAbortTest {
   @Test
   void aRefusedReadModelAbortsTheBatch() throws SQLException {
     assertAbortedBatch(repo, tx -> tx.save(P, "b", Map.of("id", "b", "v", "a\0b")));
+  }
+
+  /**
+   * Every other document the re-read refuses aborts the batch the same way, with nothing thrown but
+   * the refusal: text that is not JSON, a document nested 1001 and 10 000 levels deep (SQLite
+   * stores 1000; no StackOverflowError), a zero whose exponent {@code numeric} refuses, and an
+   * exponent beyond Java's int range (no {@link NumberFormatException}).
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {0, 1, 2, 3, 4})
+  void everyDocumentTheReReadRefusesAbortsTheBatch(int which) throws SQLException {
+    String raw =
+        List.of(
+                "{\"unclosed\":",
+                "[".repeat(1_000) + "]".repeat(1_000),
+                "[".repeat(9_999) + "]".repeat(9_999),
+                "0E+1073741824",
+                "1E+2147483648")
+            .get(which);
+
+    assertAbortedBatch(repo, tx -> tx.save(P, "b", Map.of("id", "b", "v", new RawValue(raw))));
+  }
+
+  /**
+   * The abort covers the handed repository only. After SQLITE_FULL, SQLite has already rolled the
+   * batch's transaction back and released the write lock, so a write the updater makes through
+   * another repository of the file (here the outer repository) does not wait for the batch: it
+   * commits at once, on its own, while the batch itself still throws and advances nothing.
+   */
+  @Test
+  void afterSqliteFull_aWriteThroughAnotherRepositoryCommitsAtOnce() throws SQLException {
+    SqliteProjectionRepository capped = full();
+    var caught = new ArrayList<RuntimeException>();
+
+    assertThatThrownBy(
+            () ->
+                capped.executeAtomically(
+                    P,
+                    SqliteProjectionRepositoryCrashTest.Batches.of(2, 2),
+                    GlobalOffset.of(2),
+                    0L,
+                    tx -> {
+                      try {
+                        FULL.accept(tx);
+                      } catch (EventStoreException e) {
+                        caught.add(e);
+                      }
+                      repo.save(P, "outer", new Row("outer", "not part of the batch"));
+                    },
+                    null))
+        .isExactlyInstanceOf(EventStoreException.class)
+        .hasMessageStartingWith("The projection transaction was aborted by an earlier failure");
+
+    assertThat(caught).hasSize(1);
+    assertThat(rows()).containsExactly("outer", "seed");
+    assertThat(checkpoints.getLastOffset(P)).isEqualTo(GlobalOffset.of(1));
   }
 
   /**
