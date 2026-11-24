@@ -63,14 +63,14 @@ class SqliteSchemaSeriesTest {
 
     assertThat(SqliteSchemaSeries.CRYPTO.directory()).isEqualTo("db/sqlite-crypto-migration");
     assertThat(SqliteSchemaSeries.CRYPTO.historyTable()).isEqualTo("flyway_schema_history_crypto");
-    assertThat(SqliteSchemaSeries.CRYPTO.scripts()).isEmpty();
+    assertThat(SqliteSchemaSeries.CRYPTO.scripts()).containsExactly("V001__crypto.sql");
   }
 
   @Test
   void expectedVersionIsTheHighestScriptVersion() {
     assertThat(SqliteSchemaSeries.EVENT_STORE.expectedVersion()).isEqualTo(1);
     assertThat(SqliteSchemaSeries.READ_MODEL.expectedVersion()).isEqualTo(1);
-    assertThat(SqliteSchemaSeries.CRYPTO.expectedVersion()).isZero();
+    assertThat(SqliteSchemaSeries.CRYPTO.expectedVersion()).isEqualTo(1);
     assertThat(SqliteSchemaSeries.versionOf("V012__later.sql")).isEqualTo(12);
     assertThatIllegalArgumentException()
         .isThrownBy(() -> SqliteSchemaSeries.versionOf("R__repeatable.sql"))
@@ -257,44 +257,38 @@ class SqliteSchemaSeriesTest {
     try (SqliteDatabase db = open()) {
       db.migrate(SqliteSchemaSeries.EVENT_STORE);
       db.migrate(SqliteSchemaSeries.READ_MODEL);
-      db.migrate(SqliteSchemaSeries.CRYPTO);
       db.migrate(SqliteSchemaSeries.EVENT_STORE);
 
+      // The crypto series joins them in streamrune-sqlite-crypto, which ships its scripts.
       assertThat(tables(db.dataSource()))
-          .contains(
-              "flyway_schema_history_streamrune",
-              "flyway_schema_history_readmodel",
-              "flyway_schema_history_crypto")
+          .contains("flyway_schema_history_streamrune", "flyway_schema_history_readmodel")
           .doesNotContain("flyway_schema_history");
       assertThat(history(db.dataSource(), "flyway_schema_history_streamrune"))
           .containsExactly(List.of("001", "V001__baseline.sql", 1L));
       // A series applied to a schema that already holds tables records Flyway's baseline (version
-      // 0) in its own history table, then its own scripts; an empty series records the baseline
-      // alone.
+      // 0) in its own history table, then its own scripts.
       assertThat(history(db.dataSource(), "flyway_schema_history_readmodel"))
           .containsExactly(
               List.of("0", "<< Flyway Baseline >>", 1L),
               List.of("001", "V001__readmodel_baseline.sql", 1L));
-      assertThat(history(db.dataSource(), "flyway_schema_history_crypto"))
-          .containsExactly(List.of("0", "<< Flyway Baseline >>", 1L));
       assertThat(tables(db.dataSource())).contains("readmodel_checkpoint");
       db.validate(SqliteSchemaSeries.EVENT_STORE);
       db.validate(SqliteSchemaSeries.READ_MODEL);
-      db.validate(SqliteSchemaSeries.CRYPTO);
     }
   }
 
+  /**
+   * The crypto series' scripts ship in streamrune-sqlite-crypto, which this module's tests do not
+   * have: migrating it here is refused naming that artifact, before the database is touched.
+   */
   @Test
-  void anEmptySeriesMigratesAndValidatesCleanlyOnAnEmptyDatabase() throws Exception {
+  void aSeriesWhoseArtifactIsMissingIsRefusedNamingIt() throws Exception {
     try (SqliteDatabase db = open()) {
-      db.migrate(SqliteSchemaSeries.CRYPTO);
-      db.migrate(SqliteSchemaSeries.CRYPTO);
-
-      assertThat(tables(db.dataSource())).containsExactly("flyway_schema_history_crypto");
-      assertThat(history(db.dataSource(), "flyway_schema_history_crypto")).isEmpty();
-      assertThat(SqliteSchemaValidator.validate(db.dataSource(), SqliteSchemaSeries.CRYPTO))
-          .isEmpty();
-      db.validate(SqliteSchemaSeries.CRYPTO);
+      assertThatThrownBy(() -> db.migrate(SqliteSchemaSeries.CRYPTO))
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("db/sqlite-crypto-migration/V001__crypto.sql")
+          .hasMessageContaining("streamrune-sqlite-crypto");
+      assertThat(tables(db.dataSource())).isEmpty();
     }
   }
 

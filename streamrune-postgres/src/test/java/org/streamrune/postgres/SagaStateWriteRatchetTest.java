@@ -283,6 +283,9 @@ class SagaStateWriteRatchetTest {
       "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
           + " encryption_keys)";
 
+  private static final String SQLITE_CRYPTO_KEY_TABLE =
+      "the SQLite crypto engine's key table (its builder's table name, default encryption_keys)";
+
   /**
    * Every write whose table the statement's text does not name, with the reason its table is never
    * {@code saga_state}. Keyed by {@code File.CONSTANT}, or for an unnamed statement by {@code File:
@@ -298,6 +301,8 @@ class SagaStateWriteRatchetTest {
           Map.entry("SqliteProjectionRepository.DELETE", READ_MODEL_TABLE),
           Map.entry("PostgresCryptoEngine.java: DELETE FROM #1", CRYPTO_KEY_TABLE),
           Map.entry("PostgresCryptoEngine.java: INSERT INTO #1", CRYPTO_KEY_TABLE),
+          Map.entry("SqliteCryptoEngine.java: DELETE FROM #1", SQLITE_CRYPTO_KEY_TABLE),
+          Map.entry("SqliteCryptoEngine.java: INSERT INTO #1", SQLITE_CRYPTO_KEY_TABLE),
           Map.entry("PostgresCheckpointFence.SEED", CHECKPOINT_TABLE),
           Map.entry("PostgresCheckpointFence.SAVE_LOCKED", CHECKPOINT_TABLE),
           Map.entry("PostgresCheckpointFence.STAMP", CHECKPOINT_TABLE),

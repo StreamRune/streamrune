@@ -245,14 +245,38 @@ class SqliteSchemaValidatorTest {
     assertThatCode(() -> db.validate(SqliteSchemaSeries.EVENT_STORE)).doesNotThrowAnyException();
   }
 
+  /**
+   * The crypto series requires the three tables its baseline creates and their columns; its scripts
+   * ship in streamrune-sqlite-crypto, where the migrated case is checked.
+   */
   @Test
-  void anEmptySeriesWithoutItsHistoryOnlyWarns() {
+  void theCryptoSeriesRequiresItsThreeTablesAndColumns() throws Exception {
     assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.CRYPTO))
         .containsExactly(
+            new Issue(Severity.ERROR, "encryption_keys", "Required table missing"),
+            new Issue(Severity.ERROR, "erased_key_generations", "Required table missing"),
+            new Issue(Severity.ERROR, "forgotten_subjects", "Required table missing"),
             new Issue(
                 Severity.WARNING,
                 "flyway_schema_history_crypto",
                 "Flyway history table not found — schema may not be managed by Flyway"));
+
+    execute(
+        ds,
+        "CREATE TABLE encryption_keys (subject_id TEXT PRIMARY KEY, key_bytes BLOB,"
+            + " created_at INTEGER, key_version INTEGER)",
+        "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY, forgotten_at INTEGER)",
+        "CREATE TABLE erased_key_generations (subject_id TEXT PRIMARY KEY,"
+            + " max_erased_version INTEGER)");
+    assertThat(SqliteSchemaValidator.validate(ds, SqliteSchemaSeries.CRYPTO))
+        .containsExactly(
+            new Issue(Severity.ERROR, "forgotten_subjects", "Missing column: key_created_at"),
+            new Issue(
+                Severity.WARNING,
+                "flyway_schema_history_crypto",
+                "Flyway history table not found — schema may not be managed by Flyway"));
+
+    execute(ds, "ALTER TABLE forgotten_subjects ADD COLUMN key_created_at INTEGER");
     assertThatCode(() -> db.validate(SqliteSchemaSeries.CRYPTO)).doesNotThrowAnyException();
   }
 

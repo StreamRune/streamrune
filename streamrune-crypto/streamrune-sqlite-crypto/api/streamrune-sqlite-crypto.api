@@ -1,0 +1,47 @@
+# The public API of :streamrune-crypto:streamrune-sqlite-crypto. verifyApiSurface (part of check) compares the build with this file;
+# after a deliberate change to the public API, ./gradlew apiDump rewrites it.
+public final class org.streamrune.crypto.sqlite.InProcessCryptoForgetSignal implements org.streamrune.crypto.CryptoForgetSignal
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public boolean isListening()
+  public boolean isSubscribed()
+  public java.lang.String toString()
+  public void close()
+  public void publish(java.lang.String)
+  public void subscribe(java.util.function.Consumer<java.lang.String>, java.lang.Runnable)
+
+public final class org.streamrune.crypto.sqlite.SqliteCryptoBackend implements org.streamrune.crypto.CryptoBackend
+  public <init>()
+  public java.lang.String name()
+  public org.streamrune.core.crypto.CryptoEngine keyStoreEngine(javax.sql.DataSource, org.streamrune.crypto.CryptoBackend$KeyStoreEngineSettings)
+  public org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource)
+  public org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource, java.util.function.Supplier<? extends javax.sql.DataSource>)
+  public org.streamrune.crypto.ForgottenSubjectStore forgottenSubjects(javax.sql.DataSource)
+
+public final class org.streamrune.crypto.sqlite.SqliteCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
+  public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
+  public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
+  public byte[] encrypt(org.streamrune.core.types.SubjectId, byte[])
+  public java.lang.String toString()
+  public java.util.Set<java.lang.String> requiredCryptoTables()
+  public static final java.lang.String DEFAULT_TABLE_NAME = "encryption_keys"
+  public static org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder builder()
+  public void deleteKey(org.streamrune.core.types.SubjectId)
+  public void reinstate(org.streamrune.core.types.SubjectId)
+
+public static final class org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder
+  public org.streamrune.crypto.sqlite.SqliteCryptoEngine build()
+  public org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder clock(java.time.Clock)
+  public org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder database(org.streamrune.sqlite.SqliteDatabase)
+  public org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder metrics(org.streamrune.core.StreamRuneMetrics)
+  public org.streamrune.crypto.sqlite.SqliteCryptoEngine$Builder tableName(java.lang.String)
+
+public final class org.streamrune.crypto.sqlite.SqliteForgottenSubjectStore implements org.streamrune.crypto.ForgottenSubjectStore
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.time.Clock)
+  public boolean isForgotten(org.streamrune.core.types.SubjectId)
+  public boolean requiresDatabaseSchema()
+  public java.util.Optional<java.time.Instant> forgottenAt(org.streamrune.core.types.SubjectId)
+  public java.util.Optional<java.time.Instant> keyCreatedAt(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId)
+  public void forget(org.streamrune.core.types.SubjectId, java.time.Instant)
+  public void reinstate(org.streamrune.core.types.SubjectId)

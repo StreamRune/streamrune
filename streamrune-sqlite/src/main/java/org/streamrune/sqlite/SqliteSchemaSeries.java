@@ -48,7 +48,7 @@ public enum SqliteSchemaSeries {
       "db/sqlite-crypto-migration",
       "flyway_schema_history_crypto",
       "streamrune-sqlite-crypto",
-      List.of());
+      List.of("V001__crypto.sql"));
 
   private static final Pattern VERSIONED_SCRIPT = Pattern.compile("V(\\d+)__.+\\.sql");
 
@@ -85,7 +85,7 @@ public enum SqliteSchemaSeries {
   /**
    * The file names of the series' scripts, in version order.
    *
-   * @return the scripts; empty for a series that ships none yet
+   * @return the scripts; never empty
    */
   public List<String> scripts() {
     return scripts;
@@ -96,9 +96,9 @@ public enum SqliteSchemaSeries {
     return artifact;
   }
 
-  /** The version of the last script: what a fully migrated database records; 0 for none. */
+  /** The version of the last script: what a fully migrated database records. */
   int expectedVersion() {
-    return scripts.isEmpty() ? 0 : versionOf(scripts.getLast());
+    return versionOf(scripts.getLast());
   }
 
   /**

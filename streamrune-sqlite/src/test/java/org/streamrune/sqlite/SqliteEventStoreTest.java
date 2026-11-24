@@ -754,8 +754,10 @@ class SqliteEventStoreTest {
       implements org.streamrune.core.AggregateState {}
 
   /**
-   * An engine that needs crypto tables makes the factory apply the crypto series and refuse a
-   * database without the tables, naming them; once they exist, the store is built.
+   * An engine that needs crypto tables makes the factory apply the crypto series, whose scripts
+   * streamrune-sqlite-crypto ships (refused here, naming it, where that module is absent); with
+   * auto-initialization off it refuses a database without the tables, naming them; once they exist,
+   * the store is built. streamrune-sqlite-crypto checks the migrated case.
    */
   @Test
   void anEngineThatNeedsCryptoTablesRequiresThem() throws Exception {
@@ -764,20 +766,16 @@ class SqliteEventStoreTest {
 
     assertThatThrownBy(() -> factory(database).cryptoEngine(needsTables).create())
         .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("db/sqlite-crypto-migration/V001__crypto.sql")
+        .hasMessageContaining("streamrune-sqlite-crypto");
+    assertThatThrownBy(
+            () -> factory(database).cryptoEngine(needsTables).autoInitializeSchema(false).create())
+        .isExactlyInstanceOf(IllegalStateException.class)
         .hasMessageContaining("forgotten_subjects")
         .hasMessageContaining("CRYPTO");
-    try (Connection conn = database.dataSource().getConnection()) {
-      assertThat(
-              count(
-                  conn,
-                  "SELECT count(*) FROM sqlite_schema WHERE name = '"
-                      + SqliteSchemaSeries.CRYPTO.historyTable()
-                      + "'"))
-          .as("the crypto series was applied")
-          .isEqualTo(1);
-    }
     execute(database, "CREATE TABLE forgotten_subjects (subject_id TEXT PRIMARY KEY)");
-    assertThat(factory(database).cryptoEngine(needsTables).create()).isNotNull();
+    assertThat(factory(database).cryptoEngine(needsTables).autoInitializeSchema(false).create())
+        .isNotNull();
     assertThat(
             factory(database)
                 .cryptoEngine(needsTables)

@@ -1164,6 +1164,7 @@ subprojects {
                 to "org.streamrune.spring.boot.starter",
             ":streamrune-crypto:streamrune-filesystem-crypto" to "org.streamrune.crypto.filesystem",
             ":streamrune-crypto:streamrune-postgres-crypto" to "org.streamrune.crypto.postgres",
+            ":streamrune-crypto:streamrune-sqlite-crypto" to "org.streamrune.crypto.sqlite",
             ":streamrune-crypto:streamrune-vault-crypto" to "org.streamrune.crypto.vault",
             ":streamrune-outbox:streamrune-kafka-outbox" to "org.streamrune.outbox.kafka",
             ":streamrune-outbox:streamrune-rabbitmq-outbox" to "org.streamrune.outbox.rabbitmq")
