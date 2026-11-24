@@ -23,6 +23,7 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.Encrypted;
+import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.projection.AtomicBatchProcessor.ProjectionUpdater;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
@@ -37,9 +38,9 @@ import org.streamrune.sqlite.SqliteSchemaSeries;
  * first {@code @Encrypted} value of a subject without a key would mint that key while the batch's
  * own thread holds the lock. The engine on the same file joins the batch's transaction instead of
  * waiting {@code busy_timeout}: the key commits with the batch, rolls back with it together with
- * every value encrypted under it, and a failed statement aborts the batch. An engine on another
- * file keeps its own transactions, and inside an application transaction of its own on the file the
- * engine cannot mint and says why.
+ * every value encrypted under it, and a failed statement aborts the batch. An erasure never joins:
+ * inside a batch it is refused at once. An engine on another file keeps its own transactions, and
+ * inside an application transaction of its own on the file the engine cannot mint and says why.
  */
 class SqliteCryptoEngineInABatchTest {
 
@@ -169,26 +170,144 @@ class SqliteCryptoEngineInABatchTest {
         .isEqualTo("frank@example.com");
   }
 
+  /**
+   * An erasure never joins a batch: inside one on the same file, deleteKey and reinstate are
+   * refused at once, before anything is written, and the batch itself can still commit. Joined, the
+   * erasure would not be durable when it returns: a rollback would bring the key back.
+   */
   @Test
-  void anErasureAndAReinstateInsideABatchCommitWithIt() {
+  void theEnginesErasureAndReinstateAreRefusedInsideABatch() {
     open(impatient("erase.db"));
-    SubjectId erased = SubjectId.of("erased");
-    SubjectId reinstated = SubjectId.of("reinstated");
-    byte[] old = engine.encrypt(erased, "old".getBytes(UTF_8));
-    engine.deleteKey(reinstated);
+    SubjectId kept = SubjectId.of("kept");
+    SubjectId stillForgotten = SubjectId.of("still-forgotten");
+    byte[] value = engine.encrypt(kept, "pii".getBytes(UTF_8));
+    engine.deleteKey(stillForgotten);
+    var refusals = new java.util.ArrayList<Throwable>();
 
     batch(
         1,
         tx -> {
-          engine.deleteKey(erased);
-          engine.reinstate(reinstated);
+          refusals.add(catchRefusal(() -> engine.deleteKey(kept)));
+          refusals.add(catchRefusal(() -> engine.reinstate(stillForgotten)));
+          tx.save(P, "c-0", new CustomerView("c-0", "zoe@example.com"));
         });
 
-    assertThatThrownBy(() -> engine.decrypt(erased, old))
-        .isInstanceOf(org.streamrune.core.crypto.KeyNotFoundException.class);
-    assertThatThrownBy(() -> engine.encrypt(erased, "new".getBytes(UTF_8)))
-        .isInstanceOf(org.streamrune.core.crypto.SubjectForgottenException.class);
-    assertThat(engine.encrypt(reinstated, "back".getBytes(UTF_8))).isNotNull();
+    assertThat(refusals).hasSize(2).allSatisfy(SqliteCryptoEngineInABatchTest::isTheRefusal);
+    assertThat(engine.decrypt(kept, value)).isEqualTo("pii".getBytes(UTF_8));
+    assertThatThrownBy(() -> engine.encrypt(stillForgotten, "x".getBytes(UTF_8)))
+        .isInstanceOf(SubjectForgottenException.class);
+    assertThat(checkpoints.getLastOffset(P))
+        .as("the batch committed")
+        .isEqualTo(GlobalOffset.of(1));
+    engine.deleteKey(kept);
+    assertThat(engine.isKeyAvailable(kept)).as("after the batch the erasure runs").isFalse();
+  }
+
+  /**
+   * The forgotten-subject store's tombstone writes are refused inside a batch too; its reads join
+   * the batch.
+   */
+  @Test
+  void theStoresTombstoneWritesAreRefusedInsideABatch_itsReadsJoin() {
+    open(impatient("store.db"));
+    var store = new SqliteForgottenSubjectStore(database);
+    SubjectId forgotten = SubjectId.of("forgotten");
+    SubjectId fresh = SubjectId.of("fresh");
+    store.forget(forgotten);
+    var refusals = new java.util.ArrayList<Throwable>();
+    var read = new AtomicReference<Boolean>();
+
+    batch(
+        1,
+        tx -> {
+          refusals.add(catchRefusal(() -> store.forget(fresh)));
+          refusals.add(catchRefusal(() -> store.forget(fresh, java.time.Instant.EPOCH)));
+          refusals.add(catchRefusal(() -> store.reinstate(forgotten)));
+          read.set(store.isForgotten(forgotten));
+        });
+
+    assertThat(refusals).hasSize(3).allSatisfy(SqliteCryptoEngineInABatchTest::isTheRefusal);
+    assertThat(read.get()).isTrue();
+    assertThat(store.isForgotten(fresh)).isFalse();
+    assertThat(store.isForgotten(forgotten)).isTrue();
+  }
+
+  /**
+   * Through CachedCryptoEngine, as the integrations wire it: the refused erasure publishes no
+   * forget, so no other engine evicts or acts on an erasure that never happened, and the value
+   * stays readable through the cache. (The cache drops its own entries of the subject before it
+   * calls its delegate, whatever the delegate answers; that costs a cache miss, nothing else.)
+   */
+  @Test
+  void aRefusedErasureThroughTheCachePublishesNoForget() {
+    open(impatient("cached.db"));
+    SubjectId subject = SubjectId.of("cached");
+    var heard = new java.util.concurrent.CopyOnWriteArrayList<String>();
+    try (var signal = new InProcessCryptoForgetSignal(database);
+        var peerSignal = new InProcessCryptoForgetSignal(database)) {
+      peerSignal.subscribe(heard::add);
+      CryptoEngine cached =
+          org.streamrune.crypto.CachedCryptoEngine.builder()
+              .delegate(engine)
+              .forgetSignal(signal)
+              .build();
+      byte[] value = cached.encrypt(subject, "pii".getBytes(UTF_8));
+      cached.decrypt(subject, value);
+      var refusal = new AtomicReference<Throwable>();
+
+      batch(1, tx -> refusal.set(catchRefusal(() -> cached.deleteKey(subject))));
+
+      isTheRefusal(refusal.get());
+      assertThat(heard).as("no forget was published").isEmpty();
+      assertThat(cached.decrypt(subject, value)).isEqualTo("pii".getBytes(UTF_8));
+      assertThat(engine.isKeyAvailable(subject)).isTrue();
+    }
+  }
+
+  /**
+   * The Vault engine's ordering: record the tombstone, and only once that returned destroy the key
+   * in the key backend. Inside a batch the tombstone write is refused, so the destroy step never
+   * runs and the subject stays as it was: no key destroyed behind an uncommitted tombstone.
+   */
+  @Test
+  void aVaultStyleErasureInsideABatchNeverReachesItsKeyDestroy() {
+    open(impatient("vault.db"));
+    var store = new SqliteForgottenSubjectStore(database);
+    SubjectId subject = SubjectId.of("vault-subject");
+    var transitKeyDestroyed = new java.util.concurrent.atomic.AtomicBoolean();
+    var refusal = new AtomicReference<Throwable>();
+
+    batch(
+        1,
+        tx ->
+            refusal.set(
+                catchRefusal(
+                    () -> {
+                      store.forget(subject, java.time.Instant.parse("2026-01-01T00:00:00Z"));
+                      transitKeyDestroyed.set(true);
+                    })));
+
+    isTheRefusal(refusal.get());
+    assertThat(transitKeyDestroyed).isFalse();
+    assertThat(store.isForgotten(subject)).isFalse();
+  }
+
+  private static Throwable catchRefusal(Runnable erasure) {
+    try {
+      erasure.run();
+      return null;
+    } catch (RuntimeException e) {
+      return e;
+    }
+  }
+
+  private static void isTheRefusal(Throwable refusal) {
+    assertThat(refusal)
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(
+            "cannot run inside a projection batch on the same SQLite database file")
+        .hasMessageContaining(
+            "Run the erasure after the batch, from a command handler or a saga step");
   }
 
   /**

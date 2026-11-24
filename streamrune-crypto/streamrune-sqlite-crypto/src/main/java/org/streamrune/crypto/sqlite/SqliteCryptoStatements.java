@@ -18,12 +18,21 @@ import org.streamrune.sqlite.SqliteWriteTransaction;
  * the file would wait {@code busy_timeout} for the lock its own thread holds, and on a pool of one
  * connection even a read would wait for the batch's connection. So when {@link
  * SqliteWriteTransaction#heldOn(Path)} finds the batch's transaction on this thread for the store's
- * file, every statement runs on its connection, inside it, with no begin or commit of its own: what
- * it writes commits and rolls back with the batch. Every {@link SQLException} there is reported to
- * the batch, which aborts, as a failed statement of its own does; a write first checks that the
+ * file, reads ({@link #read}) and a key's mint ({@link #write}) run on its connection, inside it,
+ * with no begin or commit of their own: a minted key commits and rolls back with the batch,
+ * together with every value encrypted under it. Every {@link SQLException} there is reported to the
+ * batch, which aborts, as a failed statement of its own does; a write first checks that the
  * transaction is still open, so it never commits on its own. Otherwise reads run on a borrowed
  * connection in autocommit (in WAL mode they never wait for a writer) and writes in one {@code
  * BEGIN IMMEDIATE} ... {@code COMMIT} on a borrowed connection ({@link SqliteTransactions}).
+ *
+ * <p><b>An erasure never joins.</b> {@code deleteKey}, {@code reinstate} and the tombstone writes
+ * of the forgotten-subject store run through {@link #writeAlone}, which refuses at once inside a
+ * batch on the file: joined, an erasure would not be durable when it returns. A rolled-back batch
+ * would bring the key back; {@code CachedCryptoEngine} would publish the forget before the {@code
+ * COMMIT}, so another thread could cache the plaintext again; and the Vault engine would destroy
+ * its transit key while the tombstone it relies on is still uncommitted. Outside a batch it commits
+ * in a transaction of its own before it returns, as on PostgreSQL.
  */
 final class SqliteCryptoStatements {
 
@@ -57,7 +66,41 @@ final class SqliteCryptoStatements {
     }
   }
 
-  /** Runs writes as one transaction: the batch's on this thread, or one of their own. */
+  /** The refusal of an erasure inside a projection batch on the same file. */
+  static final String ERASURE_INSIDE_A_BATCH =
+      "An erasure (deleteKey, reinstate, or a forgotten-subject tombstone write) cannot run inside a"
+          + " projection batch on the same SQLite database file: it would commit or roll back with"
+          + " the batch, so it would not be durable when it returns, and a cache or a key backend"
+          + " acting on its return could act on an erasure that never commits. Nothing was written."
+          + " Run the erasure after the batch, from a command handler or a saga step.";
+
+  /**
+   * Runs an erasure's writes in a write transaction of their own, committed before this returns.
+   *
+   * @throws IllegalStateException inside a projection batch on the same file, before anything runs
+   */
+  <T> T writeAlone(Work<T> writes) throws SQLException {
+    refuseInsideABatch();
+    try (Connection conn = dataSource.getConnection()) {
+      return SqliteTransactions.inTransaction(conn, transaction, writes::run);
+    }
+  }
+
+  /**
+   * Refuses an erasure inside a projection batch on the same file, before anything runs.
+   *
+   * @throws IllegalStateException with {@link #ERASURE_INSIDE_A_BATCH}
+   */
+  void refuseInsideABatch() {
+    if (SqliteWriteTransaction.heldOn(file) != null) {
+      throw new IllegalStateException(ERASURE_INSIDE_A_BATCH);
+    }
+  }
+
+  /**
+   * Runs a key's mint as one transaction: the batch's on this thread, or one of its own. Only the
+   * mint joins a batch (see the class Javadoc).
+   */
   <T> T write(Work<T> writes) throws SQLException {
     SqliteWriteTransaction joined = SqliteWriteTransaction.heldOn(file);
     if (joined != null) {

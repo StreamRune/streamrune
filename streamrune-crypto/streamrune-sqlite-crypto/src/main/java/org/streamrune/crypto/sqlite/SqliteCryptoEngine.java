@@ -56,10 +56,10 @@ import org.streamrune.sqlite.SqliteTimestamps;
  * decryption attempt take a cipher of their own. The engine checks each encryption the way decrypt
  * reads it before it returns it; a value that does not decrypt to the plaintext, or a check that
  * fails in any way, is discarded with the transient {@link CryptoOperationException}, so the
- * caller's retry encrypts again. The key a first encryption mints is committed before any cipher
- * work, so the retry loads that key and mints no second one. A decryption whose authentication tag
- * does not match is retried once with a fresh cipher before it fails with {@link
- * CryptoMappingException}. Both events are counted ({@code
+ * caller's retry encrypts again. Outside a projection batch, the key a first encryption mints is
+ * committed before any cipher work, so the retry loads that key and mints no second one (inside a
+ * batch, see below). A decryption whose authentication tag does not match is retried once with a
+ * fresh cipher before it fails with {@link CryptoMappingException}. Both events are counted ({@code
  * streamrune.crypto.encrypt_self_check_failed}; {@code streamrune.crypto.decrypt_retried}, tagged
  * {@code RECOVERED} or {@code FAILED}) through {@link Builder#metrics(StreamRuneMetrics)} and
  * logged at {@code WARN}.
@@ -86,12 +86,19 @@ import org.streamrune.sqlite.SqliteTimestamps;
  * <p><b>Inside a projection batch.</b> A projection batch or replay holds the write lock while the
  * application's updater serializes read models, so a key minted for an {@code @Encrypted} field
  * there could not be written on another connection. When the current thread runs such a batch on
- * this engine's database file, every statement of the engine runs on the batch's connection, inside
- * its transaction ({@code SqliteWriteTransaction} of {@code streamrune-sqlite}): a key minted there
- * commits with the batch, or rolls back with it together with every value encrypted under it, and a
- * failed statement aborts the batch. Inside a transaction of the application's own on the same
- * file, the engine cannot write: a mint waits {@code busy_timeout} and fails, and the message says
- * so.
+ * this engine's database file, the engine's reads and its mint run on the batch's connection,
+ * inside its transaction ({@code SqliteWriteTransaction} of {@code streamrune-sqlite}): a key
+ * minted there commits with the batch, or rolls back with it together with every value encrypted
+ * under it, and a failed statement aborts the batch. So inside a batch a minted key is not
+ * committed before the cipher work: when the encryption's check discards the value, the caller's
+ * failure rolls the batch back with the key, and the batch's rerun mints the key again, which
+ * converges. {@link #deleteKey} and {@link #reinstate} never join: inside such a batch they fail at
+ * once with {@link IllegalStateException}, because an erasure that commits or rolls back with the
+ * batch is not durable when it returns (a rollback would bring the key back, and a cache or a key
+ * backend acting on the return would act on an erasure that may never commit); run them after the
+ * batch, from a command handler or a saga step. Inside a transaction of the application's own on
+ * the same file, the engine cannot write: a mint waits {@code busy_timeout} and fails, and the
+ * message says so.
  *
  * <p><b>Schema.</b> The tables are those of {@link SqliteSchemaSeries#CRYPTO}, which this module
  * ships ({@code db/sqlite-crypto-migration}); {@code SqliteEventStoreFactory} applies it when the
@@ -213,8 +220,9 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     VersionedKey key;
     byte[] result;
     try {
-      // The mint commits before any cipher work: an encryption discarded below leaves a committed
-      // key that the caller's retry loads (no second mint).
+      // Outside a batch the mint commits before any cipher work: an encryption discarded below
+      // leaves a committed key that the caller's retry loads (no second mint). Inside a batch the
+      // mint shares the batch's fate (see the class Javadoc).
       key = keyForEncryption(subjectId);
       byte[] iv = new byte[GCM_IV_LENGTH];
       random.nextBytes(iv);
@@ -433,15 +441,20 @@ public final class SqliteCryptoEngine implements CryptoEngine {
    * the tombstone recorded, all or nothing. Crash points: before the {@code COMMIT} nothing of it
    * remains (SQLite rolls back an uncommitted transaction when the connection or the process dies)
    * and the rerun erases from the start; after it, the erasure is durable and a rerun only finds
-   * the tombstone again.
+   * the tombstone again. Never inside a projection batch on the same file (see the class Javadoc):
+   * the erasure is committed when this returns.
+   *
+   * @throws IllegalStateException inside a projection batch on this engine's database file, before
+   *     anything runs: an erasure there would commit or roll back with the batch
    */
   @Override
   public void deleteKey(SubjectId subjectId) {
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
     }
+    statements.refuseInsideABatch();
     try {
-      statements.write(
+      statements.writeAlone(
           conn -> {
             eraseKey(conn, subjectId);
             return null;
@@ -495,15 +508,20 @@ public final class SqliteCryptoEngine implements CryptoEngine {
    * <p>Deletes the subject's tombstone in one write transaction and keeps its {@code
    * erased_key_generations} row, so the next mint uses the next generation. Crash points: before
    * the {@code COMMIT} the tombstone stays and the rerun deletes it; after it, the rerun deletes
-   * nothing, and a mint after either one uses the generation above the recorded one.
+   * nothing, and a mint after either one uses the generation above the recorded one. Never inside a
+   * projection batch on the same file, like {@link #deleteKey}.
+   *
+   * @throws IllegalStateException inside a projection batch on this engine's database file, before
+   *     anything runs: an erasure there would commit or roll back with the batch
    */
   @Override
   public void reinstate(SubjectId subjectId) {
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
     }
+    statements.refuseInsideABatch();
     try {
-      statements.write(
+      statements.writeAlone(
           conn -> {
             try (PreparedStatement ps =
                 conn.prepareStatement("DELETE FROM forgotten_subjects WHERE subject_id = ?")) {

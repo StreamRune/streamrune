@@ -29,11 +29,14 @@ import org.streamrune.sqlite.SqliteTimestamps;
  * Every failure message names the subject only by that hash.
  *
  * <p><b>Writes.</b> {@link #forget} and {@link #reinstate} are one statement each, in a write
- * transaction of their own ({@code BEGIN IMMEDIATE} ... {@code COMMIT}). Inside a projection batch
- * on the same file, on the batch's thread, every statement runs inside the batch's transaction
- * instead (see {@link SqliteCryptoEngine}). Crash points: before the {@code COMMIT} nothing is
- * written and the rerun writes it; after it the tombstone (or its removal) is durable, and a rerun
- * changes nothing: a repeated forget keeps the first instant and evidence.
+ * transaction of their own ({@code BEGIN IMMEDIATE} ... {@code COMMIT}), committed before they
+ * return. Inside a projection batch on the same file they are refused at once with {@link
+ * IllegalStateException}: joined to the batch, a tombstone would commit or roll back with it, and
+ * the Vault engine destroys its transit key once {@code forget} returns. The reads join the batch's
+ * transaction there, as the engine's do (see {@link SqliteCryptoEngine}). Crash points: before the
+ * {@code COMMIT} nothing is written and the rerun writes it; after it the tombstone (or its
+ * removal) is durable, and a rerun changes nothing: a repeated forget keeps the first instant and
+ * evidence.
  *
  * <p>Safe for concurrent use: every method borrows a connection from the database's data source and
  * holds no mutable state, so the store keeps working after the {@link SqliteDatabase} handle it was
@@ -74,6 +77,14 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
     this.clock = clock;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>As {@link #forget(SubjectId, Instant)} without evidence.
+   *
+   * @throws IllegalStateException inside a projection batch on this store's database file, before
+   *     anything runs: a tombstone write there would commit or roll back with the batch
+   */
   @Override
   public void forget(SubjectId subjectId) {
     forget(subjectId, null);
@@ -83,13 +94,18 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
    * Writes the tombstone and the erased key's creation instant in one statement, so the evidence
    * never outlives or precedes its tombstone. A repeated forget changes nothing: the first
    * erasure's instant and evidence stay, and a tombstone recorded without evidence never gains
-   * some.
+   * some. Never inside a projection batch on the same file: the tombstone is committed when this
+   * returns, which the Vault engine relies on before it destroys its transit key.
+   *
+   * @throws IllegalStateException inside a projection batch on this store's database file, before
+   *     anything runs: a tombstone write there would commit or roll back with the batch
    */
   @Override
   public void forget(SubjectId subjectId, Instant keyCreatedAt) {
     requireSubject(subjectId);
+    statements.refuseInsideABatch();
     try {
-      statements.write(
+      statements.writeAlone(
           conn -> {
             try (PreparedStatement ps =
                 conn.prepareStatement(
@@ -129,11 +145,20 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Committed when this returns; never inside a projection batch on the same file.
+   *
+   * @throws IllegalStateException inside a projection batch on this store's database file, before
+   *     anything runs: a tombstone write there would commit or roll back with the batch
+   */
   @Override
   public void reinstate(SubjectId subjectId) {
     requireSubject(subjectId);
+    statements.refuseInsideABatch();
     try {
-      statements.write(
+      statements.writeAlone(
           conn -> {
             try (PreparedStatement ps =
                 conn.prepareStatement("DELETE FROM forgotten_subjects WHERE subject_id = ?")) {
