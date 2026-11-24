@@ -144,10 +144,10 @@ class JsonFieldSqlTest {
    * The expression yields what PostgreSQL's {@code ->>} yields for each JSON type: a string
    * unquoted and unescaped, a number in the spelling it is stored with, a boolean as {@code true}
    * or {@code false}; SQL NULL for JSON {@code null} and for a missing key, but the string {@code
-   * "null"} as the text {@code null}. An object or an array is its compact JSON text.
+   * "null"} as the text {@code null}.
    */
   @Test
-  void theValueIsTheTextPostgresReturnsForEveryJsonType() throws SQLException {
+  void theValueIsTheTextPostgresReturnsForEveryScalar() throws SQLException {
     insert("string", "{\"v\":\"alice\"}");
     insert("numeric-string", "{\"v\":\"5\"}");
     insert("integer", "{\"v\":5}");
@@ -166,8 +166,6 @@ class JsonFieldSqlTest {
     insert("escapes", "{\"v\":\"x\\n\\t\\r\\b\\f\\u00e9\\/\\u0001y\"}");
     insert("surrogates", "{\"v\":\"\\ud83d\\ude00\"}");
     insert("raw-non-ascii", "{\"v\":\"é～😀\"}");
-    insert("object", "{\"v\":{\"b\": 1, \"a\": [true, null]}}");
-    insert("array", "{\"v\":[1, \"x\"]}");
 
     assertThat(text("string", "v")).isEqualTo("alice");
     assertThat(text("numeric-string", "v")).isEqualTo("5");
@@ -187,6 +185,19 @@ class JsonFieldSqlTest {
     assertThat(text("escapes", "v")).isEqualTo("x\n\t\r\b\fé/\u0001y");
     assertThat(text("surrogates", "v")).isEqualTo("😀");
     assertThat(text("raw-non-ascii", "v")).isEqualTo("é～😀");
+  }
+
+  /**
+   * The documented divergence: an object or an array is its compact JSON text, keys in their stored
+   * order. PostgreSQL prints a jsonb container as {@code {"a": [true, null], "b": 1}} (a space
+   * after each comma and colon, keys in jsonb's order), so a filter or a sort on a container field
+   * differs between the two; {@code FieldEquals} promises nothing for containers.
+   */
+  @Test
+  void aContainerIsItsCompactJsonText_notPostgresJsonbLayout() throws SQLException {
+    insert("object", "{\"v\":{\"b\": 1, \"a\": [true, null]}}");
+    insert("array", "{\"v\":[1, \"x\"]}");
+
     assertThat(text("object", "v")).isEqualTo("{\"b\":1,\"a\":[true,null]}");
     assertThat(text("array", "v")).isEqualTo("[1,\"x\"]");
   }

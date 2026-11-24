@@ -4,15 +4,20 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.StreamReadConstraints;
-import com.fasterxml.jackson.core.StreamWriteFeature;
+import com.fasterxml.jackson.core.StreamWriteConstraints;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.cfg.JsonNodeFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.util.RawValue;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.lang.reflect.RecordComponent;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -91,8 +96,11 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * 19.90} as {@code 19.90}. A text column keeps whatever text it is given, so before it is stored
  * the JSON a read model serializes to is parsed and written again with every number in that plain
  * spelling (and, as {@code jsonb} does, the last of two equal keys kept). The text compared by the
- * reads, and the document read back, are then the ones PostgreSQL holds. A string holding U+0000,
- * which {@code jsonb} refuses, is refused here too, before anything is written.
+ * reads, and the document read back, are then the ones PostgreSQL holds. What {@code jsonb} refuses
+ * is refused here too, before anything is written: a string or a key holding U+0000, and a number
+ * with more than 131072 digits before the decimal point or 16383 after it. One limit is SQLite's
+ * own: its JSON parser nests at most 1000 levels deep, so a deeper document (which Jackson's
+ * default writer does not produce either) fails the table's {@code json_valid} check.
  *
  * <p><b>The checkpoint and the fence.</b> Checkpoints live in {@code readmodel_checkpoint} of the
  * same database file, the table {@link SqliteReadModelCheckpoints} reads; a repository built over
@@ -105,12 +113,15 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * replay holds it from its {@code BEGIN IMMEDIATE} to its {@code COMMIT}, so every other write to
  * the file, of any projection, through any connection, waits for it, at most the connection's
  * {@code busy_timeout}, and fails after it with an {@link EventStoreException} saying the write
- * lock was not granted. So the lock is not per projection as on PostgreSQL: a dead-letter replay of
- * one projection waits for an open batch of any other, and the other way round; {@code
- * busy_timeout} must exceed the longest batch or replay the file runs. Reads do not wait: in WAL
- * mode a read sees the last committed state. An updater must therefore write through the repository
- * it is handed; a write through this repository itself, or any other writer of the file, from
- * inside the updater waits for the updater's own transaction and fails after {@code busy_timeout}.
+ * lock was not granted. A writer that also waits for a connection, on a pool with fewer connections
+ * than writers, can instead fail when the pool's own timeout (HikariCP's {@code connectionTimeout})
+ * runs out, with the operation's connection-failure message and the pool's exception as its cause.
+ * So the lock is not per projection as on PostgreSQL: a dead-letter replay of one projection waits
+ * for an open batch of any other, and the other way round; {@code busy_timeout} must exceed the
+ * longest batch or replay the file runs. Reads do not wait: in WAL mode a read sees the last
+ * committed state. An updater must therefore write through the repository it is handed; a write
+ * through this repository itself, or any other writer of the file, from inside the updater waits
+ * for the updater's own transaction and fails after {@code busy_timeout}.
  *
  * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}. No mode makes
  * an effect outside this database exactly-once.
@@ -123,10 +134,17 @@ public final class SqliteProjectionRepository
   /**
    * The projection names this repository stores read models under: lower-case ASCII letters, digits
    * and underscores, starting with a letter or an underscore, at most 58 characters, as on
-   * PostgreSQL, so a name valid on one backend is valid on the other. The name is used exactly as
+   * PostgreSQL, so a name valid on one backend is valid on the other, except a name starting with
+   * {@code sqlite_}, which SQLite reserves ({@link #RESERVED_PREFIX}). The name is used exactly as
    * given, so two names always have two tables, and it is safe to splice into a statement.
    */
   private static final Pattern TABLE_NAMED_PROJECTION = Pattern.compile("[a-z_][a-z0-9_]{0,57}");
+
+  /**
+   * The prefix SQLite reserves for its own schema objects: a projection named with it is refused at
+   * registration, where PostgreSQL would accept it.
+   */
+  private static final String RESERVED_PREFIX = "sqlite_";
 
   private static final Set<String> DIRECT_COLUMNS = Set.of("id", "updated_at", "version");
 
@@ -170,9 +188,10 @@ public final class SqliteProjectionRepository
       "SELECT type, tbl_name FROM sqlite_schema WHERE name = ? COLLATE NOCASE";
 
   /**
-   * Re-reads the JSON a read model serializes to: every decimal number kept as written (a {@code
-   * BigDecimal}, trailing zeros included), no limit on the length of a string or a number, since
-   * PostgreSQL has none this short.
+   * Re-reads the JSON a read model serializes to and writes it back: every decimal number kept as
+   * written (a {@code BigDecimal}, trailing zeros included), and no limit on the length of a
+   * string, a number or a key, or on the nesting depth: PostgreSQL's {@code jsonb} has none this
+   * short. Its limits on numbers are applied by {@link #jsonbRefusal}.
    */
   private static final ObjectMapper JSONB =
       JsonMapper.builder(
@@ -181,12 +200,21 @@ public final class SqliteProjectionRepository
                       StreamReadConstraints.builder()
                           .maxStringLength(Integer.MAX_VALUE)
                           .maxNumberLength(Integer.MAX_VALUE)
+                          .maxNameLength(Integer.MAX_VALUE)
+                          .maxNestingDepth(Integer.MAX_VALUE)
                           .build())
+                  .streamWriteConstraints(
+                      StreamWriteConstraints.builder().maxNestingDepth(Integer.MAX_VALUE).build())
                   .build())
           .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
           .disable(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES)
-          .enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
           .build();
+
+  /** The most digits PostgreSQL's {@code numeric} stores before the decimal point. */
+  private static final int NUMERIC_INTEGER_DIGITS = 131_072;
+
+  /** The most digits PostgreSQL's {@code numeric} stores after the decimal point. */
+  private static final int NUMERIC_FRACTION_DIGITS = 16_383;
 
   private final DataSource dataSource;
   private final Path file;
@@ -855,13 +883,13 @@ public final class SqliteProjectionRepository
   /**
    * The JSON stored for {@code readModel}: what {@link #objectMapper} writes, parsed and written
    * again as PostgreSQL's {@code jsonb} would print it (numbers in plain notation with their scale,
-   * the last of two equal keys). A string or a key holding U+0000 is refused, as {@code jsonb}
-   * refuses it.
+   * the last of two equal keys). A document {@code jsonb} refuses is refused ({@link
+   * #jsonbRefusal}).
    */
   private String toJson(
       Object readModel, String failure, ProjectionName projectionName, String id) {
     JsonNode tree = toTree(readModel, failure, projectionName, id);
-    EventStoreException refusal = nulRefusal(tree, failure, projectionName, id);
+    EventStoreException refusal = jsonbRefusal(tree, failure, projectionName, id);
     if (refusal != null) {
       throw refusal;
     }
@@ -878,22 +906,30 @@ public final class SqliteProjectionRepository
     }
   }
 
-  /** The refusal of a tree holding U+0000 in a string or a key, or {@code null}. */
-  private static EventStoreException nulRefusal(
+  /**
+   * The refusal of a tree PostgreSQL's {@code jsonb} cannot store, or {@code null}: a string or a
+   * key holding U+0000, or a number with more digits than {@code numeric} holds (131072 before the
+   * decimal point, 16383 after), which PostgreSQL refuses as "value overflows numeric format".
+   */
+  private static EventStoreException jsonbRefusal(
       JsonNode tree, String failure, ProjectionName projectionName, String id) {
-    return holdsNul(tree)
-        ? new EventStoreException(
-            failure
-                + shown(projectionName, id)
-                + ": a string holds U+0000, which PostgreSQL jsonb cannot store")
-        : null;
+    String reason =
+        holdsNul(tree)
+            ? "a string holds U+0000, which PostgreSQL jsonb cannot store"
+            : overflowsNumeric(tree)
+                ? "a number has more digits than PostgreSQL's numeric stores (131072 before the"
+                    + " decimal point, 16383 after)"
+                : null;
+    return reason == null
+        ? null
+        : new EventStoreException(failure + shown(projectionName, id) + ": " + reason);
   }
 
-  /** {@code tree} as the text stored in {@code data}. */
+  /** {@code tree} as the text stored in {@code data}: every decimal in plain notation. */
   private static String toText(
       JsonNode tree, String failure, ProjectionName projectionName, String id) {
     try {
-      return JSONB.writeValueAsString(tree);
+      return JSONB.writeValueAsString(plainNumbers(tree));
     } catch (JsonProcessingException e) {
       throw new EventStoreException(failure + shown(projectionName, id), e);
     }
@@ -903,8 +939,7 @@ public final class SqliteProjectionRepository
     if (node.isTextual()) {
       return node.textValue().indexOf('\0') >= 0;
     }
-    for (var fields = node.fields(); fields.hasNext(); ) {
-      var field = fields.next();
+    for (var field : node.properties()) {
       if (field.getKey().indexOf('\0') >= 0 || holdsNul(field.getValue())) {
         return true;
       }
@@ -917,6 +952,51 @@ public final class SqliteProjectionRepository
       }
     }
     return false;
+  }
+
+  private static boolean overflowsNumeric(JsonNode node) {
+    if (node.isBigDecimal()) {
+      BigDecimal value = node.decimalValue();
+      return value.scale() > NUMERIC_FRACTION_DIGITS
+          || (value.signum() != 0
+              && (long) value.precision() - value.scale() > NUMERIC_INTEGER_DIGITS);
+    }
+    if (node.isBigInteger()) {
+      return node.bigIntegerValue().abs().toString().length() > NUMERIC_INTEGER_DIGITS;
+    }
+    for (JsonNode child : node) {
+      if (overflowsNumeric(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * {@code node} with every decimal replaced by its plain text as PostgreSQL prints a {@code
+   * numeric}: no exponent, the scale it was written with, at least zero fraction digits ({@code
+   * 1.0E-4} is {@code 0.00010}, {@code 1E+3} is {@code 1000}, {@code -0.0} is {@code 0.0}).
+   * Containers are changed in place.
+   */
+  private static JsonNode plainNumbers(JsonNode node) {
+    if (node.isBigDecimal()) {
+      BigDecimal value = node.decimalValue();
+      BigDecimal plain =
+          value.signum() == 0
+              ? BigDecimal.ZERO.setScale(Math.max(0, value.scale()))
+              : value.scale() < 0 ? value.setScale(0) : value;
+      return JsonNodeFactory.instance.rawValueNode(new RawValue(plain.toPlainString()));
+    }
+    if (node instanceof ObjectNode object) {
+      for (var field : new ArrayList<>(object.properties())) {
+        object.set(field.getKey(), plainNumbers(field.getValue()));
+      }
+    } else if (node instanceof ArrayNode array) {
+      for (int i = 0; i < array.size(); i++) {
+        array.set(i, plainNumbers(array.get(i)));
+      }
+    }
+    return node;
   }
 
   private <T> T fromJson(
@@ -1073,6 +1153,15 @@ public final class SqliteProjectionRepository
    */
   private static String tableName(ProjectionName projectionName) {
     String name = projectionName.value();
+    if (name.startsWith(RESERVED_PREFIX)) {
+      throw new IllegalArgumentException(
+          "Projection name '"
+              + LogSanitizer.sanitizeForLog(name)
+              + "' cannot name a read-model table on SQLite: SQLite reserves every name that"
+              + " starts with 'sqlite_' for its own tables, so '"
+              + LogSanitizer.sanitizeForLog(name)
+              + "_view' cannot be created. Rename the projection.");
+    }
     if (!TABLE_NAMED_PROJECTION.matcher(name).matches()) {
       throw new IllegalArgumentException(
           "Projection name '"
@@ -1089,7 +1178,8 @@ public final class SqliteProjectionRepository
 
   /**
    * Rejects, at registration, a projection name this repository cannot store read models under: one
-   * outside {@code [a-z_][a-z0-9_]{0,57}}, the rule PostgreSQL's repository applies too.
+   * outside {@code [a-z_][a-z0-9_]{0,57}}, the rule PostgreSQL's repository applies too, and one
+   * starting with {@code sqlite_}, a prefix SQLite reserves for its own tables.
    *
    * @throws IllegalArgumentException if {@code projectionName} is null or outside the rule
    */
@@ -1494,7 +1584,7 @@ public final class SqliteProjectionRepository
     private String storedJson(
         Object readModel, String failure, ProjectionName projectionName, String id) {
       JsonNode tree = toTree(readModel, failure, projectionName, id);
-      EventStoreException refusal = nulRefusal(tree, failure, projectionName, id);
+      EventStoreException refusal = jsonbRefusal(tree, failure, projectionName, id);
       if (refusal != null) {
         throw abort(refusal);
       }

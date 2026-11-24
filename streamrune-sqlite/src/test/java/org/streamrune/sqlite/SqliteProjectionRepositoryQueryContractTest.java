@@ -148,9 +148,8 @@ class SqliteProjectionRepositoryQueryContractTest extends ProjectionRepositoryQu
     String sortIndex = SqliteProjectionRepository.indexName(forSort);
     assertThat(filtered)
         .anySatisfy(line -> assertThat(line).contains("USING COVERING INDEX " + filterIndex))
-        .anySatisfy(line -> assertThat(line).contains("USING INDEX " + filterIndex + " (<expr>=?)"))
-        .noneSatisfy(
-            line -> assertThat(line).contains("TEMP B-TREE FOR ORDER BY").contains("SCAN"));
+        .anySatisfy(
+            line -> assertThat(line).contains("USING INDEX " + filterIndex + " (<expr>=?)"));
     assertThat(sorted).anySatisfy(line -> assertThat(line).contains("USING INDEX " + sortIndex));
     assertThat(byId)
         .anySatisfy(

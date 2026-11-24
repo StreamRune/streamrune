@@ -95,11 +95,13 @@ final class SqliteSetup {
   /**
    * Refuses a connection whose settings differ from what StreamRune requires: {@code
    * journal_mode=WAL}, {@code synchronous=FULL} (or the stricter {@code EXTRA}), {@code
-   * foreign_keys=ON}, a {@code busy_timeout} above 0 and {@code transaction_mode=IMMEDIATE}.
+   * foreign_keys=ON}, a {@code busy_timeout} above 0 and {@code transaction_mode=IMMEDIATE}; and a
+   * database file whose text {@code encoding} is not UTF-8.
    *
    * @throws IllegalStateException naming the first wrong setting, its value and the expected value
    */
   static void verify(SQLiteConnection connection) throws SQLException {
+    refuseEncodingOtherThanUtf8(connection);
     String journalMode = queryString(connection, "PRAGMA journal_mode");
     if (!"wal".equalsIgnoreCase(journalMode)) {
       throw wrong("journal_mode", journalMode, "journal_mode=WAL", "journal_mode=WAL");
@@ -133,6 +135,26 @@ final class SqliteSetup {
           transactionMode.name(),
           "transaction_mode=IMMEDIATE",
           "transaction_mode=IMMEDIATE");
+    }
+  }
+
+  /**
+   * Refuses a database file whose text is not stored as UTF-8 ({@code PRAGMA encoding}). The
+   * read-model stores compare text byte-wise ({@code COLLATE BINARY}), which is code-point order,
+   * PostgreSQL's {@code COLLATE "C"}, only in UTF-8; in a UTF-16 file a character beyond U+FFFF
+   * would sort before U+E000..U+FFFF. A file's encoding is fixed when the file is created, so no
+   * connection setting can change it.
+   */
+  private static void refuseEncodingOtherThanUtf8(SQLiteConnection connection) throws SQLException {
+    String encoding = queryString(connection, "PRAGMA encoding");
+    if (!"UTF-8".equalsIgnoreCase(encoding)) {
+      throw new IllegalStateException(
+          "The SQLite database setting encoding is "
+              + LogSanitizer.sanitizeForLog(encoding.toUpperCase(Locale.ROOT))
+              + ", but StreamRune requires encoding=UTF-8: the stores compare text byte-wise, which"
+              + " is code-point order (PostgreSQL's COLLATE \"C\") only in UTF-8. A database file's"
+              + " encoding is fixed when the file is created, so use a database file created with"
+              + " UTF-8, SQLite's default.");
     }
   }
 

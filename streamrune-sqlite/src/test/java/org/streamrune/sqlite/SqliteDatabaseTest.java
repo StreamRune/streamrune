@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CyclicBarrier;
@@ -68,6 +69,30 @@ class SqliteDatabaseTest {
         .isNotInstanceOf(SqliteGuardException.class)
         .hasMessageContaining(setting)
         .hasMessageContaining(expected);
+  }
+
+  /**
+   * A database file stored as UTF-16 is refused before the guard: byte-wise text order equals
+   * code-point order only in UTF-8, and a file's encoding cannot be changed once it exists.
+   */
+  @Test
+  void aDatabaseFileStoredAsUtf16IsRefusedNamingTheEncoding() throws Exception {
+    Path db = dir.resolve("utf16.sqlite");
+    try (Connection raw = java.sql.DriverManager.getConnection("jdbc:sqlite:" + db);
+        Statement st = raw.createStatement()) {
+      st.execute("PRAGMA encoding = 'UTF-16le'");
+      st.execute("CREATE TABLE t (x TEXT)");
+    }
+
+    assertThatThrownBy(() -> SqliteDatabase.open(TestDatabases.dataSource(db)))
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessage(
+            "The SQLite database setting encoding is UTF-16LE, but StreamRune requires"
+                + " encoding=UTF-8: the stores compare text byte-wise, which is code-point order"
+                + " (PostgreSQL's COLLATE \"C\") only in UTF-8. A database file's encoding is fixed"
+                + " when the file is created, so use a database file created with UTF-8, SQLite's"
+                + " default.");
+    assertThat(Files.exists(lockFileOf(db))).isFalse();
   }
 
   @Test

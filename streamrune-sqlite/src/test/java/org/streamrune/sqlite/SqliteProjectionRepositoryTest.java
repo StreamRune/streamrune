@@ -252,6 +252,25 @@ class SqliteProjectionRepositoryTest {
     }
   }
 
+  /**
+   * SQLite reserves every name that starts with sqlite_: refused at registration, not first use.
+   */
+  @Test
+  void aProjectionNameSqliteReservesIsRefusedAtRegistration() {
+    var reserved = ProjectionName.of("sqlite_stats");
+
+    assertThatThrownBy(() -> repo.checkProjectionName(reserved))
+        .isExactlyInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "Projection name 'sqlite_stats' cannot name a read-model table on SQLite: SQLite"
+                + " reserves every name that starts with 'sqlite_' for its own tables, so"
+                + " 'sqlite_stats_view' cannot be created. Rename the projection.");
+    assertThatThrownBy(() -> repo.findAll(reserved, TestView.class))
+        .isExactlyInstanceOf(IllegalArgumentException.class);
+    assertThatCode(() -> repo.checkProjectionName(ProjectionName.of("sqlitestats")))
+        .doesNotThrowAnyException();
+  }
+
   @Test
   void anIdLongerThan255CharactersIsRefusedAsOnPostgres() {
     var name = ProjectionName.of("long_ids");
@@ -292,6 +311,55 @@ class SqliteProjectionRepositoryTest {
     Map<String, Object> read = repo.findById(name, "n", Map.class).orElseThrow();
     assertThat(read.get("double")).isEqualTo(12345678);
     assertThat(read.get("text")).isEqualTo("é\n😀");
+  }
+
+  /**
+   * The re-read of the written JSON has none of Jackson's default limits PostgreSQL lacks: a key of
+   * 60 000 characters, a document nested as deep as SQLite's JSON parser allows (1000), and numbers
+   * up to numeric's own bounds (131072 digits before the point, 16383 after) are stored, printed as
+   * PostgreSQL prints them; a number beyond those bounds is refused, as PostgreSQL refuses it
+   * ("value overflows numeric format").
+   */
+  @Test
+  void documentsWithinJsonbsLimitsAreStoredAndNumbersBeyondNumericAreRefused() throws Exception {
+    var name = ProjectionName.of("limits");
+    String longKey = "k".repeat(60_000);
+    repo.save(name, "key", Map.of(longKey, "v"));
+    assertThat(rawData("limits_view", "key")).isEqualTo("{\"" + longKey + "\":\"v\"}");
+
+    // SQLite's JSON parser nests at most 1000 deep (the document's own object included), a limit
+    // of SQLite's that PostgreSQL does not share; Jackson's re-read adds none below it.
+    String deep = "[".repeat(999) + "]".repeat(999);
+    repo.save(name, "deep", Map.of("v", new RawValue(deep)));
+    assertThat(rawData("limits_view", "deep")).isEqualTo("{\"v\":" + deep + "}");
+    String tooDeep = "[".repeat(1_000) + "]".repeat(1_000);
+    assertThatThrownBy(() -> repo.save(name, "too_deep", Map.of("v", new RawValue(tooDeep))))
+        .isExactlyInstanceOf(EventStoreException.class)
+        .hasMessage("Failed to save projection: limits/too_deep")
+        .hasRootCauseMessage(
+            "[SQLITE_CONSTRAINT_CHECK] A CHECK constraint failed (CHECK constraint failed:"
+                + " json_valid(data))");
+
+    repo.save(name, "big", Map.of("v", new RawValue("1E+10000")));
+    assertThat(rawData("limits_view", "big")).isEqualTo("{\"v\":1" + "0".repeat(10_000) + "}");
+    repo.save(name, "small", Map.of("v", new RawValue("1E-10000")));
+    assertThat(rawData("limits_view", "small")).isEqualTo("{\"v\":0." + "0".repeat(9_999) + "1}");
+    repo.save(name, "edge", Map.of("v", new RawValue("1E+131071"), "w", new RawValue("1E-16383")));
+    repo.save(name, "zero", Map.of("v", new RawValue("0E+200000")));
+    assertThat(rawData("limits_view", "zero")).isEqualTo("{\"v\":0}");
+    repo.save(name, "zero_scale", Map.of("v", new RawValue("-0E-3")));
+    assertThat(rawData("limits_view", "zero_scale")).isEqualTo("{\"v\":0.000}");
+    repo.save(name, "integer", Map.of("v", new RawValue("9".repeat(131_072))));
+
+    for (String overflowing :
+        List.of("1E+131072", "1E-16384", "1.5E-16383", "0E-16384", "9".repeat(131_073))) {
+      assertThatThrownBy(() -> repo.save(name, "o", Map.of("v", new RawValue(overflowing))))
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessage(
+              "Failed to save projection: limits/o: a number has more digits than PostgreSQL's"
+                  + " numeric stores (131072 before the decimal point, 16383 after)");
+    }
+    assertThat(rawData("limits_view", "o")).isNull();
   }
 
   @Test
