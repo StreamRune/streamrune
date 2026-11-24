@@ -285,6 +285,16 @@ The consequences:
   not join: a write through the event store or any other store of the same file, or from a thread
   the updater started, waits for the batch's own transaction and fails after `busy_timeout`; made on
   the updater's own thread, the failure says that the thread's own batch holds the write lock.
+- **A write-lock timeout inside a batch is a failed batch, and the projection's error strategy
+  decides what follows.** A batch that does not get the write lock within `busy_timeout`, or whose
+  updater makes a write that does not, fails like any other batch. `HALT` retries it from the
+  checkpoint with backoff and stops the runner once it has failed a bounded number of times in a
+  row. `DLQ` treats it as transient: it retries from the checkpoint with backoff and dead-letters
+  the range only when the retries are used up; `ProjectionDeadLetterReplayer` applies it later.
+  `SKIP` moves the checkpoint past the batch at once, whatever the failure, and logs one WARN: the
+  batch's events are then missing from the read model. On PostgreSQL a store failure inside a batch
+  is rare; on SQLite a write-lock timeout is how contention shows. So do not use `SKIP` for a
+  projection whose read model must be complete; use `DLQ` or `HALT`.
 - **Global offsets stay gap-free and appear in commit order**, as on PostgreSQL: the event store
   keeps a one-row counter that each append advances inside its own transaction.
 - **Saga fencing uses the write lock.** The forward fence reads the saga row inside the append's own

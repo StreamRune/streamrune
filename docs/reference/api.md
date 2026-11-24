@@ -6,8 +6,11 @@ parameters and return values), and **extension points** (interfaces you optional
 snapshotting, schema migration, interception, and subscriptions). The `StreamRune` facade in
 `streamrune-runtime` is a bootstrap convenience that wires a command bus, an event store and
 projections through one builder; the complete option set of the command bus is
-`VirtualThreadCommandBus.Builder`, which the integrations use. Persistence is provided by `streamrune-postgres` (`PostgresEventStore` /
-`PostgresEventStoreFactory`). Types and members marked `@Internal` are public only because another
+`VirtualThreadCommandBus.Builder`, which the integrations use. Persistence is provided by a backend:
+`streamrune-postgres` (`PostgresEventStore` / `PostgresEventStoreFactory`), the default, or
+`streamrune-sqlite`, which runs on one SQLite file for one application instance (see the
+[SQLite guide](../guide/sqlite.md)). Both are opened through the backend SPI of `streamrune-core`
+([4.8](#48-storage-backends-streamrunebackend-and-backendstores)). Types and members marked `@Internal` are public only because another
 StreamRune module uses them and are not part of the public API; see
 [API stability](../../README.md#api-stability).
 
@@ -691,6 +694,35 @@ Use the endpoint to tell a connected client that an aggregate changed; a consume
 every event is a projection. Applications do not call `publish` for the shipped endpoint — the feed
 already does, and a second publisher would write every frame twice.
 
+### 4.8 Storage backends: `StreamRuneBackend` and `BackendStores`
+
+The package `org.streamrune.core.backend` is the seam between StreamRune and the storage
+technology it runs on. It names core and JDK types only, so a plain-Java application opens a
+backend without an integration module; the integrations use the same types.
+
+| Type | What it is |
+|---|---|
+| `StreamRuneBackend` | One storage technology: `name()` (`postgres` or `sqlite`, the value of `streamrune.backend`), `verify(dataSource)`, which fails fast on a database that is not the backend's, and `open(context)`. Implemented by `PostgresBackend` (`streamrune-postgres`) and `SqliteBackend` (`streamrune-sqlite`). |
+| `BackendContext` | What a bundle is opened with: the `DataSource`, the `CryptoEngine` (or `null`), the clock, metrics, tracing, and whether the stores migrate and validate their schema. |
+| `BackendStores` | The bundle of stores over one `DataSource`, one accessor per storage port: `eventStoreFactory(options)`, `offsetStore()`, `defaultReadModelStore()`, `sagaStore()`, `sagaDeadLetterStore()`, `outboxStore(options)`, `commandInbox()`, `deadLetterQueue()`, `projectionDeadLetterStore()`, the audit stores and queries, `snapshotPurger(streamsForSubject)` and `leadership(leaseTtl)`. `AutoCloseable`: the application closes it when it stops. |
+| `EventStoreOptions`, `OutboxOptions` | What the two configurable stores are built with: the type registry, upcasters, the outbox and the command inbox written inside each append; the outbox claim lease and ordering mode. |
+| `BackendOptionException` | An option value a backend cannot honour, naming the option. |
+
+```java
+StreamRuneBackend backend = new SqliteBackend();          // or new PostgresBackend()
+backend.verify(dataSource);
+BackendStores stores = backend.open(new BackendContext(
+    dataSource, cryptoEngine, Clock.systemUTC(), StreamRuneMetrics.NOOP, StreamRuneTracing.NOOP,
+    true,    // migrate the event-store series
+    true,    // migrate the read-model series
+    true));  // validate the schema
+EventStore eventStore = stores.eventStoreFactory(options).create();
+```
+
+A store handed to another store of the bundle (the outbox and the inbox in `EventStoreOptions`)
+must come from the same bundle: the event store writes it in the transaction of its own append. The
+[SQLite guide](../guide/sqlite.md#plain-java) wires a whole application this way.
+
 ---
 
 ## Section 5: Configuration — StreamRune.builder()
@@ -759,3 +791,4 @@ The Javadoc is organized by module:
 - `streamrune-core` — all contracts, value types, and extension point interfaces
 - `streamrune-runtime` — `StreamRune` facade, `VirtualThreadCommandBus`, and built-in interceptors
 - `streamrune-postgres` — `PostgresEventStore`, `PostgresEventStoreFactory`, and Postgres-specific types
+- `streamrune-sqlite` — `SqliteBackend`, the `SqliteDatabase` handle, and the SQLite stores
