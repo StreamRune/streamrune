@@ -9,6 +9,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -98,10 +99,11 @@ import org.streamrune.sqlite.SqliteBackend;
  * <p>The test asserts the state each part leaves in the file: the events (one, under an idempotency
  * key sent twice), the read model and its checkpoint, the saga row, the outbox row through the
  * {@link OutboxStore} API, and, after a GDPR forget run from application code, the shredded
- * {@code @Encrypted} field of both the read model and the event. While the first application runs,
- * another process cannot open the file. Opened again with a new pool and a new bundle, the
- * projection resumes from its checkpoint without applying any earlier event again, and the saga and
- * outbox state is what the first run left.
+ * {@code @Encrypted} field of both the read model and the event, with one erasure row for the
+ * subject in the audit log. While either application runs, another process cannot open the file.
+ * The saga subscription's checkpoint is on the file between the two runs. Opened again with a new
+ * pool and a new bundle, the projection resumes from its checkpoint without applying any earlier
+ * event again, and the saga and outbox state is what the first run left.
  */
 @Timeout(180)
 class SqliteEndToEndIT {
@@ -111,6 +113,7 @@ class SqliteEndToEndIT {
   private static final ProjectionName SUMMARY = ProjectionName.of("customer_summary");
   private static final SagaType WELCOME_SAGA = SagaType.fromClass(WelcomeSagaState.class);
   private static final Duration PATIENCE = Duration.ofSeconds(30);
+  private static final String WELCOME_SUBSCRIPTION = "welcome-saga";
 
   private static final EventTypeRegistry TYPES =
       SimpleEventTypeRegistry.builder()
@@ -398,7 +401,7 @@ class SqliteEndToEndIT {
               .build();
       sagaSubscription =
           new PollingEventSubscription(
-              SubscriptionName.of("welcome-saga"),
+              SubscriptionName.of(WELCOME_SUBSCRIPTION),
               eventStore,
               stores.offsetStore(),
               sagaRunner.asEventListener(),
@@ -438,6 +441,10 @@ class SqliteEndToEndIT {
       return readModels.checkpoints().getLastOffset(SUMMARY);
     }
 
+    GlobalOffset sagaCheckpoint() {
+      return stores.offsetStore().getLastOffset(ProjectionName.of(WELCOME_SUBSCRIPTION));
+    }
+
     Optional<LoadedSaga<WelcomeSagaState>> saga(String customerId) {
       return stores.sagaStore().load(sagaIdOf(customerId), WELCOME_SAGA, WelcomeSagaState.class);
     }
@@ -470,6 +477,7 @@ class SqliteEndToEndIT {
     Path file = directory.resolve("app.sqlite");
     long adaRegistration;
     long checkpointAtClose;
+    long sagaCheckpointAtClose;
     OutboxEntryId adaEntry = OutboxEntryId.of("registered-c-ada");
 
     try (SqliteApplication app = new SqliteApplication(file)) {
@@ -543,18 +551,45 @@ class SqliteEndToEndIT {
       assertThat(
               scalar(
                   app.pool,
-                  "SELECT count(*) FROM audit_log WHERE command_type = ? AND outcome = 'SUCCESS'",
-                  "GDPR_FORGET"))
-          .as("the erasure is on record")
-          .isNotEqualTo("0");
+                  "SELECT count(*) FROM audit_log WHERE command_type = ? AND outcome = 'SUCCESS'"
+                      + " AND aggregate_id = ? AND error_message IS NULL",
+                  "GDPR_FORGET",
+                  SubjectId.of("c-ada").redacted()))
+          .as("the erasure of c-ada is on record once, under the subject's hash")
+          .isEqualTo("1");
 
       checkpointAtClose = app.checkpoint().value();
       assertThat(checkpointAtClose).isEqualTo(app.eventStore.lastGlobalOffset().value());
+      await()
+          .atMost(PATIENCE)
+          .untilAsserted(
+              () ->
+                  assertThat(app.sagaCheckpoint())
+                      .as("the saga subscription reaches the head of the event store")
+                      .isEqualTo(app.eventStore.lastGlobalOffset()));
+      sagaCheckpointAtClose = app.sagaCheckpoint().value();
+    }
+
+    // The saga subscription's checkpoint is on the file, read before a new subscription can move
+    // it: a lost checkpoint would be re-delivered from the start and absorbed by the completed
+    // saga and the command inbox, so the welcome count alone cannot show it.
+    try (Connection closedFile = DriverManager.getConnection(SqliteTestDatabases.url(file));
+        PreparedStatement statement =
+            closedFile.prepareStatement(
+                "SELECT last_offset FROM subscription_checkpoint WHERE projection_name = ?")) {
+      statement.setString(1, WELCOME_SUBSCRIPTION);
+      try (ResultSet rows = statement.executeQuery()) {
+        assertThat(rows.next()).as("the saga subscription's checkpoint row").isTrue();
+        assertThat(rows.getLong(1)).isEqualTo(sagaCheckpointAtClose);
+      }
     }
 
     // Reopen: a new pool and a new bundle on the same file.
     try (SqliteApplication app = new SqliteApplication(file)) {
+      // The reopened bundle holds the guard again.
+      SingleInstanceMultiReadModelStoreScenario.assertGuardHeld(file, "the reopened file");
       assertThat(app.checkpoint().value()).isEqualTo(checkpointAtClose);
+      assertThat(app.sagaCheckpoint().value()).isGreaterThanOrEqualTo(sagaCheckpointAtClose);
       assertThat(app.saga("c-ada"))
           .hasValueSatisfying(
               saga -> {
@@ -602,14 +637,16 @@ class SqliteEndToEndIT {
     }
   }
 
-  /** The first column of the one row {@code sql} selects for {@code parameter}, as text. */
-  private static String scalar(DataSource database, String sql, Object parameter)
+  /** The first column of the one row {@code sql} selects for {@code parameters}, as text. */
+  private static String scalar(DataSource database, String sql, Object... parameters)
       throws SQLException {
     try (Connection connection = database.getConnection();
         PreparedStatement statement = connection.prepareStatement(sql)) {
-      statement.setObject(1, parameter);
+      for (int i = 0; i < parameters.length; i++) {
+        statement.setObject(i + 1, parameters[i]);
+      }
       try (ResultSet rows = statement.executeQuery()) {
-        assertThat(rows.next()).as("one row for %s", parameter).isTrue();
+        assertThat(rows.next()).as("one row for %s", List.of(parameters)).isTrue();
         return rows.getString(1);
       }
     }
