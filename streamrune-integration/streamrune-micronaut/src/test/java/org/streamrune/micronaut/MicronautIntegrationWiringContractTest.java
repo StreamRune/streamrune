@@ -428,7 +428,7 @@ class MicronautIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   @Override
-  protected DataSource postgresql() {
+  protected DataSource database() {
     synchronized (MicronautIntegrationWiringContractTest.class) {
       if (postgres == null) {
         postgres = new PostgreSQLContainer(PostgresTestImage.NAME);

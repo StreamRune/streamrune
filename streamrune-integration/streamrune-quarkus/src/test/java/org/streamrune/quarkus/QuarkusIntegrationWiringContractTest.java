@@ -503,7 +503,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   @Override
-  protected DataSource postgresql() {
+  protected DataSource database() {
     synchronized (QuarkusIntegrationWiringContractTest.class) {
       if (postgres == null) {
         postgres = new PostgreSQLContainer(PostgresTestImage.NAME);

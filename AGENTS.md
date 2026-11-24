@@ -201,8 +201,13 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   without a lease, runners stopped before the database closes, the bound defaults, the dead-letter
   rules the command bus and its retry runner answer a keyed re-send by. Each
   integration's `*IntegrationWiringContractTest` starts its own container through the contract's
-  hooks, on the test kit's in-memory stores or on PostgreSQL. A behaviour that crosses the three
-  integrations gets a contract test first; the beans such a test adds are in `ContractBeans`.
+  hooks, on the test kit's in-memory stores or on PostgreSQL, and its
+  `*SqliteIntegrationWiringContractTest` runs the same contract on SQLite (`supportsMultiInstance()`
+  answers `false` there, leaving out what needs several instances on one database). The read-model
+  routing scenarios are `MultiReadModelStoreScenario` (two PostgreSQL databases, real leases) and
+  `SingleInstanceMultiReadModelStoreScenario` (two SQLite files, no leadership). A behaviour that
+  crosses the three integrations gets a contract test first; the beans such a test adds are in
+  `ContractBeans`.
 - **Durable multi-step flows.** A flow that writes in more than one step (an append and an offset, a
   claim and a publish, a saga step and its command) lists its crash points, one after each write,
   and has a test per crash point that stops the flow there, runs it again and asserts that it

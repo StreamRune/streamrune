@@ -95,8 +95,14 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * <p>An application starts without a database unless its rule needs one: the test kit's in-memory
  * event store, and the beans of {@link ContractBeans} in the place of the stores the rule involves.
  * The health check, the shutdown order and the backend's stores ({@code BackendStores}, the default
- * read-model store's alias, an outbox built from the stores) run on PostgreSQL ({@link
- * #postgresql()}).
+ * read-model store's alias, an outbox built from the stores) run on a database of the backend the
+ * subclass selects ({@link #database()}): PostgreSQL, the default backend, or SQLite.
+ *
+ * <p>A subclass on a backend that serves one application instance per database, SQLite, answers
+ * {@link #supportsMultiInstance()} with {@code false}: the parts of a rule that need what only a
+ * backend serving several instances has (a real single-active-consumer lease, with its epochs above
+ * 0, LISTEN/NOTIFY, advisory locks, a second process on the database) are then left out, each where
+ * its test says so, and what the single-instance backend does in their place is asserted.
  */
 public abstract class IntegrationWiringContract {
 
@@ -111,9 +117,10 @@ public abstract class IntegrationWiringContract {
    *
    * <p>Without a {@code dataSource} the application has no database: its event store and offset
    * store are the test kit's in-memory ones, declared as an application declares its own. With one,
-   * it is the application's {@code DataSource}: the integration builds its PostgreSQL event store
-   * and stores on it, and the container closes it when the application closes, at the point where
-   * it closes an application's connection pool.
+   * it is the application's {@code DataSource}: the integration builds the selected backend's event
+   * store and stores on it, and the container closes it when the application closes, at the point
+   * where it closes an application's connection pool. A subclass on another backend than {@code
+   * postgres} selects it ({@code streamrune.backend}) for each start on a database.
    *
    * @param dataSource the application's {@code DataSource}, or {@code null} for an application
    *     without a database
@@ -128,11 +135,37 @@ public abstract class IntegrationWiringContract {
       DataSource dataSource, Map<String, String> properties, Set<Class<?>> extraBeans);
 
   /**
-   * A {@code DataSource} on an empty PostgreSQL database, one that no earlier call returned.
+   * A {@code DataSource} on an empty database of the backend this subclass runs on, one that no
+   * earlier call returned: a PostgreSQL database, or a SQLite database file with the connection
+   * settings the SQLite backend requires.
    *
    * @return the data source
    */
-  protected abstract DataSource postgresql();
+  protected abstract DataSource database();
+
+  /**
+   * The name of the backend the applications started on {@link #database()} run on, as their {@code
+   * BackendStores} bean reports it.
+   *
+   * @return {@code postgres}, the default backend, unless a subclass selects another
+   */
+  protected String backendName() {
+    return "postgres";
+  }
+
+  /**
+   * Whether the backend this subclass runs on serves several application instances on one database.
+   * PostgreSQL does: a real single-active-consumer lease with epochs above 0, LISTEN/NOTIFY,
+   * advisory locks, a second process on the same database. SQLite does not: its leadership is
+   * {@code NOOP} (no lease is taken, every epoch is 0), it polls, and its instance guard refuses a
+   * second process. Where this answers {@code false}, a test leaves out the part of its rule that
+   * needs several instances, and says so.
+   *
+   * @return {@code true} unless a subclass runs on a single-instance backend
+   */
+  protected boolean supportsMultiInstance() {
+    return true;
+  }
 
   /**
    * The name under which this integration's health endpoint reports the StreamRune check, as the
@@ -553,6 +586,10 @@ public abstract class IntegrationWiringContract {
    * single-active-consumer lease is on by default and the only replica holds it: {@code LEADING}
    * (the runner reports {@code STANDBY} until it takes the lease). With the lease switched off the
    * runner takes none and delivers on every replica: {@code UNGATED}.
+   *
+   * <p>On a single-instance backend ({@link #supportsMultiInstance()} {@code false}) there is no
+   * lease to lead under: the {@code LEADING} case is left out, and with the default properties the
+   * runner reports {@code UNGATED}, since the lease is off by default there.
    */
   @Test
   public void healthCarriesTheDocumentedNameAndKeys() {
@@ -564,7 +601,11 @@ public abstract class IntegrationWiringContract {
                 + healthCheckName()
                 + ": it states "
                 + documented);
-    assertTheProjectionReports("LEADING", Map.of());
+    if (supportsMultiInstance()) {
+      assertTheProjectionReports("LEADING", Map.of());
+    } else {
+      assertTheProjectionReports("UNGATED", Map.of());
+    }
     assertTheProjectionReports(
         "UNGATED", Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
   }
@@ -572,7 +613,7 @@ public abstract class IntegrationWiringContract {
   private void assertTheProjectionReports(String expectedRole, Map<String, String> properties) {
     String role = "subscription." + ContractProjection.NAME + ".role";
     try (Application application =
-        start(postgresql(), properties, Set.of(ContractProjection.class))) {
+        start(database(), properties, Set.of(ContractProjection.class))) {
       assertStarted(application);
       Map<String, Object> health =
           awaitHealth(
@@ -709,10 +750,10 @@ public abstract class IntegrationWiringContract {
    * within one idle interval after the close, with its poll thread asleep, passes unobserved; the
    * 20 ms interval keeps that window small.
    *
-   * <p>It runs twice: with the single-active-consumer lease (the default), so the leadership the
-   * integration builds also releases its leases before the database closes; and without it, where a
-   * projection runner the integration does not stop keeps polling, because no closed leadership
-   * parks it in standby.
+   * <p>It runs twice: with the backend's default — on PostgreSQL the single-active-consumer lease,
+   * so the leadership the integration builds also releases its leases before the database closes;
+   * on SQLite no lease — and with the lease switched off, where a projection runner the integration
+   * does not stop keeps polling, because no closed leadership parks it in standby.
    */
   @Test
   public void shutdownStopsRunnersBeforeTheEventStoreCloses() throws InterruptedException {
@@ -726,7 +767,7 @@ public abstract class IntegrationWiringContract {
 
   private void assertRunnersStopBeforeTheDatabaseCloses(Map<String, String> properties)
       throws InterruptedException {
-    RecordingDataSource database = new RecordingDataSource(postgresql());
+    RecordingDataSource database = new RecordingDataSource(database());
     try (Application application = start(database, properties, Set.of(ContractProjection.class))) {
       assertStarted(application);
       long afterStart = database.connectionsGranted();
@@ -804,17 +845,17 @@ public abstract class IntegrationWiringContract {
 
   /**
    * With a {@code DataSource} the integration opens its stores through the selected backend —
-   * {@code postgres} when {@code streamrune.backend} is not set — and exposes that bundle as the
-   * {@code BackendStores} bean an application builds its optional infrastructure from. The stores
-   * the integration wires are the bundle's own: its subscription checkpoint is the bundle's offset
-   * store, not a second instance.
+   * {@code postgres} when {@code streamrune.backend} is not set, {@link #backendName()} — and
+   * exposes that bundle as the {@code BackendStores} bean an application builds its optional
+   * infrastructure from. The stores the integration wires are the bundle's own: its subscription
+   * checkpoint is the bundle's offset store, not a second instance.
    */
   @Test
   public void backendStoresBeanIsExposed() {
-    try (Application application = start(postgresql(), Map.of(), Set.of())) {
+    try (Application application = start(database(), Map.of(), Set.of())) {
       assertStarted(application);
       BackendStores stores = application.bean(BackendStores.class);
-      assertEquals("postgres", stores.backendName(), "the default backend is postgres");
+      assertEquals(backendName(), stores.backendName(), "the bundle is the selected backend's");
       assertSame(
           stores.offsetStore(),
           application.bean(OffsetStore.class),
@@ -832,7 +873,7 @@ public abstract class IntegrationWiringContract {
   public void defaultAliasRoutesToDefaultStore() throws InterruptedException {
     try (Application application =
         start(
-            postgresql(),
+            database(),
             PROMPT_POLLING,
             Set.of(
                 ContractEventTypes.class,
@@ -866,7 +907,7 @@ public abstract class IntegrationWiringContract {
   public void userOutboxFromBackendStoresSharesTheAppendTransaction() {
     try (Application application =
         start(
-            postgresql(),
+            database(),
             Map.of(),
             Set.of(
                 ContractEventTypes.class,
@@ -950,9 +991,9 @@ public abstract class IntegrationWiringContract {
           AcceptingOutboxPublisher.class);
 
   /**
-   * With an {@code OpenTelemetry} bean, a command on the integration's PostgreSQL event store
-   * produces the tree of a command: {@code command/…} holds {@code lock/acquire}, {@code
-   * eventstore/load} and {@code eventstore/append}, the append holds {@code
+   * With an {@code OpenTelemetry} bean, a command on the event store the integration builds on the
+   * selected backend produces the tree of a command: {@code command/…} holds {@code lock/acquire},
+   * {@code eventstore/load} and {@code eventstore/append}, the append holds {@code
    * eventstore/append/serialize}. The integration's command bus has no interceptor bean for tracing
    * in its chain and adds the interceptor itself.
    */
@@ -961,7 +1002,7 @@ public abstract class IntegrationWiringContract {
     OpenTelemetryBean.reset();
     try (Application application =
         start(
-            postgresql(),
+            database(),
             Map.of(),
             Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
       assertStarted(application);
@@ -1020,14 +1061,15 @@ public abstract class IntegrationWiringContract {
 
   /**
    * {@code streamrune.tracing.event-store.enabled=false} removes every {@code eventstore/…} span of
-   * the integration's PostgreSQL event store, and the command and its lock are still traced.
+   * the event store the integration builds on the selected backend, and the command and its lock
+   * are still traced.
    */
   @Test
   public void theEventStoreSwitchRemovesTheStoresSpansOnly() {
     OpenTelemetryBean.reset();
     try (Application application =
         start(
-            postgresql(),
+            database(),
             Map.of("streamrune.tracing.event-store.enabled", "false"),
             Set.of(OpenTelemetryBean.class, ContractCommandRegistration.class))) {
       assertStarted(application);

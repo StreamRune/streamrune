@@ -34,7 +34,7 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   @Override
-  protected DataSource postgresql() {
+  protected DataSource database() {
     return new StubDataSource();
   }
 

@@ -32,9 +32,9 @@ import org.streamrune.test.InMemoryOutboxStore;
 import org.streamrune.test.InMemoryProjectionRepository;
 
 /**
- * The stores {@link ReferenceApplication} opens on its database, named {@code postgres} as the
- * default backend: the test kit's in-memory ones, memoized as a backend memoizes them. It holds
- * only the stores the contract reads; every other accessor refuses.
+ * The stores {@link ReferenceApplication} opens on its database, named after the selected backend
+ * ({@code postgres}, the default, or {@code sqlite}): the test kit's in-memory ones, memoized as a
+ * backend memoizes them. It holds only the stores the contract reads; every other accessor refuses.
  */
 final class ReferenceBackendStores implements BackendStores {
 
@@ -42,14 +42,17 @@ final class ReferenceBackendStores implements BackendStores {
   private final ReadModelStore defaultReadModelStore;
   private final Map<OutboxOptions, OutboxStore> outboxStores = new ConcurrentHashMap<>();
 
-  ReferenceBackendStores() {
+  private final String backendName;
+
+  ReferenceBackendStores(String backendName) {
+    this.backendName = backendName;
     InMemoryProjectionRepository repository = new InMemoryProjectionRepository();
-    defaultReadModelStore = ReadModelStore.of("postgres", repository, repository, repository);
+    defaultReadModelStore = ReadModelStore.of(backendName, repository, repository, repository);
   }
 
   @Override
   public String backendName() {
-    return "postgres";
+    return backendName;
   }
 
   @Override

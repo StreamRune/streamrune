@@ -56,6 +56,7 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.BackendSelection;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
 import org.streamrune.integration.ConfigurationSpelling;
 import org.streamrune.integration.MisspelledPropertyNames;
@@ -241,6 +242,11 @@ final class ReferenceApplication implements Application {
       Set<Class<?>> extraBeans,
       Set<Rule> broken) {
     return new ReferenceApplication(dataSource, properties, extraBeans, broken);
+  }
+
+  /** The selected backend: {@code streamrune.backend}, {@code postgres} when it is not set. */
+  private String backend() {
+    return properties.getOrDefault(BackendSelection.PROPERTY, "postgres");
   }
 
   private boolean keeps(Rule rule) {
@@ -532,8 +538,8 @@ final class ReferenceApplication implements Application {
     if (dataSource == null) {
       return;
     }
-    stores = new ReferenceBackendStores();
-    beans.add(keeps(Rule.BACKEND_STORES_EXPOSED) ? stores : new ReferenceBackendStores());
+    stores = new ReferenceBackendStores(backend());
+    beans.add(keeps(Rule.BACKEND_STORES_EXPOSED) ? stores : new ReferenceBackendStores(backend()));
     beans.add(stores.offsetStore());
     if (!beansOf(BackendOutboxStore.class).isEmpty()) {
       beans.add(BackendOutboxStore.from(stores));
@@ -868,9 +874,11 @@ final class ReferenceApplication implements Application {
     Map<String, Object> details = new LinkedHashMap<>();
     details.put("eventStore.lastGlobalOffset", 0L);
     if (keeps(Rule.HEALTH_DETAILS) && !beansOf(ContractProjection.class).isEmpty()) {
-      // The runner's role under its lease: on by default with a database, the only replica leads.
+      // The runner's role under its lease: on by default with a database of a backend that takes
+      // one, where the only replica leads; SQLite takes none.
       boolean leased =
           dataSource != null
+              && !"sqlite".equals(backend())
               && !"false"
                   .equals(properties.get("streamrune.subscription.single-active-consumer.enabled"));
       details.put(
