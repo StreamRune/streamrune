@@ -3,23 +3,19 @@ package org.streamrune.quarkus;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
+import org.streamrune.sqlite.SqliteNativeDowncalls;
 
 /**
- * The foreign downcalls of the SQLite backend's instance guard ({@code
- * org.streamrune.sqlite.FlockFileLock}), as reachability metadata registers them: {@code open(path,
- * flags, mode)} (variadic from the third argument), {@code flock(fd, operation)} and {@code
- * close(fd)}, each capturing {@code errno}, and {@code strerror(errnum)}.
+ * The foreign downcalls of the SQLite backend's instance guard as a reachability-metadata document
+ * registers them, read in the one-line form of {@link SqliteNativeDowncalls}.
  */
 final class SqliteForeignDowncalls {
 
-  /** One line per descriptor: condition, return type, parameter types, options. */
-  static final List<String> EXPECTED =
-      List.of(
-          "org.streamrune.sqlite.FlockFileLock jint [void*, jint, jint]"
-              + " {\"firstVariadicArg\":2,\"captureCallState\":true}",
-          "org.streamrune.sqlite.FlockFileLock jint [jint, jint] {\"captureCallState\":true}",
-          "org.streamrune.sqlite.FlockFileLock jint [jint] {\"captureCallState\":true}",
-          "org.streamrune.sqlite.FlockFileLock void* [jint] {}");
+  /**
+   * The lines the metadata must hold, derived from the descriptors the guard binds with, so a
+   * changed descriptor fails the parity test until the metadata follows.
+   */
+  static final List<String> EXPECTED = SqliteNativeDowncalls.reachabilityMetadata();
 
   private SqliteForeignDowncalls() {}
 
