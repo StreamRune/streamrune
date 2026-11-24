@@ -170,6 +170,13 @@ public final class org.streamrune.sqlite.SqliteReadModelCheckpoints implements o
   public void reset(org.streamrune.core.types.ProjectionName)
   public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
 
+public final class org.streamrune.sqlite.SqliteReadModelStore implements org.streamrune.core.projection.ReadModelStore
+  public java.lang.String name()
+  public org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public org.streamrune.core.projection.OffsetStore checkpoints()
+  public org.streamrune.core.projection.ProjectionRepository repository()
+  public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
+
 public final class org.streamrune.sqlite.SqliteSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(org.streamrune.sqlite.SqliteDatabase)
   public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)
