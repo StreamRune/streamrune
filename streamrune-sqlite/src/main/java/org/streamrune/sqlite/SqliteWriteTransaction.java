@@ -9,9 +9,10 @@ import org.streamrune.core.ScopedValueReads;
 
 /**
  * The SQLite write transaction a projection batch or a dead-letter replay holds on the current
- * thread while the application's updater runs, published for the one component that must write to
- * the same file meanwhile: the SQLite crypto key store, which mints a subject's key when an
- * {@code @Encrypted} read-model field is first written.
+ * thread while the application's updater runs, published for the two components that must work on
+ * the same file meanwhile: a {@link SqliteProjectionRepository} of the file that the updater calls
+ * directly instead of the repository it was handed, and the SQLite crypto key store, which mints a
+ * subject's key when an {@code @Encrypted} read-model field is first written.
  *
  * <p><b>Why.</b> SQLite has one write lock per database file. The batch holds it from its {@code
  * BEGIN IMMEDIATE} to its {@code COMMIT}, and the updater runs in between. A write on any other
@@ -60,14 +61,15 @@ public final class SqliteWriteTransaction {
   private static final ScopedValue<SqliteWriteTransaction> CURRENT = ScopedValue.newInstance();
 
   private final Path file;
-  private final Connection connection;
+  private final SqliteProjectionRepository.BatchTransaction batch;
   private final Consumer<SQLException> abort;
   private final Thread owner;
   private volatile boolean ended;
 
-  private SqliteWriteTransaction(Path file, Connection connection, Consumer<SQLException> abort) {
+  private SqliteWriteTransaction(
+      Path file, SqliteProjectionRepository.BatchTransaction batch, Consumer<SQLException> abort) {
     this.file = file;
-    this.connection = connection;
+    this.batch = batch;
     this.abort = abort;
     this.owner = Thread.currentThread();
   }
@@ -79,17 +81,20 @@ public final class SqliteWriteTransaction {
   }
 
   /**
-   * Runs {@code work} with the write transaction on {@code connection} published for {@code file}.
+   * Runs {@code work} with the write transaction {@code batch} published for {@code file}.
    *
    * @param file the canonical database file of the transaction
-   * @param connection the connection of the open write transaction
+   * @param batch the open write transaction and what its repository views share
    * @param abort marks the holder's transaction aborted by a joined statement's failure
    * @param work what runs while the transaction is published: the application's updater
    */
   static void publishWhile(
-      Path file, Connection connection, Consumer<SQLException> abort, Work work)
+      Path file,
+      SqliteProjectionRepository.BatchTransaction batch,
+      Consumer<SQLException> abort,
+      Work work)
       throws SQLException {
-    var published = new SqliteWriteTransaction(file, connection, abort);
+    var published = new SqliteWriteTransaction(file, batch, abort);
     try {
       ScopedValue.where(CURRENT, published)
           .call(
@@ -139,7 +144,18 @@ public final class SqliteWriteTransaction {
    */
   public Connection connection() {
     requireNotEnded();
-    return connection;
+    return batch.connection();
+  }
+
+  /**
+   * The batch's own state, for a {@link SqliteProjectionRepository} of the file that joins it: its
+   * calls then share the batch's abort, its after-commit actions and its {@code updated_at}.
+   *
+   * @throws IllegalStateException once the updater has returned or thrown
+   */
+  SqliteProjectionRepository.BatchTransaction batch() {
+    requireNotEnded();
+    return batch;
   }
 
   /**
@@ -169,7 +185,7 @@ public final class SqliteWriteTransaction {
    */
   public void requireOpen() throws SQLException {
     requireNotEnded();
-    SqliteTransactions.requireOpenTransaction(connection);
+    SqliteTransactions.requireOpenTransaction(batch.connection());
   }
 
   private void requireNotEnded() {

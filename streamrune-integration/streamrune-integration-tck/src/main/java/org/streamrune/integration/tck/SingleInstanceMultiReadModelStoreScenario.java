@@ -89,7 +89,8 @@ import org.streamrune.sqlite.SqliteReadModelStore;
  *
  * <p>Two more projections, each on the application's {@code ProjectionRepository}, run in tests of
  * their own, on file A alone: {@link LookupProjection}, whose updater looks {@code p1}'s read model
- * up through that repository.
+ * up through that repository, and {@link AtLeastOnceStoreProjection}, an {@code
+ * AT_LEAST_ONCE_IDEMPOTENT} projection that writes through it.
  *
  * <p>Leadership is {@code NOOP}, the only one the backend has: no lease is taken and every
  * checkpoint row keeps the epoch {@code 0}. So there is no takeover and no fencing case: the
@@ -361,6 +362,36 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
   }
 
   /**
+   * An {@code AT_LEAST_ONCE_IDEMPOTENT} projection on the application's {@code
+   * ProjectionRepository} is routed to the default store by its write target, and applies: the
+   * runner hands it no repository, so its helpers write through the repository it captured while
+   * the store's batch transaction is open on the same thread, and those writes join that
+   * transaction. Its checkpoint lands in the store's {@code readmodel_checkpoint}, not in the
+   * subscription checkpoint, and each event is applied once.
+   */
+  @Test
+  public void anAtLeastOnceProjectionOnTheDefaultStoreAppliesWithItsCheckpoint() {
+    DataSource a = newDatabaseFile();
+    try (Application application =
+        start(
+            a,
+            PROPERTIES,
+            Set.of(
+                ContractEventTypes.class,
+                AtLeastOnceStoreProjection.class,
+                ContractCommandRegistration.class))) {
+      assertStarted(application);
+      long top = appendEvents(application, a, "at-least-once", 3);
+      awaitCheckpoint(a, READ_MODEL_CHECKPOINT, AtLeastOnceStoreProjection.NAME, top);
+      assertNoCheckpoint(a, SUBSCRIPTION_CHECKPOINT, AtLeastOnceStoreProjection.NAME);
+      assertEquals(
+          onceEach(eventOffsets(a)),
+          applied(application.bean(ProjectionRepository.class), AtLeastOnceStoreProjection.NAME),
+          "each event applied once, in the default store's file");
+    }
+  }
+
+  /**
    * With two transactional stores, a {@code TRANSACTIONAL_LOCAL} projection that exposes no {@code
    * writeTarget()} and declares no store cannot be routed: the start is refused, and the refusal
    * names the projection and both stores.
@@ -527,6 +558,29 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
         lookedUp.put(row.offset(), row.applications());
       }
       return lookedUp;
+    }
+  }
+
+  /**
+   * An {@code AT_LEAST_ONCE_IDEMPOTENT} projection on the application's {@code
+   * ProjectionRepository}: its {@code writeTarget()} routes it to the default store, and the runner
+   * hands it no repository, so its helpers write through the injected one.
+   */
+  @ProjectionConfig(
+      name = AtLeastOnceStoreProjection.NAME,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  public static final class AtLeastOnceStoreProjection extends AppliedEventProjection {
+
+    /** The projection's name. */
+    public static final String NAME = "p5_at_least_once";
+
+    /**
+     * A projection on the application's repository.
+     *
+     * @param repository the application's {@code ProjectionRepository} bean
+     */
+    public AtLeastOnceStoreProjection(ProjectionRepository repository) {
+      super(repository, NAME);
     }
   }
 

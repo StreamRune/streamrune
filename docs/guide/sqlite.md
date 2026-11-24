@@ -264,8 +264,16 @@ The consequences:
   replay take a lock on that projection's checkpoint row only; on SQLite a dead-letter replay of one
   projection waits for an open batch of any other projection, and the other way round. It succeeds
   once the batch commits within `busy_timeout`, and fails with the write-lock message otherwise.
-- **An updater writes through the repository it is handed**, never through another writer of the
-  same file: such a write waits for the batch's own transaction and fails after `busy_timeout`.
+- **An updater writes through the repository it is handed, or through the store's own repository.**
+  A call the updater makes on the `ProjectionRepository` of a SQLite store of the same file (the
+  injected one, for example), on the updater's own thread, joins the batch's transaction: it runs
+  on the batch's connection, sees the batch's uncommitted writes, and commits or rolls back with
+  the checkpoint; a statement that fails there aborts the batch. So a lookup of another
+  projection's read model from an updater works, and an `AT_LEAST_ONCE_IDEMPOTENT` projection
+  routed to a SQLite store, which the runner hands no repository, is applied in one transaction
+  with its checkpoint, a stronger promise than the mode makes on PostgreSQL. Everything else does
+  not join: a write through the event store or any other store of the same file, or from a thread
+  the updater started, waits for the batch's own transaction and fails after `busy_timeout`.
 - **Global offsets stay gap-free and appear in commit order**, as on PostgreSQL: the event store
   keeps a one-row counter that each append advances inside its own transaction.
 - **Saga fencing uses the write lock.** The forward fence reads the saga row inside the append's own

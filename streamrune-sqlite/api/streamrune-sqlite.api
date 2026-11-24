@@ -159,6 +159,7 @@ public final class org.streamrune.sqlite.SqliteProjectionRepository implements o
   public java.lang.Object writeTargetIdentity()
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
   public static java.lang.String createIndexSql(org.streamrune.core.projection.ProjectionIndex)
+  public void afterCommit(java.lang.Runnable)
   public void checkProjectionName(org.streamrune.core.types.ProjectionName)
   public void declareIndex(org.streamrune.core.projection.ProjectionIndex)
   public void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
