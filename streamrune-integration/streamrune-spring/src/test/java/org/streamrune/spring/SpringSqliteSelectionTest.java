@@ -79,6 +79,28 @@ class SpringSqliteSelectionTest {
   }
 
   @Test
+  void aWrongSqliteSetupFailsTheStart() {
+    runner(SqliteDataSources.wrongSetup(dir.resolve("app.db")))
+        .run(
+            ctx ->
+                assertThat(rootCause(ctx.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("journal_mode"));
+  }
+
+  @Test
+  void anotherProcessHoldingTheFileFailsTheStart() throws Exception {
+    try (var holder = SqliteGuardHolder.hold(dir.resolve("app.db"))) {
+      sqlite()
+          .run(
+              ctx ->
+                  assertThat(rootCause(ctx.getStartupFailure()).getMessage())
+                      .contains("another process")
+                      .contains("app.db"));
+    }
+  }
+
+  @Test
   void aSqliteDataSourceWithDefaultsRunsOnTheSqliteBackendWithoutLeadership() {
     sqlite()
         .run(

@@ -71,6 +71,15 @@ class MicronautSqliteSelectionTest {
     Infrastructure.dataSource = SqliteDataSources.file(dir.resolve("app.db"));
   }
 
+  /** A commands-only application: no saga runner or lifecycle asks for a store at startup. */
+  private static final String COMMANDS_ONLY = "sqlite-selection";
+
+  private static Map<String, Object> commandsOnly(Object... more) {
+    Map<String, Object> values = properties(COMMANDS_ONLY, more);
+    values.put("streamrune.saga.enabled", "false");
+    return values;
+  }
+
   private static Map<String, Object> properties(String spec, Object... more) {
     Map<String, Object> values = new HashMap<>();
     values.put(SPEC, spec);
@@ -102,12 +111,8 @@ class MicronautSqliteSelectionTest {
     when(meta.getDatabaseProductVersion()).thenReturn("17.2");
     Infrastructure.dataSource = postgres;
 
-    assertThatThrownBy(
-            () -> {
-              try (var ctx = ApplicationContext.run(properties(SELECTION))) {
-                ctx.getBean(BackendStores.class);
-              }
-            })
+    // A commands-only application: the start alone fails, no bean is asked for.
+    assertThatThrownBy(() -> ApplicationContext.run(commandsOnly()).close())
         .satisfies(
             failure ->
                 assertThat(rootCause(failure))
@@ -115,6 +120,27 @@ class MicronautSqliteSelectionTest {
                     .hasMessageContaining("streamrune.backend=sqlite")
                     .hasMessageContaining("needs a SQLite database")
                     .hasMessageContaining("PostgreSQL 17.2"));
+  }
+
+  @Test
+  void aWrongSqliteSetupFailsTheStart() {
+    Infrastructure.dataSource = SqliteDataSources.wrongSetup(dir.resolve("app.db"));
+
+    assertThatThrownBy(() -> ApplicationContext.run(commandsOnly()).close())
+        .satisfies(
+            failure ->
+                assertThat(rootCause(failure))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("journal_mode"));
+  }
+
+  @Test
+  void anotherProcessHoldingTheFileFailsTheStart() throws Exception {
+    try (var holder = SqliteGuardHolder.hold(dir.resolve("app.db"))) {
+      assertThatThrownBy(() -> ApplicationContext.run(commandsOnly()).close())
+          .hasStackTraceContaining("is in use by another process")
+          .hasStackTraceContaining("app.db");
+    }
   }
 
   @Test
@@ -147,14 +173,12 @@ class MicronautSqliteSelectionTest {
   void anExplicitSingleActiveConsumerIsRefused() {
     assertThatThrownBy(
             () -> {
-              try (var ctx =
-                  ApplicationContext.run(
+              ApplicationContext.run(
                       properties(
                           SELECTION,
                           "streamrune.subscription.single-active-consumer.enabled",
-                          "true"))) {
-                ctx.findBean(SubscriptionLeadership.class);
-              }
+                          "true"))
+                  .close();
             })
         .satisfies(
             failure ->

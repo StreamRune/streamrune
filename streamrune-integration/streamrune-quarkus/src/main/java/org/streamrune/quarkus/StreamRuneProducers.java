@@ -212,6 +212,29 @@ public class StreamRuneProducers {
   }
 
   /**
+   * Opens the {@link #streamRuneBackendStores stores} when the application starts, whenever a
+   * {@code DataSource} bean is resolvable, so their startup checks never wait for the first command
+   * of an application that runs no projection or saga. On SQLite, opening verifies the DataSource
+   * (a SQLite database with the required connection setup) and takes the instance guard of the
+   * file, so another process on the same file fails the start; on Postgres it touches no database.
+   * Observed at {@code LIBRARY_BEFORE}, with the startup validators and before {@link
+   * StreamRuneLifecycle} starts the runners.
+   *
+   * @param event the startup event
+   * @param stores the stores, resolvable when a {@code DataSource} is
+   */
+  // public: the observer invoker Arc generates may live in another classloader.
+  public void openBackendStoresAtStartup(
+      @jakarta.enterprise.event.Observes
+          @jakarta.annotation.Priority(jakarta.interceptor.Interceptor.Priority.LIBRARY_BEFORE)
+          io.quarkus.runtime.StartupEvent event,
+      Instance<BackendStores> stores) {
+    if (stores.isResolvable()) {
+      stores.get().backendName();
+    }
+  }
+
+  /**
    * Closes the {@link #streamRuneBackendStores stores} when the container shuts down, which closes
    * every leadership they built. CDI destroys a producer-method product only through a matching
    * {@code @Disposes} method.

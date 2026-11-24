@@ -33,6 +33,16 @@ final class SqliteDataSources {
   }
 
   /**
+   * A data source on {@code file} with the driver's defaults: rollback journal, not WAL, so the
+   * backend's setup check refuses it.
+   */
+  static SQLiteDataSource wrongSetup(Path file) {
+    var dataSource = new SQLiteDataSource();
+    dataSource.setUrl("jdbc:sqlite:" + file);
+    return dataSource;
+  }
+
+  /**
    * {@link #file} counting the connections borrowed and not yet closed in {@code open}: a shutdown
    * test reads it when the backend's stores are closed.
    */

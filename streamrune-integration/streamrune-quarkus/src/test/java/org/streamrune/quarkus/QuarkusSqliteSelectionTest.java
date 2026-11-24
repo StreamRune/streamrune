@@ -95,6 +95,15 @@ class QuarkusSqliteSelectionTest {
     return RealArcTestContainer.boot(classes);
   }
 
+  /** Starts the application as Quarkus does: fires the startup event. */
+  private static void start(RealArcTestContainer arc) {
+    arc.container()
+        .beanManager()
+        .getEvent()
+        .select(io.quarkus.runtime.StartupEvent.class)
+        .fire(new io.quarkus.runtime.StartupEvent());
+  }
+
   private static Throwable rootCause(Throwable failure) {
     Throwable root = failure;
     while (root.getCause() != null) {
@@ -114,8 +123,9 @@ class QuarkusSqliteSelectionTest {
     when(meta.getDatabaseProductVersion()).thenReturn("17.2");
     Infrastructure.dataSource = postgres;
 
+    // A commands-only application: starting it alone fails, no bean is asked for.
     try (var arc = boot()) {
-      assertThatThrownBy(() -> arc.container().instance(BackendStores.class).get())
+      assertThatThrownBy(() -> start(arc))
           .satisfies(
               failure ->
                   assertThat(rootCause(failure))
@@ -123,6 +133,41 @@ class QuarkusSqliteSelectionTest {
                       .hasMessageContaining("streamrune.backend=sqlite")
                       .hasMessageContaining("needs a SQLite database")
                       .hasMessageContaining("PostgreSQL 17.2"));
+    }
+  }
+
+  @Test
+  void aWrongSqliteSetupFailsTheStart() throws Exception {
+    Infrastructure.dataSource = SqliteDataSources.wrongSetup(dir.resolve("app.db"));
+    try (var arc = boot()) {
+      assertThatThrownBy(() -> start(arc))
+          .satisfies(
+              failure ->
+                  assertThat(rootCause(failure))
+                      .isInstanceOf(IllegalStateException.class)
+                      .hasMessageContaining("journal_mode"));
+    }
+  }
+
+  @Test
+  void anotherProcessHoldingTheFileFailsTheStart() throws Exception {
+    try (var holder = SqliteGuardHolder.hold(dir.resolve("app.db"));
+        var arc = boot()) {
+      assertThatThrownBy(() -> start(arc))
+          .satisfies(
+              failure ->
+                  assertThat(rootCause(failure).getMessage())
+                      .contains("another process")
+                      .contains("app.db"));
+    }
+  }
+
+  @Test
+  void aGoodSqliteSetupStarts() throws Exception {
+    try (var arc = boot()) {
+      start(arc);
+      assertThat(arc.container().instance(BackendStores.class).get().backendName())
+          .isEqualTo("sqlite");
     }
   }
 
@@ -160,24 +205,6 @@ class QuarkusSqliteSelectionTest {
                           "SQLite is single-instance; set"
                               + " streamrune.subscription.single-active-consumer.enabled=false"));
     }
-  }
-
-  @Test
-  void theStartupValidatorRefusesAnExplicitSingleActiveConsumerToo() {
-    var properties =
-        TestProperties.of(
-            Map.of(
-                "streamrune.backend",
-                "sqlite",
-                "streamrune.subscription.single-active-consumer.enabled",
-                "on"));
-    assertThatThrownBy(
-            () ->
-                org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-                    properties.subscription().singleActiveConsumer().enabled().orElse(null),
-                    BackendSelection.parse(properties.backend())))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("SQLite is single-instance");
   }
 
   @Test
