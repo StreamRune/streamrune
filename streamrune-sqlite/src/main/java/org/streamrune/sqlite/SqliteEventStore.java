@@ -1409,17 +1409,36 @@ public final class SqliteEventStore implements EventStore {
 
   /**
    * The {@link EventStoreException} of a write SQLite refused for a lock, naming {@code what}:
-   * {@link #busyMessage} for {@code SQLITE_BUSY}, {@link #lockedMessage} for {@code SQLITE_LOCKED};
+   * {@link #busyMessage} for {@code SQLITE_BUSY}, or {@link #ownBatchMessage} when the refused
+   * thread's own projection batch held the lock; {@link #lockedMessage} for {@code SQLITE_LOCKED};
    * {@code null} for any other failure.
    */
   static EventStoreException lockFailure(SQLException e, String what) {
     if (isBusy(e)) {
-      return new EventStoreException(busyMessage(what), e);
+      return new EventStoreException(
+          SqliteTransactions.isHeldByOwnBatch(e) ? ownBatchMessage(what) : busyMessage(what), e);
     }
     if (isLocked(e)) {
       return new EventStoreException(lockedMessage(what), e);
     }
     return null;
+  }
+
+  /**
+   * The message of a write that waited busy_timeout for a write lock its own thread holds: it was
+   * made from inside the updater of a projection batch or dead-letter replay on the same database
+   * file, on a connection of its own.
+   */
+  static String ownBatchMessage(String what) {
+    return "SQLite's write lock was not granted within the connection's busy_timeout, so the "
+        + what
+        + " stored nothing. This thread's own projection batch (or dead-letter replay) holds the"
+        + " write lock of the database file: the write was made from inside the batch's updater,"
+        + " on a connection of its own, so it waited for a transaction that cannot commit before"
+        + " the updater returns. Inside an updater, write read models through the repository it is"
+        + " handed or through the store's own ProjectionRepository, which join the batch; make any"
+        + " other write to the same file (an append, a saga, outbox or checkpoint write) after the"
+        + " batch, from a command handler or a saga step.";
   }
 
   /** The message of a write refused with SQLITE_LOCKED, which busy_timeout does not govern. */
@@ -1576,18 +1595,22 @@ public final class SqliteEventStore implements EventStore {
     // write lock when the statement starts (waiting at most busy_timeout) and commits all of it or
     // nothing. It queues with the other writers of the process first, on the file's write mutex.
     int written;
-    try (var conn = dataSource.getConnection();
-        var _ = SqliteTransactions.awaitWriteLock(conn)) {
-      try (var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
-        SqliteStreamKeys.bind(ps, 1, streamId);
-        ps.setLong(3, version.value());
-        ps.setString(4, stateType);
-        ps.setString(5, stateJson);
-        ps.setLong(6, createdAt);
-        ps.setInt(7, snapshotVersion);
-        ps.setLong(8, snapshotPurgeGeneration);
-        written = ps.executeUpdate();
-      }
+    try (var conn = dataSource.getConnection()) {
+      written =
+          SqliteTransactions.writeStatement(
+              conn,
+              c -> {
+                try (var ps = c.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
+                  SqliteStreamKeys.bind(ps, 1, streamId);
+                  ps.setLong(3, version.value());
+                  ps.setString(4, stateType);
+                  ps.setString(5, stateJson);
+                  ps.setLong(6, createdAt);
+                  ps.setInt(7, snapshotVersion);
+                  ps.setLong(8, snapshotPurgeGeneration);
+                  return ps.executeUpdate();
+                }
+              });
     } catch (SQLException e) {
       EventStoreException lockFailure = lockFailure(e, "snapshot save of stream " + shownStream);
       if (lockFailure != null) {

@@ -486,13 +486,72 @@ class SqliteProjectionRepositoryJoinTest {
                             .submit(() -> repo.save(ORDERS, "b", new View("b", "waits")))
                             .get(30, TimeUnit.SECONDS))
                 .hasCauseExactlyInstanceOf(EventStoreException.class)
-                .hasMessageContaining("save of projection orders/b stored nothing");
+                .hasMessageContaining("save of projection orders/b stored nothing")
+                .hasMessageNotContaining("own projection batch");
           } catch (Exception e) {
             throw new IllegalStateException(e);
           }
         });
 
     assertThat(repo.findAll(ORDERS, View.class)).containsExactly(new View("a", "uncommitted"));
+  }
+
+  // ---- what cannot join says why it failed ----
+
+  /**
+   * A write from inside the updater that cannot join (a nested batch, a checkpoint reset, any other
+   * store of the file) waits busy_timeout for the lock its own thread holds. Its failure says so,
+   * instead of blaming an application transaction; the batch itself is unharmed.
+   */
+  @Test
+  @Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+  void aWriteThatCannotJoinSaysThatItsOwnBatchHoldsTheLock() throws SQLException {
+    var failures = new ArrayList<RuntimeException>();
+
+    batch(
+        1,
+        handed -> {
+          handed.save(ORDERS, "a", new View("a", "kept"));
+          try {
+            repo.resetOffset(CUSTOMERS);
+          } catch (EventStoreException e) {
+            failures.add(e);
+          }
+          try {
+            repo.executeAtomically(
+                CUSTOMERS, List.of(), GlobalOffset.of(1), 0L, nested -> {}, checkpoints);
+          } catch (EventStoreException e) {
+            failures.add(e);
+          }
+          try (Connection own = database.dataSource().getConnection()) {
+            SqliteTransactions.writeStatement(
+                own,
+                c -> {
+                  try (var st = c.createStatement()) {
+                    return st.executeUpdate(
+                        "DELETE FROM readmodel_checkpoint WHERE projection_name = 'none'");
+                  }
+                });
+          } catch (SQLException e) {
+            failures.add(SqliteEventStore.lockFailure(e, "one-statement write"));
+          }
+        });
+
+    assertThat(failures).hasSize(3);
+    for (RuntimeException failure : failures) {
+      assertThat(failure)
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessageContaining("stored nothing. This thread's own projection batch")
+          .hasMessageNotContaining("application transaction");
+    }
+    assertThat(failures.get(0)).hasMessageContaining("so the offset reset of projection customers");
+    assertThat(failures.get(1)).hasMessageContaining("projection batch of projection customers");
+    assertThat(failures.get(2))
+        .hasMessage(SqliteEventStore.ownBatchMessage("one-statement write"))
+        .cause()
+        .isInstanceOf(SqliteTransactions.WriteLockHeldByOwnBatch.class);
+    assertThat(committed(ORDERS, "a")).isPresent();
+    assertThat(checkpoints.getLastOffset(ORDERS)).isEqualTo(GlobalOffset.of(1));
   }
 
   /** Once the updater has returned, the repository's calls are its own again. */

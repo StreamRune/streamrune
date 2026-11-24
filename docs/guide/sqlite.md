@@ -283,7 +283,8 @@ The consequences:
   routed to a SQLite store, which the runner hands no repository, is applied in one transaction
   with its checkpoint, a stronger promise than the mode makes on PostgreSQL. Everything else does
   not join: a write through the event store or any other store of the same file, or from a thread
-  the updater started, waits for the batch's own transaction and fails after `busy_timeout`.
+  the updater started, waits for the batch's own transaction and fails after `busy_timeout`; made on
+  the updater's own thread, the failure says that the thread's own batch holds the write lock.
 - **Global offsets stay gap-free and appear in commit order**, as on PostgreSQL: the event store
   keeps a one-row counter that each append advances inside its own transaction.
 - **Saga fencing uses the write lock.** The forward fence reads the saga row inside the append's own
