@@ -386,7 +386,7 @@ public final class SqliteTransactions {
 
   // ---- the in-process write mutex ----
 
-  /** What SQLite's own refusal of the write lock says; the mutex's timeout says the same. */
+  /** The message of the mutex's timeout, which carries SQLite's code for a lock not granted. */
   private static final String WRITE_LOCK_TIMEOUT =
       "[SQLITE_BUSY] The database file is locked (another write transaction of this process held"
           + " the write lock for longer than this connection's busy_timeout of %d ms)";
