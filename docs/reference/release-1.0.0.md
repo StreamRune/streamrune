@@ -159,8 +159,8 @@ license.
   `synchronous=FULL`, `foreign_keys`, a `busy_timeout`, `transaction_mode=IMMEDIATE`, autocommit
   connections, a UTF-8 file, SQLite 3.45 or newer) and refuses in-memory databases and attached
   ones.
-- An instance guard, an operating-system lock on `<database-file>.lock` held for the life of the
-  process, makes a second process on the file fail its start; a crashed process releases it.
+- An instance guard, an operating-system lock on `<database-file>.lock` held from opening the
+  stores until they are closed, makes a second process on the file fail its start; a crashed process releases it.
 - Global offsets are gap-free and appear in commit order. Writes serialize on SQLite's one write
   lock per file, which is also the saga forward fence; read-model queries return PostgreSQL's rows
   in PostgreSQL's order. There is no leadership, no statement timeout and no push subscription.

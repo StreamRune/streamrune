@@ -97,8 +97,8 @@ The SQLite backend is for a small service that runs as **one instance** on one d
 [SQLite guide](sqlite.md) has the connection settings and every difference from PostgreSQL; these
 are the points that matter in production:
 
-- **One instance per file, enforced.** The instance guard locks `<database-file>.lock` for the life
-  of the process, and a second process on the file fails its start. A rolling deployment that starts
+- **One instance per file, enforced.** The instance guard locks `<database-file>.lock` from opening
+  the stores until they are closed, and a second process on the file fails its start. A rolling deployment that starts
   the new instance before the old one stops therefore fails; stop the old one first (on Kubernetes,
   `strategy: Recreate`). Never delete the lock file, rename or move the database file, give it a
   second hard link, or bind-mount the file on its own while an instance runs: each lets a second

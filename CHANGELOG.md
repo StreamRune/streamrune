@@ -264,12 +264,14 @@ Added
   `DataSource` that is not SQLite (naming the backend and the database), wrong connection settings
   (`journal_mode=WAL`, `synchronous=FULL`, `foreign_keys`, a `busy_timeout`,
   `transaction_mode=IMMEDIATE`; the message names the setting), a pool that hands out
-  `autoCommit=false` connections, an in-memory or temporary database, attached databases, a file not
-  encoded in UTF-8 and a SQLite library older than 3.45.0. The integrations run these checks when
+  `autoCommit=false` connections (a store write on a connection in manual-commit mode is refused
+  too, with a message that names both causes, such a pool and an application transaction), an
+  in-memory or temporary database, attached databases, a file not encoded in UTF-8 and a SQLite
+  library older than 3.45.0. The integrations run these checks when
   the application starts.
-- **Instance guard.** An operating-system lock on `<database-file>.lock`, held for the life of the
-  process, makes a second process on the same file fail its start with `SqliteGuardException`. A
-  database file with more than one hard link is refused. Start the JVM with
+- **Instance guard.** An operating-system lock on `<database-file>.lock`, held from opening the
+  stores until they are closed, makes a second process on the same file fail its start with
+  `SqliteGuardException`. A database file with more than one hard link is refused. Start the JVM with
   `--enable-native-access=ALL-UNNAMED`: the guard calls `flock(2)` through the Foreign Function and
   Memory API.
 - **SQLite crypto.** The new module `streamrune-sqlite-crypto` adds `SqliteCryptoEngine` (keys in
@@ -282,7 +284,8 @@ Added
   `streamrune.event-store.statement-timeout` is ignored with one WARN at startup.
 - **Native image registration.** The three integrations register the two SQLite backend classes for
   reflection, the SQLite schema scripts as resources and the instance guard's foreign downcalls; a
-  native image of a SQLite application has not been verified end-to-end.
+  native image of a SQLite application has not been verified end-to-end. Pass
+  `--enable-native-access=ALL-UNNAMED` to `native-image` as well.
 - **`AtomicBatchProcessorContract.locksPerProjection()`.** A store whose write lock spans every
   projection returns `false`, which skips the one case that needs a lock per projection.
 
@@ -303,8 +306,7 @@ Changed
   no forget signal asks for "a DataSource on the selected backend's database"; the Quarkus failure
   to build the key-store engine names the backend ("Failed to build the postgres key-store
   engine"); the Quarkus WARN that no saga dead-letter sweeper exists names "the framework's own saga
-  dead-letter store"; and a write on a connection in manual-commit mode is refused with a message
-  that names both causes, a pool of `autoCommit=false` connections and an application transaction.
+  dead-letter store".
 - **Leadership default in the configuration metadata.** Spring's and Micronaut's metadata for
   `streamrune.subscription.single-active-consumer.enabled` declare no default, because it depends on
   the backend (`true` on `postgres`, `false` on `sqlite`); the value a PostgreSQL application gets is
@@ -445,7 +447,8 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   native-image registration has not been verified with a native image of a whole application.
 - **Single writable primary.** No multi-master; use primary/standby failover. No backup/restore drill
   against a production deployment has been performed and no RPO/RTO figures are published.
-- **No embedded database mode.** `streamrune-postgres` needs a running PostgreSQL 17+;
+- **PostgreSQL needs a running server.** `streamrune-postgres` needs a running PostgreSQL 17+; the
+  SQLite backend (`streamrune-sqlite`) runs in-process on one file, for one instance only;
   `InMemoryEventStore` is for tests, in-process only, not durable and not a throughput proxy.
 - **LISTEN/NOTIFY needs a session-stable connection** and `NOTIFY` is best-effort; under PgBouncer
   transaction or statement pooling use `pollingOnly`.

@@ -118,8 +118,8 @@ it. `streamrune.backend` decides which backend opens the stores, never the class
 ### Quarkus
 
 Produce the HikariCP pool as the application's `DataSource` bean, with no `quarkus.datasource`
-configured. This is the setup the framework's Quarkus tests run on SQLite; an Agroal datasource on
-the SQLite driver is not tested.
+configured: a produced `DataSource` bean, as the framework's Quarkus tests use (they produce a plain
+`SQLiteDataSource`). An Agroal datasource on the SQLite driver is not tested.
 
 ```java
 @ApplicationScoped
@@ -390,7 +390,7 @@ Quarkus opens it in a startup observer that runs after its startup validators, a
 startup listener that runs after its validators. Opening first verifies the `DataSource`: a
 database that is not SQLite fails the start naming the `sqlite` backend and the database's product
 and version (the other way round, `postgres` on a SQLite `DataSource` fails its PostgreSQL version
-check). Then it checks every setting above, and then takes the instance guard, so another process
+check when its stores first reach the database, which need not be at startup). Then it checks every setting above, and then takes the instance guard, so another process
 on the file fails the start.
 Verification alone takes no guard: only opening finds another holder.
 
@@ -581,8 +581,8 @@ application has been built and run by the project yet.
   does so only when the connection was idle longer than its 500 ms alive-bypass window), validates
   it in its keepalive check, or retires it at `maxLifetime`. Until then each call on it fails
   cleanly with an exception, and it holds no lock.
-- **Disk full.** SQLite rolls a transaction back on its own when the disk fills (`SQLITE_FULL`). A
-  projection batch that meets it fails as a whole, and its rerun starts from the committed
+- **Disk full.** SQLite may roll a transaction back on its own when the disk fills (`SQLITE_FULL`);
+  the stores handle both outcomes. A projection batch that meets it fails as a whole, and its rerun starts from the committed
   checkpoint.
 - **WAL growth.** SQLite moves the `-wal` file's pages into the database file at checkpoints, which
   a long-running read can hold back; a `-wal` file that keeps growing points at a read that does not

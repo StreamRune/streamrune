@@ -328,7 +328,7 @@ and the exact collection rules.
 The default store is replaced by name, and only by name. Its name is the backend's, `postgres` or
 `sqlite`; its
 bean is the `ReadModelStore` named `streamRuneDefaultReadModelStore`, declared with that interface
-type. Define a `ReadModelStore` whose `name()` is `postgres` and it takes the default's place: the default is never created, so its database is never
+type. Define a `ReadModelStore` whose `name()` is the backend's name and it takes the default's place: the default is never created, so its database is never
 touched. A store with any other name is added beside the default and never removes it. This is the
 way to put the `postgres` store on another database, or to give an application that uses no
 database a store of its own (Quarkus always provides a `DataSource` bean, so such an application
