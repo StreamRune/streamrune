@@ -6,10 +6,10 @@ import org.slf4j.LoggerFactory;
 /**
  * How a retention sweeper stops its thread: interrupt it, then wait for a sweep in flight to
  * return, bounded by {@link #CLOSE_JOIN_TIMEOUT_MS}. A sweeper's {@code close()} therefore returns
- * only when the sweeper no longer touches its store, so whoever closes the store's database after
- * the sweeper (an integration closing the backend's stores at shutdown) never races a sweep. A
- * SQLite store keeps writing its file after the instance guard is released; a sweep that outlived
- * the close could write while a second process already holds the file.
+ * only when no sweep is running or can start, so whoever closes the store's database after the
+ * sweeper (an integration closing the backend's stores at shutdown) never races a sweep. A SQLite
+ * store keeps writing its file after the instance guard is released; a sweep that outlived the
+ * close could write while a second process already holds the file.
  */
 final class RetentionSweeperThreads {
 

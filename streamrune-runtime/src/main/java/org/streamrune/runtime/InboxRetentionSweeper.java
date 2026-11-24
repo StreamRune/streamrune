@@ -169,8 +169,8 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
 
   /**
    * Interrupts the background thread, waits for a sweep in flight to return (at most 30 s, then
-   * logs a WARN), and resets the started guard so start() may be called again. Once it returns, the
-   * sweeper no longer touches its store.
+   * logs a WARN), and resets the started guard so start() may be called again. Once it returns
+   * without that WARN, no sweep of this sweeper runs, so nothing of it touches the store.
    */
   @Override
   public void close() {
