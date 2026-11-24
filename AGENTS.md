@@ -161,6 +161,12 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   and counted against the class files). The checker is `gradle/api-check/ApiSurfaceCheck.java`;
   `testApiSurfaceCheck`, part of `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside
   it on compiled fixtures.
+- **Twin backends.** `streamrune-postgres` and `streamrune-sqlite`, and their crypto modules,
+  implement the same stores, and part of their logic exists once per backend: the event read path,
+  the crypto engine's wire format and retries, the checkpoint fence. A change to the logic of a
+  store of one backend is mirrored in its twin of the other backend in the same pull request, in
+  either direction, or the pull request says why the twin needs none. A behaviour both must share
+  gets a case in the store's contract suite in `streamrune-test`, which runs on both.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested
