@@ -202,6 +202,7 @@ public class org.streamrune.quarkus.StreamRuneProducers
   public org.streamrune.runtime.gdpr.ForgetSubjectService forgetSubjectService(jakarta.enterprise.inject.Instance<org.streamrune.core.crypto.CryptoEngine>, jakarta.enterprise.inject.Instance<org.streamrune.core.audit.AuditStore>, java.util.List<org.streamrune.core.gdpr.SubjectDataPurger>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, jakarta.enterprise.inject.Instance<org.streamrune.runtime.CachingQueryBus>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public void closeBackendStores(org.streamrune.core.backend.BackendStores)
   public void closeSsePublisher(org.streamrune.runtime.SseEventPublisher)
+  public void openBackendStoresAtStartup(io.quarkus.runtime.StartupEvent, jakarta.enterprise.inject.Instance<org.streamrune.core.backend.BackendStores>)
 
 public interface org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties
   public abstract org.streamrune.quarkus.StreamRuneQuarkusCryptoProperties$AwsConfig aws()
