@@ -503,7 +503,12 @@ public abstract class SingleInstanceMultiReadModelStoreScenario {
     }
   }
 
-  /** What {@link LookupProjection} keeps per event: what it found in {@code p1}'s read model. */
+  /**
+   * What {@link LookupProjection} keeps per event: what it found in {@code p1}'s read model.
+   *
+   * @param offset the event's global offset
+   * @param applications how often {@code p1} applied the event, {@code 0} when it has no row
+   */
   public record LookedUp(long offset, int applications) {}
 
   /**

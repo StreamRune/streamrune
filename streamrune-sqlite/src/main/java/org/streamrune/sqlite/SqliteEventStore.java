@@ -803,6 +803,7 @@ public final class SqliteEventStore implements EventStore {
    * @throws IllegalStateException if {@code outboxEntries} is not empty and the store has no outbox
    *     store
    * @throws IllegalArgumentException if {@code outboxEntries} is not empty and {@code events} is
+   *     empty
    * @throws NullPointerException if an argument is {@code null}
    */
   public AppendResult append(

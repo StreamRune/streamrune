@@ -458,7 +458,10 @@ public abstract class ProjectionRepositoryQueryContract {
         mapSort(name, "tag", SortDirection.ASC));
   }
 
-  /** Numbers and strings in one field sort as their text: 10, then 9, then a. */
+  /**
+   * Numbers and strings in one field sort as their text, whatever their JSON type: the number 10,
+   * then the string 5, then the number 9, then the string a.
+   */
   @Test
   public void mixedTypesSortAsText() {
     var name = freshName();
