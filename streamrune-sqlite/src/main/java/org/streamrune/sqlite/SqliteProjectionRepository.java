@@ -860,18 +860,38 @@ public final class SqliteProjectionRepository
    */
   private String toJson(
       Object readModel, String failure, ProjectionName projectionName, String id) {
-    JsonNode tree;
+    JsonNode tree = toTree(readModel, failure, projectionName, id);
+    EventStoreException refusal = nulRefusal(tree, failure, projectionName, id);
+    if (refusal != null) {
+      throw refusal;
+    }
+    return toText(tree, failure, projectionName, id);
+  }
+
+  /** What {@link #objectMapper} writes for {@code readModel}, re-read as a tree. */
+  private JsonNode toTree(
+      Object readModel, String failure, ProjectionName projectionName, String id) {
     try {
-      tree = JSONB.readTree(objectMapper.writeValueAsString(readModel));
+      return JSONB.readTree(objectMapper.writeValueAsString(readModel));
     } catch (JsonProcessingException e) {
       throw new EventStoreException(failure + shown(projectionName, id), e);
     }
-    if (holdsNul(tree)) {
-      throw new EventStoreException(
-          failure
-              + shown(projectionName, id)
-              + ": a string holds U+0000, which PostgreSQL jsonb cannot store");
-    }
+  }
+
+  /** The refusal of a tree holding U+0000 in a string or a key, or {@code null}. */
+  private static EventStoreException nulRefusal(
+      JsonNode tree, String failure, ProjectionName projectionName, String id) {
+    return holdsNul(tree)
+        ? new EventStoreException(
+            failure
+                + shown(projectionName, id)
+                + ": a string holds U+0000, which PostgreSQL jsonb cannot store")
+        : null;
+  }
+
+  /** {@code tree} as the text stored in {@code data}. */
+  private static String toText(
+      JsonNode tree, String failure, ProjectionName projectionName, String id) {
     try {
       return JSONB.writeValueAsString(tree);
     } catch (JsonProcessingException e) {
@@ -1118,6 +1138,16 @@ public final class SqliteProjectionRepository
    * every projection of the file, where PostgreSQL serializes those of one projection on its
    * checkpoint row.
    *
+   * <p><b>A failed statement aborts the transaction</b>, as on PostgreSQL. The first statement of
+   * the handed repository that fails (or a read model {@code jsonb} would refuse) marks the
+   * transaction aborted: every later call of the handed repository throws an {@link
+   * EventStoreException} naming that first failure (its cause) without running a statement, and
+   * once the updater returns, even if it caught the failure, the batch throws that exception before
+   * the advance, and rolls back. So a batch never commits without a write that failed, and after
+   * SQLite rolled a transaction back on its own ({@code SQLITE_FULL}, an I/O error) no later write
+   * of the updater runs, and autocommits, outside the batch. An {@link OptimisticLockException} (no
+   * row of the expected version) does not abort, as on PostgreSQL.
+   *
    * <p><b>Failures.</b> Every exit before the {@code COMMIT} rolls the transaction back. A fence
    * rejection, and an exception or {@link Error} of the updater, propagates unchanged. A {@link
    * SQLException} of a statement or of the {@code COMMIT} becomes an {@link EventStoreException}
@@ -1170,6 +1200,9 @@ public final class SqliteProjectionRepository
           // run under the write lock this transaction holds until its COMMIT.
           checkpointFence.lockForBatch(conn, projectionName, fencingEpoch, firstOffset);
           projectionUpdater.update(transactionScopedRepository);
+          // A statement that failed inside the updater aborted the transaction, even if the
+          // updater caught it: never advance or commit past it.
+          transactionScopedRepository.requireNotAborted();
           checkpointFence.saveLocked(conn, projectionName, newOffset, fencingEpoch);
         });
   }
@@ -1194,9 +1227,10 @@ public final class SqliteProjectionRepository
    * The lock covers the whole file, not one projection: the replay also waits for an open batch of
    * any other projection, at most {@code busy_timeout}, and fails with an {@link
    * EventStoreException} naming the replay when that batch holds the lock longer. The updater is
-   * handed a repository bound to the transaction, with the after-commit behaviour of a batch;
-   * failures are reported as for {@link #executeAtomically}, with the messages "Transaction failed
-   * during projection dead-letter replay" and "Failed to replay a projection dead-letter range".
+   * handed a repository bound to the transaction, with the after-commit behaviour and the abort on
+   * a failed statement of a batch; failures are reported as for {@link #executeAtomically}, with
+   * the messages "Transaction failed during projection dead-letter replay" and "Failed to replay a
+   * projection dead-letter range".
    *
    * <p>Crash points: killed before the {@code COMMIT}, the range's writes are gone and the
    * checkpoint row is as it was; killed after it, the range is in the read model and the caller,
@@ -1224,6 +1258,7 @@ public final class SqliteProjectionRepository
           // The lock a batch takes, with no check and no checkpoint write.
           checkpointFence.lockForReplay(conn, projectionName);
           projectionUpdater.update(transactionScopedRepository);
+          transactionScopedRepository.requireNotAborted();
         });
   }
 
@@ -1396,7 +1431,8 @@ public final class SqliteProjectionRepository
    * never borrows a connection; a table it needs is created on the bound connection, inside the
    * transaction. Its rows share one {@code updated_at}, the transaction's, as PostgreSQL's {@code
    * NOW()} does. The read models are (de)serialized while the transaction is open, so a crypto
-   * engine that needs this database's write lock cannot run inside a batch.
+   * engine that needs this database's write lock cannot run inside a batch. Its first failed
+   * statement aborts the transaction (see {@link #requireNotAborted}).
    */
   private final class TransactionScopedRepository implements ProjectionRepository {
 
@@ -1407,11 +1443,62 @@ public final class SqliteProjectionRepository
     /** Tables created during this transaction, remembered only once it has committed. */
     private final Set<ProjectionName> tablesCreatedInTransaction = new HashSet<>();
 
+    /**
+     * The failure that aborted this transaction, or {@code null}: the first failed statement, or a
+     * read model refused because PostgreSQL's {@code jsonb} could not store it.
+     */
+    private EventStoreException abortedBy;
+
     private TransactionScopedRepository(
         Connection conn, AfterCommitActions afterCommitActions, long now) {
       this.conn = conn;
       this.afterCommitActions = afterCommitActions;
       this.now = now;
+    }
+
+    /**
+     * Marks the transaction aborted by {@code failure}, unless an earlier failure already did, and
+     * returns {@code failure} to be thrown.
+     */
+    private EventStoreException abort(EventStoreException failure) {
+      if (abortedBy == null) {
+        abortedBy = failure;
+      }
+      return failure;
+    }
+
+    /**
+     * Refuses to go on once a statement failed: PostgreSQL aborts the transaction at its first
+     * failed statement, and so does this one. Called before every statement and by the batch and
+     * the replay after the updater returns, so an updater that catches a failure can neither run
+     * another statement (after SQLite's own rollback it would commit on its own) nor commit the
+     * transaction without the failed write.
+     *
+     * @throws EventStoreException naming the first failure, which is its cause
+     */
+    private void requireNotAborted() {
+      if (abortedBy != null) {
+        throw new EventStoreException(
+            "The projection transaction was aborted by an earlier failure, so it runs no further"
+                + " statement and rolls back: "
+                + abortedBy.getMessage(),
+            abortedBy);
+      }
+    }
+
+    /**
+     * The JSON to store for {@code readModel}, as {@link SqliteProjectionRepository#toJson}; a read
+     * model PostgreSQL's {@code jsonb} refuses aborts the transaction, as the refused INSERT does
+     * there.
+     */
+    private String storedJson(
+        Object readModel, String failure, ProjectionName projectionName, String id) {
+      JsonNode tree = toTree(readModel, failure, projectionName, id);
+      EventStoreException refusal = nulRefusal(tree, failure, projectionName, id);
+      if (refusal != null) {
+        throw abort(refusal);
+      }
+      return toText(tree, failure, projectionName, id);
     }
 
     /** Queues {@code action} to run once this transaction has committed; a rollback discards it. */
@@ -1438,7 +1525,7 @@ public final class SqliteProjectionRepository
       try {
         createTable(conn, table);
       } catch (SQLException e) {
-        throw new EventStoreException("Failed to create projection table: " + table, e);
+        throw abort(new EventStoreException("Failed to create projection table: " + table, e));
       }
       tablesCreatedInTransaction.add(projectionName);
     }
@@ -1449,12 +1536,14 @@ public final class SqliteProjectionRepository
       if (readModel == null) {
         throw new IllegalArgumentException("readModel cannot be null");
       }
+      requireNotAborted();
       ensureTable(projectionName);
-      String json = toJson(readModel, "Failed to save projection: ", projectionName, id);
+      String json = storedJson(readModel, "Failed to save projection: ", projectionName, id);
       try {
         upsert(conn, projectionName, id, json, now);
       } catch (SQLException e) {
-        throw new EventStoreException("Failed to save projection: " + shown(projectionName, id), e);
+        throw abort(
+            new EventStoreException("Failed to save projection: " + shown(projectionName, id), e));
       }
     }
 
@@ -1464,12 +1553,14 @@ public final class SqliteProjectionRepository
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
+      requireNotAborted();
       ensureTable(projectionName);
       Optional<String> json;
       try {
         json = findJsonById(conn, projectionName, id);
       } catch (SQLException e) {
-        throw new EventStoreException("Failed to find projection: " + shown(projectionName, id), e);
+        throw abort(
+            new EventStoreException("Failed to find projection: " + shown(projectionName, id), e));
       }
       return json.map(j -> fromJson(j, type, "Failed to find projection: ", projectionName, id));
     }
@@ -1480,13 +1571,14 @@ public final class SqliteProjectionRepository
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
+      requireNotAborted();
       ensureTable(projectionName);
       List<String> rows;
       try {
         rows = findAllJson(conn, projectionName);
       } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to find all projections: " + shown(projectionName), e);
+        throw abort(
+            new EventStoreException("Failed to find all projections: " + shown(projectionName), e));
       }
       return fromJson(rows, type, "Failed to find all projections: ", projectionName);
     }
@@ -1494,12 +1586,14 @@ public final class SqliteProjectionRepository
     @Override
     public void delete(ProjectionName projectionName, String id) {
       validateInputs(projectionName, id);
+      requireNotAborted();
       ensureTable(projectionName);
       try {
         deleteRow(conn, projectionName, id);
       } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to delete projection: " + shown(projectionName, id), e);
+        throw abort(
+            new EventStoreException(
+                "Failed to delete projection: " + shown(projectionName, id), e));
       }
     }
 
@@ -1528,13 +1622,15 @@ public final class SqliteProjectionRepository
     private <T> Page<T> page(
         ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
       String sql = pageSql(projectionName, filter, pageRequest.sort());
+      requireNotAborted();
       ensureTable(projectionName);
       Page<String> rows;
       try {
         rows = pageJson(conn, sql, filter, pageRequest);
       } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to find paginated projections: " + shown(projectionName), e);
+        throw abort(
+            new EventStoreException(
+                "Failed to find paginated projections: " + shown(projectionName), e));
       }
       return fromJson(rows, type, projectionName);
     }
@@ -1557,13 +1653,15 @@ public final class SqliteProjectionRepository
       if (lockMode == null) {
         throw new IllegalArgumentException("lockMode cannot be null");
       }
+      requireNotAborted();
       ensureTable(projectionName);
       Optional<Versioned<String>> row;
       try {
         row = findVersionedJsonById(conn, projectionName, id);
       } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to find projection with lock: " + shown(projectionName, id), e);
+        throw abort(
+            new EventStoreException(
+                "Failed to find projection with lock: " + shown(projectionName, id), e));
       }
       return fromJson(row, type, projectionName, id);
     }
@@ -1578,15 +1676,18 @@ public final class SqliteProjectionRepository
       if (expectedVersion < 0) {
         throw new IllegalArgumentException("expectedVersion must be >= 0");
       }
+      requireNotAborted();
       ensureTable(projectionName);
       String json =
-          toJson(readModel, "Failed to save projection with version check: ", projectionName, id);
+          storedJson(
+              readModel, "Failed to save projection with version check: ", projectionName, id);
       int updated;
       try {
         updated = versionedUpdate(conn, projectionName, id, json, expectedVersion, now);
       } catch (SQLException e) {
-        throw new EventStoreException(
-            "Failed to save projection with version check: " + shown(projectionName, id), e);
+        throw abort(
+            new EventStoreException(
+                "Failed to save projection with version check: " + shown(projectionName, id), e));
       }
       requireUpdated(updated, projectionName, id, expectedVersion);
     }

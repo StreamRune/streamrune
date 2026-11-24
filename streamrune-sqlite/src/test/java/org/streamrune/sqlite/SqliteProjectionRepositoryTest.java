@@ -570,44 +570,68 @@ class SqliteProjectionRepositoryTest {
 
   /** A table the repository has seen and someone else dropped fails each scoped statement. */
   @Test
-  void theScopedViewReportsEachStatementsFailure() throws SQLException {
+  void theScopedViewReportsEachStatementsFailure_andTheFirstAbortsTheBatch() throws SQLException {
     var name = ProjectionName.of("scoped_dropped");
     repo.prepareReadModel(name);
     execute("DROP TABLE scoped_dropped_view");
-    var failures = new ArrayList<String>();
+    var view = new TestView("x", "v");
+    Map<String, AtomicBatchUpdater> calls = new LinkedHashMap<>();
+    calls.put("Failed to save projection: scoped_dropped/x", tx -> tx.save(name, "x", view));
+    calls.put(
+        "Failed to save projection with version check: scoped_dropped/x",
+        tx -> tx.save(name, "x", view, 0));
+    calls.put(
+        "Failed to find projection: scoped_dropped/x",
+        tx -> tx.findById(name, "x", TestView.class));
+    calls.put(
+        "Failed to find projection with lock: scoped_dropped/x",
+        tx -> tx.findById(name, "x", TestView.class, LockMode.OPTIMISTIC));
+    calls.put(
+        "Failed to find all projections: scoped_dropped", tx -> tx.findAll(name, TestView.class));
+    calls.put(
+        "Failed to find paginated projections: scoped_dropped",
+        tx -> tx.findAll(name, TestView.class, PageRequest.of(0, 1)));
+    calls.put("Failed to delete projection: scoped_dropped/x", tx -> tx.delete(name, "x"));
 
-    batch(
-        name,
-        1,
-        tx -> {
-          var view = new TestView("x", "v");
-          List<Runnable> calls =
-              List.of(
-                  () -> tx.save(name, "x", view),
-                  () -> tx.save(name, "x", view, 0),
-                  () -> tx.findById(name, "x", TestView.class),
-                  () -> tx.findById(name, "x", TestView.class, LockMode.OPTIMISTIC),
-                  () -> tx.findAll(name, TestView.class),
-                  () -> tx.findAll(name, TestView.class, PageRequest.of(0, 1)),
-                  () -> tx.delete(name, "x"));
-          for (Runnable call : calls) {
-            try {
-              call.run();
-            } catch (EventStoreException e) {
-              failures.add(e.getMessage());
-            }
-          }
-        });
+    // Each statement, the first of its batch, reports its own failure and fails the batch.
+    for (Map.Entry<String, AtomicBatchUpdater> call : calls.entrySet()) {
+      assertThatThrownBy(() -> batch(name, 1, call.getValue()))
+          .isExactlyInstanceOf(EventStoreException.class)
+          .hasMessage(call.getKey())
+          .hasCauseInstanceOf(SQLException.class);
+    }
 
-    assertThat(failures)
-        .containsExactly(
-            "Failed to save projection: scoped_dropped/x",
-            "Failed to save projection with version check: scoped_dropped/x",
-            "Failed to find projection: scoped_dropped/x",
-            "Failed to find projection with lock: scoped_dropped/x",
-            "Failed to find all projections: scoped_dropped",
-            "Failed to find paginated projections: scoped_dropped",
-            "Failed to delete projection: scoped_dropped/x");
+    // An updater that swallows the failures: the first statement aborted the transaction, so the
+    // others run no statement and the batch rolls back, as PostgreSQL's 25P02 and its COMMIT that
+    // rolls back do.
+    var failures = new ArrayList<EventStoreException>();
+    assertThatThrownBy(
+            () ->
+                batch(
+                    name,
+                    1,
+                    tx -> {
+                      for (AtomicBatchUpdater call : calls.values()) {
+                        try {
+                          call.update(tx);
+                        } catch (EventStoreException e) {
+                          failures.add(e);
+                        }
+                      }
+                    }))
+        .isExactlyInstanceOf(EventStoreException.class)
+        .hasMessage(
+            "The projection transaction was aborted by an earlier failure, so it runs no further"
+                + " statement and rolls back: Failed to save projection: scoped_dropped/x")
+        .hasCause(failures.getFirst());
+    assertThat(failures).hasSize(7);
+    assertThat(failures.getFirst()).hasMessage("Failed to save projection: scoped_dropped/x");
+    for (EventStoreException later : failures.subList(1, 7)) {
+      assertThat(later)
+          .hasMessageStartingWith("The projection transaction was aborted by an earlier failure")
+          .hasCause(failures.getFirst());
+    }
+    assertThat(checkpoints.getLastOffset(name)).isEqualTo(GlobalOffset.initial());
   }
 
   /** A table the scoped view must create and cannot fails the statement that needs it. */
