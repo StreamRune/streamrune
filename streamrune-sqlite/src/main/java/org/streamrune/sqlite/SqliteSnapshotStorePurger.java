@@ -127,9 +127,9 @@ public final class SqliteSnapshotStorePurger implements SnapshotPurger {
     long createdAt = SqliteTimestamps.toMicros(clock.instant());
     // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
     // write lock when the statement starts (waiting at most busy_timeout) and purges every stream
-    // or none.
-    try (var conn = database.dataSource().getConnection()) {
-      SqliteTransactions.requireAutoCommit(conn);
+    // or none. It queues with the other writers of the process first, on the file's write mutex.
+    try (var conn = database.dataSource().getConnection();
+        var _ = SqliteTransactions.awaitWriteLock(conn)) {
       int purged;
       try (var ps = conn.prepareStatement(PURGE_SNAPSHOTS)) {
         ps.setLong(1, createdAt);

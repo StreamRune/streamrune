@@ -1,8 +1,14 @@
 package org.streamrune.sqlite;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +53,59 @@ import org.streamrune.core.Internal;
  * check validates it while it idles in the pool, or {@code maxLifetime} retires it (retirement
  * closes it without validating). Until then every call on that connection fails cleanly with an
  * exception, and the connection holds no lock.
+ *
+ * <p><b>The in-process write mutex.</b> SQLite's write lock is waited for inside the driver's
+ * native call, where its busy handler sleeps: a virtual thread waiting there never unmounts, it
+ * keeps its carrier for up to {@code busy_timeout}. With as many waiting writers as carriers (one
+ * or two on a small machine), a lock holder that parked inside its transaction, a projection batch
+ * whose updater makes a blocking call, could not be resumed until every waiter had timed out. So
+ * each database file has one mutex in this process ({@link #awaitWriteLock}), taken before the
+ * {@code BEGIN IMMEDIATE} of every write transaction of the stores (and before a write that is one
+ * statement in autocommit) and released after its {@code COMMIT} or {@code ROLLBACK}. Writers of
+ * this process therefore queue for the mutex in Java, first come first served, where a virtual
+ * thread parks and frees its carrier, and the one that holds it finds SQLite's lock free. The wait
+ * is bounded by the waiting connection's own {@code busy_timeout}, is not interruptible (as the
+ * native wait is not; the thread's interrupt status is kept), and ends in the failure SQLite itself
+ * reports for a lock not granted, {@code SQLITE_BUSY}, so every store reports it as before. The
+ * mutex is re-entrant: the thread that holds it (a batch's thread, inside its updater) passes
+ * straight through to SQLite, which decides. A write that joins a batch's transaction through
+ * {@link SqliteWriteTransaction} runs on the batch's connection and takes nothing. The mutex is
+ * found by the connection's database file, so every pool and every URL spelling of one file shares
+ * it; a connection whose file cannot be told (an in-memory database, a connection that is not the
+ * driver's) takes none. It is memory only: it changes no statement and no crash point.
+ *
+ * <p><b>What the mutex does not cover.</b> A writer outside the stores holds SQLite's write lock
+ * without the mutex: an application transaction on the same file, and the schema migration
+ * (Flyway), which runs at startup. A store write then gets the mutex at once and waits for SQLite's
+ * lock inside the driver, at most {@code busy_timeout}, as before; the store writers behind it wait
+ * for the mutex in Java. A writer can so wait {@code busy_timeout} for the mutex and, in that case
+ * only, {@code busy_timeout} again for SQLite's lock.
+ *
+ * <p><b>Lock order.</b> A store write takes, in this order: a connection of the pool; this mutex
+ * (bounded by {@code busy_timeout}); SQLite's write lock ({@code BEGIN IMMEDIATE}, bounded by
+ * {@code busy_timeout}); then, inside the transaction, what its statements need (the checkpoint and
+ * saga fences read rows under the write lock and take no lock of their own). The mutex is taken
+ * immediately before SQLite's write lock and released immediately after it, on the same thread, so
+ * it sits at exactly the place of that lock in every order: a wait cycle through the mutex is a
+ * cycle that existed through SQLite's lock, with the same bound.
+ *
+ * <ul>
+ *   <li>The pool: a batch holds its connection and the mutex while its updater borrows a second
+ *       connection (bounded by the pool's own timeout); a waiter holds a connection while it waits
+ *       for the mutex (bounded by {@code busy_timeout}). Both waits end, as they did when the
+ *       waiter waited inside the driver.
+ *   <li>The crypto cache's subject stripe ({@code CachedCryptoEngine}): a batch decrypting on a
+ *       cache miss waits at most 250 ms for the stripe an erasure holds, then decrypts without it;
+ *       the erasure waits for the mutex at most {@code busy_timeout}. Neither waits without bound.
+ *   <li>The instance-guard registry lock: taken to open and close a {@link SqliteDatabase} only,
+ *       and nothing under it runs a statement, so it never waits for the mutex.
+ *   <li>Two files: a batch on one file that writes to a store of another takes the second file's
+ *       mutex inside the first. Two such batches in opposite directions wait for each other, and
+ *       one fails after {@code busy_timeout}, as with SQLite's locks alone.
+ *   <li>The same thread, the same file: a write on a second connection from inside a batch's
+ *       updater passes the mutex (re-entrant) and waits for the lock its own thread holds; it fails
+ *       after {@code busy_timeout}, as before.
+ * </ul>
  *
  * <p><b>Autocommit connections only.</b> A connection that arrives in manual-commit mode is refused
  * with {@link IllegalStateException}: such a connection holds the write lock while it is not in
@@ -121,9 +180,9 @@ public final class SqliteTransactions {
    *       configuration error, not a storage failure (the pool or an application transaction must
    *       change, a retry cannot succeed), and every SQLite store refuses it the same way, the
    *       event store, the snapshot purger and the offset store included;
-   *   <li>SQLite's write lock not granted within {@code busy_timeout}, or a same-connection lock
-   *       ({@code SQLITE_LOCKED}): an {@link EventStoreException} whose message names {@code what}
-   *       and the cause ({@link SqliteEventStore#lockFailure});
+   *   <li>the file's write mutex or SQLite's write lock not granted within {@code busy_timeout}, or
+   *       a same-connection lock ({@code SQLITE_LOCKED}): an {@link EventStoreException} whose
+   *       message names {@code what} and the cause ({@link SqliteEventStore#lockFailure});
    *   <li>any other {@link SQLException} or {@link RuntimeException}, from borrowing the
    *       connection, the work or closing it: an {@link EventStoreException} with {@code
    *       failureMessage}.
@@ -159,7 +218,8 @@ public final class SqliteTransactions {
 
   /**
    * Runs {@code work} in one write transaction on {@code conn} and commits it; any exit without the
-   * commit rolls the transaction back through {@link #rollback}.
+   * commit rolls the transaction back through {@link #rollback}. The transaction holds the file's
+   * write mutex from before its begin until after its commit or rollback ({@link #open}).
    *
    * @param conn the connection, in autocommit mode
    * @param transaction what the work is, for the log record of a failed rollback (a constant, never
@@ -168,27 +228,244 @@ public final class SqliteTransactions {
    * @param <T> the work's result
    * @return the work's result
    * @throws IllegalStateException if {@code conn} is in manual-commit mode
-   * @throws SQLException if the begin, a statement of the work or the commit fails (rolled back)
+   * @throws SQLException if the write mutex or SQLite's write lock is not granted within {@code
+   *     busy_timeout}, or the begin, a statement of the work or the commit fails (rolled back)
    */
   public static <T> T inTransaction(Connection conn, String transaction, Work<T> work)
       throws SQLException {
-    begin(conn);
-    boolean committed = false;
-    try {
+    try (OpenTransaction open = open(conn, transaction)) {
       T result = work.run(conn);
-      commit(conn);
-      committed = true;
+      open.commit();
       return result;
+    }
+  }
+
+  /**
+   * Opens a write transaction on {@code conn}: waits for the file's write mutex ({@link
+   * #awaitWriteLock}), then begins ({@link #begin}). The caller runs its statements, calls {@link
+   * OpenTransaction#commit()} and closes the returned transaction, in a try-with-resources: closing
+   * it without a commit rolls back ({@link #rollback}), and closing it releases the mutex in every
+   * case. A failed wait or begin opened nothing, holds nothing and propagates.
+   *
+   * @param conn the connection, in autocommit mode
+   * @param transaction what the transaction is, for the log record of a failed rollback (a
+   *     constant, never an id)
+   * @return the open transaction
+   * @throws IllegalStateException if {@code conn} is in manual-commit mode
+   * @throws SQLException if the mutex or SQLite's write lock is not granted within {@code
+   *     busy_timeout} ({@code SQLITE_BUSY}), or the begin fails otherwise
+   */
+  static OpenTransaction open(Connection conn, String transaction) throws SQLException {
+    WriteLock writeLock = awaitWriteLock(conn);
+    try {
+      begin(conn);
+    } catch (Throwable beginFailure) {
+      writeLock.close();
+      throw beginFailure;
+    }
+    return new OpenTransaction(conn, transaction, writeLock);
+  }
+
+  /**
+   * A write transaction {@link #open} began: holds the file's write mutex and SQLite's write lock
+   * until it is closed. Used by one thread, the one that opened it.
+   */
+  static final class OpenTransaction implements AutoCloseable {
+
+    private final Connection conn;
+    private final String transaction;
+    private final WriteLock writeLock;
+    private boolean committed;
+
+    private OpenTransaction(Connection conn, String transaction, WriteLock writeLock) {
+      this.conn = conn;
+      this.transaction = transaction;
+      this.writeLock = writeLock;
+    }
+
+    /**
+     * Commits the transaction. A failure propagates; the transaction may still be open, and {@link
+     * #close()} rolls it back.
+     *
+     * @throws SQLException if the {@code COMMIT} fails
+     */
+    void commit() throws SQLException {
+      SqliteTransactions.commit(conn);
+      committed = true;
+    }
+
+    /**
+     * Rolls the transaction back unless it committed, then releases the write mutex. Never throws a
+     * {@code SQLException} or {@code RuntimeException} (see {@link SqliteTransactions#rollback}).
+     */
+    @Override
+    public void close() {
+      try {
+        if (!committed) {
+          rollback(conn, transaction);
+        }
+      } finally {
+        writeLock.close();
+      }
+    }
+  }
+
+  // ---- the in-process write mutex ----
+
+  /** What SQLite's own refusal of the write lock says; the mutex's timeout says the same. */
+  private static final String WRITE_LOCK_TIMEOUT =
+      "[SQLITE_BUSY] The database file is locked (another write transaction of this process held"
+          + " the write lock for longer than this connection's busy_timeout of %d ms)";
+
+  /** The write mutex of one database file: fair, so writers are served first come first served. */
+  private static final class FileMutex {
+    private final Path file;
+    private final ReentrantLock lock = new ReentrantLock(true);
+
+    private FileMutex(Path file) {
+      this.file = file;
+    }
+  }
+
+  /**
+   * The mutexes by canonical database file, and by the connection URL that led to the file, so the
+   * file is asked of the database once per URL. One entry per database file this process writes
+   * through the stores, and per URL spelling of it; never removed.
+   */
+  private static final ConcurrentHashMap<Path, FileMutex> MUTEX_BY_FILE = new ConcurrentHashMap<>();
+
+  private static final ConcurrentHashMap<String, FileMutex> MUTEX_BY_URL =
+      new ConcurrentHashMap<>();
+
+  /** A hold of a file's write mutex, or of none; {@link #close()} releases it, once. */
+  static final class WriteLock implements AutoCloseable {
+
+    private static final WriteLock NONE = new WriteLock(null);
+
+    private final FileMutex mutex;
+    private boolean released;
+
+    private WriteLock(FileMutex mutex) {
+      this.mutex = mutex;
+    }
+
+    /**
+     * The canonical database file whose mutex this holds, or {@code null} when the connection's
+     * file could not be told and nothing is held.
+     */
+    Path file() {
+      return mutex == null ? null : mutex.file;
+    }
+
+    /** Releases the mutex, on the thread that took it; a second call does nothing. */
+    @Override
+    public void close() {
+      if (mutex != null && !released) {
+        released = true;
+        mutex.lock.unlock();
+      }
+    }
+  }
+
+  /**
+   * Waits for the write mutex of {@code conn}'s database file, at most the connection's {@code
+   * busy_timeout}: the step before every {@code BEGIN IMMEDIATE} of a store, and before a write
+   * that is one statement in autocommit. The caller releases it by closing the returned hold after
+   * its {@code COMMIT} or {@code ROLLBACK}, in a try-with-resources. See the class Javadoc for what
+   * the mutex is for and where it stands among the other locks.
+   *
+   * <p>The thread that already holds the mutex gets it again at once. The wait is not
+   * interruptible: an interrupt leaves the thread's interrupt status set and the wait goes on, as
+   * the wait for SQLite's own lock does. A connection whose database file cannot be told takes no
+   * mutex, and the returned hold releases nothing.
+   *
+   * @param conn the connection the write will run on, in autocommit mode
+   * @return the hold; close it to release the mutex
+   * @throws IllegalStateException if {@code conn} is in manual-commit mode, before any wait
+   * @throws SQLException with {@code SQLITE_BUSY} if the mutex is not granted within the
+   *     connection's {@code busy_timeout}; or if the connection cannot be read
+   */
+  static WriteLock awaitWriteLock(Connection conn) throws SQLException {
+    requireAutoCommit(conn);
+    FileMutex mutex = mutexOf(conn);
+    if (mutex == null) {
+      return WriteLock.NONE;
+    }
+    if (!tryLockUninterruptibly(mutex.lock, 0)) {
+      long busyTimeoutMillis = busyTimeoutMillis(conn);
+      if (!tryLockUninterruptibly(mutex.lock, busyTimeoutMillis)) {
+        throw new SQLiteException(
+            String.format(WRITE_LOCK_TIMEOUT, busyTimeoutMillis), SQLiteErrorCode.SQLITE_BUSY);
+      }
+    }
+    return new WriteLock(mutex);
+  }
+
+  /**
+   * The mutex of {@code conn}'s database file, or {@code null} when the file cannot be told: the
+   * connection is not the driver's, the database is in-memory or temporary, or its path cannot be
+   * resolved. Such a write is serialized by SQLite's own lock and {@code busy_timeout} alone.
+   */
+  private static FileMutex mutexOf(Connection conn) {
+    try {
+      if (!conn.isWrapperFor(SQLiteConnection.class)) {
+        return null;
+      }
+      SQLiteConnection sqlite = conn.unwrap(SQLiteConnection.class);
+      String url = sqlite.getUrl();
+      FileMutex known = url == null ? null : MUTEX_BY_URL.get(url);
+      if (known != null) {
+        return known;
+      }
+      // The canonical path SqliteDatabase.file() reports: SQLite's own name of the main database,
+      // with symbolic links resolved.
+      Path file = SqliteSetup.databaseFile(sqlite).toRealPath();
+      FileMutex mutex = MUTEX_BY_FILE.computeIfAbsent(file, FileMutex::new);
+      if (url != null) {
+        MUTEX_BY_URL.putIfAbsent(url, mutex);
+      }
+      return mutex;
+    } catch (SQLException | IOException | RuntimeException unknownFile) {
+      return null;
+    }
+  }
+
+  /** The connection's {@code busy_timeout} in milliseconds, as SQLite reports it. */
+  private static long busyTimeoutMillis(Connection conn) throws SQLException {
+    try (Statement statement = conn.createStatement();
+        ResultSet result = statement.executeQuery("PRAGMA busy_timeout")) {
+      result.next();
+      return Math.max(0, result.getLong(1));
+    }
+  }
+
+  /**
+   * {@link ReentrantLock#tryLock(long, TimeUnit)} that an interrupt does not end: the wait goes on
+   * for what is left of {@code millis}, and the thread's interrupt status is set when it returns. A
+   * thread whose status is already set waits too.
+   */
+  private static boolean tryLockUninterruptibly(ReentrantLock lock, long millis) {
+    boolean interrupted = Thread.interrupted();
+    try {
+      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+      while (true) {
+        try {
+          return lock.tryLock(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+          interrupted = true;
+        }
+      }
     } finally {
-      if (!committed) {
-        rollback(conn, transaction);
+      if (interrupted) {
+        Thread.currentThread().interrupt();
       }
     }
   }
 
   /**
    * Begins a write transaction with {@code BEGIN IMMEDIATE}. A failure, for example the write lock
-   * not granted within {@code busy_timeout}, opened nothing and propagates.
+   * not granted within {@code busy_timeout}, opened nothing and propagates. The statement alone: it
+   * takes no write mutex, so the stores begin through {@link #open} or {@link #inTransaction}.
    *
    * @throws IllegalStateException if {@code conn} is in manual-commit mode
    */

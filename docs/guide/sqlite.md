@@ -250,10 +250,20 @@ SQLite allows one writer at a time per database file. Every StreamRune write tra
 write lock from its `BEGIN IMMEDIATE` to its `COMMIT`, so writes of every kind (appends, saga steps,
 outbox claims, projection batches, retention sweeps) run one after another. A writer waits for the
 lock at most the connection's `busy_timeout`, then fails with an `EventStoreException` saying the
-write lock was not granted. A read does not wait: in WAL mode it sees the last committed state. The
-one read that does is the first read of a projection whose read-model table does not exist yet: it
-creates the table, which is a write. A table that exists is found without the lock, so after a
-restart the first read of each projection's read model does not wait either.
+write lock was not granted.
+
+The stores' writers of one process queue for the lock in arrival order, and they wait in Java, not
+inside the driver: a waiting writer on a virtual thread parks and frees its carrier. So on a machine
+with one or two processors a transaction that is itself waiting for something (a projection updater
+making a blocking call) is not starved by the writers behind it. A writer outside the stores, an
+application transaction or a schema migration, holds SQLite's lock without joining that queue; the
+store writer at the head of the queue then waits for it inside the driver, as any SQLite writer
+does.
+
+A read does not wait: in WAL mode it sees the last committed state. The one read that does is the
+first read of a projection whose read-model table does not exist yet: it creates the table, which is
+a write. A table that exists is found without the lock, so after a restart the first read of each
+projection's read model does not wait either.
 
 The consequences:
 

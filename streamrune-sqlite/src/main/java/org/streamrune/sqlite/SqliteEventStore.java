@@ -957,27 +957,22 @@ public final class SqliteEventStore implements EventStore {
     // an unkeyed command would store its events twice.
     boolean committed = false;
     AppendResult result = null;
-    try (Connection conn = dataSource.getConnection()) {
-      SqliteTransactions.begin(conn);
-      try {
-        List<GlobalOffset> offsets = insertEvents(conn, streamId, rows, expectedVersion);
-        if (!outboxEntries.isEmpty()) {
-          outboxStore.saveAll(outboxEntries, conn);
-        }
-        writeAuditEntries(conn, streamId, events, expectedVersion);
-        SqliteTransactions.commit(conn);
-        committed = true;
-        result =
-            new AppendResult(
-                List.copyOf(offsets), new Version(expectedVersion.value() + events.size()));
-        return result;
-      } finally {
-        // The single rollback point of every exit without a commit: a SQLException, the head
-        // check's OptimisticLockException, a failed outbox write, any other Throwable.
-        if (!committed) {
-          SqliteTransactions.rollback(conn, "append");
-        }
+    // Closing the open transaction is the single rollback point of every exit without a commit: a
+    // SQLException, the head check's OptimisticLockException, a failed outbox write, any other
+    // Throwable. It also releases the file's write mutex, before the connection is returned.
+    try (Connection conn = dataSource.getConnection();
+        SqliteTransactions.OpenTransaction transaction = SqliteTransactions.open(conn, "append")) {
+      List<GlobalOffset> offsets = insertEvents(conn, streamId, rows, expectedVersion);
+      if (!outboxEntries.isEmpty()) {
+        outboxStore.saveAll(outboxEntries, conn);
       }
+      writeAuditEntries(conn, streamId, events, expectedVersion);
+      transaction.commit();
+      committed = true;
+      result =
+          new AppendResult(
+              List.copyOf(offsets), new Version(expectedVersion.value() + events.size()));
+      return result;
     } catch (SQLException e) {
       if (committed) {
         return result;
@@ -1170,35 +1165,31 @@ public final class SqliteEventStore implements EventStore {
     boolean claimLost = false;
     boolean committed = false;
     IdempotentAppendResult result = null;
-    try (Connection conn = dataSource.getConnection()) {
-      SqliteTransactions.begin(conn);
-      try {
-        if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
-          claimLost = true;
-        } else {
-          // A refusal throws here before anything else is written; the rollback below undoes the
-          // claim with the rest of the transaction.
-          if (forwardOf != null) {
-            SagaFence.requireForward(conn, forwardOf);
-          }
-          // An empty command claims its key and appends nothing: like an empty append it does not
-          // consult the stream's head.
-          List<GlobalOffset> offsets =
-              rows.isEmpty() ? List.of() : insertEvents(conn, streamId, rows, expectedVersion);
-          commandInbox.backfillOffsets(idempotencyKey, offsets, conn);
-          if (!outboxEntries.isEmpty()) {
-            outboxStore.saveAll(outboxEntries, conn);
-          }
-          writeAuditEntries(conn, streamId, events, expectedVersion);
-          SqliteTransactions.commit(conn);
-          committed = true;
-          result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
+    // Closing the open transaction is the single rollback point of every exit without a commit,
+    // the lost claim included; it also releases the file's write mutex.
+    try (Connection conn = dataSource.getConnection();
+        SqliteTransactions.OpenTransaction transaction =
+            SqliteTransactions.open(conn, "keyed append")) {
+      if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
+        claimLost = true;
+      } else {
+        // A refusal throws here before anything else is written; closing the transaction undoes
+        // the claim with the rest of it.
+        if (forwardOf != null) {
+          SagaFence.requireForward(conn, forwardOf);
         }
-      } finally {
-        // The single rollback point of every exit without a commit, the lost claim included.
-        if (!committed) {
-          SqliteTransactions.rollback(conn, "keyed append");
+        // An empty command claims its key and appends nothing: like an empty append it does not
+        // consult the stream's head.
+        List<GlobalOffset> offsets =
+            rows.isEmpty() ? List.of() : insertEvents(conn, streamId, rows, expectedVersion);
+        commandInbox.backfillOffsets(idempotencyKey, offsets, conn);
+        if (!outboxEntries.isEmpty()) {
+          outboxStore.saveAll(outboxEntries, conn);
         }
+        writeAuditEntries(conn, streamId, events, expectedVersion);
+        transaction.commit();
+        committed = true;
+        result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
       }
     } catch (SQLException e) {
       if (committed) {
@@ -1583,10 +1574,10 @@ public final class SqliteEventStore implements EventStore {
 
     // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
     // write lock when the statement starts (waiting at most busy_timeout) and commits all of it or
-    // nothing.
+    // nothing. It queues with the other writers of the process first, on the file's write mutex.
     int written;
-    try (var conn = dataSource.getConnection()) {
-      SqliteTransactions.requireAutoCommit(conn);
+    try (var conn = dataSource.getConnection();
+        var _ = SqliteTransactions.awaitWriteLock(conn)) {
       try (var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
         SqliteStreamKeys.bind(ps, 1, streamId);
         ps.setLong(3, version.value());
