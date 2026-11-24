@@ -269,11 +269,13 @@ class SqliteBackendTest {
   }
 
   /**
-   * Every store is built on the bundle's one handle: the saga store and the saga dead-letter store
-   * in particular, whose shield and hold rely on sharing one database file.
+   * Every store uses the context's own DataSource, and the saga store keeps the handle's file: what
+   * a store retains of the bundle's one handle (the stores keep no handle, so handle identity
+   * itself is the wiring's, by construction). The saga store and the saga dead-letter store matter
+   * most: their shield and hold rely on sharing one database file.
    */
   @Test
-  void everyStoreIsBuiltOnTheOneHandle() throws Exception {
+  void everyStoreUsesTheContextsDataSourceAndTheSagaStoreItsFile() throws Exception {
     DataSource dataSource = TestDatabases.dataSource(dir.resolve("one-handle.db"));
     BackendStores stores = open(dataSource, null);
     for (Object store :
@@ -618,23 +620,69 @@ class SqliteBackendTest {
         .append(stream, List.of(envelope(stream)), Version.initial());
     assertThat(count(file, "SELECT created_at FROM event_stream"))
         .isEqualTo(fixed.getEpochSecond() * 1_000_000L);
+
+    stores
+        .defaultReadModelStore()
+        .checkpoints()
+        .saveOffset(org.streamrune.core.types.ProjectionName.of("clocked"), GlobalOffset.of(1));
+    assertThat(
+            count(
+                file,
+                "SELECT updated_at FROM readmodel_checkpoint WHERE projection_name = 'clocked'"))
+        .isEqualTo(fixed.getEpochSecond() * 1_000_000L);
   }
 
   // ---------------------------------------------------------------- close
 
+  /**
+   * After close() every store accessor refuses, built before or not, and so does the create() of a
+   * factory obtained before: a store handed out after the guard is released would write without it.
+   * close() is idempotent; the name still answers.
+   */
   @Test
-  void closeIsIdempotentAndAStoreBuiltAfterItIsRefused() {
+  void afterCloseEveryStoreAccessorRefuses() {
     BackendStores stores = new SqliteBackend().open(context(dataSource("closed.db"), null));
+    // Built before close: the memoized instances are refused too, not handed back.
     EventStoreFactory factory = stores.eventStoreFactory(options());
+    stores.offsetStore();
+    stores.defaultReadModelStore();
+    stores.sagaStore();
+    stores.outboxStore(STRICT);
     stores.close();
     assertThatCode(stores::close).doesNotThrowAnyException();
+    assertThat(stores.backendName()).isEqualTo("sqlite");
 
     assertThatThrownBy(factory::create)
         .isExactlyInstanceOf(IllegalStateException.class)
         .hasMessageContaining("is closed");
-    assertThatThrownBy(stores::defaultReadModelStore)
-        .isExactlyInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("is closed");
+    List<org.assertj.core.api.ThrowableAssert.ThrowingCallable> accessors =
+        List.of(
+            () -> stores.eventStoreFactory(options()),
+            () -> stores.eventStoreFactory(options(null, null, null, null, Duration.ZERO)),
+            stores::offsetStore,
+            stores::defaultReadModelStore,
+            stores::sagaStore,
+            stores::sagaDeadLetterStore,
+            () -> stores.outboxStore(STRICT),
+            () ->
+                stores.outboxStore(
+                    new OutboxOptions(
+                        Duration.ofMinutes(1), OutboxOrderingMode.AVAILABILITY_FIRST)),
+            stores::commandInbox,
+            stores::deadLetterQueue,
+            stores::projectionDeadLetterStore,
+            stores::auditStore,
+            stores::eventAuditStore,
+            stores::commandAuditQuery,
+            stores::eventAuditQuery,
+            stores::complianceReportQuery,
+            () -> stores.snapshotPurger(subject -> List.of()));
+    for (var accessor : accessors) {
+      assertThatThrownBy(accessor)
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("are closed")
+          .hasMessageContaining("without the instance guard");
+    }
   }
 
   /**

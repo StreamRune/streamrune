@@ -404,7 +404,9 @@ class PostgresBackendTest {
   void theRefusalNamesTheBackendThatOwnsTheStore(@TempDir Path dir) {
     BackendStores stores = open(dataSource);
     // The connection settings SqliteDatabase requires; SQLiteDataSource takes them from its
-    // SQLiteConfig, not from URL parameters.
+    // SQLiteConfig, not from URL parameters. The source of truth is SqliteSetup.verify in
+    // streamrune-sqlite (documented on SqliteDatabase); its tests keep the same list in
+    // TestDatabases.REQUIRED_SETTINGS. A setting added there fails this test loudly.
     var config = new org.sqlite.SQLiteConfig();
     config.setJournalMode(org.sqlite.SQLiteConfig.JournalMode.WAL);
     config.setSynchronous(org.sqlite.SQLiteConfig.SynchronousMode.FULL);

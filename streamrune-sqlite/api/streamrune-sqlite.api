@@ -182,6 +182,7 @@ public final class org.streamrune.sqlite.SqliteReadModelStore implements org.str
   public org.streamrune.core.projection.OffsetStore checkpoints()
   public org.streamrune.core.projection.ProjectionRepository repository()
   public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
+  public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean, java.time.Clock)
 
 public final class org.streamrune.sqlite.SqliteSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(org.streamrune.sqlite.SqliteDatabase)

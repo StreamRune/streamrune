@@ -203,6 +203,10 @@ class SqliteReadModelStoreTest {
       assertThatThrownBy(() -> SqliteReadModelStore.create("sqlite", database, null, true, true))
           .isExactlyInstanceOf(IllegalArgumentException.class)
           .hasMessage("objectMapper is required");
+      assertThatThrownBy(
+              () -> SqliteReadModelStore.create("sqlite", database, mapper, true, true, null))
+          .isExactlyInstanceOf(IllegalArgumentException.class)
+          .hasMessage("clock is required");
 
       assertThat(tableExists(database.dataSource(), "readmodel_checkpoint")).isFalse();
       assertThat(tableExists(database.dataSource(), SqliteSchemaSeries.READ_MODEL.historyTable()))

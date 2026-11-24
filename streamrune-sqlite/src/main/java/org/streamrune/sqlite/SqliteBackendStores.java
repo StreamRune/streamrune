@@ -35,6 +35,7 @@ import org.streamrune.runtime.GuardedTracing;
  * The stores {@link SqliteBackend} opened on one {@link SqliteDatabase}; see {@link SqliteBackend}
  * for what each accessor builds. Every store is built on its accessor's first call, on the one
  * handle the bundle holds, and memoized; the constructor only keeps the context and the handle.
+ * After {@link #close()} every store accessor refuses.
  */
 final class SqliteBackendStores implements BackendStores {
 
@@ -66,6 +67,8 @@ final class SqliteBackendStores implements BackendStores {
       new ConcurrentHashMap<>();
   private final Map<OutboxOptions, SqliteOutboxStore> outboxStores = new ConcurrentHashMap<>();
 
+  private volatile boolean closed;
+
   SqliteBackendStores(BackendContext context, SqliteDatabase database) {
     this.context = context;
     this.database = database;
@@ -80,7 +83,8 @@ final class SqliteBackendStores implements BackendStores {
                     SqliteProjectionRepository.createObjectMapper(
                         context.cryptoEngine(), context.metrics()),
                     context.migrateReadModelSchema(),
-                    context.validateSchema()));
+                    context.validateSchema(),
+                    clock));
     this.sagaStore =
         new Memo<>(
             () ->
@@ -111,6 +115,7 @@ final class SqliteBackendStores implements BackendStores {
     if (options == null) {
       throw new IllegalArgumentException("options is required");
     }
+    requireOpen();
     // A refused store throws out of the mapping function, so nothing is memoized for it.
     return eventStoreFactories.computeIfAbsent(options, this::configure);
   }
@@ -201,6 +206,7 @@ final class SqliteBackendStores implements BackendStores {
     if (options == null) {
       throw new IllegalArgumentException("options is required");
     }
+    requireOpen();
     return outboxStores.computeIfAbsent(
         options, o -> new SqliteOutboxStore(database, o.claimLease(), o.orderingMode(), clock));
   }
@@ -251,12 +257,15 @@ final class SqliteBackendStores implements BackendStores {
     if (streamsForSubject == null) {
       throw new IllegalArgumentException("streamsForSubject is required");
     }
+    requireOpen();
     return new SqliteSnapshotStorePurger(database, streamsForSubject, clock);
   }
 
   /**
    * {@link SubscriptionLeadership#NOOP} for every positive duration, before and after {@link
-   * #close()}: the instance guard keeps a second instance off the file, and NOOP holds nothing.
+   * #close()}: the instance guard keeps a second instance off the file, and NOOP holds nothing and
+   * writes nothing, so after {@code close()} it is handed back as {@link BackendStores} documents
+   * (already closed), not refused like the stores.
    */
   @Override
   public SubscriptionLeadership leadership(Duration leaseTtl) {
@@ -275,11 +284,32 @@ final class SqliteBackendStores implements BackendStores {
    */
   @Override
   public void close() {
+    closed = true;
     database.close();
   }
 
-  /** A value built on the first {@link #get()} and returned by every later one. */
-  private static final class Memo<T> {
+  /**
+   * Refuses every store after {@link #close()}: the guard is released, so a store handed out now
+   * would write without it. A check, then an act: an accessor racing {@code close()} may still hand
+   * out a store just after the release.
+   */
+  private void requireOpen() {
+    if (closed) {
+      throw new IllegalStateException(
+          "The '"
+              + SqliteBackend.NAME
+              + "' backend's stores on "
+              + database.file()
+              + " are closed: a store handed out after close() would write without the instance"
+              + " guard. Use the stores only before the bundle is closed.");
+    }
+  }
+
+  /**
+   * A value built on the first {@link #get()} and returned by every later one while the bundle is
+   * open; refused, built or not, once it is closed.
+   */
+  private final class Memo<T> {
     private final Supplier<T> factory;
     private volatile T value;
 
@@ -288,6 +318,7 @@ final class SqliteBackendStores implements BackendStores {
     }
 
     T get() {
+      requireOpen();
       T current = value;
       if (current == null) {
         synchronized (this) {

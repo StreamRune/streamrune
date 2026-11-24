@@ -233,6 +233,11 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
    * touches the database, applies the schema series and validates them (each unless switched off),
    * and builds the store. Every call builds a new store over the same database.
    *
+   * <p>The closed-handle check is a check, then an act: a {@link SqliteDatabase#close()} on another
+   * thread just after it can still let the store be built on the released handle, and a store keeps
+   * only the data source and the file, so it never notices the close. Close the handle only after
+   * every caller of this factory and every store it built have stopped.
+   *
    * @throws IllegalStateException if the database handle is closed, if exactly one of the outbox
    *     store and the outbox mapper is set, if no crypto engine is set and a registered event or
    *     state type carries {@code @Encrypted}, or if schema validation finds an error (a missing

@@ -1,6 +1,7 @@
 package org.streamrune.sqlite;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionRepository;
@@ -68,7 +69,7 @@ public final class SqliteReadModelStore implements ReadModelStore {
    *     SqliteProjectionRepository#createObjectMapper} to encrypt {@code @Encrypted} fields at rest
    * @param migrate whether to apply the read-model series
    * @param validate whether to validate the read-model schema
-   * @return the store
+   * @return the store, stamping {@code updated_at} with {@link Clock#systemUTC()}
    * @throws IllegalArgumentException if an argument is {@code null}, or {@code name} is blank or
    *     {@link ReadModelStore#DEFAULT}
    * @throws IllegalStateException if {@code database} is closed (whatever the flags), or validation
@@ -81,6 +82,39 @@ public final class SqliteReadModelStore implements ReadModelStore {
       ObjectMapper objectMapper,
       boolean migrate,
       boolean validate) {
+    return create(name, database, objectMapper, migrate, validate, Clock.systemUTC());
+  }
+
+  /**
+   * {@link #create(String, SqliteDatabase, ObjectMapper, boolean, boolean)} whose checkpoints and
+   * repository stamp {@code updated_at} with {@code clock}.
+   *
+   * <p>The closed-handle check is a check, then an act: a {@link SqliteDatabase#close()} on another
+   * thread just after it can still let the store be built on the released handle. Close the handle
+   * only after every caller that builds stores on it has stopped.
+   *
+   * @param name the store's name ({@link ReadModelStore#name()}); not blank, and not {@link
+   *     ReadModelStore#DEFAULT}, which is reserved for the backend's default store
+   * @param database the open read-model database, used as given and never closed by the store
+   * @param objectMapper serialises the read models; build it with {@link
+   *     SqliteProjectionRepository#createObjectMapper} to encrypt {@code @Encrypted} fields at rest
+   * @param migrate whether to apply the read-model series
+   * @param validate whether to validate the read-model schema
+   * @param clock the clock that stamps {@code updated_at} of checkpoints and read models
+   * @return the store
+   * @throws IllegalArgumentException if an argument is {@code null}, or {@code name} is blank or
+   *     {@link ReadModelStore#DEFAULT}
+   * @throws IllegalStateException if {@code database} is closed (whatever the flags), or validation
+   *     finds the schema missing a table or column or behind this build
+   * @throws org.streamrune.core.EventStoreException if the migration fails
+   */
+  public static SqliteReadModelStore create(
+      String name,
+      SqliteDatabase database,
+      ObjectMapper objectMapper,
+      boolean migrate,
+      boolean validate,
+      Clock clock) {
     if (name == null || name.isBlank()) {
       throw new IllegalArgumentException("name is required and must not be blank");
     }
@@ -94,6 +128,9 @@ public final class SqliteReadModelStore implements ReadModelStore {
     if (objectMapper == null) {
       throw new IllegalArgumentException("objectMapper is required");
     }
+    if (clock == null) {
+      throw new IllegalArgumentException("clock is required");
+    }
     // With both flags off nothing else would notice a closed handle, and the store would write
     // without the instance guard.
     database.requireOpen();
@@ -103,7 +140,7 @@ public final class SqliteReadModelStore implements ReadModelStore {
     if (validate) {
       database.validate(SqliteSchemaSeries.READ_MODEL);
     }
-    var checkpoints = new SqliteReadModelCheckpoints(database);
+    var checkpoints = new SqliteReadModelCheckpoints(database, clock);
     return new SqliteReadModelStore(
         name, new SqliteProjectionRepository(database, objectMapper, checkpoints), checkpoints);
   }

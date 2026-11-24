@@ -69,11 +69,21 @@ import org.streamrune.core.types.LogSanitizer;
  * SqliteDatabase#open(DataSource)}) and takes the instance guard of the file; it runs no schema
  * SQL. Only {@code defaultReadModelStore()}, the event store factory's {@code create()} and the
  * stores' own operations reach the tables. {@link BackendStores#close()} closes the handle, which
- * releases the bundle's reference to the guard, and is idempotent. None of the stores holds
- * anything to close of its own. A store already built keeps the closed handle, and must not be used
- * after {@code close()}; building the event store or the default read-model store on a closed
- * bundle is refused with an {@link IllegalStateException}. The backend is stateless and
- * thread-safe; so is the bundle.
+ * releases the bundle's reference to the guard, and is idempotent; none of the stores holds
+ * anything to close of its own.
+ *
+ * <p><b>After {@code close()}.</b> Every store accessor, and the {@code create()} of an event store
+ * factory obtained before, refuses with an {@link IllegalStateException}, memoized stores included:
+ * a store handed out after the guard is released would write without it. {@code backendName()}
+ * still answers, and {@code leadership} still returns {@link SubscriptionLeadership#NOOP}, already
+ * as closed as it can be, as {@link BackendStores} documents. A store obtained <em>before</em>
+ * {@code close()} cannot notice it: it keeps only the {@code DataSource} and the database file, not
+ * the handle, so it goes on writing, without the guard, and a second process may then open the
+ * file. Close the bundle only after every user of its stores has stopped. The refusal is a check,
+ * then an act, so an accessor racing {@code close()} on another thread may still hand out a store
+ * just after the release; the same rule covers it.
+ *
+ * <p>The backend is stateless and thread-safe; so is the bundle.
  */
 public final class SqliteBackend implements StreamRuneBackend {
 
@@ -118,8 +128,9 @@ public final class SqliteBackend implements StreamRuneBackend {
         throw new IllegalStateException(
             "The '"
                 + NAME
-                + "' backend (streamrune.backend=sqlite) needs a SQLite database, but the"
-                + " DataSource connects to "
+                + "' backend (streamrune.backend="
+                + NAME
+                + ") needs a SQLite database, but the DataSource connects to "
                 + LogSanitizer.sanitizeForLog(product)
                 + " "
                 + LogSanitizer.sanitizeForLog(meta.getDatabaseProductVersion())
