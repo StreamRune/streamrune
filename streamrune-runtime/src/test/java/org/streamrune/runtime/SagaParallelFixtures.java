@@ -648,7 +648,8 @@ final class SagaParallelFixtures {
             .computeIfAbsent(saga, s -> new ArrayList<>())
             .add(new DeadLetter(entry.eventOffset().value(), entry.errorType()));
       }
-      // the store lists its entries in no order; an entry is unique by (saga, offset)
+      // the store lists its entries in no order; an entry is unique by (saga, type, offset), and
+      // this fixture has one type
       deadLetters.values().forEach(l -> l.sort(Comparator.comparingLong(DeadLetter::offset)));
       return deadLetters;
     }

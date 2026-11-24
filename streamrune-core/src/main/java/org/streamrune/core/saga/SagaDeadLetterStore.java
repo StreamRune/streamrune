@@ -24,10 +24,12 @@ import org.streamrune.core.types.SagaType;
  * per-subject key deletion. To inspect a quarantined event, read the event store at {@code
  * eventOffset} — see {@link SagaDeadLetterEntry}.
  *
- * <p>{@link #publish} is an idempotent upsert keyed by {@code (sagaId, eventOffset)} so
- * re-quarantine after an infra retry does not produce duplicate rows. When {@code sagaId} is {@code
- * null} (e.g. {@code extractSagaId} or {@code correlateByEventData} failed before a saga could be
- * identified), the key degenerates to {@code eventOffset} alone.
+ * <p>{@link #publish} is an idempotent upsert keyed by {@code (sagaId, sagaType, eventOffset)} so
+ * re-quarantine after an infra retry does not produce duplicate rows. The saga type is part of the
+ * key: two saga types that derive the same {@code SagaId} keep one entry each at an offset, so one
+ * type's poison or hold never replaces the other type's record. When {@code sagaId} is {@code null}
+ * (e.g. {@code extractSagaId} or {@code correlateByEventData} failed before a saga could be
+ * identified), the key is {@code (sagaType, eventOffset)}.
  *
  * <p><b>A dead-letter store must READ AND WRITE the saga rows it shields</b> (normative for
  * implementations and for how a store is WIRED). Four of its operations are not entry-local at all:
@@ -60,7 +62,9 @@ public interface SagaDeadLetterStore {
 
   /**
    * Quarantines a poison saga event. Idempotent: a second call with the same {@code (sagaId,
-   * eventOffset)} pair updates the existing row rather than inserting a duplicate.
+   * sagaType, eventOffset)} key updates the existing row rather than inserting a duplicate; an
+   * entry of another saga type at the same saga id and offset is a different entry and is left as
+   * stored.
    *
    * <p><b>Conflict semantics (normative for implementations):</b> the re-quarantine refreshes the
    * mutable columns ({@code faultedAt}, error details, ...) but preserves the STORED {@code
@@ -129,14 +133,18 @@ public interface SagaDeadLetterStore {
    *   <li>when the owner row has applied the event ({@code last_applied_offset} at or above {@code
    *       entry.eventOffset()}), nothing is written — neither entry nor shield — and the result is
    *       {@link HoldResult.AlreadyApplied};
-   *   <li>otherwise, when an entry of {@code entry.sagaType()} is stored at {@code (entry.sagaId(),
-   *       entry.eventOffset())}, it is kept exactly as stored — its error type, error message,
-   *       {@code faultedAt} and every other column — the shield is asserted (it is already set, as
-   *       every entry is written with it) and the result is {@link HoldResult.Kept} with that
-   *       entry;
+   *   <li>otherwise, when an entry is stored at the hold's full key {@code (entry.sagaId(),
+   *       entry.sagaType(), entry.eventOffset())}, it is kept exactly as stored — its error type,
+   *       error message, {@code faultedAt} and every other column — the shield is asserted (it is
+   *       already set, as every entry is written with it) and the result is {@link HoldResult.Kept}
+   *       with that entry;
    *   <li>otherwise the entry is written exactly as {@link #publishShielded} writes it, with the
    *       shield, and the result is {@link HoldResult.Written}.
    * </ul>
+   *
+   * <p>"Absent" means no entry at the full key: an entry of another saga type at the same saga id
+   * and offset is neither kept nor replaced — the hold writes its own entry beside it. A {@link
+   * HoldResult.Kept} entry therefore always carries the hold's saga type, saga id and event offset.
    *
    * <p>An absent owner row (the row-less residual) has applied nothing and leaves the shield write
    * a no-op. Two concurrent holds of one event write it once. A look-up followed by a write does
@@ -166,10 +174,6 @@ public interface SagaDeadLetterStore {
    * with any other error type, on a shielded row that is not {@code FAULTED}, is taken for the
    * saga's own poison whose fault write did not land, and the runner makes that fault write.
    *
-   * <p>The shipped stores key a named entry by {@code (sagaId, eventOffset)}, saga type not
-   * included, as {@link #publish} does: in them an entry of ANOTHER saga type stored at that key is
-   * replaced, as {@link #publish} replaces it, and the result is {@link HoldResult.Written}.
-   *
    * @param entry the hold's entry; {@code sagaId} is required
    * @return what the call did: {@link HoldResult.Written}, {@link HoldResult.Kept} with the stored
    *     entry, or {@link HoldResult.AlreadyApplied}
@@ -184,7 +188,8 @@ public interface SagaDeadLetterStore {
     record Written() implements HoldResult {}
 
     /**
-     * An entry of the hold's saga type was stored at the key and is kept as stored.
+     * An entry was stored at the hold's key {@code (sagaId, sagaType, eventOffset)} and is kept as
+     * stored.
      *
      * @param entry the stored entry
      */
@@ -215,7 +220,9 @@ public interface SagaDeadLetterStore {
   List<SagaDeadLetterEntry> findAll(int limit);
 
   /**
-   * Returns all dead-letter entries for the given saga.
+   * Returns all dead-letter entries for the given saga, of every saga type: two types that derive
+   * the same {@code SagaId} may each hold an entry at one offset, so a caller that acts for one
+   * type filters by {@link SagaDeadLetterEntry#sagaType()}.
    *
    * @param sagaId the saga to query
    * @return all entries for this saga, ordered by {@code faultedAt} descending
@@ -230,12 +237,13 @@ public interface SagaDeadLetterStore {
    *
    * <p><b>Why this exists.</b> Without it, the only way to resolve a null-saga entry is {@code
    * findAll(Integer.MAX_VALUE)} filtered in Java. The null-saga population is precisely the one
-   * that grows without bound: PostgreSQL's {@code UNIQUE(saga_id, event_offset)} treats NULLs as
-   * distinct, so every re-quarantine INSERTs a fresh row, and a broken {@code correlateByEventData}
-   * on a 1000 event/s stream produces tens of millions of rows inside one retention window.
-   * Scanning that table — twice per replay attempt, once to find the entry and again for the
-   * still-poison check — materialises every row as a {@link SagaDeadLetterEntry} on the heap and
-   * kills the JVM on exactly the recovery path the operator reaches for once the router is fixed.
+   * that grows without bound: PostgreSQL's {@code UNIQUE(saga_id, saga_type, event_offset)} treats
+   * NULLs as distinct, so every re-quarantine INSERTs a fresh row, and a broken {@code
+   * correlateByEventData} on a 1000 event/s stream produces tens of millions of rows inside one
+   * retention window. Scanning that table — twice per replay attempt, once to find the entry and
+   * again for the still-poison check — materialises every row as a {@link SagaDeadLetterEntry} on
+   * the heap and kills the JVM on exactly the recovery path the operator reaches for once the
+   * router is fixed.
    *
    * <p><b>Type scoping matches the replayer's own rule</b>: only an entry of {@code sagaType}
    * matches. There is no untyped lookup: a {@code null sagaType} is rejected, never read as "any
@@ -314,10 +322,10 @@ public interface SagaDeadLetterStore {
   }
 
   /**
-   * Removes a single quarantined entry, identified by its idempotency key {@code (sagaId,
-   * eventOffset)}, and only when its stored saga type equals {@code sagaType}. Once a quarantined
-   * event has been replayed or otherwise resolved, the entry is discarded so it does not appear in
-   * {@link #findAll} / {@link #findBySaga}.
+   * Removes a single quarantined entry, identified by its idempotency key {@code (sagaId, sagaType,
+   * eventOffset)}: only an entry whose stored saga type equals {@code sagaType} is removed. Once a
+   * quarantined event has been replayed or otherwise resolved, the entry is discarded so it does
+   * not appear in {@link #findAll} / {@link #findBySaga}.
    *
    * <p>{@code sagaId} is nullable and its null-ness is significant: SQL {@code IS NOT DISTINCT
    * FROM} semantics apply, so a {@code null sagaId} matches <b>only</b> entries whose stored {@code
@@ -345,7 +353,7 @@ public interface SagaDeadLetterStore {
   /**
    * Establishes the immutable first-replay anchor ({@link
    * SagaDeadLetterEntry#firstReplayStartedAt()}) on the entry identified by {@code (sagaId,
-   * eventOffset)} <em>if — and only if — none exists yet</em>.
+   * sagaType, eventOffset)} <em>if — and only if — none exists yet</em>.
    *
    * <p>{@code SagaDeadLetterReplayer} calls this immediately before the FIRST feed of every entry
    * it drains, named or null-saga alike. The executor's atomic create-first/CAS writes keep the
@@ -585,9 +593,10 @@ public interface SagaDeadLetterStore {
    *     runner's type is well-defined even when the saga id is not). Every type-scoped operation
    *     matches an entry by this value, so one type's replay never sees, anchors, resolves or
    *     discards another type's entry at the same offset
-   * @param eventOffset the global offset of the offending event (required; used as idempotency
-   *     key). Also the sole way to locate the offending event's payload: look it up in the event
-   *     store at this offset — it is never copied into this record.
+   * @param eventOffset the global offset of the offending event (required; part of the idempotency
+   *     key with {@code sagaId} and {@code sagaType}). Also the sole way to locate the offending
+   *     event's payload: look it up in the event store at this offset — it is never copied into
+   *     this record.
    * @param eventType the type of the offending event (required)
    * @param errorType the fully-qualified class name of the exception (required)
    * @param errorMessage the exception message, may be {@code null}. May contain orchestrator
@@ -601,7 +610,7 @@ public interface SagaDeadLetterStore {
    *     #findBySaga}, and the one row surfaced for a null-saga duplicate set). The replayer does
    *     not read it: a still-poison feed is recognised from the feed's own outcome and the saga row
    *     afterwards, not from this instant.
-   * @param firstFaultedAt the instant this {@code (sagaId, eventOffset)} pair was FIRST
+   * @param firstFaultedAt the instant this {@code (sagaId, sagaType, eventOffset)} entry was FIRST
    *     quarantined. Unlike {@code faultedAt}, this is <b>immutable across re-quarantines</b>: the
    *     store's publish upsert sets it on the first insert and never updates it, so a failed replay
    *     cannot reset it. It anchors the retention sweep ({@link #deleteOlderThan}). It does NOT

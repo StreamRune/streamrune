@@ -1346,9 +1346,9 @@ public final class SagaRunner<S extends SagaState> {
   /**
    * Whether an entry a hold kept on a shielded live row is the saga's own poison whose fault write
    * did not land: an entry of this runner's saga type that no hold wrote ({@link
-   * #HOLD_ERROR_TYPES}). The type check matters for a store that keeps one named entry per saga
-   * type at an offset; the shipped stores keep one per saga and offset, and report another type's
-   * entry as replaced, never as kept.
+   * #HOLD_ERROR_TYPES}). A store keys a named entry by saga id, saga type and offset, so the entry
+   * it keeps is of the hold's type; the type check refuses an entry of another type from a store
+   * that breaks that rule.
    */
   private boolean isUnfinishedPoison(SagaDeadLetterStore.SagaDeadLetterEntry kept) {
     return SagaType.fromClass(orchestrator.stateType()).equals(kept.sagaType())
@@ -1743,19 +1743,21 @@ public final class SagaRunner<S extends SagaState> {
    * crypto-governed, shreddable source of truth for event payloads. To inspect the offending event,
    * read the event store at {@link EventEnvelope#globalOffset()}. {@code faultedAt} is the
    * builder's clock, never {@code Instant.now()}: the replayer tests advance a {@code MutableClock}
-   * to prove a still-poison feed refreshed the entry. {@code publish} is an upsert on (saga,
-   * offset) — a crash rerun and a still-poison replay converge on ONE record per event, refreshed
-   * with the newest real failure, with the stored first-fault instant, replay anchor and target
-   * preserved. A hold does not come through here: {@link #recordHold} never replaces an entry.
+   * to prove a still-poison feed refreshed the entry. {@code publish} is an upsert on (saga id,
+   * saga type, offset) — a crash rerun and a still-poison replay converge on ONE record per event
+   * and type, refreshed with the newest real failure, with the stored first-fault instant, replay
+   * anchor and target preserved. A hold does not come through here: {@link #recordHold} never
+   * replaces an entry.
    *
    * <p><b>The saga type is ALWAYS stamped — even when {@code sagaId} is null.</b> The quarantining
    * runner's type is well-defined regardless of whether the saga id could be resolved (it is the
    * type whose router poisoned), and every entry requires it. Two types poisoning on the same event
    * at the same offset therefore produce two NULL-SAGA entries, one per type, and {@code
-   * findEntry}/{@code DISCARD_TYPED}/{@code establishFirstReplayAnchor} isolate them: one type's
+   * findEntry}/{@code discard}/{@code establishFirstReplayAnchor} isolate them: one type's
    * replay-then-discard can never match — and delete — the other type's only record that the event
-   * was never consumed. A NAMED entry is keyed by saga id and offset in the shipped stores, without
-   * the type, so two types' named entries at one saga id and offset are one row, the last written.
+   * was never consumed. A NAMED entry is keyed by saga id, saga type and offset, so two types'
+   * named entries at one saga id and offset are two rows, and neither type's write touches the
+   * other's.
    */
   private void quarantine(SagaId sagaId, EventEnvelope event, Throwable cause) {
     var entry = entryOf(sagaId, event, cause);

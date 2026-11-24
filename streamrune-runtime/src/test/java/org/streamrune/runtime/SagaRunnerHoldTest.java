@@ -788,12 +788,12 @@ abstract class SagaRunnerHoldTest {
   }
 
   /**
-   * The shipped stores key a named entry by saga id and offset, without the saga type: a hold over
-   * another type's entry at the key replaces it, as {@code publish} does, and is a written hold —
-   * the completion of an interrupted fault never sees the other type's entry.
+   * The stores key a named entry by saga id, saga type and offset: a hold beside another type's
+   * poison entry at the same saga id and offset writes its own entry, leaves the other type's entry
+   * as stored, and faults nothing.
    */
   @Test
-  void aHoldOverAnotherTypesEntryAtTheKey_replacesIt_andFaultsNothing() {
+  void aHoldBesideAnotherTypesEntryAtTheKey_writesItsOwn_keepsTheOther_andFaultsNothing() {
     inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
     inner.setDeadLetterPending(sagaId, TYPE, true);
     dlq.publish(otherTypesPoisonAt(5L));
@@ -801,17 +801,76 @@ abstract class SagaRunnerHoldTest {
     deliver(runner, correlatedEvent(5L));
     assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().status())
         .isEqualTo(SagaStatus.RUNNING);
-    assertThat(entries())
+    assertThat(entriesOf(TYPE))
         .singleElement()
         .satisfies(
             e -> assertThat(e.errorType()).isEqualTo(SagaEventHeldException.class.getName()));
+    assertThat(entriesOf(SagaType.of("Other")))
+        .singleElement()
+        .satisfies(e -> assertThat(e.errorMessage()).isEqualTo("the other type's poison"));
     assertThat(faulted.get()).isZero();
   }
 
   /**
-   * A store that keeps one named entry per saga type at an offset can hand back another type's
-   * poison entry as the entry it kept. The completion takes only an entry of this runner's saga
-   * type for this saga's unfinished poison: the event stays held and nothing is faulted.
+   * The poison of this saga is recorded with its shield and the process stops before the fault
+   * write; another saga type deriving the same saga id then records an entry at the same offset.
+   * The rerun still finds this type's poison entry, keeps it and makes the fault write; the other
+   * type's entry is left as stored. A further redelivery changes nothing.
+   */
+  @Test
+  void poisonCrashBeforeTheFault_thenAnotherTypesEntryAtTheKey_rerunStillFaultsTheSaga() {
+    inner.create(sagaId, TYPE, new StartState(SagaStatus.RUNNING, "order-1"), SagaStatus.RUNNING);
+    orchestrator.poisonCorrelated = true;
+    var crashBeforeFault =
+        new ForwardingSagaStore(inner) {
+          private boolean crashed;
+
+          @Override
+          public boolean markFaulted(SagaId id, SagaType t, long v) {
+            if (!crashed) {
+              crashed = true;
+              throw new ForwardingSagaStore.SimulatedCrash("publish, before markFaulted");
+            }
+            return super.markFaulted(id, t, v);
+          }
+        };
+    var runner = runner(crashBeforeFault, orchestrator);
+    Throwable crash = catchThrowable(() -> deliver(runner, correlatedEvent(5L)));
+    assertThat(crash).isInstanceOf(ForwardingSagaStore.SimulatedCrash.class);
+
+    dlq.publish(otherTypesPoisonAt(5L)); // the colliding type's record at the same key
+
+    deliver(runner, correlatedEvent(5L)); // rerun
+    var row = inner.load(sagaId, TYPE, StartState.class).orElseThrow();
+    assertThat(row.status()).isEqualTo(SagaStatus.FAULTED);
+    assertThat(entriesOf(TYPE))
+        .singleElement()
+        .satisfies(
+            e -> {
+              assertThat(e.errorType()).isEqualTo(RuntimeException.class.getName());
+              assertThat(e.errorMessage()).isEqualTo("simulated poison");
+            });
+    assertThat(entriesOf(SagaType.of("Other")))
+        .singleElement()
+        .satisfies(e -> assertThat(e.errorMessage()).isEqualTo("the other type's poison"));
+    assertThat(row.version()).isEqualTo(2L);
+    assertThat(held).as("a redelivery of a recorded event is not a new hold").isEmpty();
+    assertThat(faulted.get()).isEqualTo(1);
+
+    var ownAfterRerun = entriesOf(TYPE);
+    var otherAfterRerun = entriesOf(SagaType.of("Other"));
+    deliver(runner, correlatedEvent(5L)); // and again: the FAULTED row keeps both entries
+    assertThat(inner.load(sagaId, TYPE, StartState.class).orElseThrow().version()).isEqualTo(2L);
+    assertThat(entriesOf(TYPE)).isEqualTo(ownAfterRerun);
+    assertThat(entriesOf(SagaType.of("Other"))).isEqualTo(otherAfterRerun);
+    assertThat(held).isEmpty();
+    assertThat(faulted.get()).isEqualTo(1);
+  }
+
+  /**
+   * A store that breaks the key rule can hand back another type's poison entry as the entry it
+   * kept. The completion takes only an entry of this runner's saga type for this saga's unfinished
+   * poison: the event stays held and nothing is faulted.
    */
   @Test
   void aKeptPoisonEntryOfAnotherSagaType_isNotThisSagasPoison_theEventStaysHeld() {
@@ -840,6 +899,10 @@ abstract class SagaRunnerHoldTest {
     assertThat(row.version()).isEqualTo(1L);
     assertThat(store.calls()).doesNotContain("markFaulted");
     assertThat(orchestrator.consumedCorrelatedOffsets).isEmpty();
+  }
+
+  private List<SagaDeadLetterEntry> entriesOf(SagaType type) {
+    return entries().stream().filter(e -> e.sagaType().equals(type)).toList();
   }
 
   private SagaDeadLetterEntry otherTypesPoisonAt(long offset) {

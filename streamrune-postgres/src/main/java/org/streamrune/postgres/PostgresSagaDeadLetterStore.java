@@ -27,21 +27,21 @@ import org.streamrune.core.types.SagaType;
  * saga_dead_letters} table, created by the framework's baseline Flyway migration ({@code
  * V001__streamrune_baseline.sql}); this class never creates it.
  *
- * <p>{@link #publish} is an idempotent upsert keyed by {@code (saga_id, event_offset)}. A second
- * call with the same pair updates the existing row — refreshing every column except the immutable
- * {@code first_faulted_at}, the immutable {@code first_replay_started_at} anchor and the
+ * <p>{@link #publish} is an idempotent upsert keyed by {@code (saga_id, saga_type, event_offset)}.
+ * A second call with the same key updates the existing row — refreshing every column except the
+ * immutable {@code first_faulted_at}, the immutable {@code first_replay_started_at} anchor and the
  * resolved-target hint {@code target_saga_id}, whose stored values always win on a conflict —
- * rather than inserting a duplicate. When {@code sagaId} is {@code null} (routing failure before a
- * saga was identified), the UNIQUE constraint uses the standard SQL treatment of NULL — multiple
- * null-saga rows at distinct offsets are independent entries; a re-published null-saga event at the
- * same offset inserts a second row — accepted, rare routing failure. Each such duplicate is BORN
- * carrying the set's immutable evidence — the oldest {@code first_faulted_at}, the oldest {@code
- * first_replay_started_at} anchor, and the newest resolved {@code target_saga_id} among
- * type-matching null-saga rows at the offset: readers surface the NEWEST row per entry, so an
- * evidence-bare fresh row would launder a prior replay attempt's anchor out of the replayer's
- * key-age guard (re-opening the pruned-forward-key duplicate execution), grant the set a fresh
- * retention life per re-quarantine, or let the retention sweep prune a TARGET_PENDING-resolved set
- * out from under an operator mid-reconciliation.
+ * rather than inserting a duplicate; two saga types at the same saga id and offset keep two rows.
+ * When {@code sagaId} is {@code null} (routing failure before a saga was identified), the UNIQUE
+ * constraint uses the standard SQL treatment of NULL — multiple null-saga rows at distinct offsets
+ * are independent entries; a re-published null-saga event at the same offset inserts a second row —
+ * accepted, rare routing failure. Each such duplicate is BORN carrying the set's immutable evidence
+ * — the oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at} anchor, and the
+ * newest resolved {@code target_saga_id} among type-matching null-saga rows at the offset: readers
+ * surface the NEWEST row per entry, so an evidence-bare fresh row would launder a prior replay
+ * attempt's anchor out of the replayer's key-age guard (re-opening the pruned-forward-key duplicate
+ * execution), grant the set a fresh retention life per re-quarantine, or let the retention sweep
+ * prune a TARGET_PENDING-resolved set out from under an operator mid-reconciliation.
  *
  * <p>Failures are wrapped in {@link EventStoreException}.
  */
@@ -49,7 +49,7 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   private static final Logger log = LoggerFactory.getLogger(PostgresSagaDeadLetterStore.class);
 
-  // Idempotent upsert keyed by (saga_id, event_offset). When saga_id IS NULL, the UNIQUE
+  // Idempotent upsert keyed by (saga_id, saga_type, event_offset). When saga_id IS NULL, the UNIQUE
   // constraint treats two NULLs as distinct (standard SQL NULL semantics), so two null-saga
   // rows at the same offset produce separate entries — an accepted edge case for rare
   // routing failures.
@@ -76,17 +76,17 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       "INSERT INTO saga_dead_letters ("
           + COLUMNS
           + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-          + "ON CONFLICT (saga_id, event_offset) DO UPDATE SET "
-          + "saga_type = EXCLUDED.saga_type, event_type = EXCLUDED.event_type, "
+          + "ON CONFLICT (saga_id, saga_type, event_offset) DO UPDATE SET "
+          + "event_type = EXCLUDED.event_type, "
           + "error_type = EXCLUDED.error_type, error_message = EXCLUDED.error_message, "
           + "faulted_at = EXCLUDED.faulted_at";
 
-  // The hold's write: UPSERT, except that a conflict with a stored row of the SAME saga type
-  // updates nothing — the stored entry (a poison's cause, or an earlier hold) is kept as it is.
-  // A stored row of another type at the key is replaced exactly as UPSERT replaces it (the named
-  // key has no type). The row count tells the two apart: 1 = inserted or replaced, 0 = kept.
-  private static final String HOLD_UPSERT =
-      UPSERT + " WHERE saga_dead_letters.saga_type <> EXCLUDED.saga_type";
+  // The hold's write: UPSERT, except that a conflict updates nothing — the entry stored at the key
+  // (a poison's cause, or an earlier hold) is kept as it is. The conflict arm still locks the
+  // stored row (ON CONFLICT DO UPDATE locks it whether or not its WHERE holds), so the kept entry
+  // read back in the same transaction is the row the write decided on. The row count tells the two
+  // apart: 1 = inserted, 0 = kept.
+  private static final String HOLD_UPSERT = UPSERT + " WHERE FALSE";
 
   // Dedicated INSERT for NULL-saga entries. The UNIQUE
   // constraint treats NULLs as distinct, so a null-saga publish at an existing offset can never
@@ -143,13 +143,11 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   private static final String SELECT_ALL =
       "SELECT " + COLUMNS + " FROM saga_dead_letters ORDER BY faulted_at DESC LIMIT ?";
 
-  // The TARGETED null-saga read: the predicate a replayer would otherwise evaluate in Java
-  // over findAll(Integer.MAX_VALUE) — saga_id IS NULL, this offset, and the type scoping
-  // (the stored type equals the parameter; there is no unscoped form, a null type is rejected
-  // before this statement runs) — and the same
-  // newest-faulted-first ordering, so the row it resolves is identical. What changes is that
-  // PostgreSQL evaluates it and returns ONE row, instead of the JVM materialising every row in the
-  // table (twice per replay attempt) to keep one.
+  // The TARGETED null-saga read: saga_id IS NULL, this offset, and the type scoping (the stored
+  // type equals the parameter; there is no unscoped form, a null type is rejected before this
+  // statement runs), newest-faulted first — the SPI default's predicate and order, evaluated by
+  // PostgreSQL, which returns ONE row. All three columns are index conditions on
+  // saga_dead_letters_uniq.
   private static final String SELECT_NULL_SAGA_AT_OFFSET =
       "SELECT "
           + COLUMNS
@@ -160,9 +158,9 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   // (target_saga_id, stamped on TARGET_PENDING) is the saga being drained — one row per offset
   // (DISTINCT ON keeps the newest-faulted of each duplicate set, matching
   // SELECT_NULL_SAGA_AT_OFFSET), ascending by offset so the drain can merge them into causal
-  // position. Same type scoping as every other null-saga statement. Sequential scan
-  // over the null-saga population by design (the offset-indexing follow-up recorded on
-  // findNullSagaEntry applies here identically); operator-scale, once per drain.
+  // position. Same type scoping as every other null-saga statement. saga_dead_letters_uniq serves
+  // saga_id IS NULL and saga_type; target_saga_id is a filter over that type's null-saga rows.
+  // Operator-scale, once per drain.
   private static final String SELECT_NULL_SAGA_BY_RESOLVED_TARGET =
       "SELECT DISTINCT ON (event_offset) "
           + COLUMNS
@@ -177,16 +175,23 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   // create-first/CAS writes keep the saga row FAULTED for an attempt's whole duration, so the
   // ordinary SHIELDED_OWNER predicate already covers the in-flight window, and this anchor is the
   // entry's ONLY durable record that a replay was ever
-  // attempted, and it is what the STALE_REDRIVE_BLOCKED key-age guard measures against. Same IS
-  // NOT DISTINCT FROM keying and type scoping as SET_RESOLVED_TARGET.
-  private static final String ESTABLISH_FIRST_REPLAY_ANCHOR =
+  // attempted, and it is what the STALE_REDRIVE_BLOCKED key-age guard measures against. Two
+  // statements, one per shape, each addressing the full key so saga_dead_letters_uniq or
+  // idx_saga_dead_letters_saga serves it: a named entry by saga_id = ?, a null-saga entry by
+  // saga_id IS NULL (every row of its duplicate set). A predicate that takes either shape in one
+  // parameter (saga_id IS NOT DISTINCT FROM ?) is not an index condition and scans the table.
+  private static final String ANCHOR_SET =
       "UPDATE saga_dead_letters SET first_replay_started_at = "
-          + "COALESCE(first_replay_started_at, ?) "
-          + "WHERE saga_id IS NOT DISTINCT FROM ? AND event_offset = ? "
-          + "AND saga_type = ?";
+          + "COALESCE(first_replay_started_at, ?) ";
+
+  private static final String ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED =
+      ANCHOR_SET + "WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
+
+  private static final String ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA =
+      ANCHOR_SET + "WHERE saga_id IS NULL AND saga_type = ? AND event_offset = ?";
 
   // Durable resolved-target write for NULL-saga entries only (a named entry's
-  // association IS its saga_id). Type-scoped like ESTABLISH_FIRST_REPLAY_ANCHOR, with no unscoped
+  // association IS its saga_id). Type-scoped like the anchor write, with no unscoped
   // form: a null type is rejected before this statement runs (a foreign type's row at the same
   // offset is never written). Idempotent re-stamp; never cleared — a recovered target
   // stops matching the retention guard on its own, and discard removes the row.
@@ -195,13 +200,17 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
           + "WHERE saga_id IS NULL AND event_offset = ? "
           + "AND saga_type = ?";
 
-  // null sagaId matches ONLY null-saga rows (SQL NULL-safe comparison); a non-null sagaId
-  // matches only rows with that exact saga_id. Type-scoped — a cross-type SagaId
-  // collision must never let one type's replayer delete another type's quarantine record. There
-  // is no unscoped form: discard rejects a null type before this statement runs.
-  private static final String DISCARD =
-      "DELETE FROM saga_dead_letters WHERE saga_id IS NOT DISTINCT FROM ? AND event_offset = ? "
-          + "AND saga_type = ?";
+  // A null sagaId matches ONLY null-saga rows (DISCARD_NULL_SAGA, every row of the duplicate
+  // set); a non-null sagaId matches only rows with that exact saga_id (DISCARD_NAMED). One
+  // statement per shape, so an index serves each, as for the anchor write.
+  // Type-scoped — a cross-type SagaId collision must never let one type's replayer delete another
+  // type's quarantine record. There is no unscoped form: discard rejects a null type before either
+  // statement runs.
+  private static final String DISCARD_NAMED =
+      "DELETE FROM saga_dead_letters WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
+
+  private static final String DISCARD_NULL_SAGA =
+      "DELETE FROM saga_dead_letters WHERE saga_id IS NULL AND saga_type = ? AND event_offset = ?";
 
   // Batched ctid-based delete, mirroring PostgresCommandInbox.deleteProcessedBefore: repeatedly
   // deletes up to DELETE_BATCH_SIZE strictly-older rows until a chunk deletes nothing (see
@@ -289,10 +298,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   private static final String ASSERT_SHIELD_RETURNING_APPLIED =
       ASSERT_SHIELD + " RETURNING last_applied_offset";
 
-  // The entry the hold's upsert kept. Read in the hold's transaction, which holds the row lock the
-  // conflict arm took, so it is the row the upsert decided on.
-  private static final String SELECT_NAMED_AT_OFFSET =
-      "SELECT " + COLUMNS + " FROM saga_dead_letters WHERE saga_id = ? AND event_offset = ?";
+  // The entry the hold's upsert kept, at its full key. Read in the hold's transaction, which holds
+  // the row lock the conflict arm took, so it is the row the upsert decided on.
+  private static final String SELECT_NAMED_AT_KEY =
+      "SELECT "
+          + COLUMNS
+          + " FROM saga_dead_letters WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
 
   private static final int DELETE_BATCH_SIZE = 1000;
 
@@ -324,12 +335,12 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
-   * <p>Idempotent for a named entry: a second call with the same {@code (sagaId, eventOffset)} pair
-   * updates the existing row rather than inserting a duplicate. A {@code null sagaId} always
-   * INSERTs (NULL-distinct unique semantics), carrying the duplicate set's immutable evidence — the
-   * oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at}, and the newest
-   * resolved {@code target_saga_id} among type-matching null-saga rows at the offset — onto the new
-   * row.
+   * <p>Idempotent for a named entry: a second call with the same {@code (sagaId, sagaType,
+   * eventOffset)} key updates the existing row rather than inserting a duplicate. A {@code null
+   * sagaId} always INSERTs (NULL-distinct unique semantics), carrying the duplicate set's immutable
+   * evidence — the oldest {@code first_faulted_at}, the oldest {@code first_replay_started_at}, and
+   * the newest resolved {@code target_saga_id} among type-matching null-saga rows at the offset —
+   * onto the new row.
    */
   @Override
   public void publish(SagaDeadLetterEntry entry) {
@@ -399,11 +410,11 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>One transaction, as {@link #publishShielded}: the hold's upsert, whose conflict arm writes
-   * nothing over a stored row of the same saga type, then the owner's shield, whose {@code
-   * RETURNING} gives the row's {@code last_applied_offset}. When the row has applied the event the
-   * transaction is rolled back — neither the entry nor the shield is written. Otherwise the kept
-   * entry, if any, is read back, and the transaction commits. Lock order dead-letter row → saga
-   * row, as {@link #publishShielded}.
+   * nothing over the row stored at the key, then the owner's shield, whose {@code RETURNING} gives
+   * the row's {@code last_applied_offset}. When the row has applied the event the transaction is
+   * rolled back — neither the entry nor the shield is written. Otherwise the kept entry, if any, is
+   * read back, and the transaction commits. Lock order dead-letter row → saga row, as {@link
+   * #publishShielded}.
    */
   @Override
   public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
@@ -445,9 +456,10 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
     if (written) {
       return new HoldResult.Written();
     }
-    try (var ps = c.prepareStatement(SELECT_NAMED_AT_OFFSET)) {
+    try (var ps = c.prepareStatement(SELECT_NAMED_AT_KEY)) {
       ps.setString(1, entry.sagaId().value());
-      ps.setLong(2, entry.eventOffset().value());
+      ps.setString(2, entry.sagaType().value());
+      ps.setLong(3, entry.eventOffset().value());
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
           throw new SQLException(
@@ -528,6 +540,22 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
 
   private static void upsertNamed(Connection conn, SagaDeadLetterEntry entry) throws SQLException {
     writeNamed(conn, UPSERT, entry);
+  }
+
+  /**
+   * Binds the key of a statement that addresses one entry from parameter {@code first} on: the saga
+   * id (named shape only; the null-saga shape matches {@code saga_id IS NULL} in its SQL), then the
+   * saga type, then the event offset.
+   */
+  private static void bindKey(
+      PreparedStatement ps, int first, SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset)
+      throws SQLException {
+    int i = first;
+    if (sagaId != null) {
+      ps.setString(i++, sagaId.value());
+    }
+    ps.setString(i++, sagaType.value());
+    ps.setLong(i, eventOffset.value());
   }
 
   /** Binds a named entry to {@code sql} (UPSERT or HOLD_UPSERT) and returns the row count. */
@@ -618,8 +646,10 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>Establish-only ({@code COALESCE(first_replay_started_at, ?)} — the stored anchor always
-   * wins). Keyed and type-scoped exactly like {@link #setResolvedTarget}; a {@code null sagaType}
-   * is rejected before the statement runs.
+   * wins). Addressed by the full key: a named entry by {@code saga_id = ?}, a {@code null} saga id
+   * by {@code saga_id IS NULL} (every row of the null-saga duplicate set), each with {@code
+   * saga_type} and {@code event_offset}, so an index serves the write. A {@code null sagaType} is
+   * rejected before the statement runs.
    */
   @Override
   public void establishFirstReplayAnchor(
@@ -634,15 +664,13 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       throw new IllegalArgumentException("anchorIfAbsent is required");
     }
     try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(ESTABLISH_FIRST_REPLAY_ANCHOR)) {
+        var ps =
+            conn.prepareStatement(
+                sagaId == null
+                    ? ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA
+                    : ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED)) {
       ps.setTimestamp(1, Timestamp.from(anchorIfAbsent));
-      if (sagaId == null) {
-        ps.setNull(2, Types.VARCHAR);
-      } else {
-        ps.setString(2, sagaId.value());
-      }
-      ps.setLong(3, eventOffset.value());
-      ps.setString(4, sagaType.value());
+      bindKey(ps, 2, sagaId, sagaType, eventOffset);
       PostgresTransactions.commitIfManual(
           conn, "saga dead-letter replay anchor", c -> ps.executeUpdate());
     } catch (SQLException e) {
@@ -710,21 +738,11 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
-   * <p>A single indexed-predicate read returning at most one row, replacing the replayer's former
-   * {@code findAll(Integer.MAX_VALUE)} scan over a table whose null-saga population grows one row
-   * per re-quarantine.
-   *
-   * <p><b>No supporting index is shipped with this change, deliberately</b> — recorded here rather
-   * than left silent. The only indexes on {@code saga_dead_letters} are the partial one on {@code
-   * saga_id} ({@code WHERE saga_id IS NOT NULL}, so it excludes exactly this population), one on
-   * {@code faulted_at}, and the retention expression, so this predicate is a sequential scan.
-   * Adding {@code (event_offset) WHERE saga_id IS NULL} is a schema change — a new versioned
-   * migration, {@code SchemaValidator.EXPECTED_VERSION} and the tests that pin it, and the demo
-   * repository's hand-written {@code init-db.sql} drift check, which lives in a DIFFERENT
-   * repository — and is tracked as a follow-up. The memory blow-up is what kills the JVM and it is
-   * gone either way: the scan runs in the database, streams, and returns one row, where the
-   * previous code allocated a {@code SagaDeadLetterEntry} for every row in the table and did it
-   * twice per replay attempt.
+   * <p>A single read returning at most one row: the newest-faulted row of the null-saga duplicate
+   * set at the offset. Its predicate ({@code saga_id IS NULL}, {@code saga_type}, {@code
+   * event_offset}) is an index probe on the unique key {@code (saga_id, saga_type, event_offset)},
+   * so the read does not grow with the table, and nothing is materialised in the JVM beyond the one
+   * row.
    *
    * <p>A {@code null sagaType} is rejected before the statement runs: there is no untyped lookup.
    */
@@ -780,11 +798,11 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
-   * <p>{@code sagaId} nullness is significant: {@code null} is matched using SQL {@code IS NOT
-   * DISTINCT FROM}, so it removes only rows whose stored {@code saga_id} is also {@code null} —
-   * never a row that has a non-null saga id at the same offset. Type-scoped: only rows whose stored
-   * {@code saga_type} equals {@code sagaType} are removed. A {@code null sagaType} is rejected:
-   * there is no untyped discard.
+   * <p>{@code sagaId} nullness is significant: {@code null} is matched by {@code saga_id IS NULL},
+   * so it removes only rows whose stored {@code saga_id} is also {@code null} (every row of the
+   * null-saga duplicate set) — never a row that has a non-null saga id at the same offset.
+   * Type-scoped: only rows whose stored {@code saga_type} equals {@code sagaType} are removed. A
+   * {@code null sagaType} is rejected: there is no untyped discard.
    */
   @Override
   public boolean discard(SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset) {
@@ -795,14 +813,8 @@ public final class PostgresSagaDeadLetterStore implements SagaDeadLetterStore {
       throw new IllegalArgumentException("eventOffset is required");
     }
     try (var conn = dataSource.getConnection();
-        var ps = conn.prepareStatement(DISCARD)) {
-      if (sagaId == null) {
-        ps.setNull(1, Types.VARCHAR);
-      } else {
-        ps.setString(1, sagaId.value());
-      }
-      ps.setLong(2, eventOffset.value());
-      ps.setString(3, sagaType.value());
+        var ps = conn.prepareStatement(sagaId == null ? DISCARD_NULL_SAGA : DISCARD_NAMED)) {
+      bindKey(ps, 1, sagaId, sagaType, eventOffset);
       return PostgresTransactions.commitIfManual(
               conn, "saga dead-letter discard", c -> ps.executeUpdate())
           > 0;

@@ -337,7 +337,7 @@ public final class SagaDeadLetterReplayer {
    * @param sagaId the saga the entry is quarantined under, or {@code null} for a null-saga entry
    *     (the saga could not be identified when the event was quarantined)
    * @param eventOffset the quarantined event's global offset (the dead-letter idempotency key,
-   *     together with {@code sagaId})
+   *     together with {@code sagaId} and this replayer's saga type)
    * @return the outcome; see {@link ReplayOutcome}
    */
   public ReplayOutcome replay(SagaId sagaId, GlobalOffset eventOffset) {

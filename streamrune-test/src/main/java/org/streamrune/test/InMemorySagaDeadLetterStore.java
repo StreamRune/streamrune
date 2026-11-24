@@ -16,24 +16,24 @@ import org.streamrune.core.types.SagaType;
  * In-memory {@link SagaDeadLetterStore} for unit tests. Thread-safe via {@link ConcurrentHashMap};
  * not suitable for production use.
  *
- * <p>{@link #publish} is an idempotent upsert: a second call with the same {@code (sagaId,
- * eventOffset)} pair replaces the existing entry rather than inserting a duplicate — except the
- * immutable {@code firstFaultedAt}, the immutable {@code firstReplayStartedAt} anchor and the
- * resolved {@code targetSagaId}, which keep their stored values on a conflict so a re-quarantine
- * can neither reset the first-fault anchor, forge a fresh first-attempt instant, nor strip an
- * earlier resolution's retention protection. When {@code sagaId} is {@code null}, the key
- * degenerates to {@code (sagaType, eventOffset)} — <b>one entry per quarantining type per
- * offset</b>. PostgreSQL's NULL-distinct unique semantics keep every type's null-saga row at an
- * offset as an independent entry; collapsing them onto the offset alone would let one type's
- * publish silently destroy another type's only record of a never-consumed event. (Same-type
- * re-publish stays an upsert here — a deliberate improvement over the Postgres store's accepted
- * duplicate accumulation. The evidence the reader observes is nevertheless identical: this upsert
- * preserves the stored immutable columns on a conflict, and the Postgres store carries the set's
- * oldest {@code firstReplayStartedAt}/{@code firstFaultedAt} and newest {@code targetSagaId} onto
- * every fresh duplicate, so in both stores the entry the replayer reads bears the set's true
- * first-attempt, first-fault and resolved-target facts.) Null-saga {@link #discard} therefore
- * operates on all matching null-saga entries at the offset, mirroring the Postgres {@code IS NOT
- * DISTINCT FROM} statements.
+ * <p>{@link #publish} is an idempotent upsert keyed by {@code (sagaId, sagaType, eventOffset)}: a
+ * second call with the same key replaces the existing entry rather than inserting a duplicate —
+ * except the immutable {@code firstFaultedAt}, the immutable {@code firstReplayStartedAt} anchor
+ * and the resolved {@code targetSagaId}, which keep their stored values on a conflict so a
+ * re-quarantine can neither reset the first-fault anchor, forge a fresh first-attempt instant, nor
+ * strip an earlier resolution's retention protection. Two saga types at the same saga id and offset
+ * keep two entries. When {@code sagaId} is {@code null}, the key is {@code (sagaType, eventOffset)}
+ * — <b>one entry per quarantining type per offset</b>. PostgreSQL's NULL-distinct unique semantics
+ * keep every type's null-saga row at an offset as an independent entry; collapsing them onto the
+ * offset alone would let one type's publish silently destroy another type's only record of a
+ * never-consumed event. (Same-type re-publish stays an upsert here — a deliberate improvement over
+ * the Postgres store's accepted duplicate accumulation. The evidence the reader observes is
+ * nevertheless identical: this upsert preserves the stored immutable columns on a conflict, and the
+ * Postgres store carries the set's oldest {@code firstReplayStartedAt}/{@code firstFaultedAt} and
+ * newest {@code targetSagaId} onto every fresh duplicate, so in both stores the entry the replayer
+ * reads bears the set's true first-attempt, first-fault and resolved-target facts.) Null-saga
+ * {@link #discard} therefore operates on all matching null-saga entries at the offset, mirroring
+ * the Postgres store's {@code saga_id IS NULL} statements.
  *
  * <p><b>The store is bound to the saga rows it shields</b> (the SPI's wiring rule): it is
  * constructed with the {@link SagaStore} whose rows its runner writes. A test whose runner uses a
@@ -63,20 +63,19 @@ import org.streamrune.core.types.SagaType;
 public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
 
   /**
-   * Composite map key: sagaId value (empty string when null) + a null-saga type discriminator +
-   * event offset. For a NAMED entry the discriminator is always empty — the Postgres unique
-   * constraint is {@code (saga_id, event_offset)}, type not included, so a cross-type publish at
-   * the same named key upserts the one row. For a NULL-saga entry the discriminator is the saga
-   * type value (every entry carries its type), so each quarantining type keeps its own row at an
-   * offset (mirrors Postgres NULL-distinct inserts, bounded to one row per type).
+   * Composite map key: the saga id value ({@code null} for a null-saga entry), the saga type value
+   * and the event offset — the Postgres unique constraint {@code (saga_id, saga_type,
+   * event_offset)}. Two saga types at one saga id and offset keep two entries. A null-saga entry
+   * keeps one entry per quarantining type per offset (mirrors Postgres NULL-distinct inserts,
+   * bounded to one row per type).
    */
-  private record Key(String sagaIdValue, String nullSagaTypeDiscriminator, long offset) {}
+  private record Key(String sagaIdValue, String sagaTypeValue, long offset) {}
 
   private static Key keyOf(SagaDeadLetterEntry entry) {
-    if (entry.sagaId() != null) {
-      return new Key(entry.sagaId().value(), "", entry.eventOffset().value());
-    }
-    return new Key("", entry.sagaType().value(), entry.eventOffset().value());
+    return new Key(
+        entry.sagaId() == null ? null : entry.sagaId().value(),
+        entry.sagaType().value(),
+        entry.eventOffset().value());
   }
 
   private final ConcurrentHashMap<Key, SagaDeadLetterEntry> store = new ConcurrentHashMap<>();
@@ -149,8 +148,8 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>Under {@link #entriesMonitor}, as {@link #publishShielded}: when the owner row has applied
-   * the event nothing is written; otherwise the entry is written unless one of the same saga type
-   * is stored at the key, and the saga store's flag is set.
+   * the event nothing is written; otherwise the entry is written unless one is stored at its key
+   * {@code (sagaId, sagaType, eventOffset)}, and the saga store's flag is set.
    */
   @Override
   public HoldResult publishShieldedIfAbsent(SagaDeadLetterEntry entry) {
@@ -170,12 +169,11 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
         return new HoldResult.AlreadyApplied(lastApplied);
       }
       SagaDeadLetterEntry stored = store.get(keyOf(entry));
-      boolean write = stored == null || !stored.sagaType().equals(entry.sagaType());
-      if (write) {
+      if (stored == null) {
         upsert(entry);
       }
       sagaStore.setDeadLetterPending(entry.sagaId(), entry.sagaType(), true);
-      return write ? new HoldResult.Written() : new HoldResult.Kept(stored);
+      return stored == null ? new HoldResult.Written() : new HoldResult.Kept(stored);
     }
   }
 
@@ -222,9 +220,9 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     Objects.requireNonNull(anchorIfAbsent, "anchorIfAbsent is required");
     if (sagaId != null) {
       store.computeIfPresent(
-          new Key(sagaId.value(), "", eventOffset.value()),
+          new Key(sagaId.value(), sagaType.value(), eventOffset.value()),
           (key, existing) ->
-              typeMatches(existing, sagaType) && existing.firstReplayStartedAt() == null
+              existing.firstReplayStartedAt() == null
                   ? withFirstReplayStartedAt(existing, anchorIfAbsent)
                   : existing);
       return;
@@ -376,12 +374,7 @@ public final class InMemorySagaDeadLetterStore implements SagaDeadLetterStore {
     }
     Objects.requireNonNull(eventOffset, "eventOffset is required");
     if (sagaId != null) {
-      Key key = new Key(sagaId.value(), "", eventOffset.value());
-      SagaDeadLetterEntry existing = store.get(key);
-      if (existing == null || !typeMatches(existing, sagaType)) {
-        return false;
-      }
-      return store.remove(key, existing);
+      return store.remove(new Key(sagaId.value(), sagaType.value(), eventOffset.value())) != null;
     }
     return store
         .values()

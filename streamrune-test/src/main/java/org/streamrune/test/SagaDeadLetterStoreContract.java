@@ -440,19 +440,179 @@ public abstract class SagaDeadLetterStoreContract {
   }
 
   /**
-   * The named key carries no saga type: a hold over another type's entry at the key replaces it as
-   * {@code publish} would.
+   * The named key carries the saga type: a hold beside another type's entry at the same saga id and
+   * offset writes its own entry and leaves the other type's entry exactly as stored.
    */
   @Test
-  public void publishShieldedIfAbsent_replacesAnotherTypesEntryAtTheKey_asPublishDoes() {
-    store.publish(held(A, OTHER, 10L, T0));
+  public void publishShieldedIfAbsent_besideAnotherTypesEntryAtTheKey_writesItsOwn_keepsTheOther() {
+    row(A, SagaStatus.RUNNING);
+    store.publish(foreignEntry(A, 10L)); // the other type's poison: RuntimeException "boom" at T0
     assertInstanceOf(
         HoldResult.Written.class,
         store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(5))));
-    SagaDeadLetterEntry e = store.findBySaga(A).getFirst();
+    assertEquals(2, store.findBySaga(A).size());
+    SagaDeadLetterEntry own = entryOf(A, TYPE, 10L);
+    assertEquals("org.streamrune.runtime.SagaSkippedWhileFaultedException", own.errorType());
+    assertEquals(T0.plusSeconds(5), own.faultedAt());
+    SagaDeadLetterEntry other = entryOf(A, OTHER, 10L);
+    assertEquals("java.lang.RuntimeException", other.errorType());
+    assertEquals("boom", other.errorMessage());
+    assertEquals(T0, other.faultedAt());
+    assertTrue(shield(A), "the hold shields its own type's row");
+  }
+
+  /**
+   * With both types stored at the key, a hold keeps and hands back its own type's entry, never the
+   * other type's — whichever type holds, and whichever entry was stored first.
+   */
+  @Test
+  public void publishShieldedIfAbsent_withBothTypesStoredAtTheKey_handsBackItsOwnTypesEntry() {
+    row(A, SagaStatus.RUNNING);
+    store.publishShielded(entry(A, 10L, T0.plusSeconds(1))); // this type's poison
+    store.publish(held(A, OTHER, 10L, T0.plusSeconds(2))); // the other type's newer hold
+    SagaDeadLetterEntry kept =
+        assertInstanceOf(
+                HoldResult.Kept.class,
+                store.publishShieldedIfAbsent(held(A, TYPE, 10L, T0.plusSeconds(3))))
+            .entry();
+    assertEquals(TYPE, kept.sagaType());
+    assertEquals("java.lang.RuntimeException", kept.errorType());
+    assertEquals(T0.plusSeconds(1), kept.faultedAt());
+    SagaDeadLetterEntry keptOther =
+        assertInstanceOf(
+                HoldResult.Kept.class,
+                store.publishShieldedIfAbsent(held(A, OTHER, 10L, T0.plusSeconds(4))))
+            .entry();
+    assertEquals(OTHER, keptOther.sagaType());
+    assertEquals(T0.plusSeconds(2), keptOther.faultedAt());
+    assertEquals(2, store.findBySaga(A).size());
+    assertEquals(
+        "org.streamrune.runtime.SagaSkippedWhileFaultedException",
+        entryOf(A, OTHER, 10L).errorType());
+  }
+
+  /**
+   * Two saga types at the same saga id and offset keep two entries: a publish of one never replaces
+   * the other's, and a refresh of one changes only its own.
+   */
+  @Test
+  public void publish_twoTypesAtTheSameSagaAndOffset_keepTwoEntries_aRefreshTouchesOnlyItsOwn() {
+    store.publish(entry(A, 10L, T0));
+    store.publish(foreignEntry(A, 10L));
+    store.establishFirstReplayAnchor(A, OTHER, GlobalOffset.of(10L), T0.plusSeconds(7));
+    store.publish(
+        new SagaDeadLetterEntry(
+            A,
+            TYPE,
+            GlobalOffset.of(10L),
+            EventType.of("Evt"),
+            "x.Again",
+            "again",
+            T0.plusSeconds(60)));
+    assertEquals(2, store.findBySaga(A).size());
+    assertEquals(2, store.findAll(10).size());
+    SagaDeadLetterEntry own = entryOf(A, TYPE, 10L);
+    assertEquals("x.Again", own.errorType());
+    assertEquals(T0.plusSeconds(60), own.faultedAt());
+    assertEquals(T0, own.firstFaultedAt());
+    assertNull(own.firstReplayStartedAt(), "the other type's anchor is not this type's");
+    SagaDeadLetterEntry other = entryOf(A, OTHER, 10L);
+    assertEquals("java.lang.RuntimeException", other.errorType());
+    assertEquals(T0, other.faultedAt());
+    assertEquals(T0.plusSeconds(7), other.firstReplayStartedAt());
+  }
+
+  /**
+   * At a saga id and offset both types hold, the anchor write and the discard reach only their own
+   * type's entry, and the other type's entry does not count for this type's shield.
+   */
+  @Test
+  public void discardAnchorAndClear_atASagaAndOffsetBothTypesHold_reachOnlyTheirOwnType() {
+    row(A, SagaStatus.RUNNING);
+    store.publishShielded(entry(A, 10L, T0));
+    store.publish(foreignEntry(A, 10L));
+    store.establishFirstReplayAnchor(A, TYPE, GlobalOffset.of(10L), T0.plusSeconds(3));
+    assertEquals(T0.plusSeconds(3), entryOf(A, TYPE, 10L).firstReplayStartedAt());
+    assertNull(entryOf(A, OTHER, 10L).firstReplayStartedAt());
+
+    assertFalse(store.clearShieldIfDrained(A, TYPE), "this type's entry holds the shield");
+    assertTrue(store.discard(A, TYPE, GlobalOffset.of(10L)));
+    assertFalse(store.discard(A, TYPE, GlobalOffset.of(10L)), "already gone");
+    assertEquals(OTHER, store.findBySaga(A).getFirst().sagaType());
     assertEquals(1, store.findBySaga(A).size());
-    assertEquals(TYPE, e.sagaType());
-    assertEquals(T0.plusSeconds(5), e.faultedAt());
+    assertTrue(
+        store.clearShieldIfDrained(A, TYPE), "the other type's entry is not this type's backlog");
+    assertTrue(store.discard(A, OTHER, GlobalOffset.of(10L)));
+    assertTrue(store.findBySaga(A).isEmpty());
+  }
+
+  /**
+   * The discard and the anchor write address one entry by its key: a named entry by saga id, type
+   * and offset, a null-saga entry by type and offset. Neither reaches another saga's entry, another
+   * offset's, another type's, or the entry of the other shape at the same type and offset.
+   */
+  @Test
+  public void discardAndAnchor_reachOnlyTheEntryAtTheirKey_namedAndNullSaga() {
+    SagaId b = SagaId.of("dl-saga-b");
+    GlobalOffset ten = GlobalOffset.of(10L);
+    GlobalOffset eleven = GlobalOffset.of(11L);
+    store.publish(entry(A, 10L, T0));
+    store.publish(entry(b, 10L, T0)); // another saga, same type and offset
+    store.publish(entry(A, 11L, T0)); // the same saga, another offset
+    store.publish(entry(null, 10L, T0)); // no saga, same type and offset
+    store.publish(entry(null, 11L, T0)); // no saga, another offset
+    store.publish(foreignEntry(null, 10L)); // no saga, another type, same offset
+
+    store.establishFirstReplayAnchor(A, TYPE, ten, T0.plusSeconds(1));
+    assertEquals(T0.plusSeconds(1), entryOf(A, TYPE, 10L).firstReplayStartedAt());
+    assertNull(entryOf(b, TYPE, 10L).firstReplayStartedAt());
+    assertNull(entryOf(A, TYPE, 11L).firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(TYPE, ten).orElseThrow().firstReplayStartedAt());
+
+    store.establishFirstReplayAnchor(null, TYPE, ten, T0.plusSeconds(2));
+    assertEquals(
+        T0.plusSeconds(2), store.findNullSagaEntry(TYPE, ten).orElseThrow().firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(TYPE, eleven).orElseThrow().firstReplayStartedAt());
+    assertNull(store.findNullSagaEntry(OTHER, ten).orElseThrow().firstReplayStartedAt());
+    assertNull(entryOf(b, TYPE, 10L).firstReplayStartedAt());
+
+    assertTrue(store.discard(A, TYPE, ten));
+    assertEquals(1, store.findBySaga(b).size());
+    assertEquals(11L, store.findBySaga(A).getFirst().eventOffset().value());
+    assertEquals(1, store.findBySaga(A).size());
+    assertTrue(store.findNullSagaEntry(TYPE, ten).isPresent());
+
+    assertTrue(store.discard(null, TYPE, ten));
+    assertTrue(store.findNullSagaEntry(TYPE, ten).isEmpty());
+    assertTrue(store.findNullSagaEntry(TYPE, eleven).isPresent());
+    assertTrue(store.findNullSagaEntry(OTHER, ten).isPresent());
+    assertEquals(1, store.findBySaga(b).size());
+  }
+
+  /**
+   * Retention judges each of two types' entries at one saga id and offset by its own type's row:
+   * this type's entry under a healthy unshielded row is pruned, the other type's entry, whose type
+   * has no row, is the row-less residual and stays.
+   */
+  @Test
+  public void deleteOlderThan_twoTypesAtTheSameSagaAndOffset_judgesEachByItsOwnRow() {
+    row(A, SagaStatus.RUNNING);
+    store.publish(entry(A, 10L, T0));
+    store.publish(foreignEntry(A, 10L));
+    assertEquals(1L, store.countFaultedBacklog());
+    assertEquals(1, store.deleteOlderThan(T0.plus(Duration.ofDays(30))));
+    assertEquals(OTHER, store.findBySaga(A).getFirst().sagaType());
+    assertEquals(1, store.findBySaga(A).size());
+  }
+
+  /** The one entry of {@code type} stored for {@code sagaId} at {@code offset}. */
+  private SagaDeadLetterEntry entryOf(SagaId sagaId, SagaType type, long offset) {
+    List<SagaDeadLetterEntry> found =
+        store.findBySaga(sagaId).stream()
+            .filter(e -> e.sagaType().equals(type) && e.eventOffset().value() == offset)
+            .toList();
+    assertEquals(1, found.size(), "one entry of the type at the key");
+    return found.getFirst();
   }
 
   @Test

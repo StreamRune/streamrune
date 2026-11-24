@@ -335,11 +335,11 @@ class PostgresSagaDeadLetterStoreTest {
    * treats two {@code NULL} values as distinct, so re-publishing a null-saga entry at the same
    * offset does NOT upsert like the non-null case — it inserts a second row. This is a deliberate,
    * accepted edge case (rare routing failures before a saga could be identified), not a bug to fix.
-   * {@code discard(null, type, offset)} uses {@code IS NOT DISTINCT FROM}, so it removes both rows
-   * at once; the retention sweeper ({@code deleteOlderThan}) independently clears any stray
-   * duplicates that accumulate across repeated failed replays. The accumulation itself stays
-   * accepted — but each fresh row is born carrying the set's immutable evidence, pinned separately
-   * in {@code publish_nullSagaRequarantine_newRowCarriesAnchorAndFirstFault}.
+   * {@code discard(null, type, offset)} matches {@code saga_id IS NULL}, so it removes both rows at
+   * once; the retention sweeper ({@code deleteOlderThan}) independently clears any stray duplicates
+   * that accumulate across repeated failed replays. The accumulation itself stays accepted — but
+   * each fresh row is born carrying the set's immutable evidence, pinned separately in {@code
+   * publish_nullSagaRequarantine_newRowCarriesAnchorAndFirstFault}.
    */
   @Test
   void publish_nullSagaEntry_sameOffsetTwice_insertsTwoRows_discardRemovesBoth() {
@@ -371,8 +371,7 @@ class PostgresSagaDeadLetterStoreTest {
     assertTrue(all.stream().allMatch(e -> e.sagaId() == null));
     assertTrue(all.stream().allMatch(e -> e.eventOffset().equals(offset)));
 
-    // discard(null, type, offset) matches via IS NOT DISTINCT FROM — clears both stray rows at
-    // once.
+    // discard(null, type, offset) matches saga_id IS NULL — clears both stray rows at once.
     assertTrue(store.discard(null, SagaType.of("T"), offset));
     assertTrue(store.findAll(10).isEmpty());
   }
@@ -1404,7 +1403,7 @@ class PostgresSagaDeadLetterStoreTest {
     } catch (Exception e) {
       throw new IllegalStateException(e);
     }
-    throw new AssertionError("the hold's shield write never queued behind the drain's row lock");
+    throw new AssertionError("no statement starting with '" + prefix + "' waited on a lock");
   }
 
   /**
@@ -1623,6 +1622,43 @@ class PostgresSagaDeadLetterStoreTest {
     }
     assertTrue(store.findBySaga(a).isEmpty(), "no entry records the applied event");
     assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * A hold that keeps a stored entry locks its row until the hold's transaction ends: a discard of
+   * that entry from another connection, started after the hold's upsert, waits for the hold to
+   * commit, so the entry the hold reads back is the one its upsert decided on. The discard then
+   * removes it. Two real connections.
+   */
+  @Test
+  void publishShieldedIfAbsent_keptEntry_staysLockedUntilTheHoldCommits_interleaving()
+      throws Exception {
+    var rows = sagaRows();
+    var a = SagaId.of("dl-race-hold-lock");
+    var type = SagaType.of("T");
+    rows.create(a, type, new ShieldState(SagaStatus.RUNNING, "m"), SagaStatus.RUNNING);
+    store.publishShielded(entry(a, type, 60L, "the poison", T0));
+    var discard = new AtomicReference<CompletableFuture<Boolean>>();
+    var holder =
+        new PostgresSagaDeadLetterStore(
+            hookedBeforeStatement(
+                "UPDATE saga_state SET dead_letter_pending = TRUE",
+                () -> {
+                  // the hold's upsert has run in its open transaction: the discard queues on the
+                  // row
+                  discard.set(
+                      CompletableFuture.supplyAsync(
+                          () -> store.discard(a, type, GlobalOffset.of(60L))));
+                  awaitBlockedOnRowLock("DELETE FROM saga_dead_letters");
+                }));
+
+    var result = holder.publishShieldedIfAbsent(entry(a, type, 60L, "held", T0.plusSeconds(1)));
+
+    var kept = assertInstanceOf(SagaDeadLetterStore.HoldResult.Kept.class, result).entry();
+    assertEquals("the poison", kept.errorMessage());
+    assertEquals(T0, kept.faultedAt());
+    assertTrue(discard.get().get(20, TimeUnit.SECONDS), "the discard ran once the hold committed");
+    assertTrue(store.findBySaga(a).isEmpty());
   }
 
   /** The clear never runs its UPDATE on an absent row: no lock, no write, {@code false}. */
@@ -1967,5 +2003,57 @@ class PostgresSagaDeadLetterStoreTest {
 
     assertTrue(store.clearShieldIfDrained(a, type), "the rerun clears the drained saga");
     assertFalse(rows.load(a, type, ShieldState.class).orElseThrow().deadLetterPending());
+  }
+
+  /**
+   * The discard and the anchor write are index probes in both shapes: the saga id, or its absence,
+   * is an index condition of each statement. The statements are read from the store itself.
+   */
+  @Test
+  void discardAndAnchorStatements_haveTheSagaIdAsAnIndexCondition() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      // 20 000 rows over two types, one in twenty without a saga; then fresh statistics, and the
+      // scans that would hide the index on a small table switched off.
+      stmt.execute(
+          "INSERT INTO saga_dead_letters (saga_id, saga_type, event_offset, event_type, error_type)"
+              + " SELECT CASE WHEN g % 20 = 0 THEN NULL ELSE 'saga-' || g END,"
+              + " CASE WHEN g % 2 = 0 THEN 'T' ELSE 'Other' END, g, 'E', 'x'"
+              + " FROM generate_series(1, 20000) g");
+      stmt.execute("VACUUM ANALYZE saga_dead_letters");
+      stmt.execute("SET enable_seqscan = off");
+      stmt.execute("SET enable_bitmapscan = off");
+      assertThat(sagaIdIndexCondition(conn, "DISCARD_NAMED", "'saga-7'", "'Other'", "7"))
+          .contains("saga_id");
+      assertThat(
+              sagaIdIndexCondition(
+                  conn, "ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED", "NOW()", "'saga-7'", "'Other'", "7"))
+          .contains("saga_id");
+      assertThat(sagaIdIndexCondition(conn, "DISCARD_NULL_SAGA", "'T'", "20"))
+          .contains("saga_id IS NULL");
+      assertThat(
+              sagaIdIndexCondition(
+                  conn, "ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA", "NOW()", "'T'", "20"))
+          .contains("saga_id IS NULL");
+    }
+  }
+
+  /** The index condition of the scan the store's statement {@code constant} is planned with. */
+  private static String sagaIdIndexCondition(Connection conn, String constant, String... literals)
+      throws Exception {
+    var field = PostgresSagaDeadLetterStore.class.getDeclaredField(constant);
+    field.setAccessible(true);
+    String sql = (String) field.get(null);
+    for (String literal : literals) {
+      sql = sql.replaceFirst("\\?", java.util.regex.Matcher.quoteReplacement(literal));
+    }
+    var plan = ExplainPlans.explainJson(conn, sql);
+    for (String index : java.util.List.of("saga_dead_letters_uniq", "idx_saga_dead_letters_saga")) {
+      var scan = ExplainPlans.findIndexScan(plan, index);
+      if (scan != null) {
+        return scan.path("Index Cond").asText();
+      }
+    }
+    return "no scan of either index: " + plan;
   }
 }
