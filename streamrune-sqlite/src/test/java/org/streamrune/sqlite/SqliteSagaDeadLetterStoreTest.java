@@ -411,6 +411,36 @@ class SqliteSagaDeadLetterStoreTest {
     }
   }
 
+  /**
+   * The discard and the anchor write are index searches in both shapes, as on Postgres: the saga
+   * id, or its absence, the saga type and the offset are the constraints of a search of the unique
+   * key's index, never a scan of the table.
+   */
+  @Test
+  void theDiscardAndTheAnchorWriteSearchTheUniqueKeysIndex_namedAndNullSaga() throws SQLException {
+    SqliteDatabase database = migrated("plan.db", "");
+    for (String sql :
+        List.of(
+            SqliteSagaDeadLetterStore.DISCARD_NAMED,
+            SqliteSagaDeadLetterStore.DISCARD_NULL_SAGA,
+            SqliteSagaDeadLetterStore.ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED,
+            SqliteSagaDeadLetterStore.ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA)) {
+      StringBuilder plan = new StringBuilder();
+      try (Connection conn = database.dataSource().getConnection();
+          PreparedStatement ps = conn.prepareStatement("EXPLAIN QUERY PLAN " + sql);
+          var rs = ps.executeQuery()) {
+        while (rs.next()) {
+          plan.append(rs.getString("detail")).append('\n');
+        }
+      }
+      assertThat(plan.toString())
+          .as(sql)
+          .contains("SEARCH saga_dead_letters USING")
+          .contains("(saga_id=? AND saga_type=? AND event_offset=?)")
+          .doesNotContain("SCAN");
+    }
+  }
+
   @Test
   void aNegativeLimitIsRefused() {
     SqliteSagaDeadLetterStore store = new SqliteSagaDeadLetterStore(migrated("limit.db", ""));

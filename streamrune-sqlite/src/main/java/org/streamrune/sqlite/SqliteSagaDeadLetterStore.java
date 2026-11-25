@@ -25,13 +25,14 @@ import org.streamrune.core.types.SagaType;
  * keeps. Pair it with a {@link SqliteSagaStore} on the same database file. The tables belong to the
  * event-store baseline, which {@link SqliteEventStoreFactory} migrates.
  *
- * <p><b>Stored facts win.</b> {@link #publish} upserts a named entry by {@code (saga_id,
+ * <p><b>Stored facts win.</b> {@link #publish} upserts a named entry by {@code (saga_id, saga_type,
  * event_offset)}: a re-quarantine refreshes the error details and {@code faulted_at} and keeps the
- * stored {@code first_faulted_at}, {@code first_replay_started_at} and {@code target_saga_id}. A
- * null-saga entry never conflicts (two {@code NULL}s are distinct to the unique constraint, as on
- * Postgres), so each re-quarantine inserts a row born with the set's evidence: the oldest {@code
- * first_faulted_at}, the oldest {@code first_replay_started_at} and the newest resolved {@code
- * target_saga_id} among null-saga rows of the type at the offset, read by the inserting statement.
+ * stored {@code first_faulted_at}, {@code first_replay_started_at} and {@code target_saga_id}; two
+ * saga types at the same saga id and offset keep two rows. A null-saga entry never conflicts (two
+ * {@code NULL}s are distinct to the unique constraint, as on Postgres), so each re-quarantine
+ * inserts a row born with the set's evidence: the oldest {@code first_faulted_at}, the oldest
+ * {@code first_replay_started_at} and the newest resolved {@code target_saga_id} among null-saga
+ * rows of the type at the offset, read by the inserting statement.
  *
  * <p><b>One write lock, so no row locks.</b> Every write runs as {@code BEGIN IMMEDIATE} … {@code
  * COMMIT} (see {@code SqliteTransactions}), holding SQLite's database-wide write lock from before
@@ -41,9 +42,10 @@ import org.streamrune.core.types.SagaType;
  *   <li>{@link #publishShielded} writes the entry and the owner's shield in one transaction: after
  *       any crash either both exist or neither does;
  *   <li>{@link #publishShieldedIfAbsent} reads the owner's {@code last_applied_offset}, writes the
- *       entry unless it is applied or already held, and asserts the shield, in one transaction: the
- *       row it decides on is the row it writes, and two concurrent holds of one event write it
- *       once;
+ *       entry unless it is applied or an entry is stored at its key, and asserts the shield, in one
+ *       transaction: the row it decides on is the row it writes, the kept entry it reads back is
+ *       the one it decided on (Postgres holds that row's lock for this; here no writer can commit
+ *       before the hold does), and two concurrent holds of one event write it once;
  *   <li>{@link #clearShieldIfDrained} is one conditional {@code UPDATE}: no entry can be written
  *       between its check and its write. On Postgres it first locks the saga row with {@code FOR
  *       UPDATE} because a READ COMMITTED statement checks with a snapshot older than the lock; a
@@ -76,21 +78,26 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
       "saga_id, saga_type, event_offset, event_type, error_type, error_message, faulted_at, "
           + "first_faulted_at, first_replay_started_at, target_saga_id";
 
-  // The named upsert. first_faulted_at, first_replay_started_at and target_saga_id are not in the
-  // DO UPDATE set: on a conflict the stored values win.
-  private static final String UPSERT =
+  private static final String INSERT_NAMED =
       "INSERT INTO saga_dead_letters ("
           + COLUMNS
           + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-          + "ON CONFLICT (saga_id, event_offset) DO UPDATE SET "
-          + "saga_type = excluded.saga_type, event_type = excluded.event_type, "
+          + "ON CONFLICT (saga_id, saga_type, event_offset) ";
+
+  // The named upsert, keyed by (saga_id, saga_type, event_offset): another type's row at the saga
+  // id and offset is another entry. first_faulted_at, first_replay_started_at and target_saga_id
+  // are not in the DO UPDATE set: on a conflict the stored values win.
+  private static final String UPSERT =
+      INSERT_NAMED
+          + "DO UPDATE SET event_type = excluded.event_type, "
           + "error_type = excluded.error_type, error_message = excluded.error_message, "
           + "faulted_at = excluded.faulted_at";
 
-  // The hold's upsert: a stored row of the same type is kept as it is (0 rows changed), a stored
-  // row of another type is replaced as UPSERT replaces it (the named key has no type).
-  private static final String HOLD_UPSERT =
-      UPSERT + " WHERE saga_dead_letters.saga_type <> excluded.saga_type";
+  // The hold's write: the entry stored at the key (a poison's cause, or an earlier hold) is kept
+  // as it is. The row count tells the two apart: 1 = inserted, 0 = kept. Postgres writes the same
+  // with a conflict arm that updates nothing, for the row lock it takes; the write lock this
+  // transaction holds is that lock here.
+  private static final String HOLD_INSERT = INSERT_NAMED + "DO NOTHING";
 
   // The null-saga insert: born with the set's oldest first_faulted_at and first-replay anchor and
   // its newest resolved target, among null-saga rows of the type at the offset.
@@ -128,19 +135,31 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
           + " FROM saga_dead_letters WHERE saga_id IS NULL AND target_saga_id = ?"
           + " AND saga_type = ?) WHERE newest = 1 ORDER BY event_offset ASC";
 
-  // Establish-only: a stored anchor wins. "saga_id IS ?" is Postgres' IS NOT DISTINCT FROM: a
-  // NULL id matches only null-saga rows.
-  private static final String ESTABLISH_FIRST_REPLAY_ANCHOR =
+  // Establish-only: a stored anchor wins. Two statements, one per shape, each addressing the full
+  // key, as on Postgres: a named entry by saga_id = ?, a null-saga entry by saga_id IS NULL (every
+  // row of its duplicate set). The unique key's index serves both.
+  private static final String ANCHOR_SET =
       "UPDATE saga_dead_letters SET first_replay_started_at = "
-          + "coalesce(first_replay_started_at, ?) "
-          + "WHERE saga_id IS ? AND event_offset = ? AND saga_type = ?";
+          + "coalesce(first_replay_started_at, ?) ";
+
+  static final String ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED =
+      ANCHOR_SET + "WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
+
+  static final String ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA =
+      ANCHOR_SET + "WHERE saga_id IS NULL AND saga_type = ? AND event_offset = ?";
 
   private static final String SET_RESOLVED_TARGET =
       "UPDATE saga_dead_letters SET target_saga_id = ? "
           + "WHERE saga_id IS NULL AND event_offset = ? AND saga_type = ?";
 
-  private static final String DISCARD =
-      "DELETE FROM saga_dead_letters WHERE saga_id IS ? AND event_offset = ? AND saga_type = ?";
+  // A null sagaId matches only null-saga rows (every row of the duplicate set), a non-null one
+  // only rows with that saga id; one statement per shape, as for the anchor write. Type-scoped:
+  // one type's replayer never deletes another type's entry.
+  static final String DISCARD_NAMED =
+      "DELETE FROM saga_dead_letters WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
+
+  static final String DISCARD_NULL_SAGA =
+      "DELETE FROM saga_dead_letters WHERE saga_id IS NULL AND saga_type = ? AND event_offset = ?";
 
   // The retention guard's three protected populations, type-scoped.
   private static final String SHIELDED_OWNER =
@@ -194,9 +213,11 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
   private static final String SELECT_LAST_APPLIED =
       "SELECT last_applied_offset FROM saga_state WHERE saga_id = ? AND saga_type = ?";
 
-  // The entry the hold's upsert kept, read in the hold's transaction.
-  private static final String SELECT_NAMED_AT_OFFSET =
-      "SELECT " + COLUMNS + " FROM saga_dead_letters WHERE saga_id = ? AND event_offset = ?";
+  // The entry the hold kept, at its full key, read in the hold's transaction.
+  private static final String SELECT_NAMED_AT_KEY =
+      "SELECT "
+          + COLUMNS
+          + " FROM saga_dead_letters WHERE saga_id = ? AND saga_type = ? AND event_offset = ?";
 
   /** The rows one retention batch deletes at most. */
   static final int DELETE_BATCH_SIZE = 1000;
@@ -274,8 +295,9 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
    * {@inheritDoc}
    *
    * <p>One transaction: the owner's {@code last_applied_offset} is read first (an applied event
-   * writes nothing), then the hold's upsert, then the owner's shield, then, when the upsert kept a
-   * stored entry, that entry.
+   * writes nothing), then the hold's insert, which writes nothing over the entry stored at the key
+   * {@code (saga_id, saga_type, event_offset)}, then the owner's shield, then, when the insert kept
+   * a stored entry, that entry, read by the same key.
    *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
@@ -307,14 +329,13 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
     if (lastApplied != null && lastApplied >= entry.eventOffset().value()) {
       return new HoldResult.AlreadyApplied(lastApplied); // neither the entry nor the shield
     }
-    boolean written = writeNamed(conn, HOLD_UPSERT, entry) > 0;
+    boolean written = writeNamed(conn, HOLD_INSERT, entry) > 0;
     assertShield(conn, entry);
     if (written) {
       return new HoldResult.Written();
     }
-    try (PreparedStatement ps = conn.prepareStatement(SELECT_NAMED_AT_OFFSET)) {
-      ps.setString(1, entry.sagaId().value());
-      ps.setLong(2, entry.eventOffset().value());
+    try (PreparedStatement ps = conn.prepareStatement(SELECT_NAMED_AT_KEY)) {
+      bindKey(ps, 1, entry.sagaId(), entry.sagaType(), entry.eventOffset());
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
           throw new SQLException(
@@ -333,7 +354,23 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
     }
   }
 
-  /** Binds a named entry to {@code sql} (UPSERT or HOLD_UPSERT) and returns the row count. */
+  /**
+   * Binds the key of a statement that addresses one entry from parameter {@code first} on: the saga
+   * id (named shape only; the null-saga shape matches {@code saga_id IS NULL} in its SQL), then the
+   * saga type, then the event offset.
+   */
+  private static void bindKey(
+      PreparedStatement ps, int first, SagaId sagaId, SagaType sagaType, GlobalOffset eventOffset)
+      throws SQLException {
+    int i = first;
+    if (sagaId != null) {
+      ps.setString(i++, sagaId.value());
+    }
+    ps.setString(i++, sagaType.value());
+    ps.setLong(i, eventOffset.value());
+  }
+
+  /** Binds a named entry to {@code sql} (UPSERT or HOLD_INSERT) and returns the row count. */
   private static int writeNamed(Connection conn, String sql, SagaDeadLetterEntry entry)
       throws SQLException {
     try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -379,6 +416,10 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
+   * <p>Addressed by the full key: a named entry by {@code saga_id = ?}, a {@code null} saga id by
+   * {@code saga_id IS NULL} (every row of the null-saga duplicate set), each with {@code saga_type}
+   * and {@code event_offset}.
+   *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
    * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
@@ -396,11 +437,13 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
         "saga dead-letter replay anchor",
         "Failed to establish saga dead letter first-replay anchor",
         conn -> {
-          try (PreparedStatement ps = conn.prepareStatement(ESTABLISH_FIRST_REPLAY_ANCHOR)) {
+          try (PreparedStatement ps =
+              conn.prepareStatement(
+                  sagaId == null
+                      ? ESTABLISH_FIRST_REPLAY_ANCHOR_NULL_SAGA
+                      : ESTABLISH_FIRST_REPLAY_ANCHOR_NAMED)) {
             ps.setLong(1, SqliteTimestamps.toMicros(anchorIfAbsent));
-            setSagaId(ps, 2, sagaId);
-            ps.setLong(3, eventOffset.value());
-            ps.setString(4, sagaType.value());
+            bindKey(ps, 2, sagaId, sagaType, eventOffset);
             return ps.executeUpdate();
           }
         });
@@ -491,6 +534,9 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
   /**
    * {@inheritDoc}
    *
+   * <p>A {@code null} saga id is matched by {@code saga_id IS NULL}: it removes every row of the
+   * null-saga duplicate set of the type at the offset, never a named entry.
+   *
    * @throws EventStoreException if the write fails, including when the write lock is not granted
    *     within {@code busy_timeout}
    * @throws IllegalStateException if the borrowed connection is in manual-commit mode (nothing is
@@ -505,10 +551,9 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
             "saga dead-letter discard",
             "Failed to discard saga dead letter entry",
             conn -> {
-              try (PreparedStatement ps = conn.prepareStatement(DISCARD)) {
-                setSagaId(ps, 1, sagaId);
-                ps.setLong(2, eventOffset.value());
-                ps.setString(3, sagaType.value());
+              try (PreparedStatement ps =
+                  conn.prepareStatement(sagaId == null ? DISCARD_NULL_SAGA : DISCARD_NAMED)) {
+                bindKey(ps, 1, sagaId, sagaType, eventOffset);
                 return ps.executeUpdate();
               }
             });
@@ -651,15 +696,6 @@ public final class SqliteSagaDeadLetterStore implements SagaDeadLetterStore {
       ps.setNull(index, Types.INTEGER);
     } else {
       ps.setLong(index, SqliteTimestamps.toMicros(instant));
-    }
-  }
-
-  private static void setSagaId(PreparedStatement ps, int index, SagaId sagaId)
-      throws SQLException {
-    if (sagaId == null) {
-      ps.setNull(index, Types.VARCHAR);
-    } else {
-      ps.setString(index, sagaId.value());
     }
   }
 
