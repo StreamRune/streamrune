@@ -57,7 +57,7 @@ calls `flock(2)` through the Foreign Function and Memory API.
 | `SqliteEventStore`, `SqliteEventStoreFactory` | The event store and snapshots, with the outbox, the command inbox and the audit entries written inside each append. |
 | `SqliteOffsetStore`, `SqliteReadModelCheckpoints` | The subscription checkpoints and the read-model checkpoints, both fenced. |
 | `SqliteProjectionRepository`, `SqliteReadModelStore` | Read models in `<name>_view` tables, with PostgreSQL's query results; the default read-model store named `sqlite`. |
-| `SqliteSagaStore`, `SqliteSagaDeadLetterStore` | Saga state and saga dead letters. |
+| `SqliteSagaStore`, `SqliteSagaDeadLetterStore`, `SqliteConnectionFailures` | Saga state and saga dead letters, and the failures that tell the saga runner the database file is unusable. |
 | `SqliteOutboxStore`, `SqliteCommandInbox` | The transactional outbox and the idempotency inbox. |
 | `SqliteDeadLetterQueue`, `SqliteProjectionDeadLetterStore` | The command and the projection dead-letter stores. |
 | `SqliteAuditStore`, `SqliteEventAuditStore`, `SqliteCommandAuditQuery`, `SqliteEventAuditQuery`, `SqliteComplianceReportQuery` | The audit trail and its queries. |

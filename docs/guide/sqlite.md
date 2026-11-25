@@ -179,6 +179,15 @@ works: the stores pass their contract suites on a pool of one connection. But ev
 waits for a free connection, and a caller that waits longer than HikariCP's `connectionTimeout`
 fails with the pool's exception rather than with the write-lock message.
 
+A `SagaRunner` steps the sagas of a page in parallel (`streamrune.saga.parallelism`, 4 by default;
+see [Saga parallelism](advanced/saga.md#saga-parallelism)). On SQLite the steps read and decide at
+the same time and their writes queue for the write lock, first come first served. A step holds one
+connection per store call, also while that call waits for the write lock, and never a second one,
+so a page runs to its end on a pool of any size, one connection included. The startup check of the
+integrations counts as on PostgreSQL: one connection per step in flight, and a WARN when the saga
+runners can hold more than half the pool. The default in-process aggregate lock holds no
+connection, so the refusal for locks that can take the whole pool does not arise.
+
 ## One instance per database file
 
 A SQLite database serves **exactly one application instance**. A second instance on the same file

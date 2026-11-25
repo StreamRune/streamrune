@@ -1273,8 +1273,8 @@ license.
 - Event audit trail (`streamrune.event-audit-enabled`, default `false`): `EventAuditEntry` per
   persisted event written by `PostgresEventAuditStore` in the append transaction, queried through
   `EventAuditQuery` / `CommandAuditQuery`, and summarised by `ComplianceReportQuery`.
-- Paged audit reads (`CommandAuditQuery`, and `EventAuditQuery` on PostgreSQL) order by `occurredAt`
-  and break every tie by the row id (`audit_log.id`, `event_audit_log.id`); `idx_audit_occurred_at`,
+- Paged audit reads (`CommandAuditQuery`, and `EventAuditQuery` on PostgreSQL and SQLite) order by
+  `occurredAt` and break every tie by the row id (`audit_log.id`, `event_audit_log.id`); `idx_audit_occurred_at`,
   `idx_event_audit_occurred_at` and `idx_event_audit_stream` end with `id`. The page and its total
   come from one statement, and a page beyond the last reads only the count. An entry appears on
   exactly one page of a window that receives no entry between the reads.
