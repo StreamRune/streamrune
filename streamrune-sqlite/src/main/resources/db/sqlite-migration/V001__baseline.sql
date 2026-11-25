@@ -252,7 +252,8 @@ CREATE TABLE audit_log (
 CREATE INDEX idx_audit_command_id     ON audit_log (command_id);
 CREATE INDEX idx_audit_aggregate      ON audit_log (aggregate_type, aggregate_id) WHERE aggregate_id IS NOT NULL;
 CREATE INDEX idx_audit_user_id        ON audit_log (user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_audit_occurred_at    ON audit_log (occurred_at DESC);
+-- (occurred_at, id) is the order of the paged audit reads: the id breaks ties between equal timestamps.
+CREATE INDEX idx_audit_occurred_at    ON audit_log (occurred_at, id);
 CREATE INDEX idx_audit_correlation_id ON audit_log (correlation_id) WHERE correlation_id IS NOT NULL;
 
 
@@ -280,9 +281,10 @@ CREATE TABLE event_audit_log (
 CREATE INDEX idx_event_audit_command_id     ON event_audit_log (command_id);
 CREATE INDEX idx_event_audit_correlation_id ON event_audit_log (correlation_id);
 CREATE INDEX idx_event_audit_causation_id   ON event_audit_log (causation_id) WHERE causation_id IS NOT NULL;
-CREATE INDEX idx_event_audit_stream         ON event_audit_log (aggregate_type, aggregate_id, occurred_at);
+CREATE INDEX idx_event_audit_stream         ON event_audit_log (aggregate_type, aggregate_id, occurred_at, id);
 CREATE INDEX idx_event_audit_user_id        ON event_audit_log (user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX idx_event_audit_occurred_at    ON event_audit_log (occurred_at DESC);
+-- (occurred_at, id) is the order of the audit reads: the id breaks ties between equal timestamps.
+CREATE INDEX idx_event_audit_occurred_at    ON event_audit_log (occurred_at, id);
 
 
 -- ===========================================================================================

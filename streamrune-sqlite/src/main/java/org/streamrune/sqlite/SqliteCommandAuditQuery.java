@@ -27,15 +27,16 @@ import org.streamrune.core.types.UserId;
  * writes, with the semantics of {@code PostgresCommandAuditQuery}.
  *
  * <p>{@link #findByCommandId} answers the most recent entry of the command (the log keeps every
- * attempt of a retry). The paged finders page in the database, with {@code LIMIT}/{@code OFFSET}
- * and a separate {@code count(*)} for {@link Page#totalElements()}, ordered by {@code occurred_at}
- * ascending; the {@link PageRequest#sort()} component is ignored. Entries with equal {@code
- * occurred_at} come in the order they were written (the row id), one order the interface leaves
- * open. The window bounds are inclusive and compare to the microsecond; a window whose {@code from}
- * is after its {@code to} holds nothing.
+ * attempt of a retry); of two entries with an equal timestamp, the one written later. The paged
+ * finders page in the database, with {@code LIMIT}/{@code OFFSET}; the page and {@link
+ * Page#totalElements()} come from one statement, so from one snapshot of the file, and they agree.
+ * The order is {@code occurred_at} ascending, then the row's {@code id}, so entries with an equal
+ * timestamp keep one position across pages, and each entry appears once across the pages of a
+ * window that receives no entry between the reads; the {@link PageRequest#sort()} component is
+ * ignored. The window bounds are inclusive and compare to the microsecond; a window whose {@code
+ * from} is after its {@code to} holds nothing.
  *
- * <p>Queries run in autocommit and, under WAL, never wait for a writer. The count and the page are
- * two reads, as on Postgres: an entry written between them can show in one and not the other.
+ * <p>Queries run in autocommit and, under WAL, never wait for a writer.
  *
  * <p><b>Failures.</b> A storage failure, and a stored row the entry types refuse, is an {@link
  * EventStoreException}; a {@code null} argument is refused with {@link NullPointerException}, as
@@ -52,27 +53,35 @@ public final class SqliteCommandAuditQuery implements CommandAuditQuery {
           + COLUMNS
           + " FROM audit_log WHERE command_id = ? ORDER BY occurred_at DESC, id DESC LIMIT 1";
 
-  private static final String WINDOW = " AND occurred_at >= ? AND occurred_at <= ?";
+  static final String FIND_BY_USER = pageSql("user_id");
 
-  private static final String PAGE = " ORDER BY occurred_at, id LIMIT ? OFFSET ?";
+  static final String FIND_BY_OUTCOME = pageSql("outcome");
 
-  private static final String FIND_BY_USER =
-      "SELECT " + COLUMNS + " FROM audit_log WHERE user_id = ?" + WINDOW + PAGE;
+  static final String FIND_BY_TYPE = pageSql("command_type");
 
-  private static final String COUNT_BY_USER =
-      "SELECT count(*) FROM audit_log WHERE user_id = ?" + WINDOW;
-
-  private static final String FIND_BY_OUTCOME =
-      "SELECT " + COLUMNS + " FROM audit_log WHERE outcome = ?" + WINDOW + PAGE;
-
-  private static final String COUNT_BY_OUTCOME =
-      "SELECT count(*) FROM audit_log WHERE outcome = ?" + WINDOW;
-
-  private static final String FIND_BY_TYPE =
-      "SELECT " + COLUMNS + " FROM audit_log WHERE command_type = ?" + WINDOW + PAGE;
-
-  private static final String COUNT_BY_TYPE =
-      "SELECT count(*) FROM audit_log WHERE command_type = ?" + WINDOW;
+  /**
+   * The statement of a paged read: the count of the matching rows and one page of them, joined into
+   * one result, so both come from one snapshot. Every row carries the count; a page beyond the last
+   * is one row with the count and a {@code NULL} {@code id} ({@code id} is the primary key, so
+   * {@code NULL} means "no row"). The page's {@code LIMIT} is 0 unless the count exceeds the
+   * offset, so a page beyond the last skips no rows to find none (Postgres gates its page the same
+   * way, with a {@code LATERAL} join, which SQLite does not have). The order is {@code
+   * occurred_at}, then {@code id}; the outer {@code ORDER BY} restores it after the join.
+   * Parameters: the filter value, {@code from}, {@code to} (the count), the same three again (the
+   * page), the offset (the gate), {@code LIMIT}, {@code OFFSET}.
+   */
+  private static String pageSql(String filterColumn) {
+    String from =
+        " FROM audit_log WHERE " + filterColumn + " = ? AND occurred_at >= ? AND occurred_at <= ?";
+    return "WITH total(n) AS MATERIALIZED (SELECT count(*)"
+        + from
+        + ") SELECT total.n AS total_count, page.* FROM total LEFT JOIN (SELECT id, "
+        + COLUMNS
+        + from
+        + " ORDER BY occurred_at, id"
+        + " LIMIT CASE WHEN (SELECT n FROM total) > ? THEN ? ELSE 0 END OFFSET ?) AS page ON 1"
+        + " ORDER BY page.occurred_at, page.id";
+  }
 
   private static final String FAILED = "Failed to query command audit log";
 
@@ -109,54 +118,48 @@ public final class SqliteCommandAuditQuery implements CommandAuditQuery {
   public Page<AuditEntry> findByUserId(
       UserId userId, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(userId, "userId is required");
-    return queryPage(FIND_BY_USER, COUNT_BY_USER, userId.value(), from, to, pageRequest);
+    return queryPage(FIND_BY_USER, userId.value(), from, to, pageRequest);
   }
 
   @Override
   public Page<AuditEntry> findByOutcome(
       AuditOutcome outcome, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(outcome, "outcome is required");
-    return queryPage(FIND_BY_OUTCOME, COUNT_BY_OUTCOME, outcome.name(), from, to, pageRequest);
+    return queryPage(FIND_BY_OUTCOME, outcome.name(), from, to, pageRequest);
   }
 
   @Override
   public Page<AuditEntry> findByCommandType(
       String commandType, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(commandType, "commandType is required");
-    return queryPage(FIND_BY_TYPE, COUNT_BY_TYPE, commandType, from, to, pageRequest);
+    return queryPage(FIND_BY_TYPE, commandType, from, to, pageRequest);
   }
 
   private Page<AuditEntry> queryPage(
-      String selectSql,
-      String countSql,
-      String filter,
-      Instant from,
-      Instant to,
-      PageRequest pageRequest) {
+      String sql, String filter, Instant from, Instant to, PageRequest pageRequest) {
     Objects.requireNonNull(from, "from is required");
     Objects.requireNonNull(to, "to is required");
     Objects.requireNonNull(pageRequest, "pageRequest is required");
     long fromMicros = SqliteTimestamps.toMicros(from);
     long toMicros = SqliteTimestamps.toMicros(to);
-    try (Connection conn = dataSource.getConnection()) {
-      long total;
-      try (PreparedStatement ps = conn.prepareStatement(countSql)) {
-        ps.setString(1, filter);
-        ps.setLong(2, fromMicros);
-        ps.setLong(3, toMicros);
-        try (ResultSet rs = ps.executeQuery()) {
-          total = rs.next() ? rs.getLong(1) : 0L;
-        }
-      }
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(sql)) {
+      ps.setString(1, filter);
+      ps.setLong(2, fromMicros);
+      ps.setLong(3, toMicros);
+      ps.setString(4, filter);
+      ps.setLong(5, fromMicros);
+      ps.setLong(6, toMicros);
+      ps.setLong(7, pageRequest.offset());
+      ps.setInt(8, pageRequest.size());
+      ps.setLong(9, pageRequest.offset());
+      long total = 0;
       List<AuditEntry> content = new ArrayList<>();
-      try (PreparedStatement ps = conn.prepareStatement(selectSql)) {
-        ps.setString(1, filter);
-        ps.setLong(2, fromMicros);
-        ps.setLong(3, toMicros);
-        ps.setInt(4, pageRequest.size());
-        ps.setLong(5, pageRequest.offset());
-        try (ResultSet rs = ps.executeQuery()) {
-          while (rs.next()) {
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          total = rs.getLong("total_count");
+          rs.getLong("id");
+          if (!rs.wasNull()) {
             content.add(readEntry(rs));
           }
         }

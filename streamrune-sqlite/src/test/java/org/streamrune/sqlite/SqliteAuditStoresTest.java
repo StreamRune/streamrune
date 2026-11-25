@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
@@ -404,5 +405,196 @@ class SqliteAuditStoresTest {
           .doesNotContain("SCAN event_audit_log\n")
           .doesNotContain("SCAN e\n");
     }
+  }
+
+  /**
+   * Entries with an equal timestamp come in row-id order and appear once across pages. The ids are
+   * explicit and written in neither ascending nor descending order, so no insertion order and no
+   * scan direction of an index on occurred_at yields the id order by itself.
+   */
+  @Test
+  void entriesWithEqualOccurredAt_appearExactlyOnceAcrossPagesInIdOrder() throws SQLException {
+    SqliteDatabase database = migrated("ties.db", "");
+    long tied = SqliteTimestamps.toMicros(T0);
+    long later = SqliteTimestamps.toMicros(T0.plusSeconds(1));
+    try (Connection conn = database.dataSource().getConnection();
+        PreparedStatement command =
+            conn.prepareStatement(
+                "INSERT INTO audit_log (id, command_id, command_type, user_id, occurred_at,"
+                    + " outcome) VALUES (?, ?, 'Tied', 'tie-user', ?, 'SUCCESS')");
+        PreparedStatement event =
+            conn.prepareStatement(
+                "INSERT INTO event_audit_log (id, event_id, event_type, aggregate_type,"
+                    + " aggregate_id, version, command_id, correlation_id, user_id, occurred_at)"
+                    + " VALUES (?, ?, 'E', 'order', 'tied', 1, 'tie-cmd', 'tie-corr', 'tie-user',"
+                    + " ?)")) {
+      for (int i : new int[] {3, 6, 1, 4, 0, 5, 2}) {
+        for (PreparedStatement ps : List.of(command, event)) {
+          ps.setLong(1, 1000 + i);
+          ps.setString(2, "tie-0" + i);
+          ps.setLong(3, i < 5 ? tied : later);
+          ps.executeUpdate();
+        }
+      }
+    }
+    List<String> ids =
+        List.of("tie-00", "tie-01", "tie-02", "tie-03", "tie-04", "tie-05", "tie-06");
+    var commands = new SqliteCommandAuditQuery(database);
+    var events = new SqliteEventAuditQuery(database);
+    UserId user = UserId.of("tie-user");
+    StreamId stream = StreamId.of(AggregateType.of("order"), AggregateId.of("tied"));
+    Instant to = T0.plusSeconds(1);
+
+    List<String> byUser = new ArrayList<>();
+    List<String> byOutcome = new ArrayList<>();
+    List<String> byType = new ArrayList<>();
+    List<String> eventsByCorrelation = new ArrayList<>();
+    List<String> eventsByStream = new ArrayList<>();
+    List<String> eventsByUser = new ArrayList<>();
+    for (int p = 0; p < 4; p++) {
+      PageRequest request = PageRequest.of(p, 2);
+      Page<AuditEntry> page = commands.findByUserId(user, T0, to, request);
+      assertThat(page.totalElements()).isEqualTo(7);
+      page.content().forEach(e -> byUser.add(e.commandId().value()));
+      commands
+          .findByOutcome(AuditOutcome.SUCCESS, T0, to, request)
+          .content()
+          .forEach(e -> byOutcome.add(e.commandId().value()));
+      commands
+          .findByCommandType("Tied", T0, to, request)
+          .content()
+          .forEach(e -> byType.add(e.commandId().value()));
+      Page<EventAuditEntry> eventPage =
+          events.findByCorrelationId(CorrelationId.of("tie-corr"), request);
+      assertThat(eventPage.totalElements()).isEqualTo(7);
+      eventPage.content().forEach(e -> eventsByCorrelation.add(e.eventId().value()));
+      events
+          .findByStreamId(stream, T0, to, request)
+          .content()
+          .forEach(e -> eventsByStream.add(e.eventId().value()));
+      events
+          .findByUserId(user, T0, to, request)
+          .content()
+          .forEach(e -> eventsByUser.add(e.eventId().value()));
+    }
+    assertThat(byUser).isEqualTo(ids);
+    assertThat(byOutcome).isEqualTo(ids);
+    assertThat(byType).isEqualTo(ids);
+    assertThat(eventsByCorrelation).isEqualTo(ids);
+    assertThat(eventsByStream).isEqualTo(ids);
+    assertThat(eventsByUser).isEqualTo(ids);
+  }
+
+  /**
+   * Each paged read is one statement, so its total and its rows come from one snapshot of the file;
+   * a page beyond the last still carries the total.
+   */
+  @Test
+  void eachPagedReadIsOneStatement_soItsTotalAndItsRowsComeFromOneSnapshot() {
+    List<String> statements = new ArrayList<>();
+    SqliteDatabase database =
+        open(
+            countingStatements(
+                TestDatabases.dataSource(dir.resolve("one-statement.db")), statements));
+    new SqliteEventStoreFactory(database, EventStoreContract.Setup.defaults().registry()).create();
+    new SqliteAuditStore(database).save(command("c-1", T0));
+    new SqliteEventAuditStore(database).save(event("e-1", null));
+    statements.clear();
+    var commands = new SqliteCommandAuditQuery(database);
+    var events = new SqliteEventAuditQuery(database);
+
+    Page<AuditEntry> byUser = commands.findByUserId(USER, T0, T0, PageRequest.of(0, 10));
+    Page<AuditEntry> byOutcome =
+        commands.findByOutcome(AuditOutcome.SUCCESS, T0, T0, PageRequest.of(0, 10));
+    Page<AuditEntry> beyond =
+        commands.findByCommandType("PlaceOrder", T0, T0, PageRequest.of(3, 10));
+    Page<EventAuditEntry> byStream = events.findByStreamId(ORDER, T0, T0, PageRequest.of(0, 10));
+    Page<EventAuditEntry> eventsBeyond =
+        events.findByCommandId(CommandId.of("cmd-1"), PageRequest.of(3, 10));
+
+    assertThat(statements).as(statements.toString()).hasSize(5);
+    assertThat(byUser.content()).hasSize(1);
+    assertThat(byUser.totalElements()).isEqualTo(1);
+    assertThat(byOutcome.totalElements()).isEqualTo(1);
+    assertThat(beyond.content()).isEmpty();
+    assertThat(beyond.totalElements()).isEqualTo(1);
+    assertThat(byStream.content()).hasSize(1);
+    assertThat(byStream.totalElements()).isEqualTo(1);
+    assertThat(eventsBeyond.content()).isEmpty();
+    assertThat(eventsBeyond.totalElements()).isEqualTo(1);
+  }
+
+  /**
+   * {@code dataSource} with every statement its connections prepare added to {@code statements}.
+   */
+  private static DataSource countingStatements(DataSource dataSource, List<String> statements) {
+    return (DataSource)
+        java.lang.reflect.Proxy.newProxyInstance(
+            SqliteAuditStoresTest.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, args) -> {
+              Object result = invoke(dataSource, method, args);
+              if (!(result instanceof Connection conn)) {
+                return result;
+              }
+              return java.lang.reflect.Proxy.newProxyInstance(
+                  SqliteAuditStoresTest.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (connProxy, connMethod, connArgs) -> {
+                    if (connMethod.getName().equals("prepareStatement")) {
+                      statements.add((String) connArgs[0]);
+                    }
+                    return invoke(conn, connMethod, connArgs);
+                  });
+            });
+  }
+
+  private static Object invoke(Object target, java.lang.reflect.Method method, Object[] args)
+      throws Throwable {
+    try {
+      return method.invoke(target, args);
+    } catch (java.lang.reflect.InvocationTargetException e) {
+      throw e.getCause();
+    }
+  }
+
+  /**
+   * The page of a windowed read is read from the index on (occurred_at, id) in its order: the id
+   * that breaks ties is in the index, so no term of the page's ORDER BY is sorted.
+   */
+  @Test
+  void theOccurredAtIndexesEndWithTheId_soAPageIsReadInItsOrder() throws SQLException {
+    SqliteDatabase database = migrated("order-plan.db", "");
+    try (Connection conn = database.dataSource().getConnection()) {
+      assertThat(plan(conn, SqliteCommandAuditQuery.FIND_BY_OUTCOME))
+          .contains("USING INDEX idx_audit_occurred_at")
+          .doesNotContain("TERM OF ORDER BY")
+          .doesNotContain("PART OF ORDER BY");
+      assertThat(
+              plan(
+                  conn,
+                  "SELECT event_id FROM event_audit_log WHERE occurred_at >= ? AND occurred_at <= ?"
+                      + " ORDER BY occurred_at, id LIMIT 10"))
+          .contains("idx_event_audit_occurred_at")
+          .doesNotContain("ORDER BY");
+      assertThat(
+              plan(
+                  conn,
+                  "SELECT event_id FROM event_audit_log WHERE aggregate_type = ? AND aggregate_id = ?"
+                      + " AND occurred_at >= ? AND occurred_at <= ? ORDER BY occurred_at, id LIMIT 10"))
+          .contains("idx_event_audit_stream")
+          .doesNotContain("ORDER BY");
+    }
+  }
+
+  private static String plan(Connection conn, String sql) throws SQLException {
+    StringBuilder plan = new StringBuilder();
+    try (PreparedStatement ps = conn.prepareStatement("EXPLAIN QUERY PLAN " + sql);
+        ResultSet rs = ps.executeQuery()) {
+      while (rs.next()) {
+        plan.append(rs.getString("detail")).append('\n');
+      }
+    }
+    return plan.toString();
   }
 }

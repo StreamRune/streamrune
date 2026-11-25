@@ -28,13 +28,13 @@ import org.streamrune.core.types.Version;
  * SqliteEventAuditStore} and {@link SqliteEventStore} write, with the semantics of {@code
  * PostgresEventAuditQuery}.
  *
- * <p>Every finder answers {@code occurred_at} ascending; entries with equal {@code occurred_at}
- * come in the order they were written (the row id), one order the interface leaves open. The stream
- * and user windows are inclusive and compare to the microsecond; a window whose {@code from} is
- * after its {@code to} holds nothing. The paged forms page in the database, with {@code
- * LIMIT}/{@code OFFSET} and a separate {@code count(*)} for {@link Page#totalElements()}, and
- * ignore the {@link PageRequest#sort()} component (Postgres slices the unpaged result in memory;
- * the pages are the same).
+ * <p>Every read orders by {@code occurred_at}, then the row's {@code id}, so entries with an equal
+ * timestamp (the events of one command are stamped by consecutive clock reads) keep one position.
+ * The stream and user windows are inclusive and compare to the microsecond; a window whose {@code
+ * from} is after its {@code to} holds nothing. The paged forms page in the database, with {@code
+ * LIMIT}/{@code OFFSET}, and ignore the {@link PageRequest#sort()} component; the page and {@link
+ * Page#totalElements()} come from one statement, so from one snapshot of the file, and they agree.
+ * An entry appears on exactly one page of a window that receives no entry between the reads.
  *
  * <p><b>Causation chain.</b> {@link #traceFullCausationChain} is one {@code WITH RECURSIVE} query
  * that starts at the event and joins, step by step, the rows whose {@code causation_id} is an event
@@ -56,8 +56,6 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
           + " causation_id, user_id, occurred_at";
 
   private static final String ORDER = " ORDER BY occurred_at, id";
-
-  private static final String PAGE = ORDER + " LIMIT ? OFFSET ?";
 
   private static final String BY_CORRELATION = " FROM event_audit_log WHERE correlation_id = ?";
 
@@ -109,38 +107,40 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
   @Override
   public List<EventAuditEntry> findByCorrelationId(CorrelationId correlationId) {
     Objects.requireNonNull(correlationId, "correlationId is required");
-    return list(BY_CORRELATION, ps -> ps.setString(1, correlationId.value()));
+    return list(BY_CORRELATION, (ps, first) -> ps.setString(first, correlationId.value()));
   }
 
   @Override
   public Page<EventAuditEntry> findByCorrelationId(
       CorrelationId correlationId, PageRequest pageRequest) {
     Objects.requireNonNull(correlationId, "correlationId is required");
-    return page(BY_CORRELATION, 1, ps -> ps.setString(1, correlationId.value()), pageRequest);
+    return page(
+        BY_CORRELATION, 1, (ps, first) -> ps.setString(first, correlationId.value()), pageRequest);
   }
 
   @Override
   public List<EventAuditEntry> findByCommandId(CommandId commandId) {
     Objects.requireNonNull(commandId, "commandId is required");
-    return list(BY_COMMAND, ps -> ps.setString(1, commandId.value()));
+    return list(BY_COMMAND, (ps, first) -> ps.setString(first, commandId.value()));
   }
 
   @Override
   public Page<EventAuditEntry> findByCommandId(CommandId commandId, PageRequest pageRequest) {
     Objects.requireNonNull(commandId, "commandId is required");
-    return page(BY_COMMAND, 1, ps -> ps.setString(1, commandId.value()), pageRequest);
+    return page(BY_COMMAND, 1, (ps, first) -> ps.setString(first, commandId.value()), pageRequest);
   }
 
   @Override
   public List<EventAuditEntry> findByCausationId(CausationId causationId) {
     Objects.requireNonNull(causationId, "causationId is required");
-    return list(BY_CAUSATION, ps -> ps.setString(1, causationId.value()));
+    return list(BY_CAUSATION, (ps, first) -> ps.setString(first, causationId.value()));
   }
 
   @Override
   public Page<EventAuditEntry> findByCausationId(CausationId causationId, PageRequest pageRequest) {
     Objects.requireNonNull(causationId, "causationId is required");
-    return page(BY_CAUSATION, 1, ps -> ps.setString(1, causationId.value()), pageRequest);
+    return page(
+        BY_CAUSATION, 1, (ps, first) -> ps.setString(first, causationId.value()), pageRequest);
   }
 
   @Override
@@ -177,10 +177,10 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
     }
   }
 
-  /** Binds a finder's filter parameters, from index 1. */
+  /** Binds a finder's filter parameters from index {@code first} on. */
   @FunctionalInterface
   private interface Binder {
-    void bind(PreparedStatement ps) throws SQLException;
+    void bind(PreparedStatement ps, int first) throws SQLException;
   }
 
   /** Checks the arguments now, before any I/O, and binds them as a stream window. */
@@ -188,10 +188,10 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
     Objects.requireNonNull(streamId, "streamId is required");
     long fromMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(from, "from is required"));
     long toMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(to, "to is required"));
-    return ps -> {
-      SqliteStreamKeys.bind(ps, 1, streamId);
-      ps.setLong(3, fromMicros);
-      ps.setLong(4, toMicros);
+    return (ps, first) -> {
+      SqliteStreamKeys.bind(ps, first, streamId);
+      ps.setLong(first + 2, fromMicros);
+      ps.setLong(first + 3, toMicros);
     };
   }
 
@@ -200,10 +200,10 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
     Objects.requireNonNull(userId, "userId is required");
     long fromMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(from, "from is required"));
     long toMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(to, "to is required"));
-    return ps -> {
-      ps.setString(1, userId.value());
-      ps.setLong(2, fromMicros);
-      ps.setLong(3, toMicros);
+    return (ps, first) -> {
+      ps.setString(first, userId.value());
+      ps.setLong(first + 1, fromMicros);
+      ps.setLong(first + 2, toMicros);
     };
   }
 
@@ -211,7 +211,7 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
   private List<EventAuditEntry> list(String from, Binder binder) {
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement("SELECT " + COLUMNS + from + ORDER)) {
-      binder.bind(ps);
+      binder.bind(ps, 1);
       return readEntries(ps);
     } catch (SQLException | RuntimeException e) {
       throw new EventStoreException(FAILED, e);
@@ -219,27 +219,53 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
   }
 
   /**
-   * One page of what {@code SELECT COLUMNS + from} finds, and the count of all of it.
+   * The statement of a paged read of what {@code SELECT COLUMNS + from} finds: the count of the
+   * matching rows and one page of them, joined into one result, so both come from one snapshot.
+   * Every row carries the count; a page beyond the last is one row with the count and a {@code
+   * NULL} {@code id} ({@code id} is the primary key, so {@code NULL} means "no row"). The page's
+   * {@code LIMIT} is 0 unless the count exceeds the offset, so a page beyond the last skips no rows
+   * to find none (Postgres gates its page the same way, with a {@code LATERAL} join, which SQLite
+   * does not have). The outer {@code ORDER BY} restores the order after the join. Parameters: the
+   * filter's values (the count), the same again (the page), the offset (the gate), {@code LIMIT},
+   * {@code OFFSET}.
+   */
+  static String pageSql(String from) {
+    return "WITH total(n) AS MATERIALIZED (SELECT count(*)"
+        + from
+        + ") SELECT total.n AS total_count, page.* FROM total LEFT JOIN (SELECT id, "
+        + COLUMNS
+        + from
+        + ORDER
+        + " LIMIT CASE WHEN (SELECT n FROM total) > ? THEN ? ELSE 0 END OFFSET ?) AS page ON 1"
+        + " ORDER BY page.occurred_at, page.id";
+  }
+
+  /**
+   * One page of what {@code SELECT COLUMNS + from} finds, and the count of all of it, in one
+   * statement ({@link #pageSql}).
    *
-   * @param parameters how many parameters {@code binder} binds; the page's follow them
+   * @param parameters how many parameters {@code binder} binds
    */
   private Page<EventAuditEntry> page(
       String from, int parameters, Binder binder, PageRequest pageRequest) {
     Objects.requireNonNull(pageRequest, "pageRequest is required");
-    try (Connection conn = dataSource.getConnection()) {
-      long total;
-      try (PreparedStatement ps = conn.prepareStatement("SELECT count(*)" + from)) {
-        binder.bind(ps);
-        try (ResultSet rs = ps.executeQuery()) {
-          total = rs.next() ? rs.getLong(1) : 0L;
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(pageSql(from))) {
+      binder.bind(ps, 1);
+      binder.bind(ps, parameters + 1);
+      ps.setLong(2 * parameters + 1, pageRequest.offset());
+      ps.setInt(2 * parameters + 2, pageRequest.size());
+      ps.setLong(2 * parameters + 3, pageRequest.offset());
+      long total = 0;
+      List<EventAuditEntry> content = new ArrayList<>();
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) {
+          total = rs.getLong("total_count");
+          rs.getLong("id");
+          if (!rs.wasNull()) {
+            content.add(readEntry(rs));
+          }
         }
-      }
-      List<EventAuditEntry> content;
-      try (PreparedStatement ps = conn.prepareStatement("SELECT " + COLUMNS + from + PAGE)) {
-        binder.bind(ps);
-        ps.setInt(parameters + 1, pageRequest.size());
-        ps.setLong(parameters + 2, pageRequest.offset());
-        content = readEntries(ps);
       }
       return new Page<>(content, total, pageRequest.page(), pageRequest.size());
     } catch (SQLException | RuntimeException e) {
