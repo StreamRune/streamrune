@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
+import org.streamrune.core.ConnectionFailureClassifier;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.StreamRuneMetrics;
@@ -343,6 +344,12 @@ public final class SqliteSagaStore implements SagaStore {
   @Override
   public Object storageIdentity() {
     return file;
+  }
+
+  /** The generic JDBC rules plus the result codes SQLite reports when the file is unusable. */
+  @Override
+  public ConnectionFailureClassifier connectionFailureClassifier() {
+    return SqliteConnectionFailures.CLASSIFIER;
   }
 
   /**
