@@ -364,6 +364,33 @@ public abstract class EventAuditQueryContract {
     }
   }
 
+  /**
+   * Entries with one timestamp keep one position across pages: read page by page, each appears
+   * exactly once, before the later entry, in the order the unpaged read gives them.
+   */
+  @Test
+  void entriesWithAnEqualTimestampAppearExactlyOnceAcrossPages() {
+    for (int i = 0; i < 5; i++) {
+      writer.save(match("tie-" + i, T0.plusSeconds(1)));
+    }
+    writer.save(match("later", T0.plusSeconds(2)));
+
+    for (Finder finder : FINDERS) {
+      List<String> read = new java.util.ArrayList<>();
+      for (int p = 0; p < 3; p++) {
+        Page<EventAuditEntry> page = finder.page(query, FROM, TO, PageRequest.of(p, 2));
+        assertEquals(6, page.totalElements());
+        read.addAll(ids(page));
+      }
+      assertEquals(
+          List.of("later", "tie-0", "tie-1", "tie-2", "tie-3", "tie-4"),
+          read.stream().sorted().toList(),
+          "every entry once");
+      assertEquals("later", read.getLast());
+      assertEquals(ids(finder.all(query, FROM, TO)), read);
+    }
+  }
+
   @Test
   void aPageBeyondTheLastIsEmptyAndStillCarriesTheTotal() {
     writer.save(match("m-1", T0.plusSeconds(1)));

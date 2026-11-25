@@ -426,6 +426,35 @@ public abstract class CommandAuditQueryContract {
     }
   }
 
+  /**
+   * Entries with one timestamp keep one position across pages: read page by page, each appears
+   * exactly once, before the later entry, and a second reading gives the same order.
+   */
+  @Test
+  void entriesWithAnEqualTimestampAppearExactlyOnceAcrossPages() {
+    for (int i = 0; i < 5; i++) {
+      writer.save(match("tie-" + i, T0.plusSeconds(1)));
+    }
+    writer.save(match("later", T0.plusSeconds(2)));
+
+    for (Finder finder : FINDERS) {
+      List<String> read = new java.util.ArrayList<>();
+      List<String> readAgain = new java.util.ArrayList<>();
+      for (int p = 0; p < 3; p++) {
+        Page<AuditEntry> page = finder.find(query, FROM, TO, PageRequest.of(p, 2));
+        assertEquals(6, page.totalElements());
+        read.addAll(ids(page));
+        readAgain.addAll(ids(finder.find(query, FROM, TO, PageRequest.of(p, 2))));
+      }
+      assertEquals(
+          List.of("later", "tie-0", "tie-1", "tie-2", "tie-3", "tie-4"),
+          read.stream().sorted().toList(),
+          "every entry once");
+      assertEquals("later", read.getLast());
+      assertEquals(read, readAgain);
+    }
+  }
+
   @Test
   void aPageBeyondTheLastIsEmptyAndStillCarriesTheTotal() {
     writer.save(match("m-1", T0.plusSeconds(1)));
