@@ -10,7 +10,7 @@ import org.streamrune.core.Internal;
 /**
  * The statements of the crypto key store and the forgotten-subject store that differ between
  * database backends: the per-subject lock, the key insert, the erased-generation upsert, the
- * tombstone inserts and the timestamp read. {@link JdbcSubjectKeyStore} and {@link
+ * tombstone insert and the timestamp read. {@link JdbcSubjectKeyStore} and {@link
  * JdbcForgottenSubjects} run everything else themselves, the same on every backend.
  *
  * <p>Each method runs one statement (or none) on the caller's connection, inside the caller's
@@ -63,35 +63,17 @@ public interface JdbcCryptoDialect {
       throws SQLException;
 
   /**
-   * Inserts the forgotten-subject store's tombstone without erased-key evidence; an existing
-   * tombstone stays as it is.
-   *
-   * @param conn the caller's connection, inside its transaction
-   * @param storedSubjectId the hashed subject id
-   * @throws SQLException if the insert fails
-   */
-  void insertTombstone(Connection conn, String storedSubjectId) throws SQLException;
-
-  /**
-   * Inserts the forgotten-subject store's tombstone with the erased key's creation instant, or with
-   * no evidence when it is {@code null}; an existing tombstone stays as it is, evidence included.
+   * Inserts the subject's tombstone with the erased key's creation instant, or with no evidence
+   * when it is {@code null}; an existing tombstone stays as it is, evidence included. A crypto
+   * engine's erasure and the forgotten-subject store's forget write this same statement.
    *
    * @param conn the caller's connection, inside its transaction
    * @param storedSubjectId the hashed subject id
    * @param keyCreatedAtOrNull the erased key's creation instant, or {@code null}
    * @throws SQLException if the insert fails
    */
-  void insertTombstoneWithEvidence(
-      Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull) throws SQLException;
-
-  /**
-   * Inserts the tombstone of a crypto engine's erasure; an existing tombstone stays as it is.
-   *
-   * @param conn the caller's connection, inside its transaction
-   * @param storedSubjectId the hashed subject id
-   * @throws SQLException if the insert fails
-   */
-  void insertEraseTombstone(Connection conn, String storedSubjectId) throws SQLException;
+  void insertTombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
+      throws SQLException;
 
   /**
    * Reads the timestamp in {@code column} of the current row of {@code rs}.

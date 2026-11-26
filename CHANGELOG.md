@@ -336,6 +336,16 @@ Changed
   extends `ProjectionRepositoryQueryContract` with the text semantics of numbers, booleans, `null`
   and mixed types. Each runs on PostgreSQL, SQLite and the in-memory stores where they exist.
 
+Unreleased changes to crypto erasure on PostgreSQL (Changed):
+
+- **An erasure writes `forgotten_subjects.key_created_at`.** `PostgresCryptoEngine.deleteKey` and
+  `JdbcForgottenSubjectStore.forget(subjectId)` insert the tombstone with the statement of
+  `forget(subjectId, keyCreatedAt)`, binding `key_created_at` to NULL when there is no evidence of
+  the erased key's creation. On a schema that passes validation the stored row is the same: the
+  column is nullable and has no default. A hand-made `forgotten_subjects` table without that column,
+  used with `validateSchema(false)`, now fails the erasure; the shipped crypto baseline and the DDL
+  of the `streamrune-postgres-crypto` README have it.
+
 ### Modules
 
 Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three

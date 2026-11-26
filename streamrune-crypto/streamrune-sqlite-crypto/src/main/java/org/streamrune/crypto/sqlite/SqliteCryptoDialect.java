@@ -33,17 +33,12 @@ final class SqliteCryptoDialect implements JdbcCryptoDialect {
           + " max(erased_key_generations.max_erased_version,"
           + " excluded.max_erased_version)";
 
-  // The forgotten-subject store's tombstone: the erased key's creation instant is recorded with
-  // it (NULL = no evidence); ON CONFLICT DO NOTHING keeps the FIRST forget's instant and evidence.
-  private static final String TOMBSTONE_WITH_EVIDENCE_SQL =
+  // The one tombstone statement, for the engine's erasure and the store's forget alike: the erased
+  // key's creation instant is recorded with it (NULL = no evidence); ON CONFLICT DO NOTHING keeps
+  // the FIRST forget's instant and evidence.
+  private static final String TOMBSTONE_SQL =
       "INSERT INTO forgotten_subjects (subject_id, forgotten_at, key_created_at)"
           + " VALUES (?, ?, ?) ON CONFLICT (subject_id) DO NOTHING";
-
-  // The engine's erasure tombstone. The first erasure's forgotten_at stays: a repeated erasure
-  // inserts nothing.
-  private static final String ERASE_TOMBSTONE_SQL =
-      "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
-          + " ON CONFLICT (subject_id) DO NOTHING";
 
   private final Clock clock;
 
@@ -92,16 +87,11 @@ final class SqliteCryptoDialect implements JdbcCryptoDialect {
     }
   }
 
-  /** The store's tombstone without evidence: the three-column insert, binding NULL evidence. */
+  /** Stamps {@code forgotten_at} with the clock and binds NULL when there is no evidence. */
   @Override
-  public void insertTombstone(Connection conn, String storedSubjectId) throws SQLException {
-    insertTombstoneWithEvidence(conn, storedSubjectId, null);
-  }
-
-  @Override
-  public void insertTombstoneWithEvidence(
-      Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull) throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(TOMBSTONE_WITH_EVIDENCE_SQL)) {
+  public void insertTombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
+      throws SQLException {
+    try (PreparedStatement ps = conn.prepareStatement(TOMBSTONE_SQL)) {
       ps.setString(1, storedSubjectId);
       ps.setLong(2, SqliteTimestamps.toMicros(clock.instant()));
       if (keyCreatedAtOrNull == null) {
@@ -109,15 +99,6 @@ final class SqliteCryptoDialect implements JdbcCryptoDialect {
       } else {
         ps.setLong(3, SqliteTimestamps.toMicros(keyCreatedAtOrNull));
       }
-      ps.executeUpdate();
-    }
-  }
-
-  @Override
-  public void insertEraseTombstone(Connection conn, String storedSubjectId) throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(ERASE_TOMBSTONE_SQL)) {
-      ps.setString(1, storedSubjectId);
-      ps.setLong(2, SqliteTimestamps.toMicros(clock.instant()));
       ps.executeUpdate();
     }
   }

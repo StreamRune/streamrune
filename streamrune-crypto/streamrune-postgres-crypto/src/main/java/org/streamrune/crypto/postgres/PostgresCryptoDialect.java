@@ -31,13 +31,11 @@ final class PostgresCryptoDialect implements JdbcCryptoDialect {
           + "ON CONFLICT (subject_id) DO UPDATE SET max_erased_version = "
           + "GREATEST(erased_key_generations.max_erased_version, EXCLUDED.max_erased_version)";
 
+  // The one tombstone statement, for the engine's erasure and the store's forget alike. The erased
+  // key's backend-sourced creation instant is recorded with the tombstone, nullable (NULL = no
+  // evidence); ON CONFLICT DO NOTHING keeps the FIRST erasure's evidence, matching forgotten_at's
+  // first-write-wins.
   private static final String TOMBSTONE_SQL =
-      "INSERT INTO forgotten_subjects (subject_id) VALUES (?) ON CONFLICT (subject_id) DO NOTHING";
-
-  // The erased key's backend-sourced creation instant, recorded with the tombstone. Nullable
-  // (NULL = no evidence); ON CONFLICT DO NOTHING keeps the FIRST erasure's evidence, matching
-  // forgotten_at's first-write-wins.
-  private static final String FORGET_WITH_KEY_EVIDENCE_SQL =
       "INSERT INTO forgotten_subjects (subject_id, key_created_at) VALUES (?, ?)"
           + " ON CONFLICT (subject_id) DO NOTHING";
 
@@ -91,27 +89,13 @@ final class PostgresCryptoDialect implements JdbcCryptoDialect {
   }
 
   @Override
-  public void insertTombstone(Connection conn, String storedSubjectId) throws SQLException {
+  public void insertTombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
+      throws SQLException {
     try (PreparedStatement ps = conn.prepareStatement(TOMBSTONE_SQL)) {
-      ps.setString(1, storedSubjectId);
-      ps.executeUpdate();
-    }
-  }
-
-  @Override
-  public void insertTombstoneWithEvidence(
-      Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull) throws SQLException {
-    try (PreparedStatement ps = conn.prepareStatement(FORGET_WITH_KEY_EVIDENCE_SQL)) {
       ps.setString(1, storedSubjectId);
       ps.setTimestamp(2, keyCreatedAtOrNull == null ? null : Timestamp.from(keyCreatedAtOrNull));
       ps.executeUpdate();
     }
-  }
-
-  /** The engine's erasure writes the same tombstone as a plain forget. */
-  @Override
-  public void insertEraseTombstone(Connection conn, String storedSubjectId) throws SQLException {
-    insertTombstone(conn, storedSubjectId);
   }
 
   @Override

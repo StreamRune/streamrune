@@ -120,13 +120,12 @@ class PostgresCryptoDialectIntegrationTest {
   }
 
   @Test
-  void insertTombstoneWithEvidence_roundTripsThroughReadInstant_andKeepsTheFirstEvidence()
-      throws Exception {
+  void insertTombstone_roundTripsThroughReadInstant_andKeepsTheFirstEvidence() throws Exception {
     // timestamptz stores microseconds.
     Instant evidence = Instant.parse("2026-03-04T05:06:07.123456Z");
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstoneWithEvidence(c, "evidence", evidence);
-      DIALECT.insertTombstoneWithEvidence(c, "evidence", evidence.plus(1, ChronoUnit.DAYS));
+      DIALECT.insertTombstone(c, "evidence", evidence);
+      DIALECT.insertTombstone(c, "evidence", evidence.plus(1, ChronoUnit.DAYS));
       assertEquals(Optional.of(evidence), readInstant(c, "evidence", "key_created_at"));
       assertTrue(readInstant(c, "evidence", "forgotten_at").isPresent());
     }
@@ -135,26 +134,25 @@ class PostgresCryptoDialectIntegrationTest {
   @Test
   void aNullInstant_readsBackEmpty() throws Exception {
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstoneWithEvidence(c, "no-evidence", null);
+      DIALECT.insertTombstone(c, "no-evidence", null);
       assertEquals(Optional.empty(), readInstant(c, "no-evidence", "key_created_at"));
     }
   }
 
   @Test
-  void tombstoneInserts_writeNoEvidence_andLeaveAnExistingTombstoneAsItIs() throws Exception {
+  void insertTombstone_leavesAnExistingTombstoneAsItIs() throws Exception {
     Instant evidence = Instant.parse("2026-01-02T03:04:05Z");
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstone(c, "plain-tombstone");
-      DIALECT.insertTombstone(c, "plain-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "plain-tombstone", "key_created_at"));
+      DIALECT.insertTombstone(c, "plain-tombstone", null);
+      DIALECT.insertTombstone(c, "plain-tombstone", null);
+      DIALECT.insertTombstone(c, "plain-tombstone", evidence);
+      assertEquals(
+          Optional.empty(),
+          readInstant(c, "plain-tombstone", "key_created_at"),
+          "a tombstone without evidence never gains some");
 
-      DIALECT.insertEraseTombstone(c, "erase-tombstone");
-      DIALECT.insertEraseTombstone(c, "erase-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "erase-tombstone", "key_created_at"));
-
-      DIALECT.insertTombstoneWithEvidence(c, "evidence-first", evidence);
-      DIALECT.insertTombstone(c, "evidence-first");
-      DIALECT.insertEraseTombstone(c, "evidence-first");
+      DIALECT.insertTombstone(c, "evidence-first", evidence);
+      DIALECT.insertTombstone(c, "evidence-first", null);
       assertEquals(Optional.of(evidence), readInstant(c, "evidence-first", "key_created_at"));
     }
   }

@@ -11,7 +11,7 @@ import org.streamrune.core.Internal;
 /**
  * The forgotten-subject SQL over the {@code forgotten_subjects} table, run on a caller's {@link
  * Connection}: the tombstone a GDPR erasure leaves, which makes a later encrypt of the subject fail
- * instead of minting a fresh key. The tombstone inserts and the timestamp reads go through the
+ * instead of minting a fresh key. The tombstone insert and the timestamp reads go through the
  * {@link JdbcCryptoDialect}; the existence check, the delete and the timestamp selects are the same
  * on every backend.
  *
@@ -26,7 +26,7 @@ import org.streamrune.core.Internal;
  *       taken the subject's lock on the same connection.
  * </ul>
  *
- * <p>Subject ids arrive already hashed: each caller hashes with its own failure message.
+ * <p>Subject ids arrive already hashed ({@link JdbcSubjectKeyStore#storedSubjectId}).
  *
  * @hidden
  */
@@ -49,17 +49,6 @@ public final class JdbcForgottenSubjects {
   }
 
   /**
-   * Tombstones the subject without erased-key evidence. A repeated forget changes nothing.
-   *
-   * @param c the caller's connection, inside its transaction
-   * @param storedSubjectId the hashed subject id
-   * @throws SQLException if the insert fails
-   */
-  public void forget(Connection c, String storedSubjectId) throws SQLException {
-    dialect.insertTombstone(c, storedSubjectId);
-  }
-
-  /**
    * Tombstones the subject with the erased key's creation instant ({@code null}: no evidence). A
    * repeated forget changes nothing: the first forget's instant and evidence stay.
    *
@@ -70,19 +59,7 @@ public final class JdbcForgottenSubjects {
    */
   public void forget(Connection c, String storedSubjectId, Instant keyCreatedAtOrNull)
       throws SQLException {
-    dialect.insertTombstoneWithEvidence(c, storedSubjectId, keyCreatedAtOrNull);
-  }
-
-  /**
-   * Tombstones the subject with a crypto engine's erasure statement. A repeated erasure changes
-   * nothing.
-   *
-   * @param c the caller's connection, inside its transaction
-   * @param storedSubjectId the hashed subject id
-   * @throws SQLException if the insert fails
-   */
-  public void forgetForErase(Connection c, String storedSubjectId) throws SQLException {
-    dialect.insertEraseTombstone(c, storedSubjectId);
+    dialect.insertTombstone(c, storedSubjectId, keyCreatedAtOrNull);
   }
 
   /**

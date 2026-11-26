@@ -1,12 +1,10 @@
 package org.streamrune.crypto.sqlite;
 
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.security.MessageDigest;
+import static org.streamrune.crypto.JdbcSubjectKeyStore.storedSubjectId;
+
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.Optional;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
@@ -48,7 +46,7 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
 
   private final SqliteCryptoStatements statements;
 
-  // The forgotten_subjects SQL, shared with the PostgreSQL store; the inserts and the timestamp
+  // The forgotten_subjects SQL, shared with the PostgreSQL store; the insert and the timestamp
   // read are SQLite's, through a dialect carrying this store's clock (ON CONFLICT DO NOTHING keeps
   // the FIRST forget's row, evidence included).
   private final JdbcForgottenSubjects forgotten;
@@ -185,21 +183,6 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
       return statements.read(conn -> forgotten.keyCreatedAt(conn, storedSubjectId(subjectId)));
     } catch (SQLException | RuntimeException e) {
       throw failure("read erased-key creation evidence for", subjectId, e);
-    }
-  }
-
-  /**
-   * The value written to the {@code subject_id} column: the SHA-256 hex of the subject id's UTF-8
-   * bytes, as {@link SqliteCryptoEngine} writes it, so both mark a subject in the same row.
-   */
-  private static String storedSubjectId(SubjectId subjectId) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      return HexFormat.of()
-          .formatHex(md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8)));
-    } catch (GeneralSecurityException e) {
-      throw new CryptoOperationException(
-          "SHA-256 hashing failed for subject: " + subjectId.redacted(), e);
     }
   }
 

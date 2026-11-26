@@ -1,10 +1,9 @@
 package org.streamrune.crypto.postgres;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import static org.streamrune.crypto.JdbcSubjectKeyStore.storedSubjectId;
+
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.HexFormat;
 import javax.sql.DataSource;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
@@ -38,7 +37,7 @@ import org.streamrune.crypto.JdbcForgottenSubjects;
  */
 public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
 
-  // The forgotten_subjects SQL, shared with the SQLite store; the inserts and the timestamp read
+  // The forgotten_subjects SQL, shared with the SQLite store; the insert and the timestamp read
   // are PostgreSQL's (ON CONFLICT DO NOTHING keeps the FIRST forget's row, evidence included).
   private static final JdbcForgottenSubjects FORGOTTEN =
       new JdbcForgottenSubjects(PostgresCryptoDialect.INSTANCE);
@@ -59,7 +58,10 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public void forget(SubjectId subjectId) {
     requireNonNull(subjectId);
-    write(subjectId, "record forgotten-subject tombstone for", FORGOTTEN::forget);
+    write(
+        subjectId,
+        "record forgotten-subject tombstone for",
+        (c, stored) -> FORGOTTEN.forget(c, stored, null));
   }
 
   /**
@@ -182,26 +184,6 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   private static void requireNonNull(SubjectId subjectId) {
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
-    }
-  }
-
-  /**
-   * The opaque value written to / matched against the {@code subject_id} column: the SHA-256 hex of
-   * the subject id's UTF-8 bytes. Mirrors {@code PostgresCryptoEngine.storedSubjectId} so both
-   * backends tombstone the same subject to the same row, and a caller's subject id — which may
-   * itself be PII — never lands verbatim in the permanent tombstone. UTF-8 is fixed so the hash is
-   * stable across JVMs and platform default charsets.
-   */
-  private static String storedSubjectId(SubjectId subjectId) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      byte[] digest = md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(digest);
-    } catch (Exception e) {
-      // The hash computation itself failed, so we cannot (and must not) emit the
-      // subject's hash or its raw value — omit the identifier entirely, mirroring
-      // VaultCryptoEngine.
-      throw new CryptoOperationException("SHA-256 hashing failed for a subject", e);
     }
   }
 }

@@ -292,7 +292,7 @@ class JdbcSubjectKeyStoreTest {
             "SELECT key_version FROM encryption_keys WHERE subject_id = ?",
             "recordErasedGeneration",
             "DELETE FROM encryption_keys WHERE subject_id = ?",
-            "insertEraseTombstone"),
+            "insertTombstone"),
         sharedTrace());
     assertEquals(0, db.count("SELECT count(*) FROM " + TABLE));
     assertEquals(
@@ -325,7 +325,7 @@ class JdbcSubjectKeyStoreTest {
           store.eraseKey(c, SUBJECT);
           return null;
         });
-    assertEquals(List.of("lockSubject", "insertEraseTombstone"), calls);
+    assertEquals(List.of("lockSubject", "insertTombstone"), calls);
     assertEquals(0, db.count("SELECT count(*) FROM erased_key_generations"));
     assertEquals(1, db.count("SELECT count(*) FROM forgotten_subjects"));
   }
@@ -566,22 +566,10 @@ class JdbcSubjectKeyStoreTest {
     }
 
     @Override
-    public void insertTombstone(Connection conn, String storedSubjectId) throws SQLException {
+    public void insertTombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
+        throws SQLException {
       calls.add("insertTombstone");
-      super.insertTombstone(conn, storedSubjectId);
-    }
-
-    @Override
-    public void insertTombstoneWithEvidence(
-        Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull) throws SQLException {
-      calls.add("insertTombstoneWithEvidence");
-      super.insertTombstoneWithEvidence(conn, storedSubjectId, keyCreatedAtOrNull);
-    }
-
-    @Override
-    public void insertEraseTombstone(Connection conn, String storedSubjectId) throws SQLException {
-      calls.add("insertEraseTombstone");
-      super.insertEraseTombstone(conn, storedSubjectId);
+      super.insertTombstone(conn, storedSubjectId, keyCreatedAtOrNull);
     }
   }
 }
