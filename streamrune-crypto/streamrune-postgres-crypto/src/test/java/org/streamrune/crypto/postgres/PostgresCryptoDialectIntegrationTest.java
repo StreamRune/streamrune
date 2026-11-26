@@ -13,8 +13,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
@@ -55,18 +57,21 @@ class PostgresCryptoDialectIntegrationTest {
   }
 
   @Test
+  @Timeout(value = 30, unit = TimeUnit.SECONDS)
   void lockSubject_blocksASecondTransactionOnTheSameSubject_untilTheFirstEnds() throws Exception {
     try (Connection holder = dataSource.getConnection();
         Connection waiter = dataSource.getConnection()) {
+      // Every lock statement of the waiter gives up after 200 ms instead of blocking the test for
+      // ever. The timeout is set for the session while autoCommit is still on, so the rollbacks
+      // below do not clear it (a SET LOCAL would end with the first rollback). SQLState 55P03
+      // (lock_not_available) proves the first lock statement waited on the holder's lock.
+      try (var stmt = waiter.createStatement()) {
+        stmt.execute("SET lock_timeout = '200ms'");
+      }
       holder.setAutoCommit(false);
       waiter.setAutoCommit(false);
       DIALECT.lockSubject(holder, "lock-subject");
 
-      // The waiter gives up after 200 ms instead of blocking the test for ever: SQLState 55P03
-      // (lock_not_available) proves its lock statement waited on the holder's lock.
-      try (var stmt = waiter.createStatement()) {
-        stmt.execute("SET LOCAL lock_timeout = '200ms'");
-      }
       SQLException blocked =
           assertThrows(SQLException.class, () -> DIALECT.lockSubject(waiter, "lock-subject"));
       assertEquals("55P03", blocked.getSQLState(), blocked.getMessage());

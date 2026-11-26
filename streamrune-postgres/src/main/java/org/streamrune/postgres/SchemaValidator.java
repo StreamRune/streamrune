@@ -182,14 +182,16 @@ public final class SchemaValidator {
   /**
    * Runtime-required columns of the two fixed-name crypto tables — the crypto counterpart of {@link
    * #REQUIRED_COLUMNS}. {@code forgotten_subjects}: every tombstone write/read matches on {@code
-   * subject_id} ({@code JdbcForgottenSubjectStore}, {@code PostgresCryptoEngine.isForgotten});
-   * {@code forgotten_at} is read by {@code JdbcForgottenSubjectStore.forgottenAt}; and {@code
-   * key_created_at} is WRITTEN by every Vault erasure — {@code
-   * JdbcForgottenSubjectStore.forget(subjectId, keyCreatedAt)} names it in its INSERT, so a table
-   * missing it fails the GDPR erasure itself — exactly the boot-green, fail-at-first-use mode this
-   * check exists to prevent. {@code erased_key_generations}: {@code deleteKey}'s GREATEST-upsert
-   * and every mint's {@code nextKeyVersion} read both columns. Key-table columns live in {@link
-   * #CRYPTO_KEY_TABLE_COLUMNS} because that table's NAME is configurable.
+   * subject_id} ({@code JdbcForgottenSubjectStore}, and {@code PostgresCryptoEngine} through the
+   * shared {@code JdbcForgottenSubjects.isForgotten}); {@code forgotten_at} is read by {@code
+   * JdbcForgottenSubjectStore.forgottenAt}; and {@code key_created_at} is WRITTEN by every
+   * tombstone insert — the one statement of {@code JdbcForgottenSubjects.forget}, which a {@code
+   * PostgresCryptoEngine} erasure and every {@code JdbcForgottenSubjectStore.forget} (the Vault
+   * erasure included) run, names it, so a table missing it fails the GDPR erasure itself — exactly
+   * the boot-green, fail-at-first-use mode this check exists to prevent. {@code
+   * erased_key_generations}: {@code deleteKey}'s GREATEST-upsert and every mint's {@code
+   * nextKeyVersion} read both columns. Key-table columns live in {@link #CRYPTO_KEY_TABLE_COLUMNS}
+   * because that table's NAME is configurable.
    */
   private static final Map<String, Set<String>> CRYPTO_REQUIRED_COLUMNS =
       Map.of(
