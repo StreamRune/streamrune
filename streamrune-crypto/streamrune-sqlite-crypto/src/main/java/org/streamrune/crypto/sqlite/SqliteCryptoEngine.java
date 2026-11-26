@@ -1,22 +1,12 @@
 package org.streamrune.crypto.sqlite;
 
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.security.MessageDigest;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
-import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 import javax.crypto.AEADBadTagException;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +18,12 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.AesGcmV1Format;
+import org.streamrune.crypto.JdbcForgottenSubjects;
+import org.streamrune.crypto.JdbcSubjectKeyStore;
 import org.streamrune.crypto.VerifiedCipher;
+import org.streamrune.crypto.VersionedKey;
 import org.streamrune.sqlite.SqliteDatabase;
 import org.streamrune.sqlite.SqliteSchemaSeries;
-import org.streamrune.sqlite.SqliteTimestamps;
 
 /**
  * SQLite-backed {@link CryptoEngine} storing one AES-256 key per subject in the {@code
@@ -126,7 +118,12 @@ public final class SqliteCryptoEngine implements CryptoEngine {
 
   private final SqliteCryptoStatements statements;
   private final String tableName;
-  private final Clock clock;
+
+  // The key store's statements (load, mint, erase, lift tombstone), shared with the PostgreSQL
+  // engine; they run on the connection SqliteCryptoStatements hands out, inside its transactions.
+  // The SQLite dialect carries this engine's clock and takes no per-subject lock: the write lock
+  // of the transaction is the lock (see the class Javadoc).
+  private final JdbcSubjectKeyStore keys;
 
   // The cipher seam, the encryption self-check and the one-retry decryption, shared with the other
   // AES-GCM engines; its WARN lines go to this engine's logger.
@@ -140,7 +137,10 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     this.statements =
         new SqliteCryptoStatements(
             builder.database.dataSource(), builder.database.file(), "crypto key-store write");
-    this.clock = builder.clock;
+    SqliteCryptoDialect dialect = new SqliteCryptoDialect(builder.clock);
+    this.keys =
+        new JdbcSubjectKeyStore(
+            this.tableName, dialect, new JdbcForgottenSubjects(dialect), () -> {});
     this.verified = new VerifiedCipher(builder.metrics, log, builder.cipherFactory);
     this.format = new AesGcmV1Format(verified);
   }
@@ -175,9 +175,6 @@ public final class SqliteCryptoEngine implements CryptoEngine {
   public static Builder builder() {
     return new Builder();
   }
-
-  /** A subject's AES key together with its generation (the ciphertext key-version byte). */
-  private record VersionedKey(SecretKey key, int version) {}
 
   @Override
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
@@ -222,11 +219,11 @@ public final class SqliteCryptoEngine implements CryptoEngine {
    * write transaction that reads the key again, checks the tombstone and inserts the key.
    */
   private VersionedKey keyForEncryption(SubjectId subjectId) throws SQLException {
-    VersionedKey existing = statements.read(conn -> loadKeyOrNull(conn, subjectId));
+    VersionedKey existing = statements.read(conn -> keys.loadKeyOrNull(conn, subjectId));
     if (existing != null) {
       return existing;
     }
-    return statements.write(conn -> loadOrCreateKey(conn, subjectId));
+    return statements.write(conn -> keys.loadOrCreateKey(conn, subjectId));
   }
 
   @Override
@@ -238,7 +235,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
       throw new IllegalArgumentException("ciphertext must not be null");
     }
     try {
-      VersionedKey key = statements.read(conn -> loadKeyOrNull(conn, subjectId));
+      VersionedKey key = statements.read(conn -> keys.loadKeyOrNull(conn, subjectId));
       if (key == null) {
         throw new KeyNotFoundException("Key not found for subject: " + subjectId.redacted());
       }
@@ -283,7 +280,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     try {
       statements.writeAlone(
           conn -> {
-            eraseKey(conn, subjectId);
+            keys.eraseKey(conn, subjectId);
             return null;
           });
     } catch (Exception e) {
@@ -292,40 +289,6 @@ public final class SqliteCryptoEngine implements CryptoEngine {
               + subjectId.redacted()
               + SqliteCryptoStatements.lockAdvice(e),
           e);
-    }
-  }
-
-  /** The body of {@link #deleteKey}'s single transaction. */
-  private void eraseKey(Connection conn, SubjectId subjectId) throws SQLException {
-    String subject = storedSubjectId(subjectId);
-    // Record the destroyed generation first (max-upsert: idempotent and monotonic), so the next
-    // mint uses a higher one and decrypt can tell a destroyed generation from a tampered value.
-    Integer erasedVersion = selectKeyVersion(conn, subject);
-    if (erasedVersion != null) {
-      try (PreparedStatement ps =
-          conn.prepareStatement(
-              "INSERT INTO erased_key_generations (subject_id, max_erased_version) VALUES (?, ?)"
-                  + " ON CONFLICT (subject_id) DO UPDATE SET max_erased_version ="
-                  + " max(erased_key_generations.max_erased_version,"
-                  + " excluded.max_erased_version)")) {
-        ps.setString(1, subject);
-        ps.setInt(2, erasedVersion);
-        ps.executeUpdate();
-      }
-    }
-    try (PreparedStatement ps =
-        conn.prepareStatement("DELETE FROM " + tableName + " WHERE subject_id = ?")) {
-      ps.setString(1, subject);
-      ps.executeUpdate();
-    }
-    // The first erasure's forgotten_at stays: a repeated erasure inserts nothing.
-    try (PreparedStatement ps =
-        conn.prepareStatement(
-            "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
-                + " ON CONFLICT (subject_id) DO NOTHING")) {
-      ps.setString(1, subject);
-      ps.setLong(2, SqliteTimestamps.toMicros(clock.instant()));
-      ps.executeUpdate();
     }
   }
 
@@ -350,11 +313,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     try {
       statements.writeAlone(
           conn -> {
-            try (PreparedStatement ps =
-                conn.prepareStatement("DELETE FROM forgotten_subjects WHERE subject_id = ?")) {
-              ps.setString(1, storedSubjectId(subjectId));
-              ps.executeUpdate();
-            }
+            keys.liftTombstone(conn, subjectId);
             return null;
           });
     } catch (Exception e) {
@@ -367,21 +326,6 @@ public final class SqliteCryptoEngine implements CryptoEngine {
   }
 
   /**
-   * The value written to the {@code subject_id} columns: the SHA-256 hex of the subject id's UTF-8
-   * bytes, as {@code PostgresCryptoEngine} writes it.
-   */
-  static String storedSubjectId(SubjectId subjectId) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      return HexFormat.of()
-          .formatHex(md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8)));
-    } catch (GeneralSecurityException e) {
-      throw new CryptoOperationException(
-          "SHA-256 hashing failed for subject: " + subjectId.redacted(), e);
-    }
-  }
-
-  /**
    * {@inheritDoc}
    *
    * <p>The configured key table, {@code forgotten_subjects} and {@code erased_key_generations}: the
@@ -389,7 +333,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
    */
   @Override
   public Set<String> requiredCryptoTables() {
-    return Set.of(tableName, "forgotten_subjects", "erased_key_generations");
+    return keys.requiredTables();
   }
 
   @Override
@@ -398,153 +342,11 @@ public final class SqliteCryptoEngine implements CryptoEngine {
       throw new IllegalArgumentException("subjectId must not be null");
     }
     try {
-      return statements.read(
-          conn -> {
-            try (PreparedStatement ps =
-                conn.prepareStatement("SELECT 1 FROM " + tableName + " WHERE subject_id = ?")) {
-              ps.setString(1, storedSubjectId(subjectId));
-              try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-              }
-            }
-          });
+      return statements.read(conn -> keys.hasKey(conn, subjectId));
     } catch (Exception e) {
       throw new CryptoOperationException(
           "isKeyAvailable failed for subject: " + subjectId.redacted(), e);
     }
-  }
-
-  /**
-   * The body of a mint's write transaction: the key again (another writer may have minted it since
-   * the read outside the transaction), the tombstone, then a new key. The write lock held from the
-   * transaction's start keeps an erasure and a reinstate of the subject out until it commits.
-   */
-  private VersionedKey loadOrCreateKey(Connection conn, SubjectId subjectId) throws SQLException {
-    VersionedKey key = loadKeyOrNull(conn, subjectId);
-    if (key != null) {
-      return key;
-    }
-    if (isForgotten(conn, subjectId)) {
-      throw new SubjectForgottenException(
-          "Subject was crypto-shredded (GDPR erasure) and cannot be re-encrypted: "
-              + subjectId.redacted()
-              + " — call reinstate(subjectId) to re-register");
-    }
-    return createAndStoreKey(conn, subjectId);
-  }
-
-  /** The current key's generation, or {@code null} when the subject has no key row. */
-  private Integer selectKeyVersion(Connection conn, String subject) throws SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement("SELECT key_version FROM " + tableName + " WHERE subject_id = ?")) {
-      ps.setString(1, subject);
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? rs.getInt(1) : null;
-      }
-    }
-  }
-
-  /**
-   * The generation the next mint for this subject must use: one above the highest generation any
-   * erasure destroyed (1 for a subject never erased). Fails loudly at the single-byte cap instead
-   * of wrapping onto a destroyed generation.
-   */
-  private static int nextKeyVersion(Connection conn, SubjectId subjectId) throws SQLException {
-    int maxErased = 0;
-    try (PreparedStatement ps =
-        conn.prepareStatement(
-            "SELECT max_erased_version FROM erased_key_generations WHERE subject_id = ?")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (rs.next()) {
-          maxErased = rs.getInt(1);
-        }
-      }
-    }
-    int next = maxErased + 1;
-    if (next > AesGcmV1Format.MAX_KEY_VERSION) {
-      throw new CryptoOperationException(
-          "Key-generation limit reached for subject: "
-              + subjectId.redacted()
-              + " — the subject has been erased and re-registered "
-              + (AesGcmV1Format.MAX_KEY_VERSION - 1)
-              + " times, exhausting the single-byte generation counter. Re-register this person"
-              + " under a fresh subject id.");
-    }
-    return next;
-  }
-
-  private static boolean isForgotten(Connection conn, SubjectId subjectId) throws SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement("SELECT 1 FROM forgotten_subjects WHERE subject_id = ?")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next();
-      }
-    }
-  }
-
-  private VersionedKey loadKeyOrNull(Connection conn, SubjectId subjectId) throws SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement(
-            "SELECT key_bytes, key_version FROM " + tableName + " WHERE subject_id = ?")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return null;
-        }
-        byte[] bytes = rs.getBytes(1);
-        try {
-          // SecretKeySpec copies the array, so the driver's buffer can be zeroed at once.
-          return new VersionedKey(new SecretKeySpec(bytes, "AES"), rs.getInt(2));
-        } finally {
-          Arrays.fill(bytes, (byte) 0);
-        }
-      }
-    }
-  }
-
-  /**
-   * Mints and inserts a key with the next generation, stamped with the clock. Inside the write
-   * transaction no other writer can have inserted one since {@link #loadOrCreateKey} read none; the
-   * insert still never overwrites an existing key, which would orphan every value encrypted under
-   * it. Crash points: before the transaction's {@code COMMIT} no key remains and the rerun mints
-   * one; after it the key is durable and the rerun loads it.
-   */
-  private VersionedKey createAndStoreKey(Connection conn, SubjectId subjectId) throws SQLException {
-    SecretKey key;
-    try {
-      KeyGenerator generator = KeyGenerator.getInstance("AES");
-      generator.init(256);
-      key = generator.generateKey();
-    } catch (GeneralSecurityException e) {
-      throw new CryptoOperationException(
-          "Key generation failed for subject: " + subjectId.redacted(), e);
-    }
-    int version = nextKeyVersion(conn, subjectId);
-    byte[] encoded = key.getEncoded();
-    try (PreparedStatement ps =
-        conn.prepareStatement(
-            "INSERT INTO "
-                + tableName
-                + " (subject_id, key_bytes, created_at, key_version) VALUES (?, ?, ?, ?)"
-                + " ON CONFLICT (subject_id) DO NOTHING")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.setBytes(2, encoded);
-      ps.setLong(3, SqliteTimestamps.toMicros(clock.instant()));
-      ps.setInt(4, version);
-      if (ps.executeUpdate() == 1) {
-        return new VersionedKey(key, version);
-      }
-    } finally {
-      Arrays.fill(encoded, (byte) 0);
-    }
-    VersionedKey winner = loadKeyOrNull(conn, subjectId);
-    if (winner == null) {
-      throw new CryptoOperationException(
-          "Key for subject vanished after insert conflict: " + subjectId.redacted());
-    }
-    return winner;
   }
 
   @Override

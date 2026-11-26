@@ -1,17 +1,19 @@
 package org.streamrune.crypto.sqlite;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.Optional;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.ForgottenSubjectStore;
+import org.streamrune.crypto.JdbcForgottenSubjects;
 import org.streamrune.sqlite.SqliteDatabase;
 import org.streamrune.sqlite.SqliteSchemaSeries;
-import org.streamrune.sqlite.SqliteTimestamps;
 
 /**
  * Durable {@link ForgottenSubjectStore} in a SQLite database: the store that makes the AWS KMS and
@@ -45,7 +47,11 @@ import org.streamrune.sqlite.SqliteTimestamps;
 public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore {
 
   private final SqliteCryptoStatements statements;
-  private final Clock clock;
+
+  // The forgotten_subjects SQL, shared with the PostgreSQL store; the inserts and the timestamp
+  // read are SQLite's, through a dialect carrying this store's clock (ON CONFLICT DO NOTHING keeps
+  // the FIRST forget's row, evidence included).
+  private final JdbcForgottenSubjects forgotten;
 
   /**
    * A store over {@code database}, stamping {@code forgotten_at} with {@link Clock#systemUTC()}.
@@ -74,7 +80,7 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
     this.statements =
         new SqliteCryptoStatements(
             database.dataSource(), database.file(), "forgotten-subject write");
-    this.clock = clock;
+    this.forgotten = new JdbcForgottenSubjects(new SqliteCryptoDialect(clock));
   }
 
   /**
@@ -107,19 +113,8 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
     try {
       statements.writeAlone(
           conn -> {
-            try (PreparedStatement ps =
-                conn.prepareStatement(
-                    "INSERT INTO forgotten_subjects (subject_id, forgotten_at, key_created_at)"
-                        + " VALUES (?, ?, ?) ON CONFLICT (subject_id) DO NOTHING")) {
-              ps.setString(1, SqliteCryptoEngine.storedSubjectId(subjectId));
-              ps.setLong(2, SqliteTimestamps.toMicros(clock.instant()));
-              if (keyCreatedAt == null) {
-                ps.setNull(3, java.sql.Types.INTEGER);
-              } else {
-                ps.setLong(3, SqliteTimestamps.toMicros(keyCreatedAt));
-              }
-              return ps.executeUpdate();
-            }
+            forgotten.forget(conn, storedSubjectId(subjectId), keyCreatedAt);
+            return null;
           });
     } catch (SQLException | RuntimeException e) {
       throw failure("record forgotten-subject tombstone for", subjectId, e);
@@ -130,16 +125,7 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
   public boolean isForgotten(SubjectId subjectId) {
     requireSubject(subjectId);
     try {
-      return statements.read(
-          conn -> {
-            try (PreparedStatement ps =
-                conn.prepareStatement("SELECT 1 FROM forgotten_subjects WHERE subject_id = ?")) {
-              ps.setString(1, SqliteCryptoEngine.storedSubjectId(subjectId));
-              try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-              }
-            }
-          });
+      return statements.read(conn -> forgotten.isForgotten(conn, storedSubjectId(subjectId)));
     } catch (SQLException | RuntimeException e) {
       throw failure("check forgotten-subject tombstone for", subjectId, e);
     }
@@ -160,11 +146,8 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
     try {
       statements.writeAlone(
           conn -> {
-            try (PreparedStatement ps =
-                conn.prepareStatement("DELETE FROM forgotten_subjects WHERE subject_id = ?")) {
-              ps.setString(1, SqliteCryptoEngine.storedSubjectId(subjectId));
-              return ps.executeUpdate();
-            }
+            forgotten.reinstate(conn, storedSubjectId(subjectId));
+            return null;
           });
     } catch (SQLException | RuntimeException e) {
       throw failure("remove forgotten-subject tombstone for", subjectId, e);
@@ -184,7 +167,7 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
   public Optional<Instant> forgottenAt(SubjectId subjectId) {
     requireSubject(subjectId);
     try {
-      return instant(subjectId, "forgotten_at");
+      return statements.read(conn -> forgotten.forgottenAt(conn, storedSubjectId(subjectId)));
     } catch (SQLException | RuntimeException e) {
       throw failure("read forgotten-at timestamp for", subjectId, e);
     }
@@ -199,31 +182,25 @@ public final class SqliteForgottenSubjectStore implements ForgottenSubjectStore 
   public Optional<Instant> keyCreatedAt(SubjectId subjectId) {
     requireSubject(subjectId);
     try {
-      return instant(subjectId, "key_created_at");
+      return statements.read(conn -> forgotten.keyCreatedAt(conn, storedSubjectId(subjectId)));
     } catch (SQLException | RuntimeException e) {
       throw failure("read erased-key creation evidence for", subjectId, e);
     }
   }
 
-  /** The instant in {@code column} of the subject's tombstone, or empty (no row, or NULL). */
-  private Optional<Instant> instant(SubjectId subjectId, String column) throws SQLException {
-    return statements.read(
-        conn -> {
-          try (PreparedStatement ps =
-              conn.prepareStatement(
-                  "SELECT " + column + " FROM forgotten_subjects WHERE subject_id = ?")) {
-            ps.setString(1, SqliteCryptoEngine.storedSubjectId(subjectId));
-            try (ResultSet rs = ps.executeQuery()) {
-              if (!rs.next()) {
-                return Optional.empty();
-              }
-              long micros = rs.getLong(1);
-              return rs.wasNull()
-                  ? Optional.empty()
-                  : Optional.of(SqliteTimestamps.fromMicros(micros));
-            }
-          }
-        });
+  /**
+   * The value written to the {@code subject_id} column: the SHA-256 hex of the subject id's UTF-8
+   * bytes, as {@link SqliteCryptoEngine} writes it, so both mark a subject in the same row.
+   */
+  private static String storedSubjectId(SubjectId subjectId) {
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      return HexFormat.of()
+          .formatHex(md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8)));
+    } catch (GeneralSecurityException e) {
+      throw new CryptoOperationException(
+          "SHA-256 hashing failed for subject: " + subjectId.redacted(), e);
+    }
   }
 
   /** A failure naming the subject by its hash only: the message reaches the GDPR audit log. */
