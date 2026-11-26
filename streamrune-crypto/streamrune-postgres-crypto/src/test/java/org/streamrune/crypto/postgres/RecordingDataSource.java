@@ -32,7 +32,11 @@ import javax.sql.DataSource;
  * statement in order, {@link #keyBytesHandedOut} every {@code key_bytes} array a result set handed
  * to the engine, and {@link #keyBytesBound} every array the engine bound with {@code setBytes} (the
  * caller's own reference, before the fake copies it), so a test can check that the engine zeroes
- * its key buffers after use.
+ * its key buffers after use. {@link #calls} is the transcript of every physical connection —
+ * opened, autoCommit switched, statement prepared, committed, rolled back, aborted, closed — and
+ * {@link #statements} tags each prepared statement with its connection and autoCommit state, so a
+ * test can tell one transaction from statements spread over several connections (each connection's
+ * rollback restores a global snapshot, so the table contents alone cannot).
  */
 final class RecordingDataSource implements DataSource {
   private final Map<String, byte[]> keys = new HashMap<>();
@@ -44,6 +48,16 @@ final class RecordingDataSource implements DataSource {
   private final java.util.List<String> sqlSeen = new java.util.ArrayList<>();
   private final java.util.List<byte[]> keyBytesHandedOut = new java.util.ArrayList<>();
   private final java.util.List<byte[]> keyBytesBound = new java.util.ArrayList<>();
+  private final java.util.List<Call> calls = new java.util.ArrayList<>();
+  private final java.util.List<PreparedSql> statements = new java.util.ArrayList<>();
+  private int connectionsOpened;
+
+  /** One recorded call on physical connection number {@code connection} (1-based). */
+  record Call(int connection, String call) {}
+
+  /** A prepared statement, the connection that prepared it and whether autoCommit was on. */
+  record PreparedSql(int connection, boolean autoCommit, String sql) {}
+
   private Runnable beforeInsert = () -> {};
   // Crash-point injection, one-shot so the rerun that proves convergence runs clean: the Error
   // thrown by the next statement whose SQL contains failSqlFragment, before or after it executes.
@@ -84,6 +98,28 @@ final class RecordingDataSource implements DataSource {
   /** Every SQL string the engine prepared, in order — used to assert the configured table name. */
   java.util.List<String> sqlSeen() {
     return sqlSeen;
+  }
+
+  /**
+   * The connection transcript, in order: {@code getConnection}, {@code setAutoCommit(<flag>)},
+   * {@code prepare <sql>}, {@code commit}, {@code rollback}, {@code abort}, {@code close}.
+   */
+  java.util.List<Call> calls() {
+    return calls;
+  }
+
+  /** Every prepared statement with its connection and autoCommit state, in order. */
+  java.util.List<PreparedSql> statements() {
+    return statements;
+  }
+
+  /** Forgets everything recorded so far (not the tables); connection numbers keep counting. */
+  void resetRecording() {
+    sqlSeen.clear();
+    keyBytesHandedOut.clear();
+    keyBytesBound.clear();
+    calls.clear();
+    statements.clear();
   }
 
   /** Every {@code key_bytes} array {@code getBytes} handed to the engine, in order. */
@@ -236,6 +272,8 @@ final class RecordingDataSource implements DataSource {
   }
 
   private static Connection fakeConnection(RecordingDataSource ds) {
+    int id = ++ds.connectionsOpened;
+    ds.calls.add(new Call(id, "getConnection"));
     // Per-connection transaction state (see RecordingDataSource): whether autoCommit is off, and
     // the state the open transaction started from.
     boolean[] manualCommit = {false};
@@ -243,6 +281,17 @@ final class RecordingDataSource implements DataSource {
     boolean[] closed = {false};
     InvocationHandler h =
         (proxy, method, args) -> {
+          // Recording only: the transcript entry is written before the call runs.
+          switch (method.getName()) {
+            case "setAutoCommit" -> ds.calls.add(new Call(id, "setAutoCommit(" + args[0] + ")"));
+            case "prepareStatement" -> {
+              ds.calls.add(new Call(id, "prepare " + args[0]));
+              ds.statements.add(new PreparedSql(id, !manualCommit[0], (String) args[0]));
+            }
+            case "commit", "rollback", "abort", "close" ->
+                ds.calls.add(new Call(id, method.getName()));
+            default -> {}
+          }
           if (closed[0] && CLOSED_CONNECTION_REFUSES.contains(method.getName())) {
             throw new java.sql.SQLException("This connection has been closed.", "08003");
           }

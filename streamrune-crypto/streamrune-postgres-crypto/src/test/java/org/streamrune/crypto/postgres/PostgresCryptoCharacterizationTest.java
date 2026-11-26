@@ -315,22 +315,25 @@ class PostgresCryptoCharacterizationTest {
     assertEquals(
         List.of(LOCK, SELECT_KEY, SELECT_TOMBSTONE, SELECT_MAX_ERASED, INSERT_KEY),
         dataSource.sqlSeen());
+    assertOneTransaction(
+        List.of(LOCK, SELECT_KEY, SELECT_TOMBSTONE, SELECT_MAX_ERASED, INSERT_KEY), "commit");
   }
 
   @Test
   void goldenSql_encryptWithExistingKey() {
     plainEngine.encrypt(S, PLAINTEXT);
-    dataSource.sqlSeen().clear();
+    dataSource.resetRecording();
 
     plainEngine.encrypt(S, PLAINTEXT);
 
     assertEquals(List.of(LOCK, SELECT_KEY), dataSource.sqlSeen());
+    assertOneTransaction(List.of(LOCK, SELECT_KEY), "commit");
   }
 
   @Test
   void goldenSql_decrypt() {
     byte[] blob = plainEngine.encrypt(S, PLAINTEXT);
-    dataSource.sqlSeen().clear();
+    dataSource.resetRecording();
 
     plainEngine.decrypt(S, blob);
 
@@ -347,13 +350,16 @@ class PostgresCryptoCharacterizationTest {
   @Test
   void goldenSql_deleteKeyOfASubjectWithAKey() {
     plainEngine.encrypt(S, PLAINTEXT);
-    dataSource.sqlSeen().clear();
+    dataSource.resetRecording();
 
     plainEngine.deleteKey(S);
 
     assertEquals(
         List.of(LOCK, SELECT_KEY_VERSION, UPSERT_ERASED_GENERATION, DELETE_KEY, INSERT_TOMBSTONE),
         dataSource.sqlSeen());
+    assertOneTransaction(
+        List.of(LOCK, SELECT_KEY_VERSION, UPSERT_ERASED_GENERATION, DELETE_KEY, INSERT_TOMBSTONE),
+        "commit");
   }
 
   @Test
@@ -362,6 +368,7 @@ class PostgresCryptoCharacterizationTest {
 
     assertEquals(
         List.of(LOCK, SELECT_KEY_VERSION, DELETE_KEY, INSERT_TOMBSTONE), dataSource.sqlSeen());
+    assertOneTransaction(List.of(LOCK, SELECT_KEY_VERSION, DELETE_KEY, INSERT_TOMBSTONE), "commit");
   }
 
   @Test
@@ -369,6 +376,33 @@ class PostgresCryptoCharacterizationTest {
     plainEngine.reinstate(S);
 
     assertEquals(List.of(LOCK, DELETE_TOMBSTONE), dataSource.sqlSeen());
+    assertOneTransaction(List.of(LOCK, DELETE_TOMBSTONE), "commit");
+  }
+
+  /**
+   * Everything recorded since the last reset ran as ONE transaction on ONE physical connection:
+   * opened, autoCommit switched off, every statement prepared there with autoCommit off, then
+   * {@code end} ({@code commit} or {@code rollback}), the autoCommit restore and the close. A
+   * statement sent through another (autoCommit) connection fails this even when the fake's global
+   * rollback snapshot hides its effect on the tables.
+   */
+  private void assertOneTransaction(List<String> sql, String end) {
+    List<RecordingDataSource.Call> calls = dataSource.calls();
+    assertEquals(
+        1,
+        calls.stream().map(RecordingDataSource.Call::connection).distinct().count(),
+        () -> "one connection: " + calls);
+    assertTrue(
+        dataSource.statements().stream().noneMatch(RecordingDataSource.PreparedSql::autoCommit),
+        () -> "every statement runs with autoCommit off: " + dataSource.statements());
+    List<String> expected = new ArrayList<>();
+    expected.add("getConnection");
+    expected.add("setAutoCommit(false)");
+    sql.forEach(statement -> expected.add("prepare " + statement));
+    expected.add(end);
+    expected.add("setAutoCommit(true)");
+    expected.add("close");
+    assertEquals(expected, calls.stream().map(RecordingDataSource.Call::call).toList());
   }
 
   // ── golden SQL: the store ───────────────────────────────────────────────────────────────────
@@ -431,17 +465,26 @@ class PostgresCryptoCharacterizationTest {
     JdbcForgottenSubjectStore store = new JdbcForgottenSubjectStore(dataSource);
     InjectedCrash crash = new InjectedCrash("after the tombstone INSERT");
     dataSource.failAfter("INSERT INTO forgotten_subjects", crash);
+    dataSource.resetRecording();
 
     assertSame(crash, assertThrows(InjectedCrash.class, () -> plainEngine.deleteKey(S)));
+
+    assertOneTransaction(
+        List.of(LOCK, SELECT_KEY_VERSION, UPSERT_ERASED_GENERATION, DELETE_KEY, INSERT_TOMBSTONE),
+        "rollback");
 
     assertArrayEquals(keyBefore, dataSource.getKey(S.value()), "the key survives");
     assertFalse(dataSource.isForgotten(S.value()), "no tombstone is committed");
     assertFalse(store.isForgotten(S), "the store sees no tombstone either");
     assertNull(dataSource.erasedGeneration(S.value()), "no erased-generation row is committed");
     assertArrayEquals(PLAINTEXT, plainEngine.decrypt(S, ciphertext));
+    dataSource.resetRecording();
 
     plainEngine.deleteKey(S);
 
+    assertOneTransaction(
+        List.of(LOCK, SELECT_KEY_VERSION, UPSERT_ERASED_GENERATION, DELETE_KEY, INSERT_TOMBSTONE),
+        "commit");
     assertFalse(dataSource.containsKey(S.value()), "the rerun deletes the key");
     assertTrue(dataSource.isForgotten(S.value()), "the rerun writes the tombstone");
     assertTrue(store.isForgotten(S));
