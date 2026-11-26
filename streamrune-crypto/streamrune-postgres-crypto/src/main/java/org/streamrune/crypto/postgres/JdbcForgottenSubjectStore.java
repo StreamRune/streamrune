@@ -3,13 +3,13 @@ package org.streamrune.crypto.postgres;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.HexFormat;
 import javax.sql.DataSource;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.ForgottenSubjectStore;
+import org.streamrune.crypto.JdbcForgottenSubjects;
 
 /**
  * Durable, database-backed {@link ForgottenSubjectStore} — the persistent store that makes the AWS
@@ -38,22 +38,10 @@ import org.streamrune.crypto.ForgottenSubjectStore;
  */
 public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
 
-  private static final String FORGET_SQL =
-      "INSERT INTO forgotten_subjects (subject_id) VALUES (?) ON CONFLICT (subject_id) DO NOTHING";
-  private static final String IS_FORGOTTEN_SQL =
-      "SELECT 1 FROM forgotten_subjects WHERE subject_id = ?";
-  private static final String REINSTATE_SQL = "DELETE FROM forgotten_subjects WHERE subject_id = ?";
-  private static final String FORGOTTEN_AT_SQL =
-      "SELECT forgotten_at FROM forgotten_subjects WHERE subject_id = ?";
-  // The erased key's BACKEND-sourced creation instant,
-  // recorded with the tombstone so a later reinstate can prove key identity without comparing two
-  // hosts' clocks. Nullable (NULL = no evidence); ON CONFLICT DO NOTHING keeps the FIRST
-  // erasure's evidence, matching forgotten_at's first-write-wins.
-  private static final String FORGET_WITH_KEY_EVIDENCE_SQL =
-      "INSERT INTO forgotten_subjects (subject_id, key_created_at) VALUES (?, ?)"
-          + " ON CONFLICT (subject_id) DO NOTHING";
-  private static final String KEY_CREATED_AT_SQL =
-      "SELECT key_created_at FROM forgotten_subjects WHERE subject_id = ?";
+  // The forgotten_subjects SQL, shared with the SQLite store; the inserts and the timestamp read
+  // are PostgreSQL's (ON CONFLICT DO NOTHING keeps the FIRST forget's row, evidence included).
+  private static final JdbcForgottenSubjects FORGOTTEN =
+      new JdbcForgottenSubjects(PostgresCryptoDialect.INSTANCE);
 
   private final DataSource dataSource;
 
@@ -71,7 +59,7 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public void forget(SubjectId subjectId) {
     requireNonNull(subjectId);
-    execute(FORGET_SQL, subjectId, "record forgotten-subject tombstone for");
+    write(subjectId, "record forgotten-subject tombstone for", FORGOTTEN::forget);
   }
 
   /**
@@ -88,29 +76,17 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public void forget(SubjectId subjectId, java.time.Instant keyCreatedAt) {
     requireNonNull(subjectId);
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(FORGET_WITH_KEY_EVIDENCE_SQL)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.setTimestamp(2, keyCreatedAt == null ? null : java.sql.Timestamp.from(keyCreatedAt));
-      PostgresCryptoTransactions.commitIfManual(conn, c -> ps.executeUpdate());
-    } catch (Exception e) {
-      // Redact the (possibly-PII) subject id to its hash — this message reaches the
-      // GDPR audit_log FAILURE row via ForgetSubjectService and any log/DLQ error handler.
-      throw new CryptoOperationException(
-          "Failed to record forgotten-subject tombstone for subject-hash=" + subjectId.redacted(),
-          e);
-    }
+    write(
+        subjectId,
+        "record forgotten-subject tombstone for",
+        (c, stored) -> FORGOTTEN.forget(c, stored, keyCreatedAt));
   }
 
   @Override
   public boolean isForgotten(SubjectId subjectId) {
     requireNonNull(subjectId);
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(IS_FORGOTTEN_SQL)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next();
-      }
+    try (Connection conn = dataSource.getConnection()) {
+      return FORGOTTEN.isForgotten(conn, storedSubjectId(subjectId));
     } catch (Exception e) {
       // The subject id may itself be PII (email/username). Redact it to its SHA-256
       // hash — a raw id here would leak into logs and, via any DLQ/error handler, into durable
@@ -124,7 +100,7 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public void reinstate(SubjectId subjectId) {
     requireNonNull(subjectId);
-    execute(REINSTATE_SQL, subjectId, "remove forgotten-subject tombstone for");
+    write(subjectId, "remove forgotten-subject tombstone for", FORGOTTEN::reinstate);
   }
 
   @Override
@@ -146,16 +122,8 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public java.util.Optional<java.time.Instant> forgottenAt(SubjectId subjectId) {
     requireNonNull(subjectId);
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(FORGOTTEN_AT_SQL)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return java.util.Optional.empty();
-        }
-        java.sql.Timestamp ts = rs.getTimestamp("forgotten_at");
-        return java.util.Optional.ofNullable(ts).map(java.sql.Timestamp::toInstant);
-      }
+    try (Connection conn = dataSource.getConnection()) {
+      return FORGOTTEN.forgottenAt(conn, storedSubjectId(subjectId));
     } catch (Exception e) {
       // Redact the (possibly-PII) subject id to its hash.
       throw new CryptoOperationException(
@@ -174,16 +142,8 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
   @Override
   public java.util.Optional<java.time.Instant> keyCreatedAt(SubjectId subjectId) {
     requireNonNull(subjectId);
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(KEY_CREATED_AT_SQL)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return java.util.Optional.empty();
-        }
-        java.sql.Timestamp ts = rs.getTimestamp("key_created_at");
-        return java.util.Optional.ofNullable(ts).map(java.sql.Timestamp::toInstant);
-      }
+    try (Connection conn = dataSource.getConnection()) {
+      return FORGOTTEN.keyCreatedAt(conn, storedSubjectId(subjectId));
     } catch (Exception e) {
       // Redact the (possibly-PII) subject id to its hash.
       throw new CryptoOperationException(
@@ -192,11 +152,25 @@ public final class JdbcForgottenSubjectStore implements ForgottenSubjectStore {
     }
   }
 
-  private void execute(String sql, SubjectId subjectId, String action) {
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      PostgresCryptoTransactions.commitIfManual(conn, c -> ps.executeUpdate());
+  /** One tombstone write on a borrowed connection, given the hashed subject id. */
+  @FunctionalInterface
+  private interface TombstoneWrite {
+    void run(Connection conn, String storedSubjectId) throws SQLException;
+  }
+
+  /**
+   * Runs {@code work} on a borrowed connection and makes it durable whatever the pool's autoCommit
+   * mode ({@link PostgresCryptoTransactions#commitIfManual}).
+   */
+  private void write(SubjectId subjectId, String action, TombstoneWrite work) {
+    try (Connection conn = dataSource.getConnection()) {
+      String stored = storedSubjectId(subjectId);
+      PostgresCryptoTransactions.commitIfManual(
+          conn,
+          c -> {
+            work.run(c, stored);
+            return null;
+          });
     } catch (Exception e) {
       // Redact the (possibly-PII) subject id to its hash — this message reaches the
       // GDPR audit_log FAILURE row via ForgetSubjectService and any log/DLQ error handler.

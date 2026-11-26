@@ -1,17 +1,10 @@
 package org.streamrune.crypto.postgres;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Objects;
 import javax.crypto.AEADBadTagException;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
@@ -24,7 +17,10 @@ import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.AesGcmV1Format;
+import org.streamrune.crypto.JdbcForgottenSubjects;
+import org.streamrune.crypto.JdbcSubjectKeyStore;
 import org.streamrune.crypto.VerifiedCipher;
+import org.streamrune.crypto.VersionedKey;
 
 /**
  * PostgreSQL-backed {@link CryptoEngine} storing one AES-256 key per subject in the {@code
@@ -112,6 +108,10 @@ public final class PostgresCryptoEngine implements CryptoEngine {
   private final DataSource dataSource;
   private final String tableName;
 
+  // The key store's statements (per-subject advisory lock, load, mint, erase, lift tombstone),
+  // shared with the SQLite engine; they run on this engine's connection, inside its transactions.
+  private final JdbcSubjectKeyStore keys;
+
   // The cipher seam, the encryption self-check and the one-retry decryption, shared with the other
   // AES-GCM engines; its WARN lines go to this engine's logger.
   private final VerifiedCipher verified;
@@ -129,6 +129,19 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     }
     this.dataSource = dataSource;
     this.tableName = validateTableName(tableName);
+    // The race hook is read when it runs, not here, so a hook a test sets after construction
+    // (setLoadOrCreateKeyRaceHook) still runs.
+    this.keys =
+        new JdbcSubjectKeyStore(
+            this.tableName,
+            PostgresCryptoDialect.INSTANCE,
+            new JdbcForgottenSubjects(PostgresCryptoDialect.INSTANCE),
+            () -> {
+              Runnable h = raceHook;
+              if (h != null) {
+                h.run();
+              }
+            });
     this.verified = new VerifiedCipher(metrics, log, cipherFactory);
     this.format = new AesGcmV1Format(verified);
   }
@@ -165,9 +178,6 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     return new Builder();
   }
 
-  /** A subject's AES key together with its generation (the ciphertext key-version byte). */
-  private record VersionedKey(SecretKey key, int version) {}
-
   @Override
   public byte[] encrypt(SubjectId subjectId, byte[] plaintext) {
     if (subjectId == null) {
@@ -181,7 +191,7 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     try (Connection conn = dataSource.getConnection()) {
       // The mint commits in its own transaction before any cipher work: an encryption discarded
       // below leaves a committed key that the caller's retry loads (no second mint).
-      key = inTransaction(conn, c -> loadOrCreateKey(c, subjectId));
+      key = inTransaction(conn, c -> keys.loadOrCreateKey(c, subjectId));
       result = format.seal(key.key(), key.version(), plaintext);
     } catch (KeyNotFoundException | SubjectForgottenException e) {
       throw e;
@@ -239,13 +249,17 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
     }
+    // One transaction: under the per-subject advisory lock that encrypt's mint and reinstate also
+    // take, record the destroyed key's generation (erased_key_generations), delete the key and
+    // write the tombstone. All three commit together or none does: a committed delete without its
+    // tombstone would let the next encrypt mint a fresh key for a forgotten subject.
     Connection conn = null;
     try {
       conn = dataSource.getConnection();
       inTransaction(
           conn,
           c -> {
-            eraseKey(c, subjectId);
+            keys.eraseKey(c, subjectId);
             return null;
           });
     } catch (Exception e) {
@@ -253,43 +267,6 @@ public final class PostgresCryptoEngine implements CryptoEngine {
           "Failed to delete key for subject: " + subjectId.redacted(), e);
     } finally {
       closeQuietly(conn);
-    }
-  }
-
-  /** The body of {@link #deleteKey}'s single transaction ({@link #inTransaction} commits it). */
-  private void eraseKey(Connection conn, SubjectId subjectId) throws SQLException {
-    String deleteKeySql = "DELETE FROM " + tableName + " WHERE subject_id = ?";
-    String tombstoneSql =
-        "INSERT INTO forgotten_subjects (subject_id) VALUES (?) ON CONFLICT (subject_id) DO NOTHING";
-    // Take the same per-subject advisory lock loadOrCreateKey() takes, inside the same
-    // transaction, before touching either table. This makes "check tombstone, then write key"
-    // (encrypt) and "delete key, then write tombstone" (this method) mutually exclusive per
-    // subject — a concurrent encrypt() either completes entirely before this delete starts, or
-    // waits for this delete's tombstone to commit before it can even read forgotten_subjects.
-    // Other subjects take a different lock key, so throughput for unrelated subjects is
-    // unaffected — this is NOT a global lock.
-    acquireSubjectLock(conn, subjectId);
-    // Before destroying the key, record its generation
-    // in erased_key_generations (GREATEST-upsert, so re-running an erasure is idempotent and
-    // generations stay monotonic across repeated erase/reinstate cycles). The next mint for
-    // this subject uses max_erased_version + 1, which is what lets decrypt tell "written
-    // under a destroyed generation" ([REDACTED]) apart from "tampered current-generation
-    // blob" (loud). Same transaction as the delete + tombstone: all three commit or none.
-    Integer erasedVersion = selectKeyVersion(conn, subjectId);
-    if (erasedVersion != null) {
-      recordErasedGeneration(conn, subjectId, erasedVersion);
-    }
-    // Delete the key and record the tombstone in one transaction: erasure and its terminal
-    // marker must commit together, or neither does. A committed delete without a tombstone
-    // would silently allow resurrection on the next encrypt — which is why inTransaction rolls
-    // back on an Error too, before restoring autoCommit.
-    try (PreparedStatement ps = conn.prepareStatement(deleteKeySql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.executeUpdate();
-    }
-    try (PreparedStatement ps = conn.prepareStatement(tombstoneSql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.executeUpdate();
     }
   }
 
@@ -308,7 +285,7 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     // operator fault — a partial restore, a key row deleted outside the engine — which this method
     // does not repair (docs/guide/advanced/gdpr-erasure.md).
     //
-    // The DELETE runs under the same per-subject advisory lock deleteKey() and loadOrCreateKey()
+    // The DELETE runs under the same per-subject advisory lock deleteKey() and encrypt()'s mint
     // take, so a concurrent erasure or mint for this subject cannot interleave with it.
     Connection conn = null;
     try {
@@ -316,23 +293,13 @@ public final class PostgresCryptoEngine implements CryptoEngine {
       inTransaction(
           conn,
           c -> {
-            liftTombstone(c, subjectId);
+            keys.liftTombstone(c, subjectId);
             return null;
           });
     } catch (Exception e) {
       throw new CryptoOperationException("Failed to reinstate subject: " + subjectId.redacted(), e);
     } finally {
       closeQuietly(conn);
-    }
-  }
-
-  /** The body of {@link #reinstate}'s single transaction ({@link #inTransaction} commits it). */
-  private static void liftTombstone(Connection conn, SubjectId subjectId) throws SQLException {
-    acquireSubjectLock(conn, subjectId);
-    try (PreparedStatement ps =
-        conn.prepareStatement("DELETE FROM forgotten_subjects WHERE subject_id = ?")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.executeUpdate();
     }
   }
 
@@ -396,26 +363,6 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     }
   }
 
-  /**
-   * The opaque value actually written to the {@code subject_id} columns of {@code encryption_keys}
-   * and {@code forgotten_subjects}: the SHA-256 hex of the subject id's UTF-8 bytes. Every lookup,
-   * insert, delete and tombstone hashes first, so a caller's subject id — which may itself be PII
-   * (email, username) — never lands verbatim in a stored column (and never in the permanent
-   * forgotten-subjects tombstone). This mirrors {@code FileSystemCryptoEngine.sha256Hex} and {@code
-   * VaultCryptoEngine.keyName} for cross-backend parity; UTF-8 is fixed so the hash is stable
-   * across JVMs and platform default charsets.
-   */
-  private static String storedSubjectId(SubjectId subjectId) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      byte[] digest = md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(digest);
-    } catch (Exception e) {
-      throw new CryptoOperationException(
-          "SHA-256 hashing failed for subject: " + subjectId.redacted(), e);
-    }
-  }
-
   @Override
   public java.util.Set<String> requiredCryptoTables() {
     // This backend stores per-subject keys and crypto-shredding tombstones in the
@@ -423,7 +370,7 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     // the CONFIGURED key-table name so SchemaValidator fails fast at boot if a custom-named table
     // was configured but not created (the migration only creates the default-named table — see
     // Builder#tableName).
-    return java.util.Set.of(tableName, "forgotten_subjects", "erased_key_generations");
+    return keys.requiredTables();
   }
 
   @Override
@@ -431,132 +378,12 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     if (subjectId == null) {
       throw new IllegalArgumentException("subjectId must not be null");
     }
-    String sql = "SELECT 1 FROM " + tableName + " WHERE subject_id = ?";
-    try (Connection conn = dataSource.getConnection();
-        PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next();
-      }
+    try (Connection conn = dataSource.getConnection()) {
+      return keys.hasKey(conn, subjectId);
     } catch (Exception e) {
       throw new CryptoOperationException(
           "isKeyAvailable failed for subject: " + subjectId.redacted(), e);
     }
-  }
-
-  private VersionedKey loadOrCreateKey(Connection conn, SubjectId subjectId)
-      throws java.sql.SQLException {
-    // Per-subject advisory lock, held for the rest of this transaction (released on commit/
-    // rollback). deleteKey() takes the SAME lock key before it deletes the key row / inserts the
-    // tombstone, so the "load key, check tombstone, insert key" sequence below can never interleave
-    // with a concurrent delete for the SAME subject: either this whole method runs to completion
-    // (commit) before deleteKey()'s transaction can acquire the lock, or deleteKey() commits first
-    // and this method observes its result (no key, tombstone present) atomically. Different
-    // subjects hash to different lock keys, so unrelated traffic is never blocked — this is not a
-    // global lock.
-    acquireSubjectLock(conn, subjectId);
-    VersionedKey key = loadKeyOrNull(conn, subjectId);
-    if (key != null) {
-      return key;
-    }
-    // No key: either brand new, or crypto-shredded. Terminal erasure refuses to mint a fresh key
-    // for a forgotten subject; reinstate(subjectId) is the only way to lift that.
-    boolean forgotten = isForgotten(conn, subjectId);
-    if (raceHook != null) {
-      // Test-only seam (see setLoadOrCreateKeyRaceHook): lets a test force a concurrent deleteKey()
-      // to run to completion at the exact TOCTOU point this fix closes, proving the two operations
-      // are now mutually exclusive rather than relying on probabilistic timing.
-      raceHook.run();
-    }
-    if (forgotten) {
-      throw new SubjectForgottenException(
-          "Subject was crypto-shredded (GDPR erasure) and cannot be re-encrypted: "
-              + subjectId.redacted()
-              + " — call reinstate(subjectId) to re-register");
-    }
-    return createAndStoreKey(conn, subjectId);
-  }
-
-  /**
-   * Serializes {@link #loadOrCreateKey} and {@link #deleteKey} for the same subject using a
-   * Postgres transaction-scoped advisory lock keyed by a hash of the subject id. The lock is
-   * per-subject (not global): concurrent traffic for other subjects is never blocked, so this adds
-   * no cross-subject contention. Released automatically on transaction commit or rollback.
-   */
-  private static void acquireSubjectLock(Connection conn, SubjectId subjectId)
-      throws java.sql.SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement("SELECT pg_advisory_xact_lock(hashtext(?))")) {
-      ps.setString(1, storedSubjectId(subjectId));
-      // executeQuery(), not execute(): pg_advisory_xact_lock() returns a single row (its result
-      // column is irrelevant — only the call's side effect, taking the lock, matters). The row
-      // still has to be drained for the driver to consider the statement complete.
-      try (ResultSet rs = ps.executeQuery()) {
-        rs.next();
-      }
-    }
-  }
-
-  /** The current key's generation, or {@code null} when the subject has no key row. */
-  private Integer selectKeyVersion(Connection conn, SubjectId subjectId)
-      throws java.sql.SQLException {
-    String sql = "SELECT key_version FROM " + tableName + " WHERE subject_id = ?";
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? rs.getInt("key_version") : null;
-      }
-    }
-  }
-
-  /**
-   * Records that {@code erasedVersion} was destroyed for the subject. GREATEST keeps the counter
-   * monotonic under idempotent forget re-runs and concurrent erasures.
-   */
-  private static void recordErasedGeneration(
-      Connection conn, SubjectId subjectId, int erasedVersion) throws java.sql.SQLException {
-    String sql =
-        "INSERT INTO erased_key_generations (subject_id, max_erased_version) VALUES (?, ?) "
-            + "ON CONFLICT (subject_id) DO UPDATE SET max_erased_version = "
-            + "GREATEST(erased_key_generations.max_erased_version, EXCLUDED.max_erased_version)";
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.setInt(2, erasedVersion);
-      ps.executeUpdate();
-    }
-  }
-
-  /**
-   * The generation the next mint for this subject must use: one above the highest generation any
-   * completed erasure destroyed (1 for a subject never erased). Fails loudly at the single-byte cap
-   * instead of wrapping — a wrapped generation would collide with a destroyed one and turn its
-   * ciphertext into wrong-key GCM failures. Generations start at 1 and bump only on a post-erasure
-   * re-mint, so the cap ({@link AesGcmV1Format#MAX_KEY_VERSION}) allows 126 completed
-   * erase/re-register cycles per subject before the mint refuses with guidance to use a fresh
-   * subject id.
-   */
-  private int nextKeyVersion(Connection conn, SubjectId subjectId) throws java.sql.SQLException {
-    String sql = "SELECT max_erased_version FROM erased_key_generations WHERE subject_id = ?";
-    int maxErased = 0;
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (rs.next()) {
-          maxErased = rs.getInt("max_erased_version");
-        }
-      }
-    }
-    int next = maxErased + 1;
-    if (next > AesGcmV1Format.MAX_KEY_VERSION) {
-      throw new CryptoOperationException(
-          "Key-generation limit reached for subject: "
-              + subjectId.redacted()
-              + " — the subject has been erased and re-registered "
-              + (AesGcmV1Format.MAX_KEY_VERSION - 1)
-              + " times, exhausting the single-byte generation counter. Re-register this person"
-              + " under a fresh subject id.");
-    }
-    return next;
   }
 
   // Test-only hook invoked (on the calling thread, while the per-subject advisory lock is held)
@@ -570,86 +397,12 @@ public final class PostgresCryptoEngine implements CryptoEngine {
     raceHook = hook;
   }
 
-  private boolean isForgotten(Connection conn, SubjectId subjectId) throws java.sql.SQLException {
-    String sql = "SELECT 1 FROM forgotten_subjects WHERE subject_id = ?";
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next();
-      }
-    }
-  }
-
-  private VersionedKey loadKey(Connection conn, SubjectId subjectId) throws java.sql.SQLException {
-    VersionedKey key = loadKeyOrNull(conn, subjectId);
+  private VersionedKey loadKey(Connection conn, SubjectId subjectId) throws SQLException {
+    VersionedKey key = keys.loadKeyOrNull(conn, subjectId);
     if (key == null) {
       throw new KeyNotFoundException("Key not found for subject: " + subjectId.redacted());
     }
     return key;
-  }
-
-  private VersionedKey loadKeyOrNull(Connection conn, SubjectId subjectId)
-      throws java.sql.SQLException {
-    String sql = "SELECT key_bytes, key_version FROM " + tableName + " WHERE subject_id = ?";
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (rs.next()) {
-          byte[] bytes = rs.getBytes("key_bytes");
-          try {
-            // SecretKeySpec copies the array, so the JDBC buffer can be zeroed immediately.
-            return new VersionedKey(new SecretKeySpec(bytes, "AES"), rs.getInt("key_version"));
-          } finally {
-            java.util.Arrays.fill(bytes, (byte) 0);
-          }
-        }
-        return null;
-      }
-    }
-  }
-
-  private VersionedKey createAndStoreKey(Connection conn, SubjectId subjectId)
-      throws java.sql.SQLException {
-    SecretKey key;
-    try {
-      var gen = KeyGenerator.getInstance("AES");
-      gen.init(256);
-      key = gen.generateKey();
-    } catch (Exception e) {
-      throw new CryptoOperationException(
-          "Key generation failed for subject: " + subjectId.redacted(), e);
-    }
-    // The mint's generation is one above the highest generation any completed
-    // erasure destroyed for this subject (1 for a never-erased subject). Read under the same
-    // per-subject advisory lock + transaction as the insert, so it cannot interleave with a
-    // concurrent deleteKey's GREATEST-upsert for this subject.
-    int version = nextKeyVersion(conn, subjectId);
-    // First writer wins: a concurrent create must never overwrite an existing key —
-    // that would permanently orphan all data already encrypted under the old key.
-    String sql =
-        "INSERT INTO "
-            + tableName
-            + " (subject_id, key_bytes, key_version) VALUES (?, ?, ?) "
-            + "ON CONFLICT (subject_id) DO NOTHING";
-    byte[] encoded = key.getEncoded();
-    try (PreparedStatement ps = conn.prepareStatement(sql)) {
-      ps.setString(1, storedSubjectId(subjectId));
-      ps.setBytes(2, encoded);
-      ps.setInt(3, version);
-      if (ps.executeUpdate() == 1) {
-        return new VersionedKey(key, version);
-      }
-    } finally {
-      // Best-effort: getEncoded() returns a fresh copy — zero it once the INSERT has executed.
-      java.util.Arrays.fill(encoded, (byte) 0);
-    }
-    // Lost the race: re-read the winning row so both writers use the same key.
-    VersionedKey winner = loadKeyOrNull(conn, subjectId);
-    if (winner == null) {
-      throw new CryptoOperationException(
-          "Key for subject vanished after insert conflict: " + subjectId.redacted());
-    }
-    return winner;
   }
 
   public static final class Builder {
