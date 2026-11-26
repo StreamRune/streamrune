@@ -47,6 +47,7 @@ import org.springframework.boot.webmvc.autoconfigure.DispatcherServletAutoConfig
 import org.springframework.boot.webmvc.autoconfigure.WebMvcAutoConfiguration;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.ResolvableType;
@@ -57,6 +58,8 @@ import org.streamrune.core.CommandBus;
 import org.streamrune.core.EventStoreFactory;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.SimpleEventTypeRegistry;
+import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.integration.tck.Application;
 import org.streamrune.integration.tck.ConfigurationOracle;
@@ -199,6 +202,11 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
         context.registerBean(DispatchingController.class);
         continue;
       }
+      if (beanClass == ContractBeans.BackendOutboxStore.class) {
+        // The outbox an application declares from the backend's stores: a @Bean method.
+        context.registerBean(BackendOutboxConfiguration.class);
+        continue;
+      }
       if (ContractBeans.injected(beanClass)) {
         // A constructor-injected bean: Spring autowires its constructor, as for a @Component.
         @SuppressWarnings("unchecked")
@@ -235,6 +243,19 @@ class SpringIntegrationWiringContractTest extends IntegrationWiringContract {
     public String dispatch(@PathVariable("id") String id) {
       commandBus.execute(new ContractBeans.ContractCommand(id));
       return "executed";
+    }
+  }
+
+  /**
+   * The contract's {@link ContractBeans.BackendOutboxStore} as a Spring application declares it: a
+   * {@code @Bean} method that builds the outbox store from the {@code BackendStores} bean.
+   */
+  @Configuration(proxyBeanMethods = false)
+  public static class BackendOutboxConfiguration {
+
+    @Bean
+    public OutboxStore outboxStore(BackendStores stores) {
+      return ContractBeans.BackendOutboxStore.from(stores);
     }
   }
 

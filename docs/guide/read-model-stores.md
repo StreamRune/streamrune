@@ -6,7 +6,7 @@ explains what a store is, which store each projection uses, and how to run more 
 an application.
 
 Most applications never need this page: with a `DataSource`, the integrations create one store,
-`postgres`, and every projection that writes to it checkpoints there. Read on when a projection
+named after the backend (`postgres`), and every projection that writes to it checkpoints there. Read on when a projection
 writes somewhere else, when you want a read model in a second database, or when startup refuses a
 projection and names a store.
 
@@ -107,6 +107,11 @@ An unknown name is an error, and so is a declaration that contradicts the projec
     readModelStore = "search")
 public class ProductSearchProjection extends BaseProjection { /* ... */ }
 ```
+
+`ReadModelStore.DEFAULT` (the text `default`) is the alias of the default store:
+`@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)` routes to the default store whatever
+the backend names it (`postgres` with the PostgreSQL backend). The alias is reserved: a store whose
+`name()` is `default` fails the start.
 
 Use it when routing cannot decide alone: several transactional stores. A `writeTarget()` that no store
 owns is refused in two cases: for a transactional mode (rule 3), and whenever a `readModelStore`
@@ -311,8 +316,9 @@ and the exact collection rules.
 
 ## Replacing the default store
 
-The default store is replaced by name, and only by name. Define a `ReadModelStore` whose `name()` is
-`postgres` and it takes the default's place: the default is never created, so its database is never
+The default store is replaced by name, and only by name. Its name is the backend's, `postgres`; its
+bean is the `ReadModelStore` named `streamRuneDefaultReadModelStore`, declared with that interface
+type. Define a `ReadModelStore` whose `name()` is `postgres` and it takes the default's place: the default is never created, so its database is never
 touched. A store with any other name is added beside the default and never removes it. This is the
 way to put the `postgres` store on another database, or to give an application that uses no
 database a store of its own (Quarkus always provides a `DataSource` bean, so such an application

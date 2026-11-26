@@ -755,6 +755,73 @@ public interface org.streamrune.core.audit.EventAuditStore
   public abstract void save(org.streamrune.core.audit.EventAuditEntry)
   public abstract void saveAll(java.util.List<org.streamrune.core.audit.EventAuditEntry>)
 
+public final record org.streamrune.core.backend.BackendContext
+  public <init>(javax.sql.DataSource, org.streamrune.core.crypto.CryptoEngine, java.time.Clock, org.streamrune.core.StreamRuneMetrics, org.streamrune.core.tracing.StreamRuneTracing, boolean, boolean, boolean)
+  public boolean migrateReadModelSchema()
+  public boolean migrateSchema()
+  public boolean validateSchema()
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Clock clock()
+  public javax.sql.DataSource dataSource()
+  public org.streamrune.core.StreamRuneMetrics metrics()
+  public org.streamrune.core.crypto.CryptoEngine cryptoEngine()
+  public org.streamrune.core.tracing.StreamRuneTracing tracing()
+
+public final class org.streamrune.core.backend.BackendOptionException extends java.lang.IllegalArgumentException
+  public <init>(java.lang.String, java.lang.String)
+  public <init>(java.lang.String, java.lang.String, java.lang.Throwable)
+  public java.lang.String option()
+
+public interface org.streamrune.core.backend.BackendStores extends java.lang.AutoCloseable
+  public abstract java.lang.String backendName()
+  public abstract org.streamrune.core.CommandInbox commandInbox()
+  public abstract org.streamrune.core.DeadLetterQueue deadLetterQueue()
+  public abstract org.streamrune.core.EventStoreFactory eventStoreFactory(org.streamrune.core.backend.EventStoreOptions)
+  public abstract org.streamrune.core.audit.AuditStore auditStore()
+  public abstract org.streamrune.core.audit.CommandAuditQuery commandAuditQuery()
+  public abstract org.streamrune.core.audit.ComplianceReportQuery complianceReportQuery()
+  public abstract org.streamrune.core.audit.EventAuditQuery eventAuditQuery()
+  public abstract org.streamrune.core.audit.EventAuditStore eventAuditStore()
+  public abstract org.streamrune.core.gdpr.SnapshotPurger snapshotPurger(java.util.function.Function<org.streamrune.core.types.SubjectId, ? extends java.util.Collection<org.streamrune.core.types.StreamId>>)
+  public abstract org.streamrune.core.outbox.OutboxStore outboxStore(org.streamrune.core.backend.OutboxOptions)
+  public abstract org.streamrune.core.projection.OffsetStore offsetStore()
+  public abstract org.streamrune.core.projection.ProjectionDeadLetterStore projectionDeadLetterStore()
+  public abstract org.streamrune.core.projection.ReadModelStore defaultReadModelStore()
+  public abstract org.streamrune.core.saga.SagaDeadLetterStore sagaDeadLetterStore()
+  public abstract org.streamrune.core.saga.SagaStore sagaStore()
+  public abstract org.streamrune.core.subscription.SubscriptionLeadership leadership(java.time.Duration)
+  public default void close()
+
+public final record org.streamrune.core.backend.EventStoreOptions
+  public <init>(org.streamrune.core.EventTypeRegistry, java.util.List<org.streamrune.core.upcasting.EventUpcaster>, java.util.List<org.streamrune.core.SnapshotMigration>, org.streamrune.core.outbox.OutboxStore, org.streamrune.core.outbox.OutboxEventMapper, org.streamrune.core.CommandInbox, org.streamrune.core.audit.EventAuditStore, java.time.Duration)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration statementTimeout()
+  public java.util.List<org.streamrune.core.SnapshotMigration> snapshotMigrations()
+  public java.util.List<org.streamrune.core.upcasting.EventUpcaster> upcasters()
+  public org.streamrune.core.CommandInbox commandInbox()
+  public org.streamrune.core.EventTypeRegistry typeRegistry()
+  public org.streamrune.core.audit.EventAuditStore eventAuditStore()
+  public org.streamrune.core.outbox.OutboxEventMapper outboxEventMapper()
+  public org.streamrune.core.outbox.OutboxStore outboxStore()
+
+public final record org.streamrune.core.backend.OutboxOptions
+  public <init>(java.time.Duration, org.streamrune.core.outbox.OutboxOrderingMode)
+  public final boolean equals(java.lang.Object)
+  public final int hashCode()
+  public final java.lang.String toString()
+  public java.time.Duration claimLease()
+  public org.streamrune.core.outbox.OutboxOrderingMode orderingMode()
+  public static final java.time.Duration DEFAULT_CLAIM_LEASE
+
+public interface org.streamrune.core.backend.StreamRuneBackend
+  public abstract java.lang.String name()
+  public abstract org.streamrune.core.backend.BackendStores open(org.streamrune.core.backend.BackendContext)
+  public abstract void verify(javax.sql.DataSource)
+
 public interface org.streamrune.core.crypto.CryptoEngine
   public abstract boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
   public abstract byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])
@@ -1207,6 +1274,7 @@ public interface org.streamrune.core.projection.ReadModelStore
   public abstract org.streamrune.core.projection.OffsetStore checkpoints()
   public abstract org.streamrune.core.projection.ProjectionRepository repository()
   public default org.streamrune.core.projection.CheckpointTarget checkpointTarget()
+  public static final java.lang.String DEFAULT = "default"
   public static org.streamrune.core.projection.ReadModelStore of(java.lang.String, org.streamrune.core.projection.ProjectionRepository, org.streamrune.core.projection.OffsetStore, org.streamrune.core.projection.AtomicBatchProcessor)
 
 public final record org.streamrune.core.projection.Window

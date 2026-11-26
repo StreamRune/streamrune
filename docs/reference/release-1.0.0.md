@@ -937,9 +937,9 @@ license.
 
 - `OutboxEventMapper.toOutbox(EventEnvelope)` runs on the append path and its `OutboxEntry`s are saved
   on the append's own connection: a command's events and its outbox rows commit or roll back
-  together. Set both the mapper and a `PostgresOutboxStore` (on the factory, or as two beans in an
-  integration). `OutboxEntryId` is the idempotency key; saving the same id twice is a no-op.
-- Ordering modes (`OutboxOrderingMode`, a constructor argument of the store, logged at relay start):
+  together. Set both the mapper and the backend's outbox store (`BackendStores.outboxStore(OutboxOptions)`,
+  a `PostgresOutboxStore`; on the factory, or as two beans in an integration). `OutboxEntryId` is the idempotency key; saving the same id twice is a no-op.
+- Ordering modes (`OutboxOrderingMode`, one of the store's `OutboxOptions`, logged at relay start):
   - `STRICT_PER_AGGREGATE` (**default**) — `OutboxEntry.streamId` is mandatory
     (`OutboxOrderingViolationException` otherwise); a terminal `FAILED` head blocks every later entry
     of its stream until an operator replays or skips it.
@@ -997,13 +997,14 @@ license.
   (`5s`), `retry-max-attempts` (`10`), `retry-initial-delay` (`1s`), `retry-backoff-multiplier`
   (`2.0`). On
   all three integrations startup fails when `streamrune.outbox.enabled=true` has no `OutboxStore`
-  (the message names `PostgresOutboxStore`; the broker modules ship publishers only) or has neither
+  (the message names the `BackendStores` form; the broker modules ship publishers only) or has neither
   an `OutboxPublisher` nor an application `OutboxPoller`, since nothing would relay the entries the
   event store writes; the messages are the same on the three, and say that an application
   whose outbox table an external relay reads sets `streamrune.outbox.enabled=false` (the property
   switches the framework's relay, not the event store's write). Quarkus says so when more than one
-  publisher bean matches, and when the only publisher beans carry a qualifier. On Micronaut, startup also fails when an `OutboxEventMapper` is paired with a
-  store the event store cannot write in the append transaction.
+  publisher bean matches, and when the only publisher beans carry a qualifier. On all three integrations, startup also fails when an `OutboxEventMapper` is paired with a
+  store the event store cannot write in the append transaction, and when a `CommandInbox` or
+  `EventAuditStore` bean is such a store: build them from the `BackendStores` bean.
 
 ## GDPR — encryption at rest and crypto-shredding
 
@@ -1105,7 +1106,7 @@ license.
   refuses both together; the `IllegalStateException` says what to add. Breaking for a service built
   by hand: add a `PostgresSnapshotStorePurger` to `purgers(...)`, or call `withoutSnapshotPurge()`.
 - The integrations' auto-configured `ForgetSubjectService` applies the same rule to the
-  `SubjectDataPurger` beans: declare a `PostgresSnapshotStorePurger` bean (the integration cannot
+  `SubjectDataPurger` beans: declare a `SnapshotPurger` bean, built with `BackendStores.snapshotPurger` (the integration cannot
   build one, since which streams hold a subject is the application's mapping), or set
   `streamrune.gdpr.snapshot-purge=none` (default `required`). Otherwise startup fails — on Quarkus
   and Micronaut too, where `StreamRuneConfigValidator` builds the service on the startup event — with
@@ -1271,10 +1272,16 @@ property and the value; Spring and Micronaut refuse a duration property written 
 suffix, naming the key to set, and Quarkus every name its mapping does not declare — see
 [What the integrations refuse](../guide/configuration.md#what-the-integrations-refuse)):
 
-- The event store through `PostgresEventStoreFactory`, a `VirtualThreadCommandBus` with
-  `PostgresCommandInbox`, `PostgresAuditStore`, `PostgresDeadLetterQueue` + `DeadLetterRetryRunner`,
-  `LeaseBasedLeadership` + `JdbcProjectionRepository`, saga runners with `PostgresSagaStore` /
-  `PostgresSagaDeadLetterStore` and a `SagaCompensationRetrySweeper` per saga runner, the retention
+- The storage backend `streamrune.backend` names (`postgres`, the only one), opened once on the
+  `DataSource` and exposed as the `BackendStores` bean, which builds every store the integration
+  wires: the event store (through `BackendStores.eventStoreFactory`), a `VirtualThreadCommandBus`
+  with the backend's command inbox and audit store, the subscription leadership and the default
+  read-model store (named after the backend; `ReadModelStore.DEFAULT` is its alias), saga runners
+  with the backend's saga store and saga dead-letter store and a `SagaCompensationRetrySweeper` per
+  saga runner. The store beans are declared with their interface types. The application declares
+  its optional infrastructure from `BackendStores`: the outbox store, the command dead-letter queue
+  (no integration creates one; with one, a `DeadLetterRetryRunner` and its retention sweeper join),
+  the snapshot purger. Also: the retention
   sweepers, the outbox poller when `streamrune.outbox.enabled=true`, health, Micrometer metrics
   (`streamrune.metrics.enabled`, `streamrune.metrics.prefix`), the tracing of every area through the
   `OpenTelemetry` bean or the global OpenTelemetry (see below), the query cache, SSE, and the request filter that binds
@@ -1339,12 +1346,14 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
 - Crypto engines bind through `streamrune.crypto.<filesystem|postgres|vault|aws>.enabled` and their
   keys; the Vault and AWS KMS engines get a `JdbcForgottenSubjectStore` on the application `DataSource`,
   and the PostgreSQL, filesystem and AWS KMS engines the integration's `StreamRuneMetrics` bean.
-- Startup validators, all fail-closed: `StreamRuneConfigValidator` (durations), `CommandInboxWiringValidator`,
+- Startup validators, all fail-closed: `StreamRuneConfigValidator` (durations),
   `SagaRetentionValidator`, `SagaStateCryptoValidator`, `StreamRuneAuthorizationValidator`,
   `StreamRuneRequestIdentityValidator`, the `@Encrypted`-without-engine check, and the JVM check
-  (`GraalJitGuard`, see Operations; `streamrune.jvm.allow-graal-jit`). The two validators the
-  integrations share, `CommandInboxWiringValidator` and `SagaRetentionValidator`, and `GraalJitGuard` are
-  `@Internal`: the names a refused startup prints, not API. A startup banner
+  (`GraalJitGuard`, see Operations; `streamrune.jvm.allow-graal-jit`). The validator the
+  integrations share, `SagaRetentionValidator`, and `GraalJitGuard` are
+  `@Internal`: the names a refused startup prints, not API. The command bus and the event store take
+  one `CommandInbox` bean, and the backend refuses an inbox it cannot write in the append
+  transaction (see the outbox section), so no separate inbox-wiring validator exists. A startup banner
   (`streamrune.startup-log`) reports the active configuration.
 - Health: Spring Boot Actuator `streamRune` (`StreamRuneHealthIndicator`), Quarkus `@Readiness`
   `streamrune` (`StreamRuneHealthCheck`, always listed in `/q/health/ready`), Micronaut `streamrune`
@@ -1381,7 +1390,6 @@ suffix, naming the key to set, and Quarkus every name its mapping does not decla
 - **Micronaut**: `StreamRuneMicronautModule`, `ProjectionFactory`, `StreamRuneLifecycle`,
   `StreamRuneContextFilter` with `StreamRuneContextHelper`, `BeanValidationInterceptor` with Micronaut's
   compile-time validator (`@Introspected` commands), `configuration-metadata.json`, `reflect-config.json`.
-  The outbox store may be declared as `OutboxStore` or `PostgresOutboxStore`.
 - **GraalVM native image** (measured on GraalVM CE 25.0.1): each integration ships reachability
   metadata for the framework's own types. The application registers its own events, state records and
   nested value objects, and lists every sealed command/event root and nested sealed level as a

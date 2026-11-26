@@ -32,12 +32,18 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
+import org.streamrune.core.backend.BackendStores;
 import org.streamrune.core.crypto.CryptoEngine;
+import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxOrderingMode;
+import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.AtomicBatchProcessor;
 import org.streamrune.core.projection.OffsetStore;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.subscription.SubscriptionConfig;
 import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.core.tracing.StreamRuneTracing;
@@ -49,6 +55,7 @@ import org.streamrune.core.types.CorrelationId;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.core.types.Version;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
 import org.streamrune.integration.ConfigurationSpelling;
 import org.streamrune.integration.MisspelledPropertyNames;
@@ -58,10 +65,12 @@ import org.streamrune.integration.SagaParallelismSetting;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
+import org.streamrune.integration.tck.ContractBeans.BackendOutboxStore;
 import org.streamrune.integration.tck.ContractBeans.ContractCommand;
 import org.streamrune.integration.tck.ContractBeans.ContractCommandRegistration;
 import org.streamrune.integration.tck.ContractBeans.ContractInlineProjection;
 import org.streamrune.integration.tck.ContractBeans.ContractProjection;
+import org.streamrune.integration.tck.ContractBeans.DefaultAliasProjection;
 import org.streamrune.integration.tck.ContractBeans.DispatchingRoute;
 import org.streamrune.integration.tck.ContractBeans.RecordingAuditStore;
 import org.streamrune.runtime.DeadLetterRetryRunner;
@@ -80,6 +89,7 @@ import org.streamrune.runtime.TracingCommandInterceptor;
 import org.streamrune.runtime.TracingProjectionDecorator;
 import org.streamrune.runtime.TracingSettings;
 import org.streamrune.runtime.VirtualThreadCommandBus;
+import org.streamrune.test.ForwardingEventStore;
 import org.streamrune.test.InMemoryEventStore;
 import org.streamrune.test.InMemoryOffsetStore;
 
@@ -133,7 +143,10 @@ final class ReferenceApplication implements Application {
     GLOBAL_SAGA_PARALLELISM,
     BUILDER_SAGA_PARALLELISM,
     SUBSCRIPTION_SAGA_PARALLELISM,
-    KNOWN_SAGA_SUBSCRIPTIONS
+    KNOWN_SAGA_SUBSCRIPTIONS,
+    BACKEND_STORES_EXPOSED,
+    DEFAULT_ALIAS_ROUTED,
+    OUTBOX_IN_THE_APPEND
   }
 
   /** The durations among the keys the contract sets, read as an integration binds them. */
@@ -169,6 +182,7 @@ final class ReferenceApplication implements Application {
   private VirtualThreadCommandBus commandBus;
   private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
   private EventStore eventStore;
+  private BackendStores stores;
   private MultiProjectionRunner projectionRunner;
   private OutboxPoller outboxPoller;
 
@@ -202,7 +216,11 @@ final class ReferenceApplication implements Application {
       if (beansOf(StreamRuneTracing.class).isEmpty()) {
         beans.add(tracing);
       }
+      openBackend();
       eventStore = eventStore();
+      if (beansOf(EventStore.class).isEmpty()) {
+        beans.add(eventStore);
+      }
       buildDeadLetterRetry();
       if (commandBus == null) {
         commandBus = commandBusBuilder().build();
@@ -494,14 +512,69 @@ final class ReferenceApplication implements Application {
                 .build(),
             null);
     if (!keeps(Rule.STORE_TRACED)) {
-      return store;
+      return withOutbox(store);
     }
     StreamRuneTracing storeTracing =
         keeps(Rule.EVENT_STORE_SWITCH) || beansOf(OpenTelemetry.class).isEmpty()
             ? tracing
             : OpenTelemetryTracing.of(
                 beansOf(OpenTelemetry.class).getFirst(), TracingSettings.allEnabled());
-    return store.withTracing(storeTracing);
+    return withOutbox(store.withTracing(storeTracing));
+  }
+
+  /**
+   * With a database, opens the stores of the backend, exposes them as the application's {@code
+   * BackendStores} bean beside the subscription checkpoint they hold, and builds the outbox store
+   * the application declares from them. An application that breaks {@link
+   * Rule#BACKEND_STORES_EXPOSED} exposes another bundle than the one its stores come from.
+   */
+  private void openBackend() {
+    if (dataSource == null) {
+      return;
+    }
+    stores = new ReferenceBackendStores();
+    beans.add(keeps(Rule.BACKEND_STORES_EXPOSED) ? stores : new ReferenceBackendStores());
+    beans.add(stores.offsetStore());
+    if (!beansOf(BackendOutboxStore.class).isEmpty()) {
+      beans.add(BackendOutboxStore.from(stores));
+    }
+  }
+
+  /**
+   * {@code store} writing the entries of the application's {@code OutboxEventMapper} into its
+   * outbox store with each append, when the application declares both: the entries are checked
+   * before the events are stored, so an append whose outbox write fails stores neither, as one
+   * transaction would. An application that breaks {@link Rule#OUTBOX_IN_THE_APPEND} stores the
+   * events first and writes the entries afterwards.
+   */
+  private EventStore withOutbox(EventStore store) {
+    List<OutboxEventMapper> mappers = beansOf(OutboxEventMapper.class);
+    List<OutboxStore> outboxes = beansOf(OutboxStore.class);
+    if (mappers.isEmpty() || outboxes.isEmpty()) {
+      return store;
+    }
+    OutboxEventMapper mapper = mappers.getFirst();
+    OutboxStore outbox = outboxes.getFirst();
+    boolean atomic = keeps(Rule.OUTBOX_IN_THE_APPEND);
+    return new ForwardingEventStore(store) {
+      @Override
+      public AppendResult append(
+          StreamId streamId, List<org.streamrune.core.EventEnvelope> events, Version expected) {
+        List<OutboxEntry> entries =
+            events.stream().flatMap(event -> mapper.toOutbox(event).stream()).toList();
+        if (atomic) {
+          for (OutboxEntry entry : entries) {
+            if (outbox.orderingMode() == OutboxOrderingMode.STRICT_PER_AGGREGATE
+                && entry.streamId() == null) {
+              throw new OutboxOrderingViolationException(entry.id(), entry.payloadType());
+            }
+          }
+        }
+        AppendResult result = super.append(streamId, events, expected);
+        entries.forEach(outbox::save);
+        return result;
+      }
+    };
   }
 
   /**
@@ -576,6 +649,27 @@ final class ReferenceApplication implements Application {
               .register(
                   ProjectionName.of(ContractProjection.NAME),
                   beansOf(ContractProjection.class).getFirst(),
+                  ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+              .build();
+      projectionRunner.start();
+    }
+    if (dataSource != null && !beansOf(DefaultAliasProjection.class).isEmpty()) {
+      // The alias names the default store: its checkpoints hold the position, unless the rule is
+      // broken and the projection checkpoints in the subscription checkpoint.
+      ReadModelStore defaultStore = stores.defaultReadModelStore();
+      projectionRunner =
+          MultiProjectionRunner.builder()
+              .eventStore(eventStore)
+              .offsetStore(
+                  keeps(Rule.DEFAULT_ALIAS_ROUTED)
+                      ? defaultStore.checkpoints()
+                      : stores.offsetStore())
+              .subscriptionConfig(
+                  new SubscriptionConfig(true, Duration.ofMillis(50), Duration.ofMillis(10)))
+              .atomicProcessor(AtomicBatchProcessor.nonAtomicAtLeastOnce())
+              .register(
+                  ProjectionName.of(DefaultAliasProjection.NAME),
+                  beansOf(DefaultAliasProjection.class).getFirst(),
                   ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
               .build();
       projectionRunner.start();

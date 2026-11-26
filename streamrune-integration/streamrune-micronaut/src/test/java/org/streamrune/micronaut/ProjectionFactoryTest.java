@@ -162,7 +162,8 @@ class ProjectionFactoryTest {
             true,
             true,
             null,
-            "4");
+            "4",
+            "postgres");
 
     MultiProjectionRunner runner =
         factory.multiProjectionRunner(
@@ -417,7 +418,7 @@ class ProjectionFactoryTest {
    */
   /** The application's stores, with no default store (no DataSource here). */
   private static ReadModelStores stores(ReadModelStore... stores) {
-    return new ReadModelStores(java.util.Optional::empty, () -> List.of(stores));
+    return new ReadModelStores("postgres", java.util.Optional::empty, () -> List.of(stores));
   }
 
   private static ReadModelStores noStores() {

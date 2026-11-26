@@ -51,6 +51,41 @@ names the property and the value:
   a `-ms` suffix, and the outbox retry multiplier written as `retry-multiplier` instead of
   `retry-backoff-multiplier`.
 
+## Backend
+
+| Property | Default | Meaning |
+|---|---|---|
+| `streamrune.backend` | `postgres` | The storage backend every store is opened on. `postgres` is the only backend in this release; any other value fails the start. |
+
+With a `DataSource`, each integration opens the stores through the backend once and exposes them
+as a `BackendStores` bean (`org.streamrune.core.backend`). The framework's own stores are taken
+from it, and an application builds its optional infrastructure from it rather than from a
+backend's classes: `stores.outboxStore(new OutboxOptions(claimLease, orderingMode))` for the
+[transactional outbox](advanced/outbox.md#with-an-integration), `stores.deadLetterQueue()` for
+dead-lettered commands, `stores.snapshotPurger(streamsForSubject)` for
+[GDPR erasure](advanced/gdpr-erasure.md). Inject it like any bean: a parameter of a Spring `@Bean`
+method, a Quarkus `@Produces` method or a Micronaut factory method. The bundle builds each store
+once, so every caller receives the same instance (a snapshot purger is new on every call); the
+integration closes the bundle at shutdown.
+
+The event store writes the outbox, the command inbox and the event audit store inside the
+transaction of its append, so these must be the backend's own stores. An `OutboxStore` (with an
+`OutboxEventMapper`), `CommandInbox` or `EventAuditStore` bean of another type fails the start when
+the framework's event store factory is built, with a message that names the store and ends with
+`build it from this backend's BackendStores`. An application that keeps such a store supplies its
+own `EventStoreFactory`.
+
+The framework's store beans are declared with their interface type: `CommandInbox`,
+`SagaDeadLetterStore`, `EventAuditStore`, `EventAuditQuery`, `ProjectionDeadLetterStore`,
+`OffsetStore` and the default `ReadModelStore`. Inject them by the interface; a lookup or a bean
+condition by a PostgreSQL class (`PostgresCommandInbox`, `PostgresReadModelStore`, …) does not find
+them.
+
+The default read-model store is named after the backend, `postgres`. A projection that declares
+`@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)` (the text `default`) is routed to the
+default store whatever the backend's name; `default` is reserved, so a store of that name fails the
+start. See [Read-model stores](read-model-stores.md).
+
 ## Commands, locking and retries
 
 | Property | Default | Meaning |

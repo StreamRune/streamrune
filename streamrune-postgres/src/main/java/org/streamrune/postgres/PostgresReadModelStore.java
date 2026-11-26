@@ -57,14 +57,16 @@ public final class PostgresReadModelStore implements ReadModelStore {
    * event-store series or the application's tables, and converges when replicas start together (see
    * {@link SeriesMigration}).
    *
-   * @param name the store's name ({@link ReadModelStore#name()}); not blank
+   * @param name the store's name ({@link ReadModelStore#name()}); not blank, and not {@link
+   *     ReadModelStore#DEFAULT}, which is reserved for the backend's default store
    * @param dataSource the read-model database's pool, used as given
    * @param objectMapper serialises the read models; build it with {@link
    *     JdbcProjectionRepository#createObjectMapper} to encrypt {@code @Encrypted} fields at rest
    * @param migrate whether to apply the read-model series
    * @param validate whether to validate the read-model schema
    * @return the store
-   * @throws IllegalArgumentException if an argument is {@code null} or {@code name} is blank
+   * @throws IllegalArgumentException if an argument is {@code null}, or {@code name} is blank or
+   *     {@link ReadModelStore#DEFAULT}
    * @throws UnsupportedServerVersionException if the server is older than {@link
    *     PostgresServerVersion#MINIMUM_MAJOR_VERSION} — checked before anything is migrated
    * @throws org.streamrune.core.EventStoreException if the server version cannot be read
@@ -79,6 +81,10 @@ public final class PostgresReadModelStore implements ReadModelStore {
       boolean validate) {
     if (name == null || name.isBlank()) {
       throw new IllegalArgumentException("name is required and must not be blank");
+    }
+    if (ReadModelStore.DEFAULT.equals(name)) {
+      throw new IllegalArgumentException(
+          "'default' is reserved: it names the backend's default read-model store");
     }
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource is required");

@@ -6,14 +6,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.lang.Nullable;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
-import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.vault.VaultCryptoEngine;
 
 @Configuration
 @ConditionalOnClass(CryptoEngine.class)
+@Import(CryptoBackendConfiguration.class)
 @ConditionalOnProperty(prefix = "streamrune.crypto.vault", name = "enabled", havingValue = "true")
 public class VaultCryptoEngineConfiguration {
 
@@ -58,10 +60,10 @@ public class VaultCryptoEngineConfiguration {
    * Builds the Vault-backed engine. Vault erasure is terminal only if a persistent {@link
    * org.streamrune.crypto.ForgottenSubjectStore} is wired (Vault's transit engine re-creates a
    * deleted key on the next encrypt). When a {@link DataSource} is present, a durable {@link
-   * JdbcForgottenSubjectStore} is auto-wired so a forgotten subject can never be re-encrypted; when
-   * no DataSource is available, {@code build()} fails closed (no silent non-terminal erasure).
-   * Requires the crypto Flyway migration ({@code forgotten_subjects} table) on that DataSource's
-   * database.
+   * ForgottenSubjectStore} from the {@link CryptoBackend} ({@code JdbcForgottenSubjectStore} on
+   * Postgres) is auto-wired so a forgotten subject can never be re-encrypted; when no DataSource is
+   * available, {@code build()} fails closed (no silent non-terminal erasure). Requires the crypto
+   * Flyway migration ({@code forgotten_subjects} table) on that DataSource's database.
    */
   // Inferred destroy method (not explicit destroyMethod = "close"). Cache enabled → the bean
   // is an AutoCloseable CachedCryptoEngine and is still closed on shutdown; cache.enabled=false →
@@ -71,7 +73,8 @@ public class VaultCryptoEngineConfiguration {
   CryptoEngine vaultCryptoEngine(
       VaultHttpClient vaultHttpClient,
       @Nullable DataSource dataSource,
-      StreamRuneCryptoProperties props) {
+      StreamRuneCryptoProperties props,
+      CryptoBackend cryptoBackend) {
     String token = props.vault().token();
     if (token == null || token.isBlank()) {
       throw new IllegalStateException(
@@ -85,7 +88,7 @@ public class VaultCryptoEngineConfiguration {
             .token(token)
             .engineMount(vaultProps.engineMount());
     if (dataSource != null) {
-      vaultBuilder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
+      vaultBuilder.forgottenSubjectStore(cryptoBackend.forgottenSubjects(dataSource));
     }
     // No DataSource → no durable tombstone store → build() fails closed
     // rather than silently shipping non-terminal Vault erasure.
@@ -106,7 +109,8 @@ public class VaultCryptoEngineConfiguration {
         .expireAfterWrite(cacheProps.expireAfterWrite())
         .expireAfterAccess(cacheProps.expireAfterAccess())
         .forgetSignal(
-            SpringCryptoForgetSignals.resolve(dataSource, cacheProps.expireAfterWrite(), "vault"))
+            SpringCryptoForgetSignals.resolve(
+                cryptoBackend, dataSource, cacheProps.expireAfterWrite(), "vault"))
         .build();
   }
 }

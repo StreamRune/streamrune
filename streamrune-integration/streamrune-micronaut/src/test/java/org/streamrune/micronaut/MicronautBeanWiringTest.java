@@ -49,7 +49,6 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.postgres.LeaseBasedLeadership;
 import org.streamrune.postgres.PostgresCommandInbox;
-import org.streamrune.postgres.PostgresSagaDeadLetterStore;
 import org.streamrune.runtime.AnnotationAuthorizationInterceptor;
 import org.streamrune.runtime.AuditCommandInterceptor;
 import org.streamrune.runtime.AuthorizationCommandInterceptor;
@@ -1076,46 +1075,39 @@ class MicronautBeanWiringTest {
   }
 
   @Test
-  void concretePostgresCommandInboxResolvable_whenDataSourcePresent() {
-    // Regression test: the commandInbox factory used to declare CommandInbox (the interface) as
-    // its return type. Micronaut resolves @Requires(beans = ...) / concrete-typed injection
-    // points from the DECLARED factory-method return type, so consumers asking for the concrete
-    // PostgresCommandInbox (postgresEventStoreFactory's `@Nullable PostgresCommandInbox`
-    // parameter, and inboxRetentionSweeper's `PostgresCommandInbox` parameter) were NEVER
-    // satisfied even though a bean existed — the event store silently built without a command
-    // inbox and saga command dispatch threw UnsupportedOperationException at runtime. This test
-    // fails on the interface-typed factory and passes once it declares PostgresCommandInbox.
+  void frameworkCommandInboxIsInterfaceTypedAndSwept_whenDataSourcePresent() {
+    // The framework's inbox comes from the backend's BackendStores and is declared with the
+    // CommandInbox interface. Micronaut resolves @Requires(beans = ...) / concrete-typed injection
+    // points from the DECLARED factory-method return type, so no consumer may ask for the concrete
+    // PostgresCommandInbox to find it: the event-store factory takes the bus's CommandInbox, and
+    // the inbox retention sweeper takes the framework's inbox from BackendStores (a concrete-typed
+    // gate once silently dropped both — the event store built without a command inbox).
     try (var ctx = ApplicationContext.run(Map.of("spec.name", "with-datasource"))) {
       assertTrue(
-          ctx.containsBean(PostgresCommandInbox.class),
-          "PostgresCommandInbox must be resolvable by its concrete type when a DataSource bean "
-              + "is present");
-      assertTrue(
           ctx.containsBean(CommandInbox.class),
-          "PostgresCommandInbox must still satisfy the CommandInbox interface for interface-typed "
-              + "consumers");
+          "the framework's CommandInbox must be resolvable when a DataSource bean is present");
+      assertFalse(
+          ctx.containsBean(PostgresCommandInbox.class),
+          "no framework bean carries the concrete PostgresCommandInbox type");
       assertSame(
-          ctx.getBean(PostgresCommandInbox.class),
+          ctx.getBean(org.streamrune.core.backend.BackendStores.class).commandInbox(),
           ctx.getBean(CommandInbox.class),
-          "the concrete and interface lookups must resolve to the same bean instance");
+          "the inbox bean is the backend's own inbox");
 
-      // The concrete-typed downstream injection points must actually be satisfied.
+      // The inbox retention sweeper must still be registered for the framework's inbox.
       assertTrue(
           ctx.containsBean(InboxRetentionSweeper.class),
-          "InboxRetentionSweeper requires a concrete PostgresCommandInbox bean and must be "
-              + "registered once a DataSource is present");
+          "InboxRetentionSweeper must be registered once a DataSource is present");
     }
   }
 
   /**
-   * The bus takes the {@link CommandInbox} INTERFACE while the event-store factory takes the
-   * concrete {@link PostgresCommandInbox}, so a user-supplied inbox wins the bus's injection point
-   * while the framework's {@code @Secondary} default still satisfies the factory's. The store would
-   * keep claiming idempotency keys in the framework's own {@code command_inbox} table while the bus
-   * pre-checks the user's inbox — the advertised override silently ignored on the authoritative
-   * dedup path, so the user's store never receives a row and {@code execute(command, key)}'s
-   * effectively-once guarantee is broken across a resume. It must fail fast at wiring, and only a
-   * real container reproduces the split resolution. The startup validators resolve the command bus,
+   * The bus and the event-store factory both take the {@link CommandInbox} INTERFACE, so a
+   * user-supplied inbox reaches both. The event store claims the idempotency key in the append's
+   * own transaction, which an inbox of another backend than the event store's cannot join; silently
+   * keeping the framework's inbox would ignore the override on the authoritative dedup path, so
+   * {@code execute(command, key)}'s effectively-once guarantee would break across a resume. The
+   * backend refuses it when the factory is created. The startup validators resolve the command bus,
    * which needs the event store and so the factory: the startup itself is refused.
    */
   @Test
@@ -1129,12 +1121,16 @@ class MicronautBeanWiringTest {
     for (Throwable t = failure; t != null; t = t.getCause()) {
       messages.append(t.getMessage()).append('\n');
     }
+    // The bus and the event store share the one inbox bean; the backend refuses an inbox it
+    // cannot claim keys in inside the append's transaction (its foreign-store refusal).
     assertTrue(
-        messages.toString().contains("command-inbox wiring"),
-        "the failure must name the inbox wiring invariant, got: " + messages);
-    assertTrue(
-        messages.toString().contains("appendWithKey"),
-        "the failure must explain the appendWithKey contract, got: " + messages);
+        messages
+            .toString()
+            .contains(
+                "command inbox store of backend 'InMemoryCommandInbox' cannot share the"
+                    + " 'postgres' event store's transaction; build it from this backend's"
+                    + " BackendStores"),
+        "the failure must be the backend's refusal of the inbox, got: " + messages);
   }
 
   @Test
@@ -1177,10 +1173,10 @@ class MicronautBeanWiringTest {
   }
 
   /**
-   * The framework's event store writes outbox rows on the append's own connection, which only a
-   * {@code PostgresOutboxStore} can do. Paired with an {@code OutboxEventMapper}, any other {@code
-   * OutboxStore} would leave every append without its outbox row, so startup must fail and name the
-   * remedy.
+   * The framework's event store writes outbox rows on the append's own connection, which only an
+   * outbox store of the event store's own backend can do. Paired with an {@code OutboxEventMapper},
+   * any other {@code OutboxStore} would leave every append without its outbox row, so startup must
+   * fail and name the remedy.
    */
   @Test
   void outboxMapperWithAStoreTheEventStoreCannotWriteFailsStartup() {
@@ -1193,15 +1189,15 @@ class MicronautBeanWiringTest {
     for (Throwable t = failure; t != null; t = t.getCause()) {
       messages.append(t.getMessage()).append('\n');
     }
+    // The backend's foreign-store refusal, as in the Spring and Quarkus integrations: it names
+    // the store it was given and the remedy, a store built from the backend's BackendStores.
     assertTrue(
-        messages.toString().contains("PostgresOutboxStore"),
-        "the failure must name the store the event store needs, got: " + messages);
-    assertTrue(
-        messages.toString().contains("InMemoryOutboxStore"),
-        "the failure must name the store it was given, got: " + messages);
-    assertTrue(
-        messages.toString().contains("EventStoreFactory"),
-        "the failure must name the alternative (an own EventStoreFactory), got: " + messages);
+        messages
+            .toString()
+            .contains(
+                "outbox store of backend 'InMemoryOutboxStore' cannot share the 'postgres' event"
+                    + " store's transaction; build it from this backend's BackendStores"),
+        "the failure must be the backend's refusal of the outbox store, got: " + messages);
   }
 
   private static Object privateField(Object target, String name) throws Exception {
@@ -1274,7 +1270,7 @@ class MicronautBeanWiringTest {
   @Requires(property = "spec.name", value = "user-command-inbox")
   static class UserCommandInboxFixture {
 
-    // A DataSource so the framework's own @Secondary PostgresCommandInbox default is eligible too —
+    // A DataSource so the framework's own @Secondary CommandInbox default is eligible too —
     // this reproduces the split resolution, not merely an absent default.
     @Singleton
     DataSource dataSource() {
@@ -1289,30 +1285,23 @@ class MicronautBeanWiringTest {
 
   @Test
   void sagaDeadLetterRetentionSweeperPresent_whenDataSourcePresent() {
-    // The sagaDeadLetterStore factory
-    // declared the SagaDeadLetterStore INTERFACE as its return type while
-    // sagaDeadLetterRetentionSweeper is gated on @Requires(beans =
-    // PostgresSagaDeadLetterStore.class)
-    // and takes a concrete PostgresSagaDeadLetterStore parameter. Micronaut derives bean types from
-    // the declared factory-method return type, so that gate never matched the framework's own
-    // default bean: the sweeper was silently absent in every default deployment and
-    // saga_dead_letters grew without bound (a GDPR storage-limitation violation). The
-    // boot validator only checks the STORE by interface type, so it passed while the sweeper was
-    // missing.
+    // The sagaDeadLetterStore factory once declared the SagaDeadLetterStore INTERFACE while the
+    // sweeper was gated on @Requires(beans = PostgresSagaDeadLetterStore.class): Micronaut derives
+    // bean types from the declared factory-method return type, so that gate never matched the
+    // framework's own default bean, the sweeper was silently absent in every default deployment
+    // and saga_dead_letters grew without bound (a GDPR storage-limitation violation). The sweeper
+    // now takes the framework's store from BackendStores, so the interface-typed bean cannot hide
+    // it. The boot validator only checks the STORE by interface type, so only this test sees a
+    // missing sweeper.
     try (var ctx = ApplicationContext.run(Map.of("spec.name", "with-datasource"))) {
-      assertTrue(
-          ctx.containsBean(PostgresSagaDeadLetterStore.class),
-          "PostgresSagaDeadLetterStore must be resolvable by its concrete type when a DataSource "
-              + "bean is present");
       assertSame(
-          ctx.getBean(PostgresSagaDeadLetterStore.class),
+          ctx.getBean(org.streamrune.core.backend.BackendStores.class).sagaDeadLetterStore(),
           ctx.getBean(SagaDeadLetterStore.class),
-          "the concrete and interface lookups must resolve to the same bean instance");
+          "the saga dead-letter store bean is the backend's own store");
       assertTrue(
           ctx.containsBean(SagaDeadLetterRetentionSweeper.class),
-          "SagaDeadLetterRetentionSweeper requires a concrete PostgresSagaDeadLetterStore bean and "
-              + "must be registered once a DataSource is present — without it saga_dead_letters is "
-              + "never pruned");
+          "SagaDeadLetterRetentionSweeper must be registered once a DataSource is present —"
+              + " without it saga_dead_letters is never pruned");
       // StreamRuneLifecycle starts the sweeper through exactly this named lookup; asserting the
       // same qualifier proves the started bean is wired, not merely a type-compatible one.
       assertTrue(
@@ -1331,7 +1320,7 @@ class MicronautBeanWiringTest {
         ApplicationContext.run(
             Map.of("spec.name", "with-datasource", "streamrune.saga.enabled", "false"))) {
       assertFalse(
-          ctx.containsBean(PostgresSagaDeadLetterStore.class),
+          ctx.containsBean(SagaDeadLetterStore.class),
           "no saga dead-letter store when streamrune.saga.enabled=false");
       assertFalse(
           ctx.containsBean(SagaDeadLetterRetentionSweeper.class),
@@ -1343,10 +1332,10 @@ class MicronautBeanWiringTest {
   void userSuppliedSagaDeadLetterStoreWinsInterfaceResolution() {
     // Override semantics live on the INTERFACE: the framework default is @Secondary, so a
     // user-supplied SagaDeadLetterStore bean takes precedence for every interface-typed consumer
-    // (the saga runner writes to the user's store) even though the default now declares the
-    // concrete PostgresSagaDeadLetterStore return type. Note Micronaut's @Secondary deprioritizes
-    // rather than removes, so the framework's own Postgres store bean — and the sweeper that prunes
-    // it — remain registered; the sweeper only ever touches the table the framework created.
+    // (the saga runner writes to the user's store). Note Micronaut's @Secondary deprioritizes
+    // rather than removes, so the framework's own store bean remains registered, and the sweeper
+    // prunes the framework's store, taken from BackendStores: it only ever touches the table the
+    // framework created.
     try (var ctx = ApplicationContext.run(Map.of("spec.name", "user-saga-dlq-store"))) {
       assertSame(
           UserSagaDeadLetterStoreFixture.USER_STORE,

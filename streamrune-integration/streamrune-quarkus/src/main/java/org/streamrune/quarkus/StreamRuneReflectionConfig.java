@@ -18,6 +18,9 @@ import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditOutcome;
 import org.streamrune.core.audit.ComplianceReport;
 import org.streamrune.core.audit.EventAuditEntry;
+import org.streamrune.core.backend.BackendContext;
+import org.streamrune.core.backend.EventStoreOptions;
+import org.streamrune.core.backend.OutboxOptions;
 import org.streamrune.core.gdpr.GdprAction;
 import org.streamrune.core.gdpr.SubjectExport;
 import org.streamrune.core.outbox.OutboxEntry;
@@ -166,5 +169,12 @@ import org.streamrune.core.types.Version;
       SpanKind.class,
       SpanLink.class,
       TracingArea.class,
+      // Top-level core records of the backend SPI (3). Configuration records an integration builds
+      // and hands to a backend; StreamRune never serializes them. Registered because the exhaustive
+      // scan in NativeReflectionTypes demands every top-level public core record and deliberately
+      // has no opt-out list.
+      BackendContext.class,
+      EventStoreOptions.class,
+      OutboxOptions.class,
     })
 public final class StreamRuneReflectionConfig {}

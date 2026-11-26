@@ -1,11 +1,13 @@
 open module org.streamrune.core {
   requires com.fasterxml.jackson.annotation;
   requires com.fasterxml.jackson.databind;
+  // Transitive: javax.sql.DataSource is in exported signatures (org.streamrune.core.backend), and
   // ProjectionErrorClassifier.DEFAULT classifies java.sql.SQLException causes as TRANSIENT.
-  requires java.sql;
+  requires transitive java.sql;
 
   exports org.streamrune.core;
   exports org.streamrune.core.audit;
+  exports org.streamrune.core.backend;
   exports org.streamrune.core.crypto;
   exports org.streamrune.core.gdpr;
   exports org.streamrune.core.metrics;

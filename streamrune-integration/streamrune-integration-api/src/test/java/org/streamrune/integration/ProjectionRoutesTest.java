@@ -55,7 +55,8 @@ class ProjectionRoutesTest {
   void routesEveryRegistrationOnce_andKnowsTheStoreBehindEachTarget() {
     var postgres = store("postgres");
     var search = store("search");
-    var stores = new ReadModelStores(() -> Optional.of(postgres), () -> List.of(search));
+    var stores =
+        new ReadModelStores("postgres", () -> Optional.of(postgres), () -> List.of(search));
 
     var routes =
         ProjectionRoutes.route(
@@ -111,6 +112,7 @@ class ProjectionRoutesTest {
     var auditCalls = new AtomicInteger();
     var stores =
         new ReadModelStores(
+            "postgres",
             () -> Optional.of(counting("postgres", postgresCalls)),
             () -> List.of(counting("search", searchCalls), counting("audit", auditCalls)));
 
@@ -134,7 +136,8 @@ class ProjectionRoutesTest {
   void anIndexGoesToItsProjectionsRoutedStore_otherwiseToTheFallback() {
     var postgres = store("postgres");
     var search = store("search");
-    var stores = new ReadModelStores(() -> Optional.of(postgres), () -> List.of(search));
+    var stores =
+        new ReadModelStores("postgres", () -> Optional.of(postgres), () -> List.of(search));
     var routes =
         ProjectionRoutes.route(
             List.of(
@@ -164,6 +167,7 @@ class ProjectionRoutesTest {
     var selections = new AtomicInteger();
     var stores =
         new ReadModelStores(
+            "postgres",
             () -> {
               selections.incrementAndGet();
               return Optional.empty();
@@ -187,7 +191,7 @@ class ProjectionRoutesTest {
 
   @Test
   void aRoutingFailure_isThrown() {
-    var stores = new ReadModelStores(Optional::empty, () -> List.of(store("search")));
+    var stores = new ReadModelStores("postgres", Optional::empty, () -> List.of(store("search")));
 
     assertThatThrownBy(
             () ->
@@ -209,7 +213,7 @@ class ProjectionRoutesTest {
 
   @Test
   void refusesNulls() {
-    var stores = new ReadModelStores(Optional::empty, List::of);
+    var stores = new ReadModelStores("postgres", Optional::empty, List::of);
     assertThatThrownBy(
             () ->
                 ProjectionRoutes.route(
@@ -235,5 +239,24 @@ class ProjectionRoutesTest {
     assertThatThrownBy(() -> ProjectionRoutes.none().indexRepository(indexOf("a"), null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("fallback is required");
+  }
+
+  @Test
+  void aDefaultPinnedRegistration_isRoutedToTheDefaultStoreNamedByTheBackend() {
+    var sqlite = store("sqlite");
+    var search = store("search");
+    var stores = new ReadModelStores("sqlite", () -> Optional.of(sqlite), () -> List.of(search));
+
+    var routes =
+        ProjectionRoutes.route(
+            List.of(
+                new Registration(
+                    "orders", TRANSACTIONAL_LOCAL, ReadModelStore.DEFAULT, batch -> {})),
+            stores,
+            () -> SUBSCRIPTION,
+            SubscriptionLeadership.NOOP);
+
+    assertThat(routes.target("orders")).isEqualTo(sqlite.checkpointTarget());
+    assertThat(routes.store(ProjectionName.of("orders"))).containsSame(sqlite);
   }
 }

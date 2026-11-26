@@ -151,6 +151,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "search", noTarget()),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(search.checkpointTarget());
@@ -159,6 +160,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("orders", TRANSACTIONAL_LOCAL, "other", noTarget()),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(other.checkpointTarget());
@@ -168,6 +170,7 @@ class ProjectionStoreRoutingTest {
                 registration(
                     "orders", TRANSACTIONAL_LOCAL, "postgres", writingTo(postgres.repository())),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(postgres.checkpointTarget());
@@ -181,6 +184,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("orders", TRANSACTIONAL_LOCAL, "nope", noTarget()),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -208,6 +212,7 @@ class ProjectionStoreRoutingTest {
                         "search",
                         writingTo(postgres.repository())),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -228,6 +233,7 @@ class ProjectionStoreRoutingTest {
                         "search",
                         writingTo(new InMemoryProjectionRepository())),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -248,6 +254,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", writingTo(search.repository())),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(search.checkpointTarget());
@@ -255,6 +262,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("orders", TRANSACTIONAL_LOCAL, "", writingTo(postgres.repository())),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(postgres.checkpointTarget());
@@ -264,6 +272,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("fx", EXTERNAL_EFFECT, "", writingTo(second.repository())),
                 List.of(postgres, search, second),
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(second.checkpointTarget());
@@ -285,6 +294,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", cacheAware),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(search.checkpointTarget());
@@ -294,6 +304,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", proxied),
                 stores,
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(search.checkpointTarget());
@@ -306,6 +317,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("orders", TRANSACTIONAL_LOCAL, "", writingTo(real)),
                 List.of(postgres, proxiedStore),
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(proxiedStore.checkpointTarget());
@@ -320,7 +332,11 @@ class ProjectionStoreRoutingTest {
     for (var mode : List.of(TRANSACTIONAL_LOCAL, EXTERNAL_EFFECT)) {
       assertThat(
               ProjectionStoreRouting.route(
-                  registration("orders", mode, "", noTarget()), stores, SUBSCRIPTION, REAL))
+                  registration("orders", mode, "", noTarget()),
+                  stores,
+                  "postgres",
+                  SUBSCRIPTION,
+                  REAL))
           .isEqualTo(postgres.checkpointTarget());
     }
   }
@@ -333,6 +349,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("orders", EXTERNAL_EFFECT, "", noTarget()),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -353,6 +370,7 @@ class ProjectionStoreRoutingTest {
                   ProjectionStoreRouting.route(
                       registration("orders", TRANSACTIONAL_LOCAL, "", noTarget()),
                       stores,
+                      "postgres",
                       SUBSCRIPTION,
                       NOOP))
           .isInstanceOf(IllegalStateException.class)
@@ -368,6 +386,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("orders", TRANSACTIONAL_LOCAL, "", noTarget()),
                     List.of(),
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .hasMessageContaining("no read-model store is defined");
@@ -385,6 +404,7 @@ class ProjectionStoreRoutingTest {
                         "",
                         writingTo(new InMemoryProjectionRepository())),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -408,6 +428,7 @@ class ProjectionStoreRoutingTest {
               ProjectionStoreRouting.route(
                   registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
                   stores,
+                  "postgres",
                   SUBSCRIPTION,
                   REAL))
           .isSameAs(SUBSCRIPTION);
@@ -424,6 +445,7 @@ class ProjectionStoreRoutingTest {
                     "",
                     writingTo(new InMemoryProjectionRepository())),
                 List.of(fullStore("postgres"), store("search", false, true)),
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isSameAs(SUBSCRIPTION);
@@ -442,6 +464,7 @@ class ProjectionStoreRoutingTest {
                   ProjectionStoreRouting.route(
                       registration("orders", TRANSACTIONAL_LOCAL, declared, projection),
                       stores,
+                      "postgres",
                       SUBSCRIPTION,
                       NOOP))
           .isInstanceOf(IllegalStateException.class)
@@ -474,6 +497,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
                     List.of(fullStore("postgres")),
+                    "postgres",
                     UNFENCED_SUBSCRIPTION,
                     REAL))
         .isInstanceOf(IllegalStateException.class)
@@ -493,6 +517,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("orders", TRANSACTIONAL_LOCAL, "sqlite", noTarget()),
                     stores,
+                    "postgres",
                     SUBSCRIPTION,
                     REAL))
         .isInstanceOf(IllegalStateException.class)
@@ -511,6 +536,7 @@ class ProjectionStoreRoutingTest {
                         "",
                         writingTo(new InMemoryProjectionRepository())),
                     List.of(fullStore("postgres")),
+                    "postgres",
                     UNFENCED_SUBSCRIPTION,
                     REAL))
         .isInstanceOf(IllegalStateException.class)
@@ -525,6 +551,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
                 List.of(fullStore("postgres")),
+                "postgres",
                 UNFENCED_SUBSCRIPTION,
                 NOOP))
         .isSameAs(UNFENCED_SUBSCRIPTION);
@@ -533,6 +560,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("orders", TRANSACTIONAL_LOCAL, "", noTarget()),
                 List.of(sqlite),
+                "postgres",
                 SUBSCRIPTION,
                 NOOP))
         .isEqualTo(sqlite.checkpointTarget());
@@ -546,6 +574,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
                 List.of(postgres),
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isSameAs(SUBSCRIPTION);
@@ -553,6 +582,7 @@ class ProjectionStoreRoutingTest {
             ProjectionStoreRouting.route(
                 registration("orders", TRANSACTIONAL_LOCAL, "", noTarget()),
                 List.of(postgres),
+                "postgres",
                 SUBSCRIPTION,
                 REAL))
         .isEqualTo(postgres.checkpointTarget());
@@ -575,6 +605,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
                     List.of(first, second),
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .isInstanceOf(IllegalStateException.class)
@@ -608,16 +639,18 @@ class ProjectionStoreRoutingTest {
   void requiredArgumentsAreRefused() {
     var stores = List.of(fullStore("postgres"));
     var ok = registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget());
-    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, stores, SUBSCRIPTION, null))
+    assertThatThrownBy(
+            () -> ProjectionStoreRouting.route(ok, stores, "postgres", SUBSCRIPTION, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("leadership is required");
-    assertThatThrownBy(() -> ProjectionStoreRouting.route(null, stores, SUBSCRIPTION, NOOP))
+    assertThatThrownBy(
+            () -> ProjectionStoreRouting.route(null, stores, "postgres", SUBSCRIPTION, NOOP))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("registration is required");
-    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, null, SUBSCRIPTION, NOOP))
+    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, null, "postgres", SUBSCRIPTION, NOOP))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("stores is required");
-    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, stores, null, NOOP))
+    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, stores, "postgres", null, NOOP))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("subscriptionCheckpoint is required");
     assertThatThrownBy(() -> registration(null, AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()))
@@ -641,6 +674,7 @@ class ProjectionStoreRoutingTest {
                 ProjectionStoreRouting.route(
                     registration("bad\nname", TRANSACTIONAL_LOCAL, "no\npe", noTarget()),
                     List.of(fullStore("evil\nstore")),
+                    "postgres",
                     SUBSCRIPTION,
                     NOOP))
         .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("\n"));
@@ -702,7 +736,9 @@ class ProjectionStoreRoutingTest {
     var replacement = fullStore("postgres");
     var search = fullStore("search");
 
-    assertThat(ProjectionStoreRouting.selectStores(defaultStore, List.of(search, replacement)))
+    assertThat(
+            ProjectionStoreRouting.selectStores(
+                "postgres", defaultStore, List.of(search, replacement)))
         .containsExactly(search, replacement);
     assertThat(defaultStore.calls).as("the replaced default is never created").isZero();
   }
@@ -713,7 +749,7 @@ class ProjectionStoreRoutingTest {
     var defaultStore = new DefaultSupplier(Optional.of(postgres));
     var search = fullStore("search");
 
-    assertThat(ProjectionStoreRouting.selectStores(defaultStore, List.of(search)))
+    assertThat(ProjectionStoreRouting.selectStores("postgres", defaultStore, List.of(search)))
         .containsExactly(postgres, search);
     assertThat(defaultStore.calls).isEqualTo(1);
   }
@@ -724,9 +760,10 @@ class ProjectionStoreRoutingTest {
 
     assertThat(
             ProjectionStoreRouting.selectStores(
-                new DefaultSupplier(Optional.empty()), List.of(search)))
+                "postgres", new DefaultSupplier(Optional.empty()), List.of(search)))
         .containsExactly(search);
-    assertThat(ProjectionStoreRouting.selectStores(Optional::empty, List.of())).isEmpty();
+    assertThat(ProjectionStoreRouting.selectStores("postgres", Optional::empty, List.of()))
+        .isEmpty();
   }
 
   @Test
@@ -736,7 +773,9 @@ class ProjectionStoreRoutingTest {
     assertThatThrownBy(
             () ->
                 ProjectionStoreRouting.selectStores(
-                    defaultStore, List.of(fullStore("search"), store("search", false, true))))
+                    "postgres",
+                    defaultStore,
+                    List.of(fullStore("search"), store("search", false, true))))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Two read-model stores are named 'search'");
     assertThat(defaultStore.calls).isZero();
@@ -747,7 +786,9 @@ class ProjectionStoreRoutingTest {
     assertThatThrownBy(
             () ->
                 ProjectionStoreRouting.selectStores(
-                    Optional::empty, List.of(fullStore("postgres"), fullStore("postgres"))))
+                    "postgres",
+                    Optional::empty,
+                    List.of(fullStore("postgres"), fullStore("postgres"))))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("Two read-model stores are named 'postgres'");
   }
@@ -759,7 +800,9 @@ class ProjectionStoreRoutingTest {
     var alias = ReadModelStore.of("alias", repository, repository, repository);
 
     assertThatThrownBy(
-            () -> ProjectionStoreRouting.selectStores(() -> Optional.of(postgres), List.of(alias)))
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    "postgres", () -> Optional.of(postgres), List.of(alias)))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("'postgres' and 'alias' write to the same place");
   }
@@ -769,7 +812,7 @@ class ProjectionStoreRoutingTest {
     assertThatThrownBy(
             () ->
                 ProjectionStoreRouting.selectStores(
-                    () -> Optional.of(fullStore("other")), List.of()))
+                    "postgres", () -> Optional.of(fullStore("other")), List.of()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("The default read-model store must be named 'postgres'")
         .hasMessageContaining("'other'");
@@ -777,25 +820,25 @@ class ProjectionStoreRoutingTest {
 
   @Test
   void selectStores_refusesNulls() {
-    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(null, List.of()))
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores("postgres", null, List.of()))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("defaultStore is required");
-    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(Optional::empty, null))
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores("postgres", Optional::empty, null))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("applicationStores is required");
-    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(() -> null, List.of()))
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores("postgres", () -> null, List.of()))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("defaultStore must supply an Optional");
     var withNull = new java.util.ArrayList<ReadModelStore>();
     withNull.add(null);
-    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(Optional::empty, withNull))
+    assertThatThrownBy(
+            () -> ProjectionStoreRouting.selectStores("postgres", Optional::empty, withNull))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("stores must not hold null");
   }
 
   @Test
-  void theDefaultStoreNameAndBeanName() {
-    assertThat(ProjectionStoreRouting.DEFAULT_STORE).isEqualTo("postgres");
+  void theDefaultStoreBeanName() {
     assertThat(ProjectionStoreRouting.DEFAULT_STORE_BEAN)
         .isEqualTo("streamRuneDefaultReadModelStore");
   }
@@ -830,5 +873,244 @@ class ProjectionStoreRoutingTest {
         .hasMessageContaining(
             "No read-model store is named 'postgres' (no read-model store is defined)")
         .hasMessageContaining("Define a ProjectionRepository bean, or name one store 'postgres'");
+  }
+
+  // ── the backend names the default store; "default" is its alias and reserved ────
+
+  /** A store implementing the interface directly, as a container's deferred store does. */
+  private static ReadModelStore direct(String name) {
+    var repository = new InMemoryProjectionRepository();
+    return new ReadModelStore() {
+      @Override
+      public String name() {
+        return name;
+      }
+
+      @Override
+      public ProjectionRepository repository() {
+        return repository;
+      }
+
+      @Override
+      public OffsetStore checkpoints() {
+        return repository;
+      }
+
+      @Override
+      public AtomicBatchProcessor processor() {
+        return repository;
+      }
+    };
+  }
+
+  private static final String RESERVED =
+      "'default' is reserved: it names the backend's default read-model store";
+
+  @Test
+  void theDefaultAlias_routesToTheDefaultStore_namedByTheBackend() {
+    var sqlite = fullStore("sqlite");
+    var other = fullStore("other");
+    var stores = List.of(sqlite, other);
+
+    // over rule 3: two transactional stores would be ambiguous without the declaration
+    assertThat(
+            ProjectionStoreRouting.route(
+                registration("orders", TRANSACTIONAL_LOCAL, ReadModelStore.DEFAULT, noTarget()),
+                stores,
+                "sqlite",
+                SUBSCRIPTION,
+                REAL))
+        .isEqualTo(sqlite.checkpointTarget());
+    // over rule 4: an at-least-once registration goes to the default store, not the subscription
+    assertThat(
+            ProjectionStoreRouting.route(
+                registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "default", noTarget()),
+                stores,
+                "sqlite",
+                SUBSCRIPTION,
+                REAL))
+        .isEqualTo(sqlite.checkpointTarget());
+    // agreeing with writeTarget() is accepted
+    assertThat(
+            ProjectionStoreRouting.route(
+                registration(
+                    "orders", TRANSACTIONAL_LOCAL, "default", writingTo(sqlite.repository())),
+                stores,
+                "sqlite",
+                SUBSCRIPTION,
+                REAL))
+        .isEqualTo(sqlite.checkpointTarget());
+  }
+
+  @Test
+  void theDefaultAlias_followsTheBackend_notTheNamePostgres() {
+    var postgres = fullStore("postgres");
+    var sqlite = fullStore("sqlite");
+    var stores = List.of(postgres, sqlite);
+    var pinned = registration("orders", TRANSACTIONAL_LOCAL, "default", noTarget());
+
+    assertThat(ProjectionStoreRouting.route(pinned, stores, "postgres", SUBSCRIPTION, NOOP))
+        .isEqualTo(postgres.checkpointTarget());
+    assertThat(ProjectionStoreRouting.route(pinned, stores, "sqlite", SUBSCRIPTION, NOOP))
+        .isEqualTo(sqlite.checkpointTarget());
+  }
+
+  @Test
+  void theDefaultAlias_routesToTheApplicationStoreThatReplacedTheDefault() {
+    var defaultStore = new DefaultSupplier(Optional.of(fullStore("sqlite")));
+    var replacement = fullStore("sqlite");
+    var search = store("search", false, true);
+    var stores =
+        ProjectionStoreRouting.selectStores("sqlite", defaultStore, List.of(search, replacement));
+
+    assertThat(
+            ProjectionStoreRouting.route(
+                registration("orders", TRANSACTIONAL_LOCAL, "default", noTarget()),
+                stores,
+                "sqlite",
+                SUBSCRIPTION,
+                NOOP))
+        .isEqualTo(replacement.checkpointTarget());
+    assertThat(defaultStore.calls).isZero();
+  }
+
+  @Test
+  void theDefaultAlias_withoutADefaultStore_failsNamingTheAliasAndTheStore() {
+    var stores = List.of(store("search", false, true));
+
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.route(
+                    registration("orders", AT_LEAST_ONCE_IDEMPOTENT, "default", noTarget()),
+                    stores,
+                    "sqlite",
+                    SUBSCRIPTION,
+                    NOOP))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("projection 'orders'")
+        .hasMessageContaining(
+            "declares readModelStore = \"default\" (the alias of the default read-model store"
+                + " 'sqlite'), but no read-model store has that name")
+        .hasMessageContaining("'search'");
+  }
+
+  @Test
+  void theDefaultAlias_contradictingWriteTarget_failsNamingTheAlias() {
+    var sqlite = fullStore("sqlite");
+    var search = store("search", false, true);
+
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.route(
+                    registration(
+                        "orders",
+                        AT_LEAST_ONCE_IDEMPOTENT,
+                        "default",
+                        writingTo(search.repository())),
+                    List.of(sqlite, search),
+                    "sqlite",
+                    SUBSCRIPTION,
+                    NOOP))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining(
+            "declares readModelStore = \"default\" (the alias of the default read-model store"
+                + " 'sqlite'), but its writeTarget() is the repository of store 'search'");
+  }
+
+  @Test
+  void selectStores_anApplicationStoreNamedLikeTheBackendReplacesTheDefault() {
+    var defaultStore = new DefaultSupplier(Optional.of(fullStore("sqlite")));
+    var replacement = fullStore("sqlite");
+    var search = fullStore("search");
+
+    assertThat(
+            ProjectionStoreRouting.selectStores(
+                "sqlite", defaultStore, List.of(search, replacement)))
+        .containsExactly(search, replacement);
+    assertThat(defaultStore.calls).as("the replaced default is never created").isZero();
+  }
+
+  @Test
+  void selectStores_underAnotherBackend_aStoreNamedPostgresIsJustAnotherStore() {
+    var sqlite = fullStore("sqlite");
+    var defaultStore = new DefaultSupplier(Optional.of(sqlite));
+    var postgres = fullStore("postgres");
+
+    assertThat(ProjectionStoreRouting.selectStores("sqlite", defaultStore, List.of(postgres)))
+        .containsExactly(sqlite, postgres);
+    assertThat(defaultStore.calls).isEqualTo(1);
+  }
+
+  @Test
+  void selectStores_aDefaultNotNamedLikeTheBackend_isRefused() {
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    "sqlite", () -> Optional.of(fullStore("postgres")), List.of()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("The default read-model store must be named 'sqlite'")
+        .hasMessageContaining("'postgres'");
+  }
+
+  @Test
+  void aStoreNamedDefault_isRefusedHoweverItWasBuilt() {
+    var named = direct("default");
+
+    assertThatThrownBy(() -> ProjectionStoreRouting.validateStores(List.of(fullStore("a"), named)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(RESERVED);
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.route(
+                    registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget()),
+                    List.of(named),
+                    "postgres",
+                    SUBSCRIPTION,
+                    NOOP))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(RESERVED);
+  }
+
+  @Test
+  void selectStores_anApplicationStoreNamedDefault_isRefusedBeforeTheDefaultIsCreated() {
+    var defaultStore = new DefaultSupplier(Optional.of(fullStore("postgres")));
+
+    assertThatThrownBy(
+            () ->
+                ProjectionStoreRouting.selectStores(
+                    "postgres", defaultStore, List.of(fullStore("search"), direct("default"))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage(RESERVED);
+    assertThat(defaultStore.calls).isZero();
+  }
+
+  @Test
+  void theReservationIsExactAndCaseSensitive() {
+    ProjectionStoreRouting.validateStores(
+        List.of(direct("Default"), direct("DEFAULT"), direct(" default")));
+  }
+
+  @Test
+  void theDefaultStoreName_isRequired_andNeverBlankOrTheAlias() {
+    var ok = registration("audit", AT_LEAST_ONCE_IDEMPOTENT, "", noTarget());
+    List<ReadModelStore> stores = List.of(fullStore("postgres"));
+
+    assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, stores, null, SUBSCRIPTION, NOOP))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("defaultStoreName is required");
+    assertThatThrownBy(() -> ProjectionStoreRouting.selectStores(null, Optional::empty, stores))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("defaultStoreName is required");
+    for (String bad : List.of("", "  ")) {
+      assertThatThrownBy(() -> ProjectionStoreRouting.route(ok, stores, bad, SUBSCRIPTION, NOOP))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessage("defaultStoreName must not be blank");
+    }
+    assertThatThrownBy(
+            () -> ProjectionStoreRouting.selectStores("default", Optional::empty, stores))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage(
+            "defaultStoreName must be the backend's name for its default read-model store, not the"
+                + " alias 'default'");
   }
 }

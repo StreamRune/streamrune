@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.CryptoForgetSignal;
 import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
 
@@ -30,17 +31,21 @@ final class SpringCryptoForgetSignals {
   private SpringCryptoForgetSignals() {}
 
   /**
+   * @param cryptoBackend the crypto backend that builds the signal over the {@code DataSource}
    * @param dataSource the application {@link DataSource}, or {@code null} if none is available
    * @param configuredWriteTtl the configured cache {@code expireAfterWrite}, or {@code null} to use
    *     the {@link CachedCryptoEngine#DEFAULT_EXPIRE_AFTER_WRITE default}
    * @param backend the crypto backend name, for the WARN message
-   * @return a {@link PostgresCryptoForgetSignal} when a DataSource is present, else {@link
-   *     CryptoForgetSignal#NOOP} (with a startup WARN)
+   * @return the crypto backend's signal ({@link PostgresCryptoForgetSignal} on Postgres) when a
+   *     DataSource is present, else {@link CryptoForgetSignal#NOOP} (with a startup WARN)
    */
   static CryptoForgetSignal resolve(
-      @Nullable DataSource dataSource, @Nullable Duration configuredWriteTtl, String backend) {
+      CryptoBackend cryptoBackend,
+      @Nullable DataSource dataSource,
+      @Nullable Duration configuredWriteTtl,
+      String backend) {
     if (dataSource != null) {
-      return new PostgresCryptoForgetSignal(dataSource);
+      return cryptoBackend.forgetSignal(dataSource);
     }
     Duration writeTtl =
         configuredWriteTtl != null

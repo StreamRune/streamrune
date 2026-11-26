@@ -213,19 +213,19 @@ The production implementation is **`PostgresCommandInbox`**, backed by the `comm
 
 ## Auto-wiring
 
-Spring, Quarkus, and Micronaut all auto-configure a `PostgresCommandInbox` and wire it into the command bus **when a `DataSource` bean is available** — no explicit setup is required. Once the inbox is wired, `supportsIdempotentExecution()` on the produced bus returns `true`, and the keyed `execute(command, key)` overload runs the effectively-once path.
+Spring, Quarkus, and Micronaut all auto-configure the backend's command inbox (`BackendStores.commandInbox()`, a `PostgresCommandInbox` on PostgreSQL, declared as a `CommandInbox` bean) and wire it into the command bus **when a `DataSource` bean is available** — no explicit setup is required. Once the inbox is wired, `supportsIdempotentExecution()` on the produced bus returns `true`, and the keyed `execute(command, key)` overload runs the effectively-once path.
 
 If no `DataSource` is present, the bus has no inbox: `supportsIdempotentExecution()` stays `false` and the keyed overload throws `IllegalStateException`. Always gate keyed calls on the probe when your deployment might run without a database.
 
 ### Supplying your own `CommandInbox`
 
-The inbox is wired into **two** places from **two** injection points: the command bus takes the `CommandInbox` *interface*, while the event-store factory takes the concrete `PostgresCommandInbox` — it has to, because the authoritative claim happens inside `EventStore.appendWithKey`, in the same transaction as the append. The bus's inbox is more than a fast path: the bus consults it before taking the aggregate lock, again under the lock, and once more after the decider rejects a keyed command, and those lookups carry the [overlapping-duplicate guarantee](#how-it-works) above. It must therefore read the very rows `appendWithKey` claims.
+The command bus and the framework's event store take the **same** `CommandInbox` bean. The authoritative claim happens inside `EventStore.appendWithKey`, in the same transaction as the append, so the event store needs a store of its own backend. The bus's inbox is more than a fast path: the bus consults it before taking the aggregate lock, again under the lock, and once more after the decider rejects a keyed command, and those lookups carry the [overlapping-duplicate guarantee](#how-it-works) above. It must therefore read the very rows `appendWithKey` claims, which sharing one bean guarantees.
 
-A `CommandInbox` bean that is **not** a `PostgresCommandInbox` therefore only half-overrides the framework: the bus would use it, the framework's PostgreSQL event store could not. All three integrations **fail startup** on that composition (`IllegalStateException`, naming this remedy) rather than booting green and breaking every keyed execution — including the saga executor's command dispatch — at runtime.
+A `CommandInbox` bean of another type cannot be written in the append transaction, so with the framework's event store factory all three integrations **fail startup** on it (`IllegalArgumentException`: `command inbox store of backend '…' cannot share the 'postgres' event store's transaction; build it from this backend's BackendStores`) rather than booting green and breaking every keyed execution — including the saga executor's command dispatch — at runtime.
 
 Two supported shapes:
 
-- **Use the default class.** Supply your own `PostgresCommandInbox` bean and both sides share one implementation.
+- **Use the backend's inbox.** The default needs nothing; a bean of your own that returns `stores.commandInbox()` from the `BackendStores` bean, or any `PostgresCommandInbox`, is shared by both sides whatever type its bean method declares.
 - **Own the whole path.** Supply your own `CommandInbox` *and* your own `EventStoreFactory`/`EventStore` whose `appendWithKey` claims the idempotency key in the same transaction as the append. The framework's factory then steps aside entirely and the check does not run — the atomicity contract above becomes yours to keep.
 
 ## Retention

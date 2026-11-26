@@ -428,6 +428,12 @@
       "description": "Whether the default read-model store (postgres) applies its migration series (db/readmodel-migration) at startup. Unset, it follows streamrune.event-store.schema.auto-initialize."
     },
     {
+      "name": "streamrune.backend",
+      "type": "java.lang.String",
+      "description": "The storage backend every store is built on: postgres (default) or sqlite (needs the module org.streamrune:streamrune-sqlite on the classpath). Read case-insensitively; any other value fails startup.",
+      "defaultValue": "postgres"
+    },
+    {
       "name": "streamrune.inbox.retention-max-age",
       "type": "java.time.Duration",
       "description": "How long processed command-inbox rows are kept; 0s or negative keeps them.",

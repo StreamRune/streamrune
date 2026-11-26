@@ -10,6 +10,14 @@ public final class org.streamrune.crypto.postgres.JdbcForgottenSubjectStore impl
   public void forget(org.streamrune.core.types.SubjectId, java.time.Instant)
   public void reinstate(org.streamrune.core.types.SubjectId)
 
+public final class org.streamrune.crypto.postgres.PostgresCryptoBackend implements org.streamrune.crypto.CryptoBackend
+  public <init>()
+  public java.lang.String name()
+  public org.streamrune.core.crypto.CryptoEngine keyStoreEngine(javax.sql.DataSource, org.streamrune.crypto.CryptoBackend$KeyStoreEngineSettings)
+  public org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource)
+  public org.streamrune.crypto.CryptoForgetSignal forgetSignal(javax.sql.DataSource, java.util.function.Supplier<? extends javax.sql.DataSource>)
+  public org.streamrune.crypto.ForgottenSubjectStore forgottenSubjects(javax.sql.DataSource)
+
 public final class org.streamrune.crypto.postgres.PostgresCryptoEngine implements org.streamrune.core.crypto.CryptoEngine
   public boolean isKeyAvailable(org.streamrune.core.types.SubjectId)
   public byte[] decrypt(org.streamrune.core.types.SubjectId, byte[])

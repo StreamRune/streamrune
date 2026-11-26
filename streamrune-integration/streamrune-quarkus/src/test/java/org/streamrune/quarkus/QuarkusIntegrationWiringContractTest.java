@@ -122,6 +122,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           SseController.class,
           StreamRuneProducers.class,
           ProjectionProducer.class,
+          StreamRuneCryptoProducers.CryptoBackendProducer.class,
           StreamRuneCryptoProducers.FileSystemCryptoProducer.class,
           StreamRuneCryptoProducers.PostgresCryptoProducer.class,
           StreamRuneCryptoProducers.VaultCryptoProducer.class,
@@ -312,6 +313,21 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     }
   }
 
+  /**
+   * The contract's {@link ContractBeans.BackendOutboxStore} as a Quarkus application declares it: a
+   * producer that builds the outbox store from the {@code BackendStores} bean.
+   */
+  @ApplicationScoped
+  public static class BackendOutboxProducer {
+
+    @Produces
+    @Singleton
+    public org.streamrune.core.outbox.OutboxStore outboxStore(
+        org.streamrune.core.backend.BackendStores stores) {
+      return ContractBeans.BackendOutboxStore.from(stores);
+    }
+  }
+
   /** Makes a supplied contract bean: the class named by the {@code bean} parameter supplies it. */
   public static class SuppliedBean implements BeanCreator<Object> {
     @Override
@@ -351,6 +367,8 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
     for (Class<?> beanClass : extraBeans) {
       if (beanClass == ContractBeans.DispatchingRoute.class) {
         dispatchingRoute = true;
+      } else if (beanClass == ContractBeans.BackendOutboxStore.class) {
+        beans.add(BackendOutboxProducer.class);
       } else if (Supplier.class.isAssignableFrom(beanClass)) {
         supplied.add(
             new RealArcTestContainer.SyntheticBean(

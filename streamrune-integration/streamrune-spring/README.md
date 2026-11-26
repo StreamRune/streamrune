@@ -58,6 +58,8 @@ the ones most applications set:
 
 ```yaml
 streamrune:
+  # the storage backend every store is built on: postgres or sqlite (streamrune.backend)
+  backend: postgres
   snapshot-every-n-events: 100
   retry-max-attempts: 3
   retry-initial-delay: 50ms
@@ -302,11 +304,12 @@ stores to place their `ProjectionIndex` beans, even when you own the runner: a d
 routing would refuse fails the start.
 
 **Where each projection checkpoints.** With a `DataSource`, the integration registers the default
-read-model store, a `PostgresReadModelStore` named `postgres` (bean
-`streamRuneDefaultReadModelStore`): read models in `<name>_view` tables, their checkpoints beside
+read-model store, a `PostgresReadModelStore` named `postgres`, after the backend (a `ReadModelStore`
+bean `streamRuneDefaultReadModelStore`): read models in `<name>_view` tables, their checkpoints beside
 them in `readmodel_checkpoint`. The injectable
 `ProjectionRepository` bean is that store's repository. Each discovered projection is routed on its
-own: a projection that names a store (`@ProjectionConfig(readModelStore = "postgres")`) or writes to
+own: a projection that names a store (`@ProjectionConfig(readModelStore = "postgres")`, or `ReadModelStore.DEFAULT`, the alias of
+the default store) or writes to
 its repository (a `BaseProjection` over the injected `ProjectionRepository`) goes to that store, so
 a `TRANSACTIONAL_LOCAL` projection's read-model writes and its checkpoint commit in one transaction.
 An `AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in the event store's

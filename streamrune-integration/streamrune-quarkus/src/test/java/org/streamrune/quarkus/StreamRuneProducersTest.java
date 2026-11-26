@@ -58,19 +58,15 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(),
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -100,19 +96,15 @@ class StreamRuneProducersTest {
   private static EventStoreFactory eventStoreFactoryWith(
       StreamRuneProducers producers, StreamRuneQuarkusProperties properties) {
     return producers.postgresEventStoreFactory(
-        mock(DataSource.class),
+        TestBackends.stores(mock(DataSource.class)),
         producers.eventTypeRegistry(),
         properties,
-        unsatisfied(),
         List.of(),
         List.of(),
         unsatisfied(),
         unsatisfied(),
         unsatisfied(),
-        unsatisfied(),
-        unsatisfied(),
-        unsatisfied(),
-        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+        unsatisfied());
   }
 
   @Test
@@ -144,10 +136,7 @@ class StreamRuneProducersTest {
             storesOf(
                 org.streamrune.core.projection.ReadModelStore.of("search", other, other, other),
                 org.streamrune.core.projection.ReadModelStore.of(
-                    StreamRuneProducers.DEFAULT_READ_MODEL_STORE,
-                    defaultRepository,
-                    defaultRepository,
-                    defaultRepository)));
+                    "postgres", defaultRepository, defaultRepository, defaultRepository)));
     assertSame(defaultRepository, repository);
   }
 
@@ -173,7 +162,7 @@ class StreamRuneProducersTest {
   void aPostgresOffsetStoreBringsTheFencingSubscriptionCheckpoint() {
     var producers = new StreamRuneProducers();
     var dataSource = mock(DataSource.class);
-    var offsetStore = producers.offsetStore(dataSource);
+    var offsetStore = producers.offsetStore(TestBackends.stores(dataSource));
 
     var target = producers.subscriptionCheckpoint(offsetStore);
 
@@ -223,7 +212,9 @@ class StreamRuneProducersTest {
   /** The application's stores as {@link StreamRuneProducers#readModelStores} collects them. */
   private static org.streamrune.integration.ReadModelStores storesOf(
       org.streamrune.core.projection.ReadModelStore... stores) {
-    return new StreamRuneProducers().readModelStores(storeInstance(null, stores));
+    return new StreamRuneProducers()
+        .readModelStores(
+            storeInstance(null, stores), new org.streamrune.postgres.PostgresBackend());
   }
 
   /**
@@ -285,11 +276,18 @@ class StreamRuneProducersTest {
     var search = memoryStore("search");
     assertEquals(
         List.of(defaultStore, search),
-        producers.readModelStores(storeInstance(defaultStore, search)).stores());
+        producers
+            .readModelStores(
+                storeInstance(defaultStore, search), new org.streamrune.postgres.PostgresBackend())
+            .stores());
 
     var replacement = memoryStore("postgres");
     var instance = storeInstance(defaultStore, replacement);
-    assertEquals(List.of(replacement), producers.readModelStores(instance).stores());
+    assertEquals(
+        List.of(replacement),
+        producers
+            .readModelStores(instance, new org.streamrune.postgres.PostgresBackend())
+            .stores());
     verify(instance, never())
         .select(
             jakarta.enterprise.inject.literal.NamedLiteral.of(
@@ -303,14 +301,15 @@ class StreamRuneProducersTest {
         List.of(),
         new StreamRuneProducers()
             .readModelStores(
-                storeInstance(null, (org.streamrune.core.projection.ReadModelStore) null))
+                storeInstance(null, (org.streamrune.core.projection.ReadModelStore) null),
+                new org.streamrune.postgres.PostgresBackend())
             .stores());
   }
 
   @Test
   void offsetStoreProduced() {
     var producers = new StreamRuneProducers();
-    var offsetStore = producers.offsetStore(mock(DataSource.class));
+    var offsetStore = producers.offsetStore(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(offsetStore);
     assertInstanceOf(org.streamrune.postgres.PostgresOffsetStore.class, offsetStore);
   }
@@ -431,7 +430,7 @@ class StreamRuneProducersTest {
   @Test
   void auditStoreProduced() {
     var producers = new StreamRuneProducers();
-    var store = producers.auditStore(mock(javax.sql.DataSource.class));
+    var store = producers.auditStore(TestBackends.stores(mock(javax.sql.DataSource.class)));
     assertNotNull(store);
     assertInstanceOf(org.streamrune.postgres.PostgresAuditStore.class, store);
   }
@@ -513,19 +512,15 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(),
             satisfied(store),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -536,19 +531,15 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class), cryptoEngine),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            satisfied(cryptoEngine),
             List.of(),
             List.of(),
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -559,48 +550,143 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(migration),
             unsatisfied(),
             unsatisfied(),
             unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     var field = factory.getClass().getDeclaredField("snapshotMigrations");
     field.setAccessible(true);
     assertEquals(List.of(migration), field.get(factory));
   }
 
+  /**
+   * An ambiguous engine is refused where the bundle is opened — the event store, the saga store and
+   * the default read-model store all take their engine from it — before the database is touched.
+   */
   @Test
   @SuppressWarnings("unchecked")
-  void postgresEventStoreFactoryThrows_whenCryptoEngineAmbiguous() {
+  void backendStoresThrow_whenCryptoEngineAmbiguous() {
     var producers = new StreamRuneProducers();
     Instance<CryptoEngine> ambiguous = mock(Instance.class);
     when(ambiguous.isAmbiguous()).thenReturn(true);
+    DataSource dataSource = mock(DataSource.class);
 
-    assertThrows(
-        IllegalStateException.class,
-        () ->
-            producers.postgresEventStoreFactory(
-                mock(DataSource.class),
-                producers.eventTypeRegistry(),
-                TestProperties.defaults(),
-                ambiguous,
-                List.of(),
-                List.of(),
-                unsatisfied(),
-                unsatisfied(),
-                unsatisfied(),
-                unsatisfied(),
-                unsatisfied(),
-                unsatisfied(),
-                org.streamrune.core.tracing.StreamRuneTracing.NOOP));
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                producers.streamRuneBackendStores(
+                    new org.streamrune.postgres.PostgresBackend(),
+                    dataSource,
+                    TestProperties.defaults(),
+                    ambiguous,
+                    unsatisfied(),
+                    org.streamrune.core.tracing.StreamRuneTracing.NOOP));
+    assertTrue(ex.getMessage().contains("PLAINTEXT"), ex.getMessage());
+    assertTrue(
+        ex.getMessage()
+            .contains("the event store, the saga store and the default read-model store"),
+        ex.getMessage());
+    org.mockito.Mockito.verifyNoInteractions(dataSource);
+  }
+
+  /** The bundle carries the engine bean, the metrics bean and the schema switches. */
+  @Test
+  void backendStoresCarryTheEngineAndTheSchemaSwitches() {
+    var producers = new StreamRuneProducers();
+    var cryptoEngine = new org.streamrune.test.InMemoryCryptoEngine();
+    var metrics = mock(org.streamrune.core.StreamRuneMetrics.class);
+    var captured =
+        new java.util.concurrent.atomic.AtomicReference<
+            org.streamrune.core.backend.BackendContext>();
+    org.streamrune.core.backend.StreamRuneBackend backend =
+        new org.streamrune.core.backend.StreamRuneBackend() {
+          @Override
+          public String name() {
+            return "postgres";
+          }
+
+          @Override
+          public void verify(DataSource dataSource) {}
+
+          @Override
+          public org.streamrune.core.backend.BackendStores open(
+              org.streamrune.core.backend.BackendContext context) {
+            captured.set(context);
+            return TestBackends.stores(context.dataSource());
+          }
+        };
+    DataSource dataSource = mock(DataSource.class);
+
+    producers.streamRuneBackendStores(
+        backend,
+        dataSource,
+        TestProperties.of(
+            Map.of(
+                "streamrune.event-store.schema.auto-initialize", "false",
+                "streamrune.read-model.schema.auto-initialize", "true")),
+        satisfied(cryptoEngine),
+        satisfied(metrics),
+        org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+
+    var context = captured.get();
+    assertSame(dataSource, context.dataSource());
+    assertSame(cryptoEngine, context.cryptoEngine());
+    assertSame(metrics, context.metrics());
+    assertSame(org.streamrune.core.tracing.StreamRuneTracing.NOOP, context.tracing());
+    assertFalse(context.migrateSchema());
+    assertTrue(context.migrateReadModelSchema());
+    assertTrue(context.validateSchema());
+  }
+
+  @Test
+  void theBackendStoresDisposerClosesTheBundle() {
+    var stores = mock(org.streamrune.core.backend.BackendStores.class);
+    new StreamRuneProducers().closeBackendStores(stores);
+    verify(stores).close();
+  }
+
+  @Test
+  void anUnknownBackendIsRefusedWithTheSelectionMessage() {
+    var ex =
+        assertThrows(
+            IllegalStateException.class,
+            () ->
+                new StreamRuneProducers()
+                    .streamRuneBackend(TestProperties.of(Map.of("streamrune.backend", "oracle"))));
+    assertEquals(
+        "streamrune.backend='oracle' is not a backend; valid values: postgres, sqlite",
+        ex.getMessage());
+  }
+
+  /** A refusal of an option other than the statement timeout is the backend's, unchanged. */
+  @Test
+  void anotherOptionRefusalIsRethrownAsIs() {
+    var refusal =
+        new org.streamrune.core.backend.BackendOptionException("upcasters", "not supported");
+    var stores = mock(org.streamrune.core.backend.BackendStores.class);
+    when(stores.eventStoreFactory(org.mockito.ArgumentMatchers.any())).thenThrow(refusal);
+    var producers = new StreamRuneProducers();
+    var thrown =
+        assertThrows(
+            org.streamrune.core.backend.BackendOptionException.class,
+            () ->
+                producers.postgresEventStoreFactory(
+                    stores,
+                    producers.eventTypeRegistry(),
+                    TestProperties.defaults(),
+                    List.of(),
+                    List.of(),
+                    unsatisfied(),
+                    unsatisfied(),
+                    unsatisfied(),
+                    unsatisfied()));
+    assertSame(refusal, thrown);
   }
 
   @Test
@@ -611,19 +697,15 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(),
             unsatisfied(),
             satisfied(mapper),
             satisfied(outboxStore),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -636,19 +718,15 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(),
             unsatisfied(),
             satisfied(mapper),
             unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -661,19 +739,15 @@ class StreamRuneProducersTest {
 
     EventStoreFactory factory =
         producers.postgresEventStoreFactory(
-            mock(DataSource.class),
+            TestBackends.stores(mock(DataSource.class)),
             producers.eventTypeRegistry(),
             TestProperties.defaults(),
-            unsatisfied(),
             List.of(),
             List.of(),
             unsatisfied(),
             unsatisfied(),
             satisfied(outboxStore),
-            unsatisfied(),
-            unsatisfied(),
-            unsatisfied(),
-            org.streamrune.core.tracing.StreamRuneTracing.NOOP);
+            unsatisfied());
     assertNotNull(factory);
   }
 
@@ -733,8 +807,58 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     var sweeper =
         producers.inboxRetentionSweeper(
-            unsatisfied(), TestProperties.defaults(), unsatisfied(), unsatisfied());
+            unsatisfied(), unsatisfied(), TestProperties.defaults(), unsatisfied(), unsatisfied());
     assertNull(sweeper);
+  }
+
+  /** Without an application Postgres inbox the sweeper sweeps the bundle's own inbox. */
+  @Test
+  void inboxRetentionSweeperSweepsTheBundlesInbox_whenNoApplicationPostgresInbox() {
+    var producers = new StreamRuneProducers();
+    var stores = TestBackends.stores(mock(DataSource.class));
+    var sweeper =
+        producers.inboxRetentionSweeper(
+            unsatisfied(),
+            satisfied(stores),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied());
+    assertNotNull(sweeper);
+    assertSame(stores.commandInbox(), getField(sweeper, "inbox"));
+    sweeper.close();
+  }
+
+  /** An application's Postgres inbox is swept, not the bundle's. */
+  @Test
+  void inboxRetentionSweeperSweepsTheApplicationsPostgresInbox() {
+    var producers = new StreamRuneProducers();
+    var inbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
+    var sweeper =
+        producers.inboxRetentionSweeper(
+            satisfied(inbox),
+            satisfied(TestBackends.stores(mock(DataSource.class))),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied());
+    assertSame(inbox, getField(sweeper, "inbox"));
+    sweeper.close();
+  }
+
+  /** Without an application Postgres store the sweeper sweeps the bundle's own store. */
+  @Test
+  void sagaDeadLetterRetentionSweeperSweepsTheBundlesStore_whenNoApplicationPostgresStore() {
+    var producers = new StreamRuneProducers();
+    var stores = TestBackends.stores(mock(DataSource.class));
+    var sweeper =
+        producers.sagaDeadLetterRetentionSweeper(
+            unsatisfied(),
+            satisfied(stores),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied());
+    assertNotNull(sweeper);
+    assertSame(stores.sagaDeadLetterStore(), getField(sweeper, "store"));
+    sweeper.close();
   }
 
   @Test
@@ -743,7 +867,11 @@ class StreamRuneProducersTest {
     var inbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
     var sweeper =
         producers.inboxRetentionSweeper(
-            satisfied(inbox), TestProperties.defaults(), unsatisfied(), unsatisfied());
+            satisfied(inbox),
+            unsatisfied(),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied());
     assertNotNull(sweeper);
     assertInstanceOf(InboxRetentionSweeper.class, sweeper);
     sweeper.close();
@@ -755,7 +883,8 @@ class StreamRuneProducersTest {
     var props = TestProperties.of(Map.of("streamrune.inbox.retention-max-age", "PT336H"));
     var inbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
     var sweeper =
-        producers.inboxRetentionSweeper(satisfied(inbox), props, unsatisfied(), unsatisfied());
+        producers.inboxRetentionSweeper(
+            satisfied(inbox), unsatisfied(), props, unsatisfied(), unsatisfied());
     assertNotNull(sweeper);
     sweeper.close();
   }
@@ -767,7 +896,7 @@ class StreamRuneProducersTest {
     var store = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
     var sweeper =
         producers.sagaDeadLetterRetentionSweeper(
-            satisfied(store), props, unsatisfied(), unsatisfied());
+            satisfied(store), unsatisfied(), props, unsatisfied(), unsatisfied());
     assertNull(sweeper);
   }
 
@@ -776,7 +905,7 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     var sweeper =
         producers.sagaDeadLetterRetentionSweeper(
-            unsatisfied(), TestProperties.defaults(), unsatisfied(), unsatisfied());
+            unsatisfied(), unsatisfied(), TestProperties.defaults(), unsatisfied(), unsatisfied());
     assertNull(sweeper);
   }
 
@@ -786,7 +915,11 @@ class StreamRuneProducersTest {
     var store = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
     var sweeper =
         producers.sagaDeadLetterRetentionSweeper(
-            satisfied(store), TestProperties.defaults(), unsatisfied(), unsatisfied());
+            satisfied(store),
+            unsatisfied(),
+            TestProperties.defaults(),
+            unsatisfied(),
+            unsatisfied());
     assertNotNull(sweeper);
     assertInstanceOf(SagaDeadLetterRetentionSweeper.class, sweeper);
     sweeper.close();
@@ -800,7 +933,7 @@ class StreamRuneProducersTest {
     var store = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
     var sweeper =
         producers.sagaDeadLetterRetentionSweeper(
-            satisfied(store), props, unsatisfied(), unsatisfied());
+            satisfied(store), unsatisfied(), props, unsatisfied(), unsatisfied());
     assertNotNull(sweeper);
     sweeper.close();
   }
@@ -820,14 +953,15 @@ class StreamRuneProducersTest {
 
     var inbox = mock(org.streamrune.postgres.PostgresCommandInbox.class);
     var inboxSweeper =
-        producers.inboxRetentionSweeper(satisfied(inbox), props, satisfied(metrics), unsatisfied());
+        producers.inboxRetentionSweeper(
+            satisfied(inbox), unsatisfied(), props, satisfied(metrics), unsatisfied());
     assertNotNull(inboxSweeper);
     inboxSweeper.close();
 
     var dlqStore = mock(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
     var sagaSweeper =
         producers.sagaDeadLetterRetentionSweeper(
-            satisfied(dlqStore), props, satisfied(metrics), unsatisfied());
+            satisfied(dlqStore), unsatisfied(), props, satisfied(metrics), unsatisfied());
     assertNotNull(sagaSweeper);
     sagaSweeper.close();
 
@@ -907,7 +1041,8 @@ class StreamRuneProducersTest {
   void postgresEventAuditStoreProduced_whenEnabled() {
     var producers = new StreamRuneProducers();
     var props = TestProperties.of(Map.of("streamrune.event-audit-enabled", "true"));
-    var store = producers.postgresEventAuditStore(mock(DataSource.class), props);
+    var store =
+        producers.postgresEventAuditStore(TestBackends.stores(mock(DataSource.class)), props);
     assertNotNull(store);
   }
 
@@ -915,7 +1050,8 @@ class StreamRuneProducersTest {
   void postgresEventAuditStoreNull_whenDisabled() {
     var producers = new StreamRuneProducers();
     var store =
-        producers.postgresEventAuditStore(mock(DataSource.class), TestProperties.defaults());
+        producers.postgresEventAuditStore(
+            TestBackends.stores(mock(DataSource.class)), TestProperties.defaults());
     assertNull(store);
   }
 
@@ -923,7 +1059,8 @@ class StreamRuneProducersTest {
   void postgresEventAuditQueryProduced_whenEnabled() {
     var producers = new StreamRuneProducers();
     var props = TestProperties.of(Map.of("streamrune.event-audit-enabled", "true"));
-    var query = producers.postgresEventAuditQuery(mock(DataSource.class), props);
+    var query =
+        producers.postgresEventAuditQuery(TestBackends.stores(mock(DataSource.class)), props);
     assertNotNull(query);
   }
 
@@ -931,7 +1068,8 @@ class StreamRuneProducersTest {
   void postgresEventAuditQueryNull_whenDisabled() {
     var producers = new StreamRuneProducers();
     var query =
-        producers.postgresEventAuditQuery(mock(DataSource.class), TestProperties.defaults());
+        producers.postgresEventAuditQuery(
+            TestBackends.stores(mock(DataSource.class)), TestProperties.defaults());
     assertNull(query);
   }
 
@@ -939,7 +1077,9 @@ class StreamRuneProducersTest {
   void postgresProjectionDeadLetterStoreProduced_whenEnabled() {
     var producers = new StreamRuneProducers();
     var props = TestProperties.of(Map.of("streamrune.projection-dlq-enabled", "true"));
-    var dlq = producers.postgresProjectionDeadLetterStore(mock(DataSource.class), props);
+    var dlq =
+        producers.postgresProjectionDeadLetterStore(
+            TestBackends.stores(mock(DataSource.class)), props);
     assertNotNull(dlq);
   }
 
@@ -948,7 +1088,7 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     var dlq =
         producers.postgresProjectionDeadLetterStore(
-            mock(DataSource.class), TestProperties.defaults());
+            TestBackends.stores(mock(DataSource.class)), TestProperties.defaults());
     assertNull(dlq);
   }
 
@@ -957,7 +1097,7 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
     var leadership =
         producers.subscriptionLeadership(
-            satisfied(mock(DataSource.class)), TestProperties.defaults());
+            satisfied(TestBackends.stores(mock(DataSource.class))), TestProperties.defaults());
     assertNotNull(leadership);
     assertInstanceOf(org.streamrune.postgres.LeaseBasedLeadership.class, leadership);
   }
@@ -977,7 +1117,9 @@ class StreamRuneProducersTest {
     var props =
         TestProperties.of(
             Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
-    var leadership = producers.subscriptionLeadership(satisfied(mock(DataSource.class)), props);
+    var leadership =
+        producers.subscriptionLeadership(
+            satisfied(TestBackends.stores(mock(DataSource.class))), props);
     assertSame(org.streamrune.core.subscription.SubscriptionLeadership.NOOP, leadership);
   }
 
@@ -1209,17 +1351,18 @@ class StreamRuneProducersTest {
   @Test
   void sagaStoreProduced_whenEnabled() {
     var producers = new StreamRuneProducers();
-    var store =
-        producers.sagaStore(
-            mock(DataSource.class), TestProperties.defaults(), unsatisfied(), unsatisfied());
+    var stores = TestBackends.stores(mock(DataSource.class));
+    var store = producers.sagaStore(stores, TestProperties.defaults());
     assertNotNull(store);
+    assertSame(stores.sagaStore(), store);
+    assertSame(store, producers.sagaStore(stores, TestProperties.defaults()));
   }
 
   @Test
   void sagaStoreNull_whenDisabled() {
     var producers = new StreamRuneProducers();
     var props = TestProperties.of(Map.of("streamrune.saga.enabled", "false"));
-    var store = producers.sagaStore(mock(DataSource.class), props, unsatisfied(), unsatisfied());
+    var store = producers.sagaStore(TestBackends.stores(mock(DataSource.class)), props);
     assertNull(store);
   }
 
@@ -1230,10 +1373,7 @@ class StreamRuneProducersTest {
 
     var store =
         producers.sagaStore(
-            mock(DataSource.class),
-            TestProperties.defaults(),
-            satisfied(cryptoEngine),
-            unsatisfied());
+            TestBackends.stores(mock(DataSource.class), cryptoEngine), TestProperties.defaults());
 
     assertNotNull(store);
     var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(store, "objectMapper");
@@ -1245,8 +1385,7 @@ class StreamRuneProducersTest {
     var producers = new StreamRuneProducers();
 
     var store =
-        producers.sagaStore(
-            mock(DataSource.class), TestProperties.defaults(), unsatisfied(), unsatisfied());
+        producers.sagaStore(TestBackends.stores(mock(DataSource.class)), TestProperties.defaults());
 
     assertNotNull(store);
     var mapper = (com.fasterxml.jackson.databind.ObjectMapper) getField(store, "objectMapper");
@@ -1254,45 +1393,9 @@ class StreamRuneProducersTest {
   }
 
   @Test
-  @SuppressWarnings("unchecked")
-  void sagaStoreThrows_whenCryptoEngineAmbiguous() {
-    var producers = new StreamRuneProducers();
-    Instance<CryptoEngine> ambiguous = mock(Instance.class);
-    when(ambiguous.isAmbiguous()).thenReturn(true);
-
-    assertThrows(
-        IllegalStateException.class,
-        () ->
-            producers.sagaStore(
-                mock(DataSource.class), TestProperties.defaults(), ambiguous, unsatisfied()));
-  }
-
-  // The default read-model store's repository is built with the crypto-aware mapper (asserted on a
-  // real database in QuarkusReadModelStoreWiringTest); an ambiguous engine is refused before the
-  // database is touched.
-
-  @Test
-  @SuppressWarnings("unchecked")
-  void postgresReadModelStoreThrows_whenCryptoEngineAmbiguous() {
-    var producers = new StreamRuneProducers();
-    Instance<CryptoEngine> ambiguous = mock(Instance.class);
-    when(ambiguous.isAmbiguous()).thenReturn(true);
-    DataSource dataSource = mock(DataSource.class);
-
-    var ex =
-        assertThrows(
-            IllegalStateException.class,
-            () ->
-                producers.postgresReadModelStore(
-                    dataSource, TestProperties.defaults(), ambiguous, unsatisfied()));
-    assertTrue(ex.getMessage().contains("PLAINTEXT"), ex.getMessage());
-    org.mockito.Mockito.verifyNoInteractions(dataSource);
-  }
-
-  @Test
   void complianceReportQueryProduced() {
     var producers = new StreamRuneProducers();
-    var query = producers.complianceReportQuery(mock(DataSource.class));
+    var query = producers.complianceReportQuery(TestBackends.stores(mock(DataSource.class)));
     assertNotNull(query);
   }
 

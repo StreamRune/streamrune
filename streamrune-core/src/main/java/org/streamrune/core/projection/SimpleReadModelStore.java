@@ -18,5 +18,9 @@ record SimpleReadModelStore(
     if (name.isBlank()) {
       throw new IllegalArgumentException("name must not be blank");
     }
+    if (ReadModelStore.DEFAULT.equals(name)) {
+      throw new IllegalArgumentException(
+          "'default' is reserved: it names the backend's default read-model store");
+    }
   }
 }

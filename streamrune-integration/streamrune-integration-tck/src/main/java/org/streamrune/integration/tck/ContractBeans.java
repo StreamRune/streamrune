@@ -30,12 +30,18 @@ import org.streamrune.core.SimpleEventTypeRegistry;
 import org.streamrune.core.StreamRuneContext;
 import org.streamrune.core.audit.AuditEntry;
 import org.streamrune.core.audit.AuditStore;
+import org.streamrune.core.backend.BackendStores;
+import org.streamrune.core.backend.OutboxOptions;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEntry;
+import org.streamrune.core.outbox.OutboxEntryId;
+import org.streamrune.core.outbox.OutboxEventMapper;
+import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxPublisher;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.projection.Projection;
 import org.streamrune.core.projection.ProjectionDeliveryMode;
+import org.streamrune.core.projection.ReadModelStore;
 import org.streamrune.core.saga.SagaCommand;
 import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaOrchestrator;
@@ -312,6 +318,72 @@ public final class ContractBeans {
   }
 
   /**
+   * The application's outbox store, built from the backend's stores as an application declares
+   * optional infrastructure: {@code stores.outboxStore(new OutboxOptions(...))}, so the event store
+   * can write it in the transaction of its own append. The class marks the bean in a start's beans:
+   * an adapter declares in its place a bean of type {@link OutboxStore} that its framework builds
+   * from the application's {@link BackendStores} bean with {@link #from(BackendStores)} — a Spring
+   * {@code @Bean} method, a Quarkus producer, a Micronaut factory method — the way an application
+   * declares one.
+   */
+  public static final class BackendOutboxStore {
+
+    /** The options the application builds its outbox with: the default lease, strict ordering. */
+    public static final OutboxOptions OPTIONS =
+        new OutboxOptions(
+            OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE);
+
+    /**
+     * The outbox store the bean is.
+     *
+     * @param stores the application's backend stores
+     * @return {@code stores.outboxStore(OPTIONS)}
+     */
+    public static OutboxStore from(BackendStores stores) {
+      return stores.outboxStore(OPTIONS);
+    }
+  }
+
+  /**
+   * The application's {@code OutboxEventMapper}: one entry per event, on the event's stream, with
+   * the id {@link #entryId(String)} of the aggregate's id — the id of the {@link ContractCommand}
+   * that stored it. The event of a command whose id starts with {@value #UNORDERED} gets a second
+   * entry without a stream, which a {@code STRICT_PER_AGGREGATE} outbox refuses, so the append of
+   * that command's event fails.
+   */
+  public static final class ContractOutboxMapper implements Supplier<OutboxEventMapper> {
+
+    /** The prefix of a command id whose append the outbox refuses. */
+    public static final String UNORDERED = "unordered-";
+
+    /**
+     * The id of the entry the mapper writes for the event of a command.
+     *
+     * @param commandId the id of the contract command
+     * @return the entry id
+     */
+    public static OutboxEntryId entryId(String commandId) {
+      return OutboxEntryId.of("contract-" + commandId);
+    }
+
+    @Override
+    public OutboxEventMapper get() {
+      return event -> {
+        String commandId = event.streamId().aggregateId().value();
+        OutboxEntry ordered =
+            OutboxEntry.pending(
+                entryId(commandId), "{}", "ContractCommandExecuted", event.streamId());
+        return commandId.startsWith(UNORDERED)
+            ? List.of(
+                ordered,
+                OutboxEntry.pending(
+                    OutboxEntryId.of("stream-less-" + commandId), "{}", "ContractCommandExecuted"))
+            : List.of(ordered);
+      };
+    }
+  }
+
+  /**
    * The application's {@code OutboxPublisher}: it accepts every entry and keeps nothing, so the
    * integration's outbox poller relays each entry the application's outbox store holds.
    */
@@ -584,6 +656,24 @@ public final class ContractBeans {
 
     /** The projection's name, the name of its subscription. */
     public static final String NAME = "contract_projection";
+
+    @Override
+    public void process(List<EventEnvelope> batch) {}
+  }
+
+  /**
+   * A continuous projection the integration discovers and runs, named {@value #NAME}, that declares
+   * the alias {@link ReadModelStore#DEFAULT} as its read-model store: the integration routes it to
+   * the default store, whose checkpoints hold its position. It reads every event and keeps nothing.
+   */
+  @ProjectionConfig(
+      name = DefaultAliasProjection.NAME,
+      readModelStore = ReadModelStore.DEFAULT,
+      deliveryMode = ProjectionDeliveryMode.AT_LEAST_ONCE_IDEMPOTENT)
+  public static final class DefaultAliasProjection implements Projection {
+
+    /** The projection's name. */
+    public static final String NAME = "contract_default_alias_projection";
 
     @Override
     public void process(List<EventEnvelope> batch) {}

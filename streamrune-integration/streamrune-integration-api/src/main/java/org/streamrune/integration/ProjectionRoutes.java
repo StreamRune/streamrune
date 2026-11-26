@@ -54,7 +54,9 @@ public final class ProjectionRoutes {
    * (no store is created) nor the subscription checkpoint.
    *
    * @param registrations the runners' registrations, each projection name once
-   * @param stores the application's read-model stores
+   * @param stores the application's read-model stores; their {@link
+   *     ReadModelStores#defaultStoreName()} is what a {@code ReadModelStore.DEFAULT} declaration
+   *     routes to
    * @param subscriptionCheckpoint supplies the event store's subscription checkpoint, rule 4's
    *     target; asked for once, and only when there are registrations
    * @param leadership the configured leadership, or {@link SubscriptionLeadership#NOOP}
@@ -81,7 +83,8 @@ public final class ProjectionRoutes {
     var routedStores = new LinkedHashMap<String, ReadModelStore>();
     for (Registration registration : registrations) {
       var routed =
-          ProjectionStoreRouting.resolve(registration, candidates, subscription, leadership);
+          ProjectionStoreRouting.resolve(
+              registration, candidates, stores.defaultStoreName(), subscription, leadership);
       targets.put(registration.projectionName(), routed.target());
       if (routed.store() != null) {
         routedStores.put(registration.projectionName(), routed.store());
@@ -124,8 +127,8 @@ public final class ProjectionRoutes {
    * The repository an index is declared on: the repository of the store its projection is routed
    * to; for a projection routed to no store — the subscription checkpoint, an INLINE projection, or
    * no registration at all — {@code fallback}, the integration's injectable {@code
-   * ProjectionRepository} bean (the {@value ProjectionStoreRouting#DEFAULT_STORE} store's
-   * repository unless the application defines its own).
+   * ProjectionRepository} bean (the default store's repository, {@link
+   * ReadModelStores#defaultRepository()}, unless the application defines its own).
    *
    * @param index the index to declare
    * @param fallback the repository for an index routed to no store; asked for only then

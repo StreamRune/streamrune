@@ -90,9 +90,9 @@ public class StreamRuneConfigValidator implements ApplicationEventListener<Start
     }
     // The framework's event store binds the outbox store when it is built, and an application
     // without projections first builds it for its first command. Build it here whenever a mapper
-    // and a store are declared, so a store it cannot write into fails the boot (see
-    // StreamRuneMicronautModule#transactionalOutboxStore) before the runners start, instead of
-    // failing the first command.
+    // and a store are declared, so a store it cannot write into — one of another backend than the
+    // event store's — fails the boot (StreamRuneMicronautModule#postgresEventStoreFactory) before
+    // the runners start, instead of failing the first command.
     if (ctx.containsBean(org.streamrune.core.outbox.OutboxEventMapper.class)
         && ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)
         && ctx.containsBean(org.streamrune.core.EventStoreFactory.class)) {

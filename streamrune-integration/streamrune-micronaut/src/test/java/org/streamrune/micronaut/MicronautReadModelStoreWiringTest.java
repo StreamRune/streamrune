@@ -437,19 +437,28 @@ class MicronautReadModelStoreWiringTest {
   void theDefaultStoresMapperEncryptsWithTheCryptoEngine_andIsCryptoBlindWithout()
       throws Exception {
     applicationDataSource = freshDatabase();
-    var module = new StreamRuneMicronautModule();
-    var withCrypto =
-        module.postgresReadModelStore(
-            applicationDataSource,
-            StreamRuneMicronautProperties.withDefaults(),
-            List.of(new InMemoryCryptoEngine()),
-            null);
+    var withCrypto = defaultStore(applicationDataSource, List.of(new InMemoryCryptoEngine()));
     assertThat(mapperOf(withCrypto).getRegisteredModuleIds()).contains("CryptoShreddingModule");
-    var withoutCrypto =
-        module.postgresReadModelStore(
-            applicationDataSource, StreamRuneMicronautProperties.withDefaults(), List.of(), null);
+    var withoutCrypto = defaultStore(applicationDataSource, List.of());
     assertThat(mapperOf(withoutCrypto).getRegisteredModuleIds())
         .doesNotContain("CryptoShreddingModule");
+  }
+
+  /**
+   * The default read-model store bean over the bundle the framework opens with the default
+   * properties and {@code cryptoEngines}, so the engine flows through the production wiring.
+   */
+  private static ReadModelStore defaultStore(
+      DataSource dataSource, List<org.streamrune.core.crypto.CryptoEngine> cryptoEngines) {
+    var module = new StreamRuneMicronautModule();
+    return module.postgresReadModelStore(
+        module.streamRuneBackendStores(
+            new org.streamrune.postgres.PostgresBackend(),
+            dataSource,
+            StreamRuneMicronautProperties.withDefaults(),
+            cryptoEngines,
+            null,
+            org.streamrune.core.tracing.StreamRuneTracing.NOOP));
   }
 
   /**

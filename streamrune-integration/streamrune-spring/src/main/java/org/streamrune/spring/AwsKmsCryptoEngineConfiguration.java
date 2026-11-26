@@ -5,17 +5,19 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.lang.Nullable;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.aws.AwsKmsCryptoEngine;
-import org.streamrune.crypto.postgres.JdbcForgottenSubjectStore;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kms.KmsClient;
 
 @Configuration
 @ConditionalOnClass(CryptoEngine.class)
+@Import(CryptoBackendConfiguration.class)
 @ConditionalOnProperty(prefix = "streamrune.crypto.aws", name = "enabled", havingValue = "true")
 public class AwsKmsCryptoEngineConfiguration {
 
@@ -57,10 +59,11 @@ public class AwsKmsCryptoEngineConfiguration {
   /**
    * Builds the KMS-backed engine. AWS-KMS erasure is durable only if a persistent {@link
    * org.streamrune.crypto.ForgottenSubjectStore} is wired. When a {@link DataSource} is present, a
-   * durable {@link JdbcForgottenSubjectStore} is auto-wired so KMS erasure survives restarts out of
-   * the box; when no DataSource is available, {@code build()} fails closed (no silent in-memory
-   * tombstone). Requires the crypto Flyway migration ({@code forgotten_subjects} table) on that
-   * DataSource's database.
+   * durable {@link org.streamrune.crypto.ForgottenSubjectStore} from the {@link CryptoBackend}
+   * ({@code JdbcForgottenSubjectStore} on Postgres) is auto-wired so KMS erasure survives restarts
+   * out of the box; when no DataSource is available, {@code build()} fails closed (no silent
+   * in-memory tombstone). Requires the crypto Flyway migration ({@code forgotten_subjects} table)
+   * on that DataSource's database.
    */
   // Inferred destroy method (not explicit destroyMethod = "close"). Cache enabled → the bean
   // is an AutoCloseable CachedCryptoEngine and is still closed on shutdown; cache.enabled=false →
@@ -71,7 +74,8 @@ public class AwsKmsCryptoEngineConfiguration {
       StreamRuneKmsClient kmsClient,
       @Nullable DataSource dataSource,
       StreamRuneCryptoProperties props,
-      @Nullable StreamRuneMetrics metrics) {
+      @Nullable StreamRuneMetrics metrics,
+      CryptoBackend cryptoBackend) {
     String kmsKeyId = props.aws().kmsKeyId();
     if (kmsKeyId == null || kmsKeyId.isBlank()) {
       throw new IllegalStateException(
@@ -97,7 +101,7 @@ public class AwsKmsCryptoEngineConfiguration {
             // plaintext nor plaintext data keys are kept in heap.
             .dataKeyCacheMaximumSize(cacheProps.enabled() ? dataKeyCacheMaximumSize : 0);
     if (dataSource != null) {
-      builder.forgottenSubjectStore(new JdbcForgottenSubjectStore(dataSource));
+      builder.forgottenSubjectStore(cryptoBackend.forgottenSubjects(dataSource));
     }
     // No DataSource → no durable store → build() fails closed rather than silently recording
     // in-memory tombstones that would resurrect erased PII on restart.
@@ -118,7 +122,8 @@ public class AwsKmsCryptoEngineConfiguration {
         .expireAfterWrite(cacheProps.expireAfterWrite())
         .expireAfterAccess(cacheProps.expireAfterAccess())
         .forgetSignal(
-            SpringCryptoForgetSignals.resolve(dataSource, cacheProps.expireAfterWrite(), "aws-kms"))
+            SpringCryptoForgetSignals.resolve(
+                cryptoBackend, dataSource, cacheProps.expireAfterWrite(), "aws-kms"))
         .build();
   }
 

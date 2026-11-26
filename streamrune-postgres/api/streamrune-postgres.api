@@ -114,6 +114,12 @@ public final class org.streamrune.postgres.PostgresAuditStore implements org.str
   public <init>(javax.sql.DataSource)
   public void save(org.streamrune.core.audit.AuditEntry)
 
+public final class org.streamrune.postgres.PostgresBackend implements org.streamrune.core.backend.StreamRuneBackend
+  public <init>()
+  public java.lang.String name()
+  public org.streamrune.core.backend.BackendStores open(org.streamrune.core.backend.BackendContext)
+  public void verify(javax.sql.DataSource)
+
 public final class org.streamrune.postgres.PostgresCommandAuditQuery implements org.streamrune.core.audit.CommandAuditQuery
   public <init>(javax.sql.DataSource)
   public java.util.Optional<org.streamrune.core.audit.AuditEntry> findByCommandId(org.streamrune.core.types.CommandId)

@@ -31,7 +31,6 @@ import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.postgres.JdbcProjectionRepository;
 import org.streamrune.postgres.PostgresEventStoreFactory;
 import org.streamrune.postgres.PostgresOffsetStore;
-import org.streamrune.postgres.PostgresReadModelStore;
 import org.streamrune.postgres.PostgresSubscriptionCheckpointProcessor;
 import org.streamrune.runtime.MultiProjectionRunner;
 import org.streamrune.test.InMemoryCryptoEngine;
@@ -152,7 +151,8 @@ class EventStoreWiringAutoConfigurationTest {
           assertThat(
                   ctx.getBeanFactory()
                       .getType(StreamRuneAutoConfiguration.DEFAULT_READ_MODEL_STORE_BEAN))
-              .isEqualTo(PostgresReadModelStore.class);
+              .as("declared with the SPI interface; the backend builds it on first use")
+              .isEqualTo(ReadModelStore.class);
           var checkpoint =
               ctx.getBean(
                   StreamRuneAutoConfiguration.SUBSCRIPTION_CHECKPOINT, CheckpointTarget.class);
@@ -249,14 +249,12 @@ class EventStoreWiringAutoConfigurationTest {
   // ── the advertised CommandInbox override must not become a runtime trap ─────────────
 
   /**
-   * A user-supplied {@link org.streamrune.core.CommandInbox} suppresses the framework's {@code
-   * PostgresCommandInbox} default (the bean javadoc advertises exactly that), so the event-store
-   * factory's concrete-typed {@code ObjectProvider<PostgresCommandInbox>} resolves nothing and the
-   * store is built WITHOUT an inbox — while the command bus, which injects the INTERFACE, happily
-   * takes the user's. The app booted green and then every keyed execution, including the saga
-   * executor's idempotency-keyed dispatch, failed at runtime inside {@code appendWithKey} with
-   * UnsupportedOperationException, dead-lettering healthy commands. It must fail fast at wiring
-   * time instead.
+   * A user-supplied {@link org.streamrune.core.CommandInbox} suppresses the framework's default
+   * (the bean javadoc advertises exactly that). The event store is handed that same inbox bean, the
+   * one the command bus takes; an inbox of a foreign type cannot be written in the append's
+   * transaction, so the backend refuses it and the start fails — rather than booting green and then
+   * failing every keyed execution, including the saga executor's idempotency-keyed dispatch, at
+   * runtime inside {@code appendWithKey}.
    */
   @Test
   void customCommandInboxWithTheFrameworkEventStoreFactoryFailsFast() {
@@ -267,9 +265,11 @@ class EventStoreWiringAutoConfigurationTest {
             ctx -> {
               assertThat(ctx).hasFailed();
               assertThat(ctx.getStartupFailure())
-                  .hasStackTraceContaining("command-inbox wiring")
-                  .hasStackTraceContaining("appendWithKey")
-                  .hasStackTraceContaining("EventStoreFactory");
+                  .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                  .hasStackTraceContaining(
+                      "command inbox store of backend 'InMemoryCommandInbox' cannot share the"
+                          + " 'postgres' event store's transaction; build it from this backend's"
+                          + " BackendStores");
             });
   }
 

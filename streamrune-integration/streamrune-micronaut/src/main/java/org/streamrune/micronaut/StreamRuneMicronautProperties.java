@@ -256,7 +256,14 @@ public record StreamRuneMicronautProperties(
     // aligned.
     @Bindable(defaultValue = "4")
         @io.micronaut.context.annotation.Property(name = "streamrune.saga.parallelism")
-        String sagaParallelism) {
+        String sagaParallelism,
+    // backend: matches Spring/Quarkus. The storage backend every store is built on, read through
+    // BackendSelection.parse: postgres (default) or sqlite (needs streamrune-sqlite on the
+    // classpath); any other value fails the start. Appended at the end so the positional
+    // withDefaults() stays aligned.
+    @Bindable(defaultValue = "postgres")
+        @io.micronaut.context.annotation.Property(name = "streamrune.backend")
+        String backend) {
 
   public StreamRuneMicronautProperties {
     org.streamrune.integration.SingleActiveConsumerSetting.enabled(
@@ -343,7 +350,9 @@ public record StreamRuneMicronautProperties(
         // read-model.schema.auto-initialize: unset, follows event-store.schema.auto-initialize
         null,
         // saga.parallelism
-        "4");
+        "4",
+        // backend
+        "postgres");
   }
 
   /**

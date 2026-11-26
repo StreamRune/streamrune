@@ -6,14 +6,17 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.lang.Nullable;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.crypto.CachedCryptoEngine;
+import org.streamrune.crypto.CryptoBackend;
 import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 
 @Configuration
 @ConditionalOnClass(CryptoEngine.class)
+@Import(CryptoBackendConfiguration.class)
 @ConditionalOnProperty(
     prefix = "streamrune.crypto.filesystem",
     name = "enabled",
@@ -29,7 +32,8 @@ public class FileSystemCryptoEngineConfiguration {
   CryptoEngine fileSystemCryptoEngine(
       @Nullable DataSource dataSource,
       StreamRuneCryptoProperties props,
-      @Nullable StreamRuneMetrics metrics) {
+      @Nullable StreamRuneMetrics metrics,
+      CryptoBackend cryptoBackend) {
     String keyDirectory = props.filesystem().keyDirectory();
     if (keyDirectory == null || keyDirectory.isBlank()) {
       throw new IllegalStateException(
@@ -59,7 +63,7 @@ public class FileSystemCryptoEngineConfiguration {
         .expireAfterAccess(cacheProps.expireAfterAccess())
         .forgetSignal(
             SpringCryptoForgetSignals.resolve(
-                dataSource, cacheProps.expireAfterWrite(), "filesystem"))
+                cryptoBackend, dataSource, cacheProps.expireAfterWrite(), "filesystem"))
         .build();
   }
 }

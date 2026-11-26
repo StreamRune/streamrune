@@ -49,6 +49,8 @@ the ones most applications set:
 
 ```yaml
 streamrune:
+  # the storage backend every store is built on: postgres or sqlite (streamrune.backend)
+  backend: postgres
   snapshot-every-n-events: 100
   retry-max-attempts: 3
   lock-timeout: 5s
@@ -137,7 +139,8 @@ read-model store, a `PostgresReadModelStore` named `postgres` (a `ReadModelStore
 `@Named("streamRuneDefaultReadModelStore")`): read models in `<name>_view` tables, their checkpoints beside them in
 `readmodel_checkpoint`. The injectable `ProjectionRepository` bean is that store's repository. Each
 discovered projection is routed on its own: a projection that names a store
-(`@ProjectionConfig(readModelStore = "postgres")`) or writes to its repository (a `BaseProjection`
+(`@ProjectionConfig(readModelStore = "postgres")`, or `ReadModelStore.DEFAULT`, the alias of
+the default store) or writes to its repository (a `BaseProjection`
 over the injected `ProjectionRepository`) goes to that store, so a `TRANSACTIONAL_LOCAL`
 projection's read-model writes and its checkpoint commit in one transaction. An
 `AT_LEAST_ONCE_IDEMPOTENT` projection that matches no store checkpoints in the event store's
@@ -168,12 +171,25 @@ Quarkus.
 
 ## Transactional outbox
 
-Declare an `OutboxEventMapper` bean and a `PostgresOutboxStore` bean; the factory method may
-return either `OutboxStore` or `PostgresOutboxStore`, because every framework consumer (the event
-store, `OutboxPoller`, `OutboxRetentionSweeper`, `OutboxFailedReplayer`) injects the `OutboxStore`
-interface. The event store writes the outbox entries inside the append transaction, which only a
-`PostgresOutboxStore` can do, so startup fails when the mapper is paired with any other
-`OutboxStore`; supply your own `EventStoreFactory` for such a store. With
+Declare an `OutboxEventMapper` bean and an `OutboxStore` bean built from the module's
+`BackendStores` bean:
+
+```java
+@Factory
+class OutboxBeans {
+  @Singleton
+  OutboxStore outboxStore(BackendStores stores) {
+    return stores.outboxStore(
+        new OutboxOptions(OutboxOptions.DEFAULT_CLAIM_LEASE, OutboxOrderingMode.STRICT_PER_AGGREGATE));
+  }
+}
+```
+
+Every framework consumer (the event store, `OutboxPoller`, `OutboxRetentionSweeper`,
+`OutboxFailedReplayer`) injects the `OutboxStore` interface. The event store writes the outbox
+entries inside the append transaction, which only the backend's own store can do, so startup fails
+when the mapper is paired with an `OutboxStore` of another type, with a message ending in `build it
+from this backend's BackendStores`; supply your own `EventStoreFactory` for such a store. With
 `streamrune.outbox.enabled=true` the relay and the retention sweeper start too, and startup fails
 when no `OutboxStore` bean exists, or when neither an `OutboxPublisher` bean
 (`streamrune-kafka-outbox`, `streamrune-rabbitmq-outbox` or an `HttpOutboxPublisher`) nor your own

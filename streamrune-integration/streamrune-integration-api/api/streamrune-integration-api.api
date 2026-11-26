@@ -3,6 +3,13 @@
 public interface org.streamrune.integration.AuthenticatedUserResolver
   public abstract java.util.Optional<org.streamrune.core.types.UserId> currentUser()
 
+public final class org.streamrune.integration.BackendSelection
+  public static final java.lang.String PROPERTY = "streamrune.backend"
+  public static final java.lang.String SQLITE_BACKEND_CLASS = "org.streamrune.sqlite.SqliteBackend"
+  public static final java.lang.String SQLITE_CRYPTO_BACKEND_CLASS = "org.streamrune.crypto.sqlite.SqliteCryptoBackend"
+  public static java.lang.String parse(java.lang.String)
+  public static org.streamrune.core.backend.StreamRuneBackend resolve(java.lang.String, java.util.function.Supplier<org.streamrune.core.backend.StreamRuneBackend>)
+
 public final class org.streamrune.integration.DeadLetterUnkeyedReplaySetting
   public static final java.lang.String PROPERTY = "streamrune.dead-letter.unkeyed-replay"
   public static org.streamrune.core.DeadLetterRetryPolicy$UnkeyedReplay parse(java.lang.String)

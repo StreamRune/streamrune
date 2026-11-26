@@ -128,6 +128,9 @@ class IntegrationWiringContractTest extends IntegrationWiringContract {
       case SUBSCRIPTION_SAGA_PARALLELISM -> this::aSubscriptionPropertyWinsOverTheBuilder;
       case KNOWN_SAGA_SUBSCRIPTIONS ->
           this::anUnknownSagaSubscriptionNameRefusesStartListingTheKnownNames;
+      case BACKEND_STORES_EXPOSED -> this::backendStoresBeanIsExposed;
+      case DEFAULT_ALIAS_ROUTED -> this::defaultAliasRoutesToDefaultStore;
+      case OUTBOX_IN_THE_APPEND -> this::userOutboxFromBackendStoresSharesTheAppendTransaction;
     };
   }
 

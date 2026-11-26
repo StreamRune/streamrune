@@ -8,6 +8,7 @@ import java.time.Duration;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.streamrune.crypto.CryptoForgetSignal;
+import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.crypto.postgres.PostgresCryptoForgetSignal;
 
 /**
@@ -20,7 +21,8 @@ class SpringCryptoForgetSignalsTest {
   @Test
   void resolvesToPostgresListenNotifyChannel_whenDataSourcePresent() {
     CryptoForgetSignal signal =
-        SpringCryptoForgetSignals.resolve(mock(DataSource.class), Duration.ofMinutes(5), "aws-kms");
+        SpringCryptoForgetSignals.resolve(
+            new PostgresCryptoBackend(), mock(DataSource.class), Duration.ofMinutes(5), "aws-kms");
     assertInstanceOf(
         PostgresCryptoForgetSignal.class,
         signal,
@@ -29,7 +31,8 @@ class SpringCryptoForgetSignalsTest {
 
   @Test
   void fallsBackToNoop_whenNoDataSource() {
-    CryptoForgetSignal signal = SpringCryptoForgetSignals.resolve(null, null, "vault");
+    CryptoForgetSignal signal =
+        SpringCryptoForgetSignals.resolve(new PostgresCryptoBackend(), null, null, "vault");
     assertSame(
         CryptoForgetSignal.NOOP,
         signal,

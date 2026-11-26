@@ -179,7 +179,8 @@ class StreamRuneMicronautPropertiesTest {
             true,
             true,
             null,
-            "4");
+            "4",
+            "postgres");
     assertEquals(10, p.snapshotEveryNEvents());
     assertEquals(1, p.retryMaxAttempts());
     assertEquals(Duration.ofMillis(1), p.retryInitialDelay());

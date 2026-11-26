@@ -175,6 +175,78 @@ The unique key of `saga_dead_letters` is `(saga_id, saga_type, event_offset)`, a
 never replaces the other type's entry, and `SagaDeadLetterStore.publishShieldedIfAbsent` keeps only
 an entry at its full key.
 
+Unreleased changes to how the integrations open their stores (Changed):
+
+- **Storage backend.** The new property `streamrune.backend` (default `postgres`, the only backend
+  in this release) selects the backend every store is opened on; any other value fails the start.
+  With a `DataSource`, Spring, Quarkus and Micronaut open the stores through it once and expose them
+  as a `BackendStores` bean (`org.streamrune.core.backend`, beside `StreamRuneBackend`,
+  `BackendContext`, `EventStoreOptions`, `OutboxOptions` and `BackendOptionException`). The
+  framework's stores and crypto engines are built from the backend, and an application declares
+  its optional infrastructure from the bean: `stores.outboxStore(new OutboxOptions(...))`,
+  `stores.deadLetterQueue()`, `stores.snapshotPurger(...)`. See the
+  [configuration reference](docs/guide/configuration.md#backend).
+- **Store beans declared with their interface types.** On all three integrations the framework's
+  command inbox (`CommandInbox`), saga dead-letter store (`SagaDeadLetterStore`), event audit store
+  and query (`EventAuditStore`, `EventAuditQuery`) and projection dead-letter store
+  (`ProjectionDeadLetterStore`) beans are declared with the interface, not the PostgreSQL class. On
+  Spring the default read-model store (`ReadModelStore`) and the offset store (`OffsetStore`) are
+  too (Quarkus and Micronaut declared them so already), and on Micronaut the event store factory
+  `postgresEventStoreFactory` is declared as `EventStoreFactory`, not `PostgresEventStoreFactory`. A
+  lookup, an injection point or a bean condition by the PostgreSQL class does not find them. On
+  Quarkus the inbox, the saga dead-letter store, the event audit store and query and the projection
+  dead-letter store are one instance each, shared by every injection point.
+- **`ReadModelStore.DEFAULT`.** The default read-model store is named after the backend
+  (`postgres`). `@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)`, the text `default`,
+  routes a projection to it whatever that name is, and no store may be named `default`. The
+  constant `ProjectionStoreRouting.DEFAULT_STORE` is removed: routing takes the default store's
+  name from the backend.
+- **A store the event store cannot write in its append fails the start.** The event store writes
+  the outbox, the command inbox and the event audit store in the transaction of its append, so an
+  `OutboxStore` paired with an `OutboxEventMapper`, a `CommandInbox` or an `EventAuditStore` bean
+  that is not the backend's own type now fails when the framework's event store factory is built,
+  with an `IllegalArgumentException` ending in `build it from this backend's BackendStores`. Before,
+  such an outbox store disabled emission with a `WARN` on Spring and Quarkus and failed with a
+  message of Micronaut's own there, such an inbox failed with the message of
+  `CommandInboxWiringValidator`, and such an audit store was silently left out. The three
+  integrations now refuse it the same way, and `CommandInboxWiringValidator` is removed from
+  `streamrune-integration-api`.
+- **The beans the event store takes are found by their interfaces.** The command bus and the event
+  store take the same `CommandInbox` bean, so an application's `CommandInbox` bean of the backend's
+  type is the event store's inbox too, whatever type its bean method declares. An application's
+  `EventAuditStore` bean is wired into the event store whether or not `streamrune.event-audit-enabled`
+  is set. On Spring and Quarkus an outbox store bean declared as `OutboxStore` now reaches the event
+  store, not only one declared as `PostgresOutboxStore`.
+- **Retention sweepers follow the backend's stores.** The outbox retention sweeper runs for any
+  `OutboxStore` bean on all three integrations, so an outbox store built with
+  `stores.outboxStore(...)` and declared as `OutboxStore` is pruned; on Spring and Quarkus it ran
+  only for a bean declared as `PostgresOutboxStore`. On Spring, as on Quarkus and Micronaut, the
+  inbox and saga dead-letter sweepers sweep an application bean declared as `PostgresCommandInbox`
+  / `PostgresSagaDeadLetterStore`, and otherwise the backend's own store from `BackendStores`
+  whenever a `DataSource` exists: an application bean that returns `stores.commandInbox()` keeps
+  its sweeper, and an application store of another type is never swept. On Quarkus the WARN that
+  no saga dead-letter sweeper exists fires only without a `DataSource`, and names that case.
+- **Two unqualified inboxes on Quarkus.** With two unqualified `CommandInbox` beans on
+  Quarkus, the event store gets no inbox, as the command bus already did, instead of the
+  framework's PostgreSQL inbox.
+- **`CryptoBackend` bean.** With a crypto engine enabled, each integration declares a
+  `CryptoBackend` bean (`org.streamrune.crypto`) that builds the engine's stores for the selected
+  backend. An application bean of that type makes the injection ambiguous.
+- **Micronaut eager singletons.** With `eagerInitSingletons`, creating the default read-model store
+  bean now opens the `BackendStores` bundle and creates the crypto engine; the store itself is still
+  created only when the stores are selected, and opening the bundle touches no table.
+- **Outbox warning.** With only one of an `OutboxEventMapper` and an `OutboxStore` bean, the `WARN`
+  now asks for "an OutboxStore" (it named "a PostgresOutboxStore"), and on Spring and Quarkus it
+  also fires for an outbox store of another type without a mapper, which was silent.
+- **Crypto engine resolution.** Every framework store bean takes the `CryptoEngine` through the
+  `BackendStores` bean. Several `CryptoEngine` beans with none marked primary now fail once, when the
+  bundle opens, with one message naming the event store, the saga store and the default read-model
+  store, in place of one message per store; the failure can surface through whichever store bean is
+  created first, and on Quarkus through `StreamRuneConfigValidator`'s lookups at startup. On
+  Micronaut, two engines fail the start also when the application supplies its own event store
+  factory and command bus, because the retention sweepers open the bundle. An application
+  `CryptoEngine` bean that injects a framework store is now a circular dependency.
+
 ### Modules
 
 Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three

@@ -376,12 +376,13 @@ own factory (`new PostgresEventStoreFactory(...).cryptoEngine(engine).create()`)
 Erase a subject: delete the key, then purge any read models holding their rows.
 
 ```java
+// stores: the application's BackendStores (the integration's bean, or new PostgresBackend().open(...))
 ForgetSubjectService forget = ForgetSubjectService.builder()
     .cryptoEngine(engine)
     .auditStore(auditStore)                              // records the erasure in the audit log
     .purgers(List.of(
         new CustomerReadModelPurger(),                   // one per read model with the subject's rows
-        new PostgresSnapshotStorePurger(dataSource,      // the aggregate snapshots (required, see below)
+        stores.snapshotPurger(                           // the aggregate snapshots (required, see below)
             subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))))))
     .queryCache(cachingQueryBus)                         // evicted after the last purger (optional)
     .build();
@@ -566,8 +567,10 @@ exact aggregate, and nothing else deletes the row.
 snapshots.** One of its purgers must be a
 [`SnapshotPurger`](../../../streamrune-core/src/main/java/org/streamrune/core/gdpr/SnapshotPurger.java),
 or the application must state `withoutSnapshotPurge()`; otherwise `build()` throws
-`IllegalStateException` with what to add. Both together are refused too. For `PostgresEventStore`
-the snapshot purger is
+`IllegalStateException` with what to add. Both together are refused too. The backend's stores build
+the snapshot purger: `BackendStores.snapshotPurger(streamsForSubject)` (`stores` below: the
+integration's `BackendStores` bean, or the stores `new PostgresBackend().open(...)` returns without one). For
+`PostgresEventStore` it is a
 [`PostgresSnapshotStorePurger`](../../../streamrune-postgres/src/main/java/org/streamrune/postgres/PostgresSnapshotStorePurger.java),
 which purges the snapshots of the subject's streams from `snapshot_store`:
 
@@ -576,7 +579,7 @@ ForgetSubjectService.builder()
     .cryptoEngine(engine)
     .purgers(List.of(
         new CustomerReadModelPurger(jdbc),
-        new PostgresSnapshotStorePurger(dataSource,
+        stores.snapshotPurger(
             subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))))))
     .build();
 ```
@@ -584,7 +587,7 @@ ForgetSubjectService.builder()
 (`CUSTOMER` is the `AggregateType` the customer decider is registered under; the mapping here says
 the customer's stream carries the subject id as its aggregate id.)
 
-You construct the purger because `snapshot_store` is keyed by `(aggregate_type, aggregate_id)` (a
+You supply the mapping because `snapshot_store` is keyed by `(aggregate_type, aggregate_id)` (a
 typed stream), not `subject_id` — unlike your own read models (typically `DELETE ... WHERE
 subject_id = ?`), there is no indexed subject column to purge against, and the framework has no
 general way to derive one: whether a stream's aggregate id equals a subject id, or an aggregate's
@@ -636,20 +639,39 @@ every save of a state loaded before the purge write nothing, which is what
 `AggregateHistory.snapshotPurgeGeneration()` are for.
 
 **With an integration**, declare the purger as a bean: the auto-configured `ForgetSubjectService`
-runs every `SubjectDataPurger` bean, and a `PostgresSnapshotStorePurger` bean is one.
+runs every `SubjectDataPurger` bean, and the purger `BackendStores.snapshotPurger` builds is one.
+Build it from the integration's `BackendStores` bean:
 
 ```java
-@Bean // Spring; a Quarkus @Produces or a Micronaut factory method works the same way
-PostgresSnapshotStorePurger customerSnapshotPurger(DataSource dataSource) {
-    return new PostgresSnapshotStorePurger(dataSource,
+// Spring: a @Bean method
+@Bean
+SnapshotPurger customerSnapshotPurger(BackendStores stores) {
+    return stores.snapshotPurger(
+        subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))));
+}
+
+// Quarkus: a producer method
+@Produces
+@Singleton
+SnapshotPurger customerSnapshotPurger(BackendStores stores) {
+    return stores.snapshotPurger(
+        subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))));
+}
+
+// Micronaut: a method of a @Factory class
+@Singleton
+SnapshotPurger customerSnapshotPurger(BackendStores stores) {
+    return stores.snapshotPurger(
         subjectId -> List.of(StreamId.of(CUSTOMER, AggregateId.of(subjectId.value()))));
 }
 ```
 
+`snapshotPurger` builds a new purger on every call; declare one bean per mapping.
+
 **The rule is checked on the purger object the service receives.** A wrapper or decorator around a
 snapshot purger, and a purger for another store, must implement `SnapshotPurger` themselves. A
 proxy that implements only the bean's declared type hides the marker; declare the bean as
-`PostgresSnapshotStorePurger` or `SnapshotPurger`, as above, to be safe on every integration. On
+`SnapshotPurger`, as above (or as `PostgresSnapshotStorePurger`), to be safe on every integration. On
 Quarkus a normal-scoped producer (`@ApplicationScoped`) declared as `SubjectDataPurger` hands over
 a client proxy without the marker; the integration looks through the proxy to the instance, so it
 still counts. A snapshot purger whose scope is not active at startup (`@RequestScoped`) cannot be

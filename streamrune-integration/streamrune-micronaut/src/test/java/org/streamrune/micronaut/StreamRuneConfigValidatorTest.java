@@ -109,7 +109,8 @@ class StreamRuneConfigValidatorTest {
             true,
             true,
             null,
-            "4");
+            "4",
+            "postgres");
     var ctx = mock(ApplicationContext.class);
     var validator = new StreamRuneConfigValidator(props, ctx);
     var ex =
@@ -179,7 +180,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   /**
@@ -298,7 +300,8 @@ class StreamRuneConfigValidatorTest {
             true,
             true,
             null,
-            "4");
+            "4",
+            "postgres");
     var ctx = mock(ApplicationContext.class);
     when(ctx.containsBean(org.streamrune.core.outbox.OutboxStore.class)).thenReturn(false);
     var validator = new StreamRuneConfigValidator(props, ctx);
@@ -372,7 +375,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   @Test
@@ -467,7 +471,7 @@ class StreamRuneConfigValidatorTest {
         assertThrows(
             IllegalStateException.class,
             () -> validator.onApplicationEvent(mock(StartupEvent.class)));
-    assertTrue(ex.getMessage().contains("PostgresOutboxStore"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("BackendStores"), ex.getMessage());
     assertFalse(
         ex.getMessage().contains("to your classpath"),
         "the publisher modules provide no store, so adding one cannot fix this: "
@@ -562,7 +566,8 @@ class StreamRuneConfigValidatorTest {
         true,
         true,
         null,
-        "4");
+        "4",
+        "postgres");
   }
 
   // ── Command dead-letter retention vs inbox retention ──────────────────────────────────────────

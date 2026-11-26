@@ -195,6 +195,37 @@ final class RealArcTestContainer implements AutoCloseable {
   }
 
   /**
+   * As {@link #bootRemovingUnusedBeans(List, List, Set)} without REST providers, with the
+   * build-time conditions evaluated against {@code buildTimeProperties} ({@link #boot(List, Map)}):
+   * the deployment a real Quarkus application builds, removal of unused beans included.
+   *
+   * @param beanClasses as {@link #boot(List)}
+   * @param buildTimeProperties as {@link #boot(List, Map)}
+   * @param entryPoints as {@link #bootRemovingUnusedBeans(List, List, Set)}
+   */
+  static RealArcTestContainer bootRemovingUnusedBeans(
+      List<Class<?>> beanClasses,
+      Map<String, String> buildTimeProperties,
+      Set<Class<?>> entryPoints)
+      throws Exception {
+    List<Class<?>> allBeanClasses = new ArrayList<>(beanClasses);
+    for (Class<?> entryPoint : entryPoints) {
+      if (!allBeanClasses.contains(entryPoint)) {
+        allBeanClasses.add(entryPoint);
+      }
+    }
+    return boot(
+        allBeanClasses,
+        buildTimeProperties,
+        List.of(),
+        Set.of(),
+        true,
+        new HashSet<>(entryPoints),
+        List.of(),
+        List.of());
+  }
+
+  /**
    * A bean registered in code, the way a Quarkus extension registers a synthetic bean: a
    * {@code @Singleton} of {@code type} that {@code creator} makes from {@code params}.
    *

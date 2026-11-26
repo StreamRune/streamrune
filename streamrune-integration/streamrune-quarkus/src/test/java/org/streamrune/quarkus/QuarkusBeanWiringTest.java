@@ -338,28 +338,20 @@ class QuarkusBeanWiringTest {
 
   @Test
   void sagaDeadLetterRetentionSweeperResolvesInTheDefaultConfiguration() throws Exception {
-    // The sagaDeadLetterStore producer declared the SagaDeadLetterStore INTERFACE as its return
-    // type while sagaDeadLetterRetentionSweeper injects Instance<PostgresSagaDeadLetterStore>. CDI
-    // bean types are the closure of the producer's DECLARED return type, so that Instance was
-    // permanently unsatisfied against the framework's own default bean and the producer returned
-    // null with no log: the sweeper was silently absent in every default deployment and
-    // saga_dead_letters grew without bound (a GDPR storage-limitation violation). The
-    // boot validator only checks the STORE by interface type, so it passed while the sweeper was
-    // missing.
+    // CDI bean types are the closure of the producer's DECLARED return type. Once a sweeper asked
+    // for Instance<PostgresSagaDeadLetterStore> while the store producer declared the interface:
+    // that Instance was permanently unsatisfied, the producer returned null with no log, the
+    // sweeper was silently absent in every default deployment and saga_dead_letters grew without
+    // bound (a GDPR storage-limitation violation). The store producer now declares the interface
+    // (backend SPI) and the sweeper takes the framework's store from the backend's bundle, so no
+    // injection point depends on a backend's store type to find the framework's store.
     try (var arc =
         RealArcTestContainer.boot(
             List.of(StreamRuneProducers.class, ApplicationInfrastructure.class))) {
-      var concreteStore =
-          arc.container().instance(org.streamrune.postgres.PostgresSagaDeadLetterStore.class);
-      assertTrue(
-          concreteStore.isAvailable(),
-          "the default store must be resolvable by its concrete type — that is what the sweeper's"
-              + " Instance<PostgresSagaDeadLetterStore> injection point asks for");
-
       var interfaceStore = arc.container().instance(SagaDeadLetterStore.class);
       assertTrue(
           interfaceStore.isAvailable(),
-          "the concrete store must still satisfy interface-typed consumers");
+          "the framework store must satisfy interface-typed consumers");
       assertInstanceOf(
           org.streamrune.postgres.PostgresSagaDeadLetterStore.class, interfaceStore.get());
 
@@ -398,10 +390,9 @@ class QuarkusBeanWiringTest {
   @Test
   void applicationSagaDeadLetterStoreWinsInterfaceResolution() throws Exception {
     // Override semantics stay on the INTERFACE: @DefaultBean makes the framework producer lose
-    // interface-typed resolution to a user-supplied SagaDeadLetterStore even though the default now
-    // declares the concrete PostgresSagaDeadLetterStore return type. (Arc's @DefaultBean resolves
-    // ambiguity rather than removing the bean, so the framework's own Postgres store — and the
-    // sweeper that prunes the table the framework created — stay registered.)
+    // interface-typed resolution to a user-supplied SagaDeadLetterStore. (The sweeper keeps
+    // pruning the table the framework created: it takes the framework's store from the backend's
+    // bundle, never the application's store.)
     try (var arc =
         RealArcTestContainer.boot(
             List.of(
@@ -500,15 +491,12 @@ class QuarkusBeanWiringTest {
   }
 
   /**
-   * The command bus injects {@code Instance<CommandInbox>} and the event-store factory injects the
-   * concrete {@code Instance<PostgresCommandInbox>} (deliberately concrete), so a user-supplied
-   * {@code CommandInbox} wins the bus's interface-typed point while the framework's
-   * {@code @DefaultBean} still satisfies the factory's concrete one — Arc's {@code @DefaultBean}
-   * resolves ambiguity rather than removing the bean. The store would then keep claiming
-   * idempotency keys in the framework's own {@code command_inbox} table while the bus pre-checks
-   * the user's inbox: the override silently ignored on the authoritative dedup path, or (where the
-   * default is absent) every keyed execution dying inside {@code appendWithKey}. It must fail fast
-   * at wiring, and only a real container reproduces the split resolution.
+   * The command bus and the event-store factory both inject {@code Instance<CommandInbox>}, so a
+   * user-supplied {@code CommandInbox} reaches both. The store must claim the idempotency key in
+   * the append's own transaction, which an inbox of another backend (here an in-memory one) cannot
+   * join: the backend refuses it when the factory is built, instead of the override being silently
+   * ignored on the authoritative dedup path or every keyed execution dying inside {@code
+   * appendWithKey}. Only a real container reproduces the resolution.
    */
   @Test
   void customCommandInboxWithTheFrameworkEventStoreFactoryFailsFast() throws Exception {
@@ -525,11 +513,10 @@ class QuarkusBeanWiringTest {
               "a custom CommandInbox without a custom EventStoreFactory must fail at wiring");
       String message = causeChainMessages(failure);
       assertTrue(
-          message.contains("command-inbox wiring"),
-          "the failure must name the inbox wiring invariant, got: " + message);
-      assertTrue(
-          message.contains("appendWithKey"),
-          "the failure must explain the appendWithKey contract, got: " + message);
+          message.contains(
+              "command inbox store of backend 'InMemoryCommandInbox' cannot share the 'postgres'"
+                  + " event store's transaction; build it from this backend's BackendStores"),
+          "the failure must be the backend's foreign-store refusal, got: " + message);
     }
   }
 
