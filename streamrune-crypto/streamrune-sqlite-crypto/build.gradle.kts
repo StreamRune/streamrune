@@ -16,6 +16,9 @@ dependencies {
     testImplementation(libs.hikaricp)
     testImplementation(libs.jackson.databind)
     testImplementation(libs.jackson.datatype.jsr310)
+    // The characterization test pins the engine's WARN lines and their logger category (a
+    // logback ListAppender); test scope only. Quiet defaults in src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 }
 
 // streamrune-sqlite's driver loads its native library and its instance guard calls flock(2)
