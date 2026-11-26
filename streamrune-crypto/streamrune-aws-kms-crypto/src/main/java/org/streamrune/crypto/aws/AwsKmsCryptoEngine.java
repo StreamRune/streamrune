@@ -2,10 +2,7 @@ package org.streamrune.crypto.aws;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.security.Key;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
@@ -27,6 +24,7 @@ import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.ForgottenSubjectStore;
 import org.streamrune.crypto.InMemoryForgottenSubjectStore;
+import org.streamrune.crypto.VerifiedCipher;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kms.KmsClient;
@@ -209,37 +207,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
    */
   private static final String SUBJECT_CONTEXT_KEY = "streamrune-subject";
 
-  private static final String ALGORITHM = "AES/GCM/NoPadding";
-
   private static final Logger log = LoggerFactory.getLogger(AwsKmsCryptoEngine.class);
-
-  /** The {@code outcome} of {@code streamrune.crypto.decrypt_retried}. */
-  private static final String RETRY_RECOVERED = "RECOVERED";
-
-  private static final String RETRY_FAILED = "FAILED";
-
-  /**
-   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
-   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
-   */
-  @FunctionalInterface
-  interface CipherFactory {
-    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
-  }
-
-  // A new Cipher for every encryption, every check of an encryption and every decryption attempt,
-  // as in the PostgreSQL and filesystem engines. Cipher.getInstance costs about a microsecond, a
-  // few times the encryption of a short value (PerfCandidatesBenchmark, candidate C), and buys
-  // isolation: a cipher reused across operations carries internal state from one operation to the
-  // next, so a fault in one operation could spoil later ones on the same thread. A fresh cipher
-  // confines a fault to one operation, which the encryption check or the decryption retry then
-  // catches.
-  static final CipherFactory FRESH_CIPHERS =
-      (mode, key, params) -> {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(mode, key, params);
-        return cipher;
-      };
 
   private final KmsClient kmsClient;
   private final String kmsKeyId;
@@ -249,13 +217,11 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
 
   private final int dataKeyCacheMaximumSize;
   private final Duration dataKeyCacheExpireAfterWrite;
-  private final StreamRuneMetrics metrics;
-  private final CipherFactory cipherFactory;
+  private final VerifiedCipher verified;
 
   private AwsKmsCryptoEngine(Builder builder) {
     this.kmsClient = builder.kmsClient;
-    this.metrics = builder.metrics;
-    this.cipherFactory = builder.cipherFactory;
+    this.verified = new VerifiedCipher(builder.metrics, log, builder.cipherFactory);
     this.kmsKeyId = builder.kmsKeyId;
     this.forgottenSubjects = builder.forgottenSubjects;
     this.dataKeyCacheMaximumSize = builder.dataKeyCacheMaximumSize;
@@ -637,7 +603,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     System.arraycopy(nonce, 0, result, headerLength, NONCE_LENGTH);
     try {
       Cipher cipher =
-          cipherFactory.create(
+          verified.cipher(
               Cipher.ENCRYPT_MODE, dataKey.key(), new GCMParameterSpec(TAG_LENGTH * 8, nonce));
       cipher.updateAAD(result, 0, AAD_HEADER_LENGTH);
       cipher.updateAAD(subjectBinding(subjectId));
@@ -662,50 +628,15 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       byte[] ciphertext,
       byte[] plaintext) {
     int headerLength = FIXED_HEADER_LENGTH + dataKey.wrapped().length;
-    Exception failure = null;
-    try {
-      if (MessageDigest.isEqual(
-          plaintext, openOnce(subjectId, dataKey.key(), ciphertext, headerLength))) {
-        return;
-      }
-    } catch (GeneralSecurityException | RuntimeException e) {
-      failure = e;
-    }
-    throw selfCheckFailed(subjectId, failure);
-  }
-
-  /**
-   * Counts and logs a failed encryption check; the returned exception is the transient type. A
-   * checked failure of the check (a tag failure) is its cause. An unchecked one — any {@code
-   * RuntimeException}, an {@code IllegalArgumentException} or a {@link CryptoMappingException}
-   * among them — is attached as suppressed instead: the classifiers walk the cause chain and read
-   * those types as permanent evidence, while a failed check is transient whatever raised it.
-   */
-  private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
-    metrics.recordEncryptSelfCheckFailed();
-    log.warn(
-        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
-            + " plaintext and is discarded; the operation fails as transient and is retried",
-        subjectId.redacted());
-    boolean unchecked = failure instanceof RuntimeException;
-    CryptoOperationException transientFailure =
-        new CryptoOperationException(
-            "Encryption self-check failed for subject: "
-                + subjectId.redacted()
-                + " — the encrypted value did not decrypt to its plaintext and is discarded"
-                + " (transient; retrying encrypts it again)",
-            unchecked ? null : failure);
-    if (unchecked) {
-      transientFailure.addSuppressed(failure);
-    }
-    return transientFailure;
+    verified.verify(
+        subjectId, plaintext, () -> openOnce(subjectId, dataKey.key(), ciphertext, headerLength));
   }
 
   /** One decryption attempt with a cipher of its own; {@code headerLength} precedes the nonce. */
   private byte[] openOnce(SubjectId subjectId, SecretKey key, byte[] ciphertext, int headerLength)
       throws GeneralSecurityException {
     Cipher cipher =
-        cipherFactory.create(
+        verified.cipher(
             Cipher.DECRYPT_MODE,
             key,
             new GCMParameterSpec(TAG_LENGTH * 8, ciphertext, headerLength, NONCE_LENGTH));
@@ -721,19 +652,8 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
    */
   private byte[] open(SubjectId subjectId, SecretKey key, byte[] ciphertext, int headerLength) {
     try {
-      try {
-        return openOnce(subjectId, key, ciphertext, headerLength);
-      } catch (AEADBadTagException first) {
-        try {
-          byte[] plaintext = openOnce(subjectId, key, ciphertext, headerLength);
-          retried(subjectId, RETRY_RECOVERED);
-          return plaintext;
-        } catch (AEADBadTagException second) {
-          retried(subjectId, RETRY_FAILED);
-          second.addSuppressed(first);
-          throw second;
-        }
-      }
+      return verified.openWithOneRetry(
+          subjectId, () -> openOnce(subjectId, key, ciphertext, headerLength));
     } catch (AEADBadTagException e) {
       // Deterministic on both attempts: the value or its header was altered, or it belongs to
       // another subject.
@@ -748,16 +668,6 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
       throw new CryptoOperationException(
           "AES-GCM decryption failed for subject: " + subjectId.redacted(), e);
     }
-  }
-
-  /** Counts and logs a retried decryption with its outcome. */
-  private void retried(SubjectId subjectId, String outcome) {
-    metrics.recordDecryptRetried(outcome);
-    log.warn(
-        "Decryption for subject {} failed its authentication tag and was retried once with a fresh"
-            + " cipher; outcome {}",
-        subjectId.redacted(),
-        outcome);
   }
 
   /**
@@ -827,7 +737,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     private long maxEncryptionsPerDataKey = MAX_ENCRYPTIONS_PER_DATA_KEY;
     private LongSupplier nanoClock = System::nanoTime;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
-    private CipherFactory cipherFactory = FRESH_CIPHERS;
+    private VerifiedCipher.CipherFactory cipherFactory = VerifiedCipher.FRESH_CIPHERS;
 
     public Builder kmsClient(KmsClient client) {
       this.kmsClient = client;
@@ -848,7 +758,7 @@ public final class AwsKmsCryptoEngine implements CryptoEngine {
     }
 
     /** Test-only seam (package-private): creates the cipher of every operation. */
-    Builder cipherFactory(CipherFactory cipherFactory) {
+    Builder cipherFactory(VerifiedCipher.CipherFactory cipherFactory) {
       this.cipherFactory = cipherFactory;
       return this;
     }
