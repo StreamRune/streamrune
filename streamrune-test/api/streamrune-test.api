@@ -41,6 +41,15 @@ public static final record org.streamrune.test.AtomicBatchProcessorContract$Cont
   public java.lang.String id()
   public java.lang.String value()
 
+public abstract class org.streamrune.test.AuditStoreContract
+  protected abstract org.streamrune.core.audit.AuditStore newStore()
+  public <init>()
+
+public abstract class org.streamrune.test.CommandAuditQueryContract
+  protected abstract org.streamrune.core.audit.AuditStore writer()
+  protected abstract org.streamrune.core.audit.CommandAuditQuery query()
+  public <init>()
+
 public abstract class org.streamrune.test.CommandBusProvenanceContract
   protected abstract org.streamrune.core.CommandBus newBus(org.streamrune.core.EventStore)
   protected final java.util.List<org.streamrune.core.EventEnvelope> storedEventsOf(java.lang.ScopedValue$Carrier)
@@ -133,6 +142,21 @@ public static final record org.streamrune.test.CommandInboxContract$Inboxed
   public org.streamrune.core.CommandInbox inbox()
   public org.streamrune.core.EventStore store()
 
+public abstract class org.streamrune.test.ComplianceReportQueryContract
+  protected abstract org.streamrune.core.audit.AuditStore writer()
+  protected abstract org.streamrune.core.audit.ComplianceReportQuery query()
+  public <init>()
+
+public abstract class org.streamrune.test.CryptoKeyStoreContract
+  protected abstract org.streamrune.core.crypto.CryptoEngine newEngine()
+  protected abstract org.streamrune.core.crypto.CryptoEngine sameKeysNewInstance(org.streamrune.core.crypto.CryptoEngine)
+  protected boolean durable()
+  public <init>()
+
+public abstract class org.streamrune.test.DeadLetterQueueContract
+  protected abstract org.streamrune.core.DeadLetterQueue newQueue()
+  public <init>()
+
 public final class org.streamrune.test.DeciderFixture<C extends org.streamrune.core.Command, S extends org.streamrune.core.AggregateState, E extends org.streamrune.core.DomainEvent>
   public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage given(E...)
   public final org.streamrune.test.DeciderFixture<C, S, E>$GivenStage givenEvents(E...)
@@ -150,6 +174,15 @@ public final class org.streamrune.test.DeciderFixture$WhenStage
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectProduced(java.util.function.Consumer<java.util.List<E>>, java.util.function.Consumer<S>)
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectState(java.util.function.Consumer<S>)
   public org.streamrune.test.DeciderFixture<C, S, E>$WhenStage expectStateMatches(S)
+
+public abstract class org.streamrune.test.EventAuditQueryContract
+  protected abstract org.streamrune.core.audit.EventAuditQuery query()
+  protected abstract org.streamrune.core.audit.EventAuditStore writer()
+  public <init>()
+
+public abstract class org.streamrune.test.EventAuditStoreContract
+  protected abstract org.streamrune.core.audit.EventAuditStore newStore()
+  public <init>()
 
 public final class org.streamrune.test.EventPayloadAssertions
   public static <E extends org.streamrune.core.DomainEvent> E assertRoundTrips(E)
@@ -436,6 +469,12 @@ public final class org.streamrune.test.FaultSchedule
   public org.streamrune.test.FaultSchedule throwing(java.util.function.Supplier<? extends java.lang.RuntimeException>)
   public static org.streamrune.test.FaultSchedule none()
   public void reset()
+
+public abstract class org.streamrune.test.ForgottenSubjectStoreContract
+  protected abstract org.streamrune.crypto.ForgottenSubjectStore newStore()
+  protected boolean durable()
+  protected org.streamrune.crypto.ForgottenSubjectStore sameStateNewInstance(org.streamrune.crypto.ForgottenSubjectStore)
+  public <init>()
 
 public class org.streamrune.test.ForwardingCommandBus implements org.streamrune.core.CommandBus
   protected final org.streamrune.core.CommandBus delegate
@@ -861,6 +900,10 @@ public abstract class org.streamrune.test.OutboxStoreContract
   public void transientFailureOnTheHeadHoldsTheWholeAggregate_bothModes()
   public void twoStreamsSharingAnIdValue_haveIndependentHeads_strict()
 
+public abstract class org.streamrune.test.ProjectionDeadLetterStoreContract
+  protected abstract org.streamrune.core.projection.ProjectionDeadLetterStore newStore()
+  public <init>()
+
 public final class org.streamrune.test.ProjectionFixture<S>
   public org.streamrune.test.ProjectionFixture<S>$GivenStage givenEvents(java.util.List<org.streamrune.core.EventEnvelope>)
   public org.streamrune.test.ProjectionFixture<S>$WhenStage when()
@@ -907,10 +950,17 @@ public abstract class org.streamrune.test.ProjectionRepositoryQueryContract
   public void anEncryptedComponentCannotBeFilteredOrSorted()
   public void anEncryptedComponentOfAnUnwrappedRecordCannotBeFilteredOrSorted()
   public void anUnsortedReadOrdersByIdInCodePointOrder()
+  public void booleansCompareAsTrueFalseText()
   public void decimalsDoublesDurationsAndBooleansCompareAsPostgresPrintsThem()
   public void declaringAnIndexTwiceIsAccepted()
+  public void jsonEscapedStringsCompareUnescaped()
+  public void missingAndNullFieldsNeverMatchAValue()
+  public void mixedTypesSortAsText()
+  public void nonAsciiIdsAndValuesSortBytewise()
+  public void numericStringFieldMatchesTextFilter()
   public void theRowsOfOneTransactionTieOnUpdatedAt()
   public void theVersionAndUpdatedAtColumnsSortByTheirValues()
+  public void trailingZeroDecimalKeepsItsSpelling()
 
 public static final record org.streamrune.test.ProjectionRepositoryQueryContract$Contact
   public <init>(java.lang.String, java.lang.String)

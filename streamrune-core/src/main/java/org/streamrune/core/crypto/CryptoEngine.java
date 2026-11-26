@@ -19,8 +19,9 @@ import org.streamrune.core.types.SubjectId;
  * <p><b>Enforcement is backend-specific:</b>
  *
  * <ul>
- *   <li><em>Filesystem, PostgreSQL</em> — persist a tombstone alongside/instead of the key, so
- *       erasure survives restarts and {@code encrypt} after {@code deleteKey} throws {@link
+ *   <li><em>An engine that keeps per-subject keys and tombstones in its own store</em> (for example
+ *       filesystem, PostgreSQL) — persists a tombstone alongside/instead of the key, so erasure
+ *       survives restarts and {@code encrypt} after {@code deleteKey} throws {@link
  *       SubjectForgottenException}; {@link #reinstate(SubjectId)} lifts it for legitimate
  *       re-registration.
  *   <li><em>AWS KMS</em> — a single shared CMK encrypts every subject, so there is no per-subject
@@ -87,11 +88,12 @@ public interface CryptoEngine {
    * @return the plaintext
    * @throws IllegalArgumentException if {@code subjectId} or {@code ciphertext} is null
    * @throws KeyNotFoundException if no key exists for the subject — either never created or
-   *     crypto-shredded — or (PostgreSQL/filesystem) if the ciphertext was written under an earlier
-   *     key generation that a GDPR erasure destroyed, even though the subject was later reinstated
-   *     and re-keyed. Decrypting pre-forget ciphertext after a forget always throws this (the
-   *     {@code CryptoShreddingModule} maps it to the {@code [REDACTED]} tombstone); it is never
-   *     reported as {@link SubjectForgottenException}, which is reserved for the encrypt path.
+   *     crypto-shredded — or (an engine that keeps per-subject keys in its own store, for example
+   *     PostgreSQL or filesystem) if the ciphertext was written under an earlier key generation
+   *     that a GDPR erasure destroyed, even though the subject was later reinstated and re-keyed.
+   *     Decrypting pre-forget ciphertext after a forget always throws this (the {@code
+   *     CryptoShreddingModule} maps it to the {@code [REDACTED]} tombstone); it is never reported
+   *     as {@link SubjectForgottenException}, which is reserved for the encrypt path.
    * @throws CryptoOperationException if decryption fails (corrupted or foreign ciphertext,
    *     infrastructure failure)
    */
@@ -104,13 +106,14 @@ public interface CryptoEngine {
    * a key is still tombstoned by every backend shipped with StreamRune, so a later {@link
    * #encrypt(SubjectId, byte[])} for that id is refused until {@link #reinstate(SubjectId)}: erase
    * only subject ids known to exist. Terminal-erasure enforcement is backend-specific (see the
-   * class documentation): filesystem and PostgreSQL delete the per-subject key and record a
-   * persistent tombstone directly; Vault and AWS KMS record a persistent tombstone in a pluggable
-   * {@code ForgottenSubjectStore} (Vault also deletes its transit key; AWS KMS has no per-subject
-   * key to delete, since one shared CMK serves every subject). On every backend shipped with
-   * StreamRune, once this method returns, a later {@link #encrypt(SubjectId, byte[])} for the
-   * subject throws {@link SubjectForgottenException} instead of resurrecting the key, and
-   * decrypting the subject's old ciphertext throws {@link KeyNotFoundException}.
+   * class documentation): an engine that keeps per-subject keys and tombstones in its own store
+   * (for example filesystem, PostgreSQL) deletes the per-subject key and records a persistent
+   * tombstone directly; Vault and AWS KMS record a persistent tombstone in a pluggable {@code
+   * ForgottenSubjectStore} (Vault also deletes its transit key; AWS KMS has no per-subject key to
+   * delete, since one shared CMK serves every subject). On every backend shipped with StreamRune,
+   * once this method returns, a later {@link #encrypt(SubjectId, byte[])} for the subject throws
+   * {@link SubjectForgottenException} instead of resurrecting the key, and decrypting the subject's
+   * old ciphertext throws {@link KeyNotFoundException}.
    *
    * @param subjectId the data subject whose key to delete; must not be null
    * @throws IllegalArgumentException if {@code subjectId} is null
@@ -127,12 +130,12 @@ public interface CryptoEngine {
    * Lifts the terminal-erasure tombstone for a forgotten subject, allowing {@link
    * #encrypt(SubjectId, byte[])} to mint a fresh key again for legitimate re-registration.
    *
-   * <p>This is the explicit escape hatch from terminal erasure. After a completed erasure on
-   * PostgreSQL, the filesystem or Vault it does <b>not</b> recover the old key or make pre-erasure
-   * ciphertext readable again — those are gone forever; it only stops a future {@code encrypt} from
-   * throwing {@link SubjectForgottenException}. On AWS KMS it does make pre-erasure ciphertext
-   * readable again (see below). Idempotent: reinstating a subject that was never forgotten is a
-   * no-op.
+   * <p>This is the explicit escape hatch from terminal erasure. After a completed erasure on an
+   * engine that keeps per-subject keys in its own store (for example PostgreSQL or the filesystem),
+   * or on Vault, it does <b>not</b> recover the old key or make pre-erasure ciphertext readable
+   * again — those are gone forever; it only stops a future {@code encrypt} from throwing {@link
+   * SubjectForgottenException}. On AWS KMS it does make pre-erasure ciphertext readable again (see
+   * below). Idempotent: reinstating a subject that was never forgotten is a no-op.
    *
    * <p><b>The engine writes no audit record.</b> A reinstate reverses part of an erasure, so it
    * must be a recorded, authorized decision: reinstate through {@code
@@ -144,11 +147,12 @@ public interface CryptoEngine {
    * backend-specific:</b>
    *
    * <ul>
-   *   <li><em>PostgreSQL, filesystem</em> — the re-minted key gets a HIGHER key generation
-   *       (recorded durably across erasures), so decrypting pre-erasure ciphertext keeps yielding
-   *       {@link KeyNotFoundException} → {@code [REDACTED]}: aggregate loads and projection
-   *       rebuilds stay working, exactly as before the reinstate. Tampering with current-generation
-   *       ciphertext still fails loudly.
+   *   <li><em>An engine that keeps per-subject keys and tombstones in its own store (for example
+   *       PostgreSQL, filesystem)</em> — the re-minted key gets a HIGHER key generation (recorded
+   *       durably across erasures), so decrypting pre-erasure ciphertext keeps yielding {@link
+   *       KeyNotFoundException} → {@code [REDACTED]}: aggregate loads and projection rebuilds stay
+   *       working, exactly as before the reinstate. Tampering with current-generation ciphertext
+   *       still fails loudly.
    *   <li><em>Vault</em> — transit owns the ciphertext format, so generations cannot be
    *       discriminated; {@code reinstate} therefore <b>refuses</b> (throws {@link
    *       CryptoOperationException}) after a COMPLETED erasure — re-register under a new subject id

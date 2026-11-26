@@ -618,49 +618,6 @@ class PostgresDeadLetterQueueTest {
         stored);
   }
 
-  /** The conflict target is the key index only: a duplicate command id still fails loudly. */
-  @Test
-  void aDuplicateCommandIdIsStillRefused() {
-    dlq.publish(keyedRequest("e5000000-0000-0000-0000-000000000001", "client-op-a"));
-
-    assertThrows(
-        org.streamrune.core.EventStoreException.class,
-        () -> dlq.publish(keyedRequest("e5000000-0000-0000-0000-000000000001", "client-op-b")));
-  }
-
-  /**
-   * Two replicas that dead-letter the same keyed command at the same moment: both inserts are
-   * released together, and one row is stored every time.
-   */
-  @Test
-  void twoConcurrentKeyedRequestsForOneCommand_storeOneRow() throws Exception {
-    for (int round = 0; round < 20; round++) {
-      var start = new CyclicBarrier(2);
-      var key = "client-op-race-" + round;
-      var errors = new ConcurrentLinkedQueue<Throwable>();
-      List<Thread> threads = new ArrayList<>();
-      for (int publisher = 0; publisher < 2; publisher++) {
-        String id = String.format("e6000000-0000-0000-%04d-%012d", round, publisher);
-        threads.add(
-            Thread.ofVirtual()
-                .start(
-                    () -> {
-                      try {
-                        start.await();
-                        dlq.publish(keyedRequest(id, key));
-                      } catch (Throwable t) {
-                        errors.add(t);
-                      }
-                    }));
-      }
-      for (Thread thread : threads) {
-        thread.join();
-      }
-      assertTrue(errors.isEmpty(), () -> "round failed: " + errors);
-      assertEquals(1, dlq.findByIdempotencyKey(IdempotencyKey.of(key)).size(), key);
-    }
-  }
-
   @Test
   void findByIdempotencyKey_wrapsAStoreFailureWithoutTheKey() {
     var broken = new PGSimpleDataSource();

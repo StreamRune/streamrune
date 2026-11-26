@@ -171,6 +171,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public void publish(DeadLetterPublishRequest request) {
+    requireArgument(request, "request");
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(INSERT)) {
       ps.setString(1, request.commandId().value());
@@ -196,6 +197,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public List<DeadLetterEntry> read(int limit) {
+    requirePositiveLimit(limit);
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT)) {
@@ -218,6 +220,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
    */
   @Override
   public Optional<DeadLetterEntry> find(CommandId commandId) {
+    requireArgument(commandId, "commandId");
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_BY_ID)) {
       ps.setString(1, commandId.value());
@@ -238,6 +241,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
    */
   @Override
   public List<DeadLetterEntry> findByIdempotencyKey(IdempotencyKey key) {
+    requireArgument(key, "key");
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_BY_IDEMPOTENCY_KEY)) {
@@ -255,6 +259,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public void discard(CommandId commandId) {
+    requireArgument(commandId, "commandId");
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(DELETE)) {
       ps.setString(1, commandId.value());
@@ -269,6 +274,8 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
 
   @Override
   public void updateAttempts(CommandId commandId, int dlqAttempts, Instant lastAttemptAt) {
+    requireArgument(commandId, "commandId");
+    requireArgument(lastAttemptAt, "lastAttemptAt");
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(UPDATE_ATTEMPTS)) {
       ps.setInt(1, dlqAttempts);
@@ -285,6 +292,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
   @Override
   public List<DeadLetterEntry> readRetryable(
       int maxRetries, int limit, boolean includeUnkeyed, Instant keyedFirstAttemptAtOrAfter) {
+    requirePositiveLimit(limit);
     List<DeadLetterEntry> results = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(SELECT_RETRYABLE)) {
@@ -365,6 +373,18 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
       // older than the past cutoff, and each non-empty chunk strictly shrinks that finite set.
     } while (batch > 0);
     return total;
+  }
+
+  private static void requireArgument(Object value, String name) {
+    if (value == null) {
+      throw new IllegalArgumentException(name + " is required");
+    }
+  }
+
+  private static void requirePositiveLimit(int limit) {
+    if (limit <= 0) {
+      throw new IllegalArgumentException("limit must be > 0");
+    }
   }
 
   private DeadLetterEntry readEntry(ResultSet rs) throws SQLException {

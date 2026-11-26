@@ -385,6 +385,117 @@ public abstract class ProjectionRepositoryQueryContract {
     return page.content().stream().map(row -> row.get("id")).toList();
   }
 
+  private void saveMap(ProjectionName name, String id, String field, Object value, boolean write) {
+    var row = new LinkedHashMap<String, Object>();
+    row.put("id", id);
+    if (write) {
+      row.put(field, value);
+    }
+    repository().save(name, id, row);
+  }
+
+  @SuppressWarnings("rawtypes")
+  private List<Object> mapFilter(ProjectionName name, String field, String value) {
+    return mapIds(
+        repository()
+            .findAllBy(name, Map.class, FieldEquals.of(field, value), PageRequest.of(0, 10)));
+  }
+
+  @SuppressWarnings("rawtypes")
+  private List<Object> mapSort(ProjectionName name, String field, SortDirection direction) {
+    return mapIds(
+        repository().findAll(name, Map.class, PageRequest.of(0, 10, Sort.by(field, direction))));
+  }
+
+  /** A JSON string and a JSON number with the same text both match the text filter. */
+  @Test
+  public void numericStringFieldMatchesTextFilter() {
+    var name = freshName();
+    saveMap(name, "s", "rank", "5", true);
+    saveMap(name, "n", "rank", 5, true);
+    saveMap(name, "o", "rank", 6, true);
+
+    assertEquals(List.of("n", "s"), mapFilter(name, "rank", "5"));
+  }
+
+  /** A decimal keeps the spelling it was written with: 19.90 is not 19.9. */
+  @Test
+  public void trailingZeroDecimalKeepsItsSpelling() {
+    var name = freshName();
+    saveMap(name, "p", "price", new BigDecimal("19.90"), true);
+
+    assertEquals(List.of("p"), mapFilter(name, "price", "19.90"));
+    assertEquals(List.of(), mapFilter(name, "price", "19.9"));
+  }
+
+  /** A boolean compares as the text true or false. */
+  @Test
+  public void booleansCompareAsTrueFalseText() {
+    var name = freshName();
+    saveMap(name, "t", "active", true, true);
+    saveMap(name, "f", "active", false, true);
+
+    assertEquals(List.of("t"), mapFilter(name, "active", "true"));
+    assertEquals(List.of("f"), mapFilter(name, "active", "false"));
+    assertEquals(List.of(), mapFilter(name, "active", "TRUE"));
+  }
+
+  /** A missing or null field matches no value, and sorts after every value ascending. */
+  @Test
+  public void missingAndNullFieldsNeverMatchAValue() {
+    var name = freshName();
+    saveMap(name, "a-missing", "tag", null, false);
+    saveMap(name, "b-null", "tag", null, true);
+    saveMap(name, "c-value", "tag", "x", true);
+    saveMap(name, "d-empty", "tag", "", true);
+    saveMap(name, "e-text", "tag", "null", true);
+
+    assertEquals(List.of("e-text"), mapFilter(name, "tag", "null"));
+    assertEquals(List.of("d-empty"), mapFilter(name, "tag", ""));
+    assertEquals(
+        List.of("d-empty", "e-text", "c-value", "a-missing", "b-null"),
+        mapSort(name, "tag", SortDirection.ASC));
+  }
+
+  /** Numbers and strings in one field sort as their text: 10, then 9, then a. */
+  @Test
+  public void mixedTypesSortAsText() {
+    var name = freshName();
+    saveMap(name, "s", "v", "a", true);
+    saveMap(name, "n9", "v", 9, true);
+    saveMap(name, "n10", "v", 10, true);
+    saveMap(name, "s5", "v", "5", true);
+
+    assertEquals(List.of("n10", "s5", "n9", "s"), mapSort(name, "v", SortDirection.ASC));
+    assertEquals(List.of("s", "n9", "s5", "n10"), mapSort(name, "v", SortDirection.DESC));
+  }
+
+  /** A string with a quote or a backslash matches its unescaped text, as {@code ->>} returns it. */
+  @Test
+  public void jsonEscapedStringsCompareUnescaped() {
+    var name = freshName();
+    saveMap(name, "q", "v", "a\"b", true);
+    saveMap(name, "b", "v", "a\\b", true);
+
+    assertEquals(List.of("q"), mapFilter(name, "v", "a\"b"));
+    assertEquals(List.of("b"), mapFilter(name, "v", "a\\b"));
+    assertEquals(List.of(), mapFilter(name, "v", "a\\\"b"));
+  }
+
+  /** Ids and values outside ASCII compare byte-wise, so by code point, not linguistically. */
+  @Test
+  public void nonAsciiIdsAndValuesSortBytewise() {
+    var name = freshName();
+    for (String id : List.of("é", "z", "😀", "Z", "～")) {
+      saveMap(name, id, "v", id, true);
+    }
+    var expected = List.<Object>of("Z", "z", "é", "～", "😀");
+
+    assertEquals(expected, mapSort(name, "v", SortDirection.ASC));
+    assertEquals(expected, mapIds(repository().findAll(name, Map.class, PageRequest.of(0, 10))));
+    assertEquals(List.of("é"), mapFilter(name, "v", "é"));
+  }
+
   /** A whole number filters by its text and sorts as text. */
   @Test
   public void aNumberFieldFiltersAndSortsAsText() {

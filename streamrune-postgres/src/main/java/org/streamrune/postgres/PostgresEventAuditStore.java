@@ -45,6 +45,9 @@ public final class PostgresEventAuditStore implements EventAuditStore {
   @Override
   public void saveAll(List<EventAuditEntry> entries) {
     Objects.requireNonNull(entries, "entries is required");
+    for (EventAuditEntry entry : entries) {
+      Objects.requireNonNull(entry, "entries must not contain null");
+    }
     if (entries.isEmpty()) {
       return;
     }

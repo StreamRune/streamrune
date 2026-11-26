@@ -138,7 +138,7 @@ class InMemoryDeadLetterQueueTest {
             .map(DeadLetterQueue.DeadLetterEntry::commandId)
             .toList());
     assertTrue(queue.findByIdempotencyKey(IdempotencyKey.of("k-none")).isEmpty());
-    assertThrows(NullPointerException.class, () -> queue.findByIdempotencyKey(null));
+    assertThrows(IllegalArgumentException.class, () -> queue.findByIdempotencyKey(null));
   }
 
   @Test
@@ -160,34 +160,6 @@ class InMemoryDeadLetterQueueTest {
         queue.all().stream()
             .map(DeadLetterQueue.DeadLetterEntry::commandId)
             .collect(java.util.stream.Collectors.toSet()));
-  }
-
-  @Test
-  void twoConcurrentKeyedRequestsForOneCommand_storeOneEntry() throws Exception {
-    for (int round = 0; round < 50; round++) {
-      var queue = new InMemoryDeadLetterQueue();
-      var start = new java.util.concurrent.CyclicBarrier(2);
-      int r = round;
-      try (var threads = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-        var a =
-            threads.submit(
-                () -> {
-                  start.await();
-                  queue.publish(keyedRequest("a-" + r, "k-race"));
-                  return null;
-                });
-        var b =
-            threads.submit(
-                () -> {
-                  start.await();
-                  queue.publish(keyedRequest("b-" + r, "k-race"));
-                  return null;
-                });
-        a.get();
-        b.get();
-      }
-      assertEquals(1, queue.all().size(), "round " + round);
-    }
   }
 
   private DeadLetterQueue.DeadLetterPublishRequest keyedRequest(String id, String key) {

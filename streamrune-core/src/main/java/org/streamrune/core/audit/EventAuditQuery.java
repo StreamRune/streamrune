@@ -16,7 +16,8 @@ import org.streamrune.core.types.UserId;
  * Read-side interface for querying the event audit log.
  *
  * <p>All query methods return results ordered by {@link EventAuditEntry#occurredAt()} ascending. An
- * empty list is returned (never {@code null}) when no matching entries are found.
+ * empty list is returned (never {@code null}) when no matching entries are found, which includes a
+ * time window whose {@code from} is after its {@code to}.
  *
  * <p><b>Pagination.</b> The unpaged {@code find*} methods materialize every matching entry in
  * memory — on a production audit log a wide time window can return millions of rows. Prefer the
@@ -175,6 +176,9 @@ public interface EventAuditQuery {
    * <p>The returned list includes the event identified by {@code eventId} plus all descendants
    * reachable via {@link EventAuditEntry#causationId()} links. Returns an empty list if no event
    * with the given ID exists.
+   *
+   * <p>Each event appears at most once: a causation cycle (an event that is, directly or
+   * transitively, its own cause) or a self-reference terminates the trace instead of looping.
    *
    * <p><b>Unbounded result.</b> The list grows with the size of the causal subtree and is not
    * paged. Causal chains are bounded by real causality (typically small), but a saga or projector

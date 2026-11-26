@@ -24,7 +24,11 @@ import org.streamrune.core.types.SubjectId;
  */
 public interface ForgottenSubjectStore {
 
-  /** Records a durable tombstone for {@code subjectId}. Idempotent. */
+  /**
+   * Records a durable tombstone for {@code subjectId}. Idempotent.
+   *
+   * @throws IllegalArgumentException if {@code subjectId} is null
+   */
   void forget(SubjectId subjectId);
 
   /**
@@ -32,7 +36,9 @@ public interface ForgottenSubjectStore {
    * backend-sourced creation instant</em> — the evidence {@code VaultCryptoEngine.reinstate} later
    * uses to prove key IDENTITY. Idempotent, and <b>first-write-wins on the evidence too</b>: a
    * repeated {@code deleteKey} must never overwrite the first erasure's record, because the key it
-   * can read the second time may already be post-forget residue.
+   * can read the second time may already be post-forget residue. A tombstone first recorded
+   * <em>without</em> evidence (through {@link #forget(SubjectId)} or with a {@code null} instant)
+   * therefore never gains evidence from a later call.
    *
    * <p>Why it exists: comparing the transit key's age against the tombstone's age would span TWO
    * hosts' clocks (this process's {@code now} and the store's {@code forgotten_at} — Postgres
@@ -52,8 +58,12 @@ public interface ForgottenSubjectStore {
    * @param keyCreatedAt the erased key's creation instant as reported by the key backend itself, or
    *     {@code null} when the backend could not supply provable evidence (the caller must then
    *     accept that the revival will be refused)
+   * @throws IllegalArgumentException if {@code subjectId} is null
    */
   default void forget(SubjectId subjectId, java.time.Instant keyCreatedAt) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     forget(subjectId);
   }
 
@@ -69,15 +79,27 @@ public interface ForgottenSubjectStore {
    *
    * @param subjectId the tombstoned subject; must not be null
    * @return the recorded key-creation instant, or empty when unknown or not tombstoned
+   * @throws IllegalArgumentException if {@code subjectId} is null
    */
   default java.util.Optional<java.time.Instant> keyCreatedAt(SubjectId subjectId) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     return java.util.Optional.empty();
   }
 
-  /** Returns {@code true} if {@code subjectId} has been tombstoned (crypto-shredded). */
+  /**
+   * Returns {@code true} if {@code subjectId} has been tombstoned (crypto-shredded).
+   *
+   * @throws IllegalArgumentException if {@code subjectId} is null
+   */
   boolean isForgotten(SubjectId subjectId);
 
-  /** Removes the tombstone for {@code subjectId}, re-enabling encryption. Idempotent. */
+  /**
+   * Removes the tombstone for {@code subjectId}, re-enabling encryption. Idempotent.
+   *
+   * @throws IllegalArgumentException if {@code subjectId} is null
+   */
   void reinstate(SubjectId subjectId);
 
   /**
@@ -102,8 +124,12 @@ public interface ForgottenSubjectStore {
    *
    * @param subjectId the tombstoned subject; must not be null
    * @return the first-forget instant, or empty when unknown or not tombstoned
+   * @throws IllegalArgumentException if {@code subjectId} is null
    */
   default java.util.Optional<java.time.Instant> forgottenAt(SubjectId subjectId) {
+    if (subjectId == null) {
+      throw new IllegalArgumentException("subjectId must not be null");
+    }
     return java.util.Optional.empty();
   }
 

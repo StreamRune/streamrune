@@ -1111,6 +1111,11 @@ Every public type of `streamrune-test` (package `org.streamrune.test`):
 | `SagaForwardFenceContract` | The contract suite of an `EventStore` that fences a saga's forward command against the rows of a `SagaStore`. |
 | `EventStoreContract` | The contract suite of every `EventStore`: versions, conflicts, atomicity, reads, the global head, snapshots and the idempotent append; extend it to prove a custom store. |
 | `CommandInboxContract` | The contract suite of every `CommandInbox`, written through the keyed append of its event store: the recorded result and retention. |
+| `DeadLetterQueueContract` | The contract suite of every `DeadLetterQueue`: newest-first read, retry bookkeeping, counts, lookup by idempotency key and retention. |
+| `AuditStoreContract`, `EventAuditStoreContract` | The contract suites of the audit sinks: what `save` accepts, the one-entry-per-`eventId` rule and the atomic `saveAll`. |
+| `CryptoKeyStoreContract`, `ForgottenSubjectStoreContract` | The contract suites of a crypto engine that keeps per-subject keys and tombstones itself (per-subject keys, terminal erasure, `reinstate`; a heap-only engine skips the restart cases) and of a `ForgottenSubjectStore` (idempotent tombstones, first-write-wins evidence, durability across a restart). |
+| `CommandAuditQueryContract`, `EventAuditQueryContract`, `ComplianceReportQueryContract` | The contract suites of the audit reads: filters, inclusive time windows, order, paging, the causal chain and the compliance totals. |
+| `ProjectionDeadLetterStoreContract` | The contract suite of every `ProjectionDeadLetterStore`: oldest-first reads, per-projection isolation, discard and the backlog count. |
 | `OffsetStoreContract` | The contract suite of every `OffsetStore`: reads, saves, `reset` and the monotonic guard. |
 | `NativeReflectionTypes` | Derives from code the StreamRune types a GraalVM native image registers for reflection; the integrations' native-hint tests compare their hints with it. |
 | `ShippedMigrationScripts` | Lists the Flyway migration scripts StreamRune ships, from the class path, so a native-image test can check each is a registered resource. |

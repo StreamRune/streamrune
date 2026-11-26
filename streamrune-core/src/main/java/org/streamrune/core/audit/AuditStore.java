@@ -13,6 +13,10 @@ public interface AuditStore {
   /**
    * Persists an audit entry.
    *
+   * <p>Not idempotent and never a duplicate error: {@link AuditEntry#commandId() commandId} is not
+   * unique here. A retry runs the same command again and appends one more entry under the same
+   * {@code commandId}; every attempt is kept.
+   *
    * @param entry the audit entry to save; must not be {@code null}
    * @throws NullPointerException if {@code entry} is {@code null}
    */
