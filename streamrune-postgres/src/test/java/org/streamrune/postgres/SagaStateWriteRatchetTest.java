@@ -278,13 +278,18 @@ class SagaStateWriteRatchetTest {
   private static final String READ_MODEL_TABLE =
       "a projection's read-model table: the projection's name plus _view";
 
-  /** Why a write of {@code PostgresCryptoEngine} never targets {@code saga_state}. */
+  /** Why a write of the Postgres crypto dialect never targets {@code saga_state}. */
   private static final String CRYPTO_KEY_TABLE =
       "the crypto engine's key table (streamrune.crypto.postgres.table-name, default"
           + " encryption_keys)";
 
   private static final String SQLITE_CRYPTO_KEY_TABLE =
       "the SQLite crypto engine's key table (its builder's table name, default encryption_keys)";
+
+  /** Why the shared key-store DELETE never targets {@code saga_state}. */
+  private static final String SHARED_CRYPTO_KEY_TABLE =
+      "the crypto engines' configured key table (Postgres and SQLite share this store),"
+          + " validated as a plain identifier";
 
   /**
    * Every write whose table the statement's text does not name, with the reason its table is never
@@ -299,10 +304,9 @@ class SagaStateWriteRatchetTest {
           Map.entry("SqliteProjectionRepository.UPSERT", READ_MODEL_TABLE),
           Map.entry("SqliteProjectionRepository.VERSIONED_UPDATE", READ_MODEL_TABLE),
           Map.entry("SqliteProjectionRepository.DELETE", READ_MODEL_TABLE),
-          Map.entry("PostgresCryptoEngine.java: DELETE FROM #1", CRYPTO_KEY_TABLE),
-          Map.entry("PostgresCryptoEngine.java: INSERT INTO #1", CRYPTO_KEY_TABLE),
-          Map.entry("SqliteCryptoEngine.java: DELETE FROM #1", SQLITE_CRYPTO_KEY_TABLE),
-          Map.entry("SqliteCryptoEngine.java: INSERT INTO #1", SQLITE_CRYPTO_KEY_TABLE),
+          Map.entry("JdbcSubjectKeyStore.java: DELETE FROM #1", SHARED_CRYPTO_KEY_TABLE),
+          Map.entry("PostgresCryptoDialect.java: INSERT INTO #1", CRYPTO_KEY_TABLE),
+          Map.entry("SqliteCryptoDialect.java: INSERT INTO #1", SQLITE_CRYPTO_KEY_TABLE),
           Map.entry("PostgresCheckpointFence.SEED", CHECKPOINT_TABLE),
           Map.entry("PostgresCheckpointFence.SAVE_LOCKED", CHECKPOINT_TABLE),
           Map.entry("PostgresCheckpointFence.STAMP", CHECKPOINT_TABLE),
