@@ -538,13 +538,14 @@ public final class SchemaValidator {
    * not make the guidance wrong.
    *
    * <p>{@code forgotten_subjects} additionally says WHY it is demanding columns the running engine
-   * may never touch. {@link #CRYPTO_REQUIRED_COLUMNS} is keyed by table NAME, not by engine, and
-   * that table is shared by every backend that reports it: {@code PostgresCryptoEngine} and {@code
-   * AwsKmsCryptoEngine} read neither {@code forgotten_at} nor {@code key_created_at}, yet a
-   * hand-created table missing either fails their boot. That is deliberate — a shared table cannot
-   * be validated per engine without letting a schema pass here and then fail the Vault engine's
-   * erasure, and this check's whole point is to fail closed — but an operator reading a boot abort
-   * over a column their engine demonstrably never uses will otherwise conclude the error is wrong.
+   * may never read. {@link #CRYPTO_REQUIRED_COLUMNS} is keyed by table NAME, not by engine, and
+   * that table is shared by every backend that reports it. Only the Vault engine READS {@code
+   * forgotten_at} and {@code key_created_at}, but every backend's tombstone insert (the statement
+   * of {@code JdbcForgottenSubjects.forget}) WRITES {@code key_created_at}, so a table without it
+   * fails the erasure of every backend, and a table without {@code forgotten_at} fails the Vault
+   * engine's. A shared table cannot be validated per engine without letting a schema pass here and
+   * then fail an erasure, and this check's whole point is to fail closed; an operator reading a
+   * boot abort over a column their engine never reads would otherwise conclude the error is wrong.
    */
   private static String missingCryptoColumnMessage(String table, String column) {
     String head =
@@ -559,9 +560,9 @@ public final class SchemaValidator {
               + " — forgotten_subjects is the GDPR erasure tombstone table, shared by every crypto"
               + " backend, and it is validated as a whole rather than per engine. Your engine may"
               + " never read this particular column (only the vault backend reads forgotten_at and"
-              + " key_created_at; the postgres and aws-kms backends do not), but the table is"
-              + " shared, so a partial one boots green here and then fails the vault backend's"
-              + " erasure — a GDPR operation — at first use. Provision it in full. ";
+              + " key_created_at), but every backend's tombstone insert writes key_created_at, so"
+              + " a partial table boots green here and then fails the erasure — a GDPR operation"
+              + " — at first use. Provision it in full. ";
     }
     String alter =
         "ALTER TABLE "

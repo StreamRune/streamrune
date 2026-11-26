@@ -109,7 +109,9 @@ public final class PostgresCryptoEngine implements CryptoEngine {
   private final String tableName;
 
   // The key store's statements (per-subject advisory lock, load, mint, erase, lift tombstone),
-  // shared with the SQLite engine; they run on this engine's connection, inside its transactions.
+  // shared with the SQLite engine; its writes run on this engine's connection, inside its
+  // transactions,
+  // while decrypt and isKeyAvailable read outside one.
   private final JdbcSubjectKeyStore keys;
 
   // The cipher seam, the encryption self-check and the one-retry decryption, shared with the other

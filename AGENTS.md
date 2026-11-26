@@ -162,8 +162,11 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   `testApiSurfaceCheck`, part of `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside
   it on compiled fixtures.
 - **Twin backends.** `streamrune-postgres` and `streamrune-sqlite`, and their crypto modules,
-  implement the same stores, and part of their logic exists once per backend: the event read path,
-  the crypto engine's wire format and retries, the checkpoint fence. A change to the logic of a
+  implement the same stores, and part of their logic exists once per backend: the event read path
+  and the checkpoint fence. The crypto cipher with its self-check and retries (`VerifiedCipher`),
+  the v1 wire format (`AesGcmV1Format`) and the JDBC key store and forgotten-subject SQL
+  (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in `streamrune-crypto-api`; each
+  backend supplies only its `JdbcCryptoDialect`. A change to the logic of a
   store of one backend is mirrored in its twin of the other backend in the same pull request, in
   either direction, or the pull request says why the twin needs none. A behaviour both must share
   gets a case in the store's contract suite in `streamrune-test`, which runs on both.

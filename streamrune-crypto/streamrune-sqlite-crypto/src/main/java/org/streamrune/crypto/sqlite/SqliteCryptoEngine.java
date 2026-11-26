@@ -120,7 +120,8 @@ public final class SqliteCryptoEngine implements CryptoEngine {
   private final String tableName;
 
   // The key store's statements (load, mint, erase, lift tombstone), shared with the PostgreSQL
-  // engine; they run on the connection SqliteCryptoStatements hands out, inside its transactions.
+  // engine; its writes run on the connection SqliteCryptoStatements hands out, inside this engine's
+  // transactions, while decrypt and isKeyAvailable read outside one.
   // The SQLite dialect carries this engine's clock and takes no per-subject lock: the write lock
   // of the transaction is the lock (see the class Javadoc).
   private final JdbcSubjectKeyStore keys;
