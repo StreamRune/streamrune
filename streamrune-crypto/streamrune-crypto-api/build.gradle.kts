@@ -18,6 +18,9 @@ dependencies {
     testImplementation(libs.mockito.core)
     // Log-assertion tests capture WARN events with a logback ListAppender; test scope only.
     testImplementation(libs.logback.classic)
+    // JdbcSubjectKeyStoreTest and JdbcForgottenSubjectsTest run the shared JDBC helpers on a
+    // SQLite file, so this module's own coverage needs no Docker; test scope only.
+    testImplementation(libs.sqlite.jdbc)
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
 }
 
@@ -26,3 +29,28 @@ dependencies {
 tasks.withType<Test> {
     jvmArgs("-Dnet.bytebuddy.experimental=true")
 }
+
+// The JDBC helper tests create their SQLite database from the DDL that streamrune-sqlite-crypto
+// ships, read from disk. Declared as a test input so an edit to it re-runs them instead of being
+// served from the build cache; the path reaches the tests through an argument provider, so the
+// absolute path stays out of the cache key.
+tasks.named<Test>("test") {
+    val sqliteCryptoDdl =
+        layout.projectDirectory.file(
+            "../streamrune-sqlite-crypto/src/main/resources/db/sqlite-crypto-migration/V001__crypto.sql",
+        )
+    inputs
+        .file(sqliteCryptoDdl)
+        .withPropertyName("sqliteCryptoDdl")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    val ddlPath = sqliteCryptoDdl.asFile.absolutePath
+    jvmArgumentProviders.add(
+        org.gradle.process.CommandLineArgumentProvider {
+            listOf("-Dstreamrune.crypto.sqlite-ddl=$ddlPath")
+        },
+    )
+}
+
+// The SQLite driver loads its native library; enabling native access keeps the JVM's
+// restricted-method warnings out of the test output, as streamrune-sqlite does for its own tests.
+tasks.withType<Test>().configureEach { jvmArgs("--enable-native-access=ALL-UNNAMED") }
