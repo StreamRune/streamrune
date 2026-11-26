@@ -16,6 +16,8 @@ dependencies {
     api(libs.caffeine)
     api(libs.slf4j.api)
     testImplementation(libs.mockito.core)
+    // Log-assertion tests capture WARN events with a logback ListAppender; test scope only.
+    testImplementation(libs.logback.classic)
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine")
 }
 
