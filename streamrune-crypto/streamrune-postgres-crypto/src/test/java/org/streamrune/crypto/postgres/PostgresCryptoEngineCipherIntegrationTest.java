@@ -33,6 +33,8 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.AesGcmV1Format;
+import org.streamrune.crypto.VerifiedCipher;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -235,19 +237,31 @@ class PostgresCryptoEngineCipherIntegrationTest {
     GCMParameterSpec params = new GCMParameterSpec(128, new byte[12]);
 
     assertNotSame(
-        PostgresCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params),
-        PostgresCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
-    Field factory = PostgresCryptoEngine.class.getDeclaredField("cipherFactory");
+        VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params),
+        VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
+    Field verified = PostgresCryptoEngine.class.getDeclaredField("verified");
+    verified.setAccessible(true);
+    Field factory = VerifiedCipher.class.getDeclaredField("ciphers");
     factory.setAccessible(true);
     assertSame(
-        PostgresCryptoEngine.FRESH_CIPHERS,
-        factory.get(plainEngine),
+        VerifiedCipher.FRESH_CIPHERS,
+        factory.get(verified.get(plainEngine)),
         "an engine built without the test seam uses the production factory");
   }
 
   @Test
-  void theEngineKeepsNoCipherBetweenOperations() {
-    for (Field field : PostgresCryptoEngine.class.getDeclaredFields()) {
+  void theEngineKeepsNoCipherBetweenOperations() throws Exception {
+    // The engine holds its cipher seam and format as fields; neither may hold a cipher either.
+    assertSame(
+        VerifiedCipher.class, PostgresCryptoEngine.class.getDeclaredField("verified").getType());
+    assertSame(
+        AesGcmV1Format.class, PostgresCryptoEngine.class.getDeclaredField("format").getType());
+    List<Field> fields = new ArrayList<>();
+    for (Class<?> owner :
+        List.of(PostgresCryptoEngine.class, VerifiedCipher.class, AesGcmV1Format.class)) {
+      fields.addAll(List.of(owner.getDeclaredFields()));
+    }
+    for (Field field : fields) {
       assertFalse(
           ThreadLocal.class.isAssignableFrom(field.getType())
               || Cipher.class.isAssignableFrom(field.getType()),
@@ -299,7 +313,7 @@ class PostgresCryptoEngineCipherIntegrationTest {
    * initialised under a key of its own (a wrong result) or in encrypt mode instead of decrypt mode
    * (a result that is not the plaintext and raises no tag failure).
    */
-  private static final class FaultyCiphers implements PostgresCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     final List<Cipher> created = new ArrayList<>();
     final List<Integer> modes = new ArrayList<>();
     private int wrongKeyMode = -1;
