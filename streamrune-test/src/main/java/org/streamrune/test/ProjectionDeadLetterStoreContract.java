@@ -20,12 +20,13 @@ import org.streamrune.core.types.ProjectionName;
  * ({@code failedAt}, then {@code fromOffset}) and honour their limit, {@code read} is scoped to one
  * projection while {@code readAll} is not, {@code discard} removes the entry named by projection
  * and starting offset, and {@code countPending} counts across projections. Run by {@code
- * InMemoryProjectionDeadLetterStoreContractTest} and {@code
- * PostgresProjectionDeadLetterStoreContractTest}.
+ * InMemoryProjectionDeadLetterStoreContractTest}, {@code
+ * PostgresProjectionDeadLetterStoreContractTest} and {@code
+ * SqliteProjectionDeadLetterStoreContractTest}.
  *
  * <p>Also pinned: saving a batch that is already stored refreshes it (the upsert, attempts never
- * decreasing), and null arguments and non-positive limits fail with {@link
- * IllegalArgumentException}.
+ * decreasing), null arguments and non-positive limits fail with {@link IllegalArgumentException},
+ * and {@code failedAt} keeps microseconds.
  */
 public abstract class ProjectionDeadLetterStoreContract {
 
@@ -246,5 +247,18 @@ public abstract class ProjectionDeadLetterStoreContract {
 
     assertEquals(List.of("orders@30", "orders@20", "orders@10"), keys(read));
     assertEquals(first, read.getFirst().failedAt());
+  }
+
+  @Test
+  void aMicrosecondFailedAtRoundTripsUnchanged_alsoThroughTheUpsert() {
+    Instant first = Instant.parse("2026-03-04T05:06:07.123456Z");
+    Instant again = Instant.parse("2026-03-04T05:06:08.654321Z");
+    store.save(entry(ORDERS, 10, first));
+
+    assertEquals(first, store.read(ORDERS, 10).getFirst().failedAt());
+
+    store.save(entry(ORDERS, 10, again));
+
+    assertEquals(again, store.readAll(10).getFirst().failedAt());
   }
 }

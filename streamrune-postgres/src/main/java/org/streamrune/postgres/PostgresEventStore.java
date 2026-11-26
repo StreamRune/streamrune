@@ -2533,6 +2533,7 @@ public final class PostgresEventStore implements EventStore {
    */
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
+    requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
@@ -2615,6 +2616,7 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
     Objects.requireNonNull(streamId, "streamId is required");
+    requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
@@ -2634,6 +2636,17 @@ public final class PostgresEventStore implements EventStore {
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
     return readEvents(rawRows, "STREAM", started);
+  }
+
+  /**
+   * Refuses a negative {@code maxCount} with the {@link IllegalArgumentException} the {@link
+   * EventStore} javadoc promises, before the query: the server would refuse {@code LIMIT -1} with
+   * an SQL error.
+   */
+  private static void requireMaxCount(int maxCount) {
+    if (maxCount < 0) {
+      throw new IllegalArgumentException("maxCount must not be negative, got " + maxCount);
+    }
   }
 
   /**

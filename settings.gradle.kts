@@ -8,6 +8,7 @@ rootProject.name = "streamrune"
 include(
     "streamrune-core",
     "streamrune-postgres",
+    "streamrune-sqlite",
     "streamrune-runtime",
     "streamrune-crypto",
     "streamrune-crypto:streamrune-crypto-api",

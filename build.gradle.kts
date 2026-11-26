@@ -1155,6 +1155,7 @@ subprojects {
         val automaticModuleNames = mapOf(
             ":streamrune-runtime" to "org.streamrune.runtime",
             ":streamrune-postgres" to "org.streamrune.postgres",
+            ":streamrune-sqlite" to "org.streamrune.sqlite",
             ":streamrune-integration:streamrune-integration-api" to "org.streamrune.integration",
             ":streamrune-integration:streamrune-spring" to "org.streamrune.spring",
             ":streamrune-integration:streamrune-quarkus" to "org.streamrune.quarkus",
@@ -2313,6 +2314,9 @@ tasks.register("quickCheck") {
     dependsOn("spotlessCheck", subprojects.map { "${it.path}:spotlessCheck" })
     dependsOn(dockerFreeModules.map { "$it:test" })
     dependsOn(docLintModules.map { "$it:docLintTest" })
+    // The saga_state write ratchet reads source text only and needs no Docker, though its module's
+    // other tests do.
+    dependsOn(":streamrune-postgres:sagaStateWriteRatchetTest")
     dependsOn(subprojects.map { p -> p.tasks.matching { it.name == "verifyApiSurface" } })
     dependsOn(testApiSurfaceCheck)
     dependsOn(verifyReleaseChecksRule)

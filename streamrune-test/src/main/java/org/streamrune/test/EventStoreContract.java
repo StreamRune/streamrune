@@ -129,11 +129,13 @@ import org.streamrune.core.upcasting.EventUpcaster;
  *   <li><b>Reads.</b> {@link EventStore#load} returns a stream's events in version order; {@link
  *       EventStore#readStream} reads one stream strictly after a version, {@link
  *       EventStore#readGlobalStream} every stream strictly after a global offset, in append order;
- *       both return at most {@code maxCount} events. The same id value under another aggregate type
- *       is another stream. A reader that pages through {@link EventStore#readGlobalStream} from the
- *       offset of the last event it read visits every event once and in order, also while appends
- *       run, and {@link EventStore#readStream} pages through a stream of over a thousand events the
- *       same way. Every field of an event's metadata reads back as appended, on all three reads.
+ *       both return at most {@code maxCount} events, none for {@code 0}, and refuse a negative
+ *       {@code maxCount} with {@link IllegalArgumentException}. The same id value under another
+ *       aggregate type is another stream. A reader that pages through {@link
+ *       EventStore#readGlobalStream} from the offset of the last event it read visits every event
+ *       once and in order, also while appends run, and {@link EventStore#readStream} pages through
+ *       a stream of over a thousand events the same way. Every field of an event's metadata reads
+ *       back as appended, on all three reads.
  *   <li><b>Identifiers.</b> A stream whose aggregate type and id are as long as {@link
  *       AggregateType} and {@link StreamId} allow, in ASCII, two-byte or supplementary-plane
  *       characters, is stored, read, snapshotted and keyed like any other. So is an event type of
@@ -1638,6 +1640,26 @@ public abstract class EventStoreContract {
   }
 
   // ── The global head ─────────────────────────────────────────────────────────────────────────
+
+  @Test
+  public void aNegativeMaxCountIsRefusedAndZeroReadsNothing() {
+    store.append(A, events(A, 1, 2), Version.initial());
+
+    for (int maxCount : new int[] {-1, Integer.MIN_VALUE}) {
+      IllegalArgumentException global =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> store.readGlobalStream(GlobalOffset.initial(), maxCount));
+      assertTrue(global.getMessage().contains("maxCount"), global.getMessage());
+      IllegalArgumentException stream =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> store.readStream(A, Version.initial(), maxCount));
+      assertTrue(stream.getMessage().contains("maxCount"), stream.getMessage());
+    }
+    assertTrue(store.readGlobalStream(GlobalOffset.initial(), 0).isEmpty());
+    assertTrue(store.readStream(A, Version.initial(), 0).isEmpty());
+  }
 
   @Test
   public void theHeadOfAnEmptyStoreIsTheInitialOffset() {

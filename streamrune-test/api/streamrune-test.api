@@ -245,6 +245,7 @@ public abstract class org.streamrune.test.EventStoreContract
   public void aLaterSnapshotReplacesTheEarlierOne()
   public void aMismatchedSnapshotOfAStoreWithoutMigrationsIsDiscarded()
   public void aMismatchedSnapshotWithACompleteMigrationChainIsMigratedAndUsed()
+  public void aNegativeMaxCountIsRefusedAndZeroReadsNothing()
   public void aNegativePurgeGenerationIsRejected()
   public void aPurgeRemovesTheSnapshotAndRaisesTheGeneration()
   public void aReadEventCarriesItsStreamTypePayloadAndMetadata()
