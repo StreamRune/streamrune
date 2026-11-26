@@ -22,6 +22,9 @@ dependencies {
     testImplementation(libs.mockito.core)
     testImplementation(libs.testcontainers.localstack)
     testImplementation(libs.testcontainers.junit)
+    // The characterization test pins the engine's WARN lines and their logger category (a
+    // logback ListAppender); test scope only. Quiet defaults in src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 }
 
 // Byte Buddy (used by Mockito) does not yet officially support Java 25.
