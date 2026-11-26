@@ -6,6 +6,8 @@ description = "StreamRune crypto: filesystem-backed per-subject key store for en
 
 dependencies {
     api(project(":streamrune-core"))
+    // The shared cipher seam and v1 wire format live there; they appear in no public signature of this module.
+    implementation(project(":streamrune-crypto:streamrune-crypto-api"))
     implementation(libs.slf4j.api)
     testImplementation(project(":streamrune-test"))
     // The characterization test pins the engine's WARN lines and their logger category (a

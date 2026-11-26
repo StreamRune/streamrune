@@ -7,10 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
-import java.security.Key;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HexFormat;
@@ -22,10 +19,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.crypto.AEADBadTagException;
-import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +31,8 @@ import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.AesGcmV1Format;
+import org.streamrune.crypto.VerifiedCipher;
 
 /**
  * File-backed {@link CryptoEngine} storing one AES-256 key per subject.
@@ -195,58 +192,22 @@ import org.streamrune.core.types.SubjectId;
  */
 public final class FileSystemCryptoEngine implements CryptoEngine {
 
-  private static final String ALGORITHM = "AES/GCM/NoPadding";
-  private static final int GCM_TAG_LENGTH = 128;
-  private static final int GCM_IV_LENGTH = 12;
-  private static final byte FORMAT_VERSION = 1;
-  private static final int HEADER_LENGTH = 2;
-
   /** AES-256 key length; also the exact size of a generation-1 key file. */
   private static final int KEY_LENGTH = 32;
 
-  /**
-   * Highest key generation the single-byte header can carry. Generations start at 1 and bump only
-   * on a post-erasure re-mint, so the cap allows 126 completed erase/re-register cycles per subject
-   * before the mint refuses with guidance to use a fresh subject id.
-   */
-  private static final int MAX_KEY_VERSION = Byte.MAX_VALUE;
-
   private static final Logger log = LoggerFactory.getLogger(FileSystemCryptoEngine.class);
-
-  /** The {@code outcome} of {@code streamrune.crypto.decrypt_retried}. */
-  private static final String RETRY_RECOVERED = "RECOVERED";
-
-  private static final String RETRY_FAILED = "FAILED";
-
-  /**
-   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
-   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
-   */
-  @FunctionalInterface
-  interface CipherFactory {
-    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
-  }
-
-  // A new Cipher for every encryption, every check of an encryption and every decryption attempt.
-  // Cipher.getInstance costs about a microsecond, a few times the encryption of a short value
-  // (PerfCandidatesBenchmark, candidate C), and buys isolation: a cipher reused across operations
-  // carries internal state from one operation to the next, so a fault in one operation could
-  // spoil later ones on the same thread. A fresh cipher confines a fault to one operation, which
-  // the encryption check or the decryption retry then catches.
-  static final CipherFactory FRESH_CIPHERS =
-      (mode, key, params) -> {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(mode, key, params);
-        return cipher;
-      };
 
   /** Number of lock stripes. Bounds lock memory; each subject maps to one stripe by hash. */
   private static final int LOCK_STRIPES = 64;
 
   private final Path keyDirectory;
-  private final SecureRandom random = new SecureRandom();
-  private final StreamRuneMetrics metrics;
-  private final CipherFactory cipherFactory;
+
+  // The cipher seam, the encryption self-check and the one-retry decryption, shared with the other
+  // AES-GCM engines; its WARN lines go to this engine's logger.
+  private final VerifiedCipher verified;
+
+  // The v1 wire format (see the class comment), sealing and opening through the cipher seam above.
+  private final AesGcmV1Format format;
 
   // Per-subject (not global) IN-JVM lock guarding the tombstone-check + key-file-create sequence
   // in encrypt() against deleteKey() for the SAME subject id. A FIXED-SIZE striped array keyed by
@@ -313,13 +274,13 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
       Durability durability,
       int keyDurabilityMemoCapacity,
       StreamRuneMetrics metrics,
-      CipherFactory cipherFactory) {
+      VerifiedCipher.CipherFactory cipherFactory) {
     if (keyDirectory == null) {
       throw new IllegalArgumentException("keyDirectory must not be null");
     }
     this.keyDirectory = keyDirectory;
-    this.metrics = metrics;
-    this.cipherFactory = cipherFactory;
+    this.verified = new VerifiedCipher(metrics, log, cipherFactory);
+    this.format = new AesGcmV1Format(verified);
     this.durability =
         durability != null ? durability : PlatformDurability.forFileSystemOf(keyDirectory);
     this.keyDurability = boundedLru(keyDurabilityMemoCapacity);
@@ -373,115 +334,24 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     }
     Path keyPath = resolveKeyPath(subjectId.value());
     VersionedKey key = loadOrCreateKey(subjectId, keyPath);
-    byte[] iv = new byte[GCM_IV_LENGTH];
-    random.nextBytes(iv);
     byte[] result;
     try {
-      Cipher cipher =
-          cipherFactory.create(
-              Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-      byte[] ciphertext = cipher.doFinal(plaintext);
-      result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
-      result[0] = FORMAT_VERSION;
-      result[1] = (byte) key.version();
-      System.arraycopy(iv, 0, result, HEADER_LENGTH, GCM_IV_LENGTH);
-      System.arraycopy(ciphertext, 0, result, HEADER_LENGTH + GCM_IV_LENGTH, ciphertext.length);
+      result = format.seal(key.key(), key.version(), plaintext);
     } catch (Exception e) {
       throw new CryptoOperationException(
           "Encryption failed for subject: " + subjectId.redacted(), e);
     }
-    verifyEncryption(subjectId, key, result, plaintext);
+    // The check reads the value the way decrypt does: its header against the key's generation,
+    // then its value with a second, independent cipher. The header check runs inside the one
+    // attempt, so a rejection fails the check as transient like any other failure of it.
+    verified.verify(
+        subjectId,
+        plaintext,
+        () -> {
+          AesGcmV1Format.validateHeader(subjectId.redacted(), result, key.version());
+          return format.openOnce(key.key(), result);
+        });
     return result;
-  }
-
-  /**
-   * Checks a fresh encryption the way decrypt reads it: its header against the key's generation,
-   * then its value with an independent cipher, compared with the plaintext. Any failure — a
-   * mismatch, a tag failure or an exception of the check itself — throws the transient {@link
-   * CryptoOperationException} before the value is returned, so a wrong cipher result is never
-   * handed to the caller, whose retry encrypts it again.
-   */
-  private void verifyEncryption(
-      SubjectId subjectId, VersionedKey key, byte[] encrypted, byte[] plaintext) {
-    Exception failure = null;
-    try {
-      validateCiphertextHeader(subjectId.redacted(), encrypted, key.version());
-      if (MessageDigest.isEqual(plaintext, open(key.key(), encrypted))) {
-        return;
-      }
-    } catch (GeneralSecurityException | RuntimeException e) {
-      failure = e;
-    }
-    throw selfCheckFailed(subjectId, failure);
-  }
-
-  /**
-   * Counts and logs a failed encryption check; the returned exception is the transient type. A
-   * checked failure of the check (a tag failure) is its cause. An unchecked one — any {@code
-   * RuntimeException}, an {@code IllegalArgumentException} or a {@link CryptoMappingException}
-   * among them — is attached as suppressed instead: the classifiers walk the cause chain and read
-   * those types as permanent evidence, while a failed check is transient whatever raised it.
-   */
-  private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
-    metrics.recordEncryptSelfCheckFailed();
-    log.warn(
-        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
-            + " plaintext and is discarded; the operation fails as transient and is retried",
-        subjectId.redacted());
-    boolean unchecked = failure instanceof RuntimeException;
-    CryptoOperationException transientFailure =
-        new CryptoOperationException(
-            "Encryption self-check failed for subject: "
-                + subjectId.redacted()
-                + " — the encrypted value did not decrypt to its plaintext and is discarded"
-                + " (transient; retrying encrypts it again)",
-            unchecked ? null : failure);
-    if (unchecked) {
-      transientFailure.addSuppressed(failure);
-    }
-    return transientFailure;
-  }
-
-  /** One decryption attempt with a cipher of its own. */
-  private byte[] open(SecretKey key, byte[] encrypted) throws GeneralSecurityException {
-    Cipher cipher =
-        cipherFactory.create(
-            Cipher.DECRYPT_MODE,
-            key,
-            new GCMParameterSpec(GCM_TAG_LENGTH, encrypted, HEADER_LENGTH, GCM_IV_LENGTH));
-    return cipher.doFinal(
-        encrypted, HEADER_LENGTH + GCM_IV_LENGTH, encrypted.length - HEADER_LENGTH - GCM_IV_LENGTH);
-  }
-
-  /**
-   * Decrypts, and retries once with a fresh cipher when the authentication tag does not match. A
-   * second mismatch propagates with the first attached as suppressed: the value itself is bad.
-   */
-  private byte[] openWithOneRetry(SubjectId subjectId, SecretKey key, byte[] encrypted)
-      throws GeneralSecurityException {
-    try {
-      return open(key, encrypted);
-    } catch (AEADBadTagException first) {
-      try {
-        byte[] plaintext = open(key, encrypted);
-        retried(subjectId, RETRY_RECOVERED);
-        return plaintext;
-      } catch (AEADBadTagException second) {
-        retried(subjectId, RETRY_FAILED);
-        second.addSuppressed(first);
-        throw second;
-      }
-    }
-  }
-
-  /** Counts and logs a retried decryption with its outcome. */
-  private void retried(SubjectId subjectId, String outcome) {
-    metrics.recordDecryptRetried(outcome);
-    log.warn(
-        "Decryption for subject {} failed its authentication tag and was retried once with a fresh"
-            + " cipher; outcome {}",
-        subjectId.redacted(),
-        outcome);
   }
 
   @Override
@@ -497,9 +367,9 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
       throw new KeyNotFoundException("Key not found for subject: " + subjectId.redacted());
     }
     VersionedKey key = loadKey(keyPath);
-    validateCiphertextHeader(subjectId.redacted(), ciphertext, key.version());
+    AesGcmV1Format.validateHeader(subjectId.redacted(), ciphertext, key.version());
     try {
-      return openWithOneRetry(subjectId, key.key(), ciphertext);
+      return verified.openWithOneRetry(subjectId, () -> format.openOnce(key.key(), ciphertext));
     } catch (AEADBadTagException e) {
       // A GCM tag mismatch on both attempts is DETERMINISTIC — the blob is
       // corrupted, tampered, or was written under a different key — and retrying can never
@@ -517,93 +387,6 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     } catch (Exception e) {
       throw new CryptoOperationException(
           "Decryption failed for subject: " + subjectId.redacted(), e);
-    }
-  }
-
-  /**
-   * Rejects blobs that cannot have been produced by this engine before touching the cipher, so a
-   * format mismatch (different engine, tampering, future version) fails with a clear message
-   * instead of a generic GCM tag-check failure — and routes a blob written under a DESTROYED key
-   * generation to {@link KeyNotFoundException} so it reads as {@code [REDACTED]} instead of failing
-   * the tag check under the wrong key.
-   *
-   * <p>The destroyed-generation tolerance is strictly bounded to {@code [1, currentKeyVersion)}: a
-   * version byte of {@code < 1} or {@code > currentKeyVersion} is not a generation this engine ever
-   * minted for the subject, so it stays a loud corruption error — otherwise flipping the byte low
-   * would silently redact ANY subject's field, including never-erased ones.
-   */
-  private static void validateCiphertextHeader(
-      String subjectDigest, byte[] ciphertext, int currentKeyVersion) {
-    // Every rejection below is DETERMINISTIC (a property of the blob, not of the key
-    // store), so it is raised as CryptoMappingException — the subtype the family classifiers
-    // treat as poison — never as the bare CryptoOperationException they read as a transient
-    // key-store outage and retry forever (mirrors PostgresCryptoEngine).
-    //
-    // The erased-generation
-    // check below must run BEFORE the full-length rejection — a blob too short to ever decrypt
-    // (missing IV/tag) can still carry a whole, readable 2-byte header (FORMAT_VERSION +
-    // generation), and a generation the current key has already outlived is still the designed
-    // KeyNotFoundException ([REDACTED]) signal for GDPR-erased data, not a length-corruption
-    // verdict. Guard on length >= HEADER_LENGTH first: only the two header bytes this reads must
-    // be safely present; a genuinely sub-header blob (or one whose format byte doesn't match)
-    // falls through unchanged to the full checks below.
-    if (ciphertext.length >= HEADER_LENGTH && ciphertext[0] == FORMAT_VERSION) {
-      int erasedCheckBlobVersion = ciphertext[1];
-      if (erasedCheckBlobVersion >= 1 && erasedCheckBlobVersion < currentKeyVersion) {
-        throw new KeyNotFoundException(
-            "Ciphertext was written under key generation "
-                + erasedCheckBlobVersion
-                + ", which a GDPR erasure destroyed; the current key generation is "
-                + currentKeyVersion
-                + " for subject: "
-                + subjectDigest);
-      }
-    }
-    int minLength = HEADER_LENGTH + GCM_IV_LENGTH + GCM_TAG_LENGTH / 8;
-    if (ciphertext.length < minLength) {
-      throw new CryptoMappingException(
-          "Ciphertext too short for subject: "
-              + subjectDigest
-              + " — expected at least "
-              + minLength
-              + " bytes, got "
-              + ciphertext.length);
-    }
-    if (ciphertext[0] != FORMAT_VERSION) {
-      throw new CryptoMappingException(
-          "Unsupported ciphertext format version "
-              + ciphertext[0]
-              + " for subject: "
-              + subjectDigest
-              + " — this engine reads format "
-              + FORMAT_VERSION
-              + "; the blob may come from a different CryptoEngine or a newer StreamRune version");
-    }
-    int blobVersion = ciphertext[1];
-    if (blobVersion >= 1 && blobVersion < currentKeyVersion) {
-      // Written under an earlier key generation of this subject — destroyed by a GDPR erasure
-      // (the current key was minted after reinstate/re-registration). No key can decrypt it
-      // anymore; surface the designed erased-data signal instead of a wrong-key GCM tag failure
-      // that would block replay and rebuilds.
-      throw new KeyNotFoundException(
-          "Ciphertext was written under key generation "
-              + blobVersion
-              + ", which a GDPR erasure destroyed; the current key generation is "
-              + currentKeyVersion
-              + " for subject: "
-              + subjectDigest);
-    }
-    if (blobVersion != currentKeyVersion) {
-      throw new CryptoMappingException(
-          "Unsupported key version "
-              + blobVersion
-              + " for subject: "
-              + subjectDigest
-              + " — this subject's current key generation is "
-              + currentKeyVersion
-              + " and destroyed generations are 1.."
-              + (currentKeyVersion - 1)
-              + "; the blob may be corrupted or come from a different CryptoEngine");
     }
   }
 
@@ -676,7 +459,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
           // unknowable, so conservatively burn the counter: no future mint may collide with
           // whatever generation the corrupt key's ciphertext claims. Same-id re-registration is
           // refused afterwards (the mint's fresh-subject-id guidance).
-          erasedVersion = MAX_KEY_VERSION;
+          erasedVersion = AesGcmV1Format.MAX_KEY_VERSION;
         }
         recordErasedGeneration(subjectId, erasedVersion);
       }
@@ -860,7 +643,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     try {
       String content = Files.readString(generationPath, StandardCharsets.US_ASCII).trim();
       int value = Integer.parseInt(content);
-      if (value < 1 || value > MAX_KEY_VERSION) {
+      if (value < 1 || value > AesGcmV1Format.MAX_KEY_VERSION) {
         throw new CryptoOperationException(
             "Corrupt key-generation record " + generationPath + ": out-of-range value " + value);
       }
@@ -889,7 +672,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
         // unknowable, so burn the counter (record the maximum): no future mint can collide with
         // any destroyed generation. A transient WRITE failure below still fails the erasure
         // loudly, and the idempotent re-run converges.
-        current = MAX_KEY_VERSION;
+        current = AesGcmV1Format.MAX_KEY_VERSION;
         recordReadable = false;
       }
       int merged = Math.max(current, erasedVersion);
@@ -1027,7 +810,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
         }
         if (bytes.length == KEY_LENGTH + 1) {
           int version = bytes[KEY_LENGTH];
-          if (version < 2 || version > MAX_KEY_VERSION) {
+          if (version < 2 || version > AesGcmV1Format.MAX_KEY_VERSION) {
             throw new CryptoOperationException(
                 "Corrupt key file " + path + ": invalid key generation byte " + version);
           }
@@ -1188,12 +971,12 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
   private int nextKeyVersion(SubjectId subjectId) {
     int maxErased = readMaxErasedGeneration(subjectId.value());
     int next = maxErased + 1;
-    if (next > MAX_KEY_VERSION) {
+    if (next > AesGcmV1Format.MAX_KEY_VERSION) {
       throw new CryptoOperationException(
           "Key-generation limit reached for subject: "
               + subjectId.redacted()
               + " — the subject has been erased and re-registered "
-              + (MAX_KEY_VERSION - 1)
+              + (AesGcmV1Format.MAX_KEY_VERSION - 1)
               + " times, exhausting the single-byte generation counter. Re-register this person"
               + " under a fresh subject id.");
     }
@@ -1550,7 +1333,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     private Durability durability;
     private int keyDurabilityMemoCapacity = DEFAULT_KEY_DURABILITY_MEMO_CAPACITY;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
-    private CipherFactory cipherFactory = FRESH_CIPHERS;
+    private VerifiedCipher.CipherFactory cipherFactory = VerifiedCipher.FRESH_CIPHERS;
 
     public Builder keyDirectory(Path path) {
       this.keyDirectory = path;
@@ -1571,7 +1354,7 @@ public final class FileSystemCryptoEngine implements CryptoEngine {
     }
 
     /** Test-only seam (package-private): creates the cipher of every operation. */
-    Builder cipherFactory(CipherFactory cipherFactory) {
+    Builder cipherFactory(VerifiedCipher.CipherFactory cipherFactory) {
       this.cipherFactory = cipherFactory;
       return this;
     }
