@@ -587,11 +587,20 @@ class CryptoConfigurationTest {
     assertSame(metrics, metricsOf(aws));
   }
 
-  /** The metrics collector an engine was built with (a private field, read for the test). */
+  /** The engine's metrics collector, read from its own or its VerifiedCipher's private field. */
   private static Object metricsOf(Object engine) throws ReflectiveOperationException {
-    java.lang.reflect.Field field = engine.getClass().getDeclaredField("metrics");
+    Object holder = engine;
+    java.lang.reflect.Field field;
+    try {
+      field = holder.getClass().getDeclaredField("metrics");
+    } catch (NoSuchFieldException e) {
+      java.lang.reflect.Field verified = holder.getClass().getDeclaredField("verified");
+      verified.setAccessible(true);
+      holder = verified.get(holder);
+      field = holder.getClass().getDeclaredField("metrics");
+    }
     field.setAccessible(true);
-    return field.get(engine);
+    return field.get(holder);
   }
 
   /** A decryption of an altered value is retried once, and the failed retry is counted. */
