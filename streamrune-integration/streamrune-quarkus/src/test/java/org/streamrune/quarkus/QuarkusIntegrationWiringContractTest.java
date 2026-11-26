@@ -125,6 +125,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           StreamRuneCryptoProducers.CryptoBackendProducer.class,
           StreamRuneCryptoProducers.FileSystemCryptoProducer.class,
           StreamRuneCryptoProducers.PostgresCryptoProducer.class,
+          StreamRuneCryptoProducers.SqliteCryptoProducer.class,
           StreamRuneCryptoProducers.VaultCryptoProducer.class,
           StreamRuneCryptoProducers.AwsKmsCryptoProducer.class,
           StreamRuneLifecycle.class,
@@ -502,7 +503,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
   }
 
   @Override
-  protected DataSource postgresql() {
+  protected DataSource database() {
     synchronized (QuarkusIntegrationWiringContractTest.class) {
       if (postgres == null) {
         postgres = new PostgreSQLContainer(PostgresTestImage.NAME);

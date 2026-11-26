@@ -520,8 +520,10 @@ val dockerFreeModules =
         ":streamrune-core",
         ":streamrune-runtime",
         ":streamrune-test",
+        ":streamrune-sqlite",
         ":streamrune-crypto:streamrune-crypto-api",
         ":streamrune-crypto:streamrune-filesystem-crypto",
+        ":streamrune-crypto:streamrune-sqlite-crypto",
         ":streamrune-integration:streamrune-integration-api",
         ":streamrune-integration:streamrune-integration-tck")
 

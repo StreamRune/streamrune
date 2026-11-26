@@ -145,9 +145,25 @@ public class StreamRuneProducers {
   /**
    * The stores of the {@link #streamRuneBackend backend}, opened once on the application's {@code
    * DataSource}: every store these producers build is taken from it, so they all share one backend.
-   * Opening builds nothing and touches no database; each store is built on first use and memoized
-   * by the bundle. {@link #closeBackendStores} closes the bundle when the container shuts down,
-   * which closes the leadership it built.
+   * Opening builds no store: each store is built on first use and memoized by the bundle. On
+   * Postgres opening touches no database; on SQLite it verifies the DataSource, checks the
+   * connection setup and takes the file's instance guard (see below). {@link #closeBackendStores}
+   * closes the bundle when the container shuts down, which closes the leadership it built.
+   *
+   * <p>The bundle is opened through {@link org.streamrune.integration.BackendStartup#open}: a
+   * backend other than Postgres is verified against the {@code DataSource} first, and SQLite's
+   * {@code open} takes the instance guard of the database file.
+   *
+   * <p><b>Shutdown order.</b> A SQLite store keeps writing the file after its bundle released the
+   * instance guard, so the bundle must close after every user of its stores stopped. The
+   * framework's own users (runners, sweepers, pollers) stop on the shutdown event ({@link
+   * StreamRuneLifecycle}), before Arc destroys any bean, and a retention sweeper's close waits for
+   * a sweep in flight. Arc then destroys the application context before the singleton context the
+   * bundle lives in, so an {@code @ApplicationScoped} application bean's {@code @PreDestroy} runs
+   * before the bundle closes. The order in which Arc destroys the beans of the singleton context is
+   * unspecified: an application {@code @Singleton} bean must not write through a store in its
+   * {@code @PreDestroy}, because the bundle may already be closed; it observes the shutdown event
+   * instead.
    *
    * <p>The bundle's context carries the {@link CryptoEngine} bean (if present), which the event
    * store, the saga store and the default read-model store wire into their ObjectMappers through
@@ -182,7 +198,10 @@ public class StreamRuneProducers {
     }
     CryptoEngine cryptoEngine =
         cryptoEngineInstance.isUnsatisfied() ? null : cryptoEngineInstance.get();
-    return backend.open(
+    // Verified first unless it is the Postgres backend, which opens nothing (BackendStartup); on
+    // SQLite, open() takes the instance guard, so another process holding the file fails here.
+    return org.streamrune.integration.BackendStartup.open(
+        backend,
         new BackendContext(
             dataSource,
             cryptoEngine,
@@ -192,6 +211,33 @@ public class StreamRuneProducers {
             properties.eventStore().schema().autoInitialize(),
             readModelAutoInitialize(properties),
             true));
+  }
+
+  /**
+   * Opens the {@link #streamRuneBackendStores stores} when the application starts, whenever a
+   * {@code DataSource} bean is resolvable, so their startup checks never wait for the first command
+   * of an application that runs no projection or saga. On SQLite, opening verifies the DataSource
+   * (a SQLite database with the required connection setup) and takes the instance guard of the
+   * file, so another process on the same file fails the start; on Postgres it touches no database.
+   * Observed at {@code LIBRARY_BEFORE + 50}: the explicit opener runs after the startup validators
+   * ({@code LIBRARY_BEFORE}) and before {@link StreamRuneLifecycle} starts the runners ({@code
+   * LIBRARY_BEFORE + 100}). It does not keep every database access behind the validators: an
+   * observer at {@code LIBRARY_BEFORE} that resolves a store (the request-identity validator builds
+   * the command buses, the projection index declarer writes through the repositories) opens the
+   * stores itself, and CDI leaves the order within {@code LIBRARY_BEFORE} unspecified.
+   *
+   * @param event the startup event
+   * @param stores the stores, resolvable when a {@code DataSource} is
+   */
+  // public: the observer invoker Arc generates may live in another classloader.
+  public void openBackendStoresAtStartup(
+      @jakarta.enterprise.event.Observes
+          @jakarta.annotation.Priority(jakarta.interceptor.Interceptor.Priority.LIBRARY_BEFORE + 50)
+          io.quarkus.runtime.StartupEvent event,
+      Instance<BackendStores> stores) {
+    if (stores.isResolvable()) {
+      stores.get().backendName();
+    }
   }
 
   /**
@@ -224,6 +270,10 @@ public class StreamRuneProducers {
    * detect (the bus on the application's inbox, the store on the framework's) cannot happen, and an
    * inbox the backend cannot write in the append's transaction fails here.
    *
+   * <p>On SQLite, which has no statement timeout, a {@code
+   * streamrune.event-store.statement-timeout} the application set is ignored and logged once as a
+   * WARN.
+   *
    * @throws IllegalArgumentException if one of those store beans is not the backend's own type: the
    *     store could not share the event store's transaction
    * @throws IllegalStateException if {@code streamrune.event-store.statement-timeout} is a value
@@ -241,7 +291,13 @@ public class StreamRuneProducers {
       Instance<org.streamrune.core.audit.EventAuditStore> eventAuditStoreInstance,
       Instance<org.streamrune.core.outbox.OutboxEventMapper> outboxEventMapperInstance,
       Instance<org.streamrune.core.outbox.OutboxStore> outboxStoreInstance,
-      Instance<CommandInbox> commandInboxInstance) {
+      Instance<CommandInbox> commandInboxInstance,
+      Instance<org.eclipse.microprofile.config.Config> config) {
+    // SQLite has no statement timeout: a value the application set is ignored there, with a WARN.
+    org.streamrune.integration.BackendStartup.statementTimeoutIgnored(
+        stores.backendName(),
+        explicitlyConfigured(
+            config, org.streamrune.integration.BackendStartup.STATEMENT_TIMEOUT_PROPERTY));
     boolean hasMapper = !outboxEventMapperInstance.isUnsatisfied();
     boolean hasStore = !outboxStoreInstance.isUnsatisfied();
     if (hasMapper != hasStore) {
@@ -279,6 +335,23 @@ public class StreamRuneProducers {
               + LogSanitizer.sanitizeFreeText(e.getMessage()),
           e);
     }
+  }
+
+  /**
+   * The raw value of {@code key} when a configuration source of the application sets it, or {@code
+   * null} when only a default applies: the default values of a configuration mapping live in
+   * sources of negative ordinal, below every source an application writes (properties files, the
+   * environment, system properties). Without a {@code Config} bean, the configuration of this
+   * thread's class loader.
+   */
+  static String explicitlyConfigured(
+      Instance<org.eclipse.microprofile.config.Config> config, String key) {
+    org.eclipse.microprofile.config.Config source =
+        config.isResolvable()
+            ? config.get()
+            : org.eclipse.microprofile.config.ConfigProvider.getConfig();
+    org.eclipse.microprofile.config.ConfigValue value = source.getConfigValue(key);
+    return value.getRawValue() != null && value.getSourceOrdinal() > 0 ? value.getRawValue() : null;
   }
 
   /** Creates an EventStore from the factory. */
@@ -332,19 +405,20 @@ public class StreamRuneProducers {
    * repository, or (transactional, with no write target of its own) has no other transactional
    * store to go to.
    *
-   * <p>Creating the store checks the server version, applies the read-model migration series
-   * ({@code db/readmodel-migration}) when {@code streamrune.read-model.schema.auto-initialize} —
-   * unset, {@code streamrune.event-store.schema.auto-initialize} — is on, and validates the
-   * read-model schema. Arc creates a {@code @Singleton} bean when it is first injected or looked
-   * up, and only {@link #readModelStores} looks it up — when the stores are first selected — so the
-   * database is touched when the first bean that needs the stores is created: in an application
-   * with projection runners, the runners' producers on the startup event (or the {@link
-   * ProjectionIndexDeclarer}, earlier on the same event, when index beans exist).
+   * <p>Creating the store checks the server version (on Postgres; any other backend verified the
+   * {@code DataSource} when its stores were opened), applies the backend's read-model migration
+   * series when {@code streamrune.read-model.schema.auto-initialize} — unset, {@code
+   * streamrune.event-store.schema.auto-initialize} — is on, and validates the read-model schema.
+   * Arc creates a {@code @Singleton} bean when it is first injected or looked up, and only {@link
+   * #readModelStores} looks it up — when the stores are first selected — so the database is touched
+   * when the first bean that needs the stores is created: in an application with projection
+   * runners, the runners' producers on the startup event (or the {@link ProjectionIndexDeclarer},
+   * earlier on the same event, when index beans exist).
    *
    * <p>Quarkus always provides a {@code DataSource} bean, so this store is produced even in an
-   * application that uses no database: when the server version cannot be read (no usable database),
-   * the failure says that such an application produces its own {@code ReadModelStore} named after
-   * the backend. A server whose version is read and too old fails with {@link
+   * application that uses no database: when the Postgres server version cannot be read (no usable
+   * database), the failure says that such an application produces its own {@code ReadModelStore}
+   * named after the backend. A Postgres server whose version is read and too old fails with {@link
    * org.streamrune.postgres.UnsupportedServerVersionException}, unwrapped.
    *
    * <p>Its repository's ObjectMapper wires the {@link CryptoEngine} bean (if present) through
@@ -359,8 +433,8 @@ public class StreamRuneProducers {
    * application's store, as before.
    *
    * @throws IllegalStateException if multiple CryptoEngine beans exist — silently skipping
-   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT — or the server
-   *     version cannot be read (no usable database)
+   *     encryption would persist {@code @Encrypted} read-model fields as PLAINTEXT — or the
+   *     Postgres server version cannot be read (no usable database)
    * @throws org.streamrune.postgres.UnsupportedServerVersionException if the server is older than
    *     StreamRune supports
    */
@@ -369,6 +443,10 @@ public class StreamRuneProducers {
   @DefaultBean
   @jakarta.inject.Named(DEFAULT_READ_MODEL_STORE_BEAN)
   public ReadModelStore postgresReadModelStore(DataSource dataSource, BackendStores stores) {
+    if (!"postgres".equals(stores.backendName())) {
+      // Any other backend verified the DataSource when the bundle was opened, at startup.
+      return stores.defaultReadModelStore();
+    }
     // The version check runs once more inside create; run first here, its "cannot read the server
     // version" failure — no usable database behind the DataSource Quarkus always provides — gets
     // the hint below. A readable but unsupported version is a real, old server: rethrown as is.
@@ -1795,7 +1873,8 @@ public class StreamRuneProducers {
       Instance<BackendStores> stores, StreamRuneQuarkusProperties properties) {
     boolean enabled =
         org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-            properties.subscription().singleActiveConsumer().enabled());
+            properties.subscription().singleActiveConsumer().enabled().orElse(null),
+            BackendSelection.parse(properties.backend()));
     if (!enabled || stores.isUnsatisfied()) {
       return org.streamrune.core.subscription.SubscriptionLeadership.NOOP;
     }
@@ -1885,8 +1964,8 @@ public class StreamRuneProducers {
     }
     if (store == null) {
       LOG.warn(
-          "Sagas are enabled but neither a PostgresSagaDeadLetterStore bean nor the framework's"
-              + " own saga dead-letter store (no DataSource) is resolvable, so no"
+          "Sagas are enabled but neither an application PostgresSagaDeadLetterStore bean nor the"
+              + " framework's own saga dead-letter store (no DataSource) is resolvable, so no"
               + " SagaDeadLetterRetentionSweeper was created: quarantined saga dead letters will"
               + " NEVER be pruned (streamrune.saga.dead-letter-retention-max-age has no effect).");
       return null;

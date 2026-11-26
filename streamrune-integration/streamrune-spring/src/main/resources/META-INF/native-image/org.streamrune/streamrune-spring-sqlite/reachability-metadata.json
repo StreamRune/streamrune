@@ -1,0 +1,30 @@
+{
+  "comment": "The SQLite backend's instance guard (org.streamrune.sqlite.FlockFileLock) calls open(2), flock(2), close(2) and strerror(3) through the Foreign Function and Memory API on Linux and macOS. Spring's RuntimeHints cannot express a foreign downcall, so the descriptors are registered here, conditional on the guard class.",
+  "foreign": {
+    "downcalls": [
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint"],
+        "options": { "firstVariadicArg": 2, "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["jint", "jint"],
+        "options": { "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["jint"],
+        "options": { "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "void*",
+        "parameterTypes": ["jint"]
+      }
+    ]
+  }
+}

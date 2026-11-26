@@ -37,6 +37,6 @@ class MicronautMultiReadModelStoreScenarioTest extends MultiReadModelStoreScenar
 
   @Override
   protected DataSource postgresql() {
-    return contract.postgresql();
+    return contract.database();
   }
 }

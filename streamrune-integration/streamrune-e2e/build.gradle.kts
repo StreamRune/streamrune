@@ -1,9 +1,11 @@
 description =
     "StreamRune end-to-end crash-recovery / HA tests: real Postgres (Testcontainers) proving " +
-        "runner- and relay-level exactly-once invariants across simulated crashes."
+        "runner- and relay-level exactly-once invariants across simulated crashes, and a " +
+        "framework-free application on one SQLite file across a close and reopen."
 
 // Test-only module: no main sources. It exercises the already-published runtime + postgres
-// event-store modules end to end. Everything is declared as testImplementation/testRuntimeOnly.
+// event-store modules end to end, and the SQLite backend in SqliteEndToEndIT. Everything is
+// declared as testImplementation/testRuntimeOnly.
 dependencies {
     testImplementation(project(":streamrune-runtime"))
     testImplementation(project(":streamrune-postgres"))
@@ -18,6 +20,12 @@ dependencies {
     testImplementation(libs.rabbitmq.client)
     testImplementation(libs.testcontainers.kafka)
     testImplementation(libs.testcontainers.rabbitmq)
+
+    // SqliteEndToEndIT: a plain-Java application on one SQLite file. streamrune-sqlite-crypto brings
+    // streamrune-sqlite and the crypto API with it (api). The TCK holds the forked-JVM probe of the
+    // instance guard and the SQLite connection settings the backend requires, which the test reuses.
+    testImplementation(project(":streamrune-crypto:streamrune-sqlite-crypto"))
+    testImplementation(project(":streamrune-integration:streamrune-integration-tck"))
 
     testImplementation(libs.postgresql)
     // The saga forward fence stress test gives each simulated process a connection pool, as a
@@ -51,6 +59,10 @@ tasks.withType<JacocoCoverageVerification>().configureEach {
 // Crash-recovery scenarios use awaitility with multi-second bounds and start a Postgres container;
 // give them more headroom than the default per-test timeout would allow under a cold container.
 tasks.withType<Test>().configureEach {
+    // The SQLite driver loads its native library and the SQLite instance guard calls flock(2)
+    // through the Foreign Function and Memory API (SqliteEndToEndIT); the guard probe it forks
+    // passes the same option.
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
     // Run the IT classes (named *IT) which JUnit Platform discovers like any other test class.
     // No special include filter is needed — there are no unit tests in this module.
     systemProperty("junit.jupiter.execution.timeout.default", "5m")

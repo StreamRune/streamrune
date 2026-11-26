@@ -127,15 +127,18 @@ public final class SqliteSnapshotStorePurger implements SnapshotPurger {
     long createdAt = SqliteTimestamps.toMicros(clock.instant());
     // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
     // write lock when the statement starts (waiting at most busy_timeout) and purges every stream
-    // or none.
+    // or none. It queues with the other writers of the process first, on the file's write mutex.
     try (var conn = database.dataSource().getConnection()) {
-      SqliteTransactions.requireAutoCommit(conn);
-      int purged;
-      try (var ps = conn.prepareStatement(PURGE_SNAPSHOTS)) {
-        ps.setLong(1, createdAt);
-        ps.setString(2, streamsJson);
-        purged = ps.executeUpdate();
-      }
+      int purged =
+          SqliteTransactions.writeStatement(
+              conn,
+              c -> {
+                try (var ps = c.prepareStatement(PURGE_SNAPSHOTS)) {
+                  ps.setLong(1, createdAt);
+                  ps.setString(2, streamsJson);
+                  return ps.executeUpdate();
+                }
+              });
       log.info(
           "GDPR forget: purged the snapshots of {} stream(s) in snapshot_store for subject-hash={}",
           purged,

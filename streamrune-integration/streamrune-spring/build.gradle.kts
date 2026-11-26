@@ -51,6 +51,14 @@ dependencies {
     testImplementation(libs.jakarta.validation.api)
     testImplementation(libs.postgresql)
     testImplementation(libs.bundles.testcontainers.pg)
+    // SpringSqliteSelectionTest boots the auto-configuration on streamrune.backend=sqlite. Test scope
+    // only: the integration loads the SQLite backend by name and names no SQLite type, so the
+    // published POM gains no SQLite dependency; an application adds the modules itself.
+    testImplementation(project(":streamrune-sqlite"))
+    testImplementation(project(":streamrune-crypto:streamrune-sqlite-crypto"))
+    // SpringSqliteApplicationTransactionTest runs a @Transactional method (DataSourceTransactionManager,
+    // JdbcTemplate) on the SQLite DataSource the stores use. Test scope only.
+    testImplementation(libs.spring.boot.starter.jdbc)
     testRuntimeOnly(libs.hibernate.validator)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -134,11 +142,34 @@ val openTelemetryAbsentTest =
         filter { includeTestsMatching(openTelemetryAbsentTestClass) }
     }
 
+// A test JVM without streamrune-sqlite-crypto: streamrune.backend=sqlite with a crypto engine
+// enabled must fail naming the module. BackendSelection loads the class with its own class loader,
+// which a FilteredClassLoader cannot hide it from, so the module leaves the classpath.
+val sqliteCryptoAbsentTestClass = "org.streamrune.spring.SpringSqliteCryptoAbsentTest"
+
+val sqliteCryptoAbsentTest =
+    tasks.register<Test>("sqliteCryptoAbsentTest") {
+        group = "verification"
+        description = "Boots streamrune.backend=sqlite with a crypto engine and no streamrune-sqlite-crypto."
+        testClassesDirs = testSourceSet.output.classesDirs
+        classpath =
+            testSourceSet.runtimeClasspath.filter { !it.path.contains("streamrune-sqlite-crypto") }
+        filter { includeTestsMatching(sqliteCryptoAbsentTestClass) }
+    }
+
+// streamrune-sqlite's driver loads its native library and its instance guard calls flock(2)
+// through the Foreign Function and Memory API; enabling native access keeps the JVM's
+// restricted-method warnings out of the test output.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 tasks.named<Test>("test") {
     filter {
         excludeTestsMatching(noValidationProviderTestClass)
         excludeTestsMatching(optionalDependencyAbsentTestClass)
         excludeTestsMatching(openTelemetryAbsentTestClass)
+        excludeTestsMatching(sqliteCryptoAbsentTestClass)
     }
 
     // StreamRuneFailureAnalyzerTest reads this module's own
@@ -160,7 +191,12 @@ tasks.named<Test>("test") {
 }
 
 tasks.named("check") {
-    dependsOn(noValidationProviderTest, optionalDependencyAbsentTest, openTelemetryAbsentTest)
+    dependsOn(
+        noValidationProviderTest,
+        optionalDependencyAbsentTest,
+        openTelemetryAbsentTest,
+        sqliteCryptoAbsentTest,
+    )
 }
 
 // ConfigurationDocLintTest reads the guides, this module's README, the pages listed in

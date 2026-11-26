@@ -219,11 +219,13 @@ class StreamRunePropertiesTest {
   }
 
   @Test
-  void defaultPropertiesShouldHaveSingleActiveConsumerEnabled() {
-    assertThat(
-            org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-                defaults().subscription().singleActiveConsumer().enabled()))
+  void defaultPropertiesShouldHaveSingleActiveConsumerEnabledOnPostgresAndOffOnSqlite() {
+    String unset = defaults().subscription().singleActiveConsumer().enabled();
+    assertThat(unset).isNull();
+    assertThat(org.streamrune.integration.SingleActiveConsumerSetting.enabled(unset, "postgres"))
         .isTrue();
+    assertThat(org.streamrune.integration.SingleActiveConsumerSetting.enabled(unset, "sqlite"))
+        .isFalse();
   }
 
   @Test
@@ -244,7 +246,7 @@ class StreamRunePropertiesTest {
     var props = bind(Map.of("streamrune.subscription.single-active-consumer.enabled", "false"));
     assertThat(
             org.streamrune.integration.SingleActiveConsumerSetting.enabled(
-                props.subscription().singleActiveConsumer().enabled()))
+                props.subscription().singleActiveConsumer().enabled(), "postgres"))
         .isFalse();
   }
 

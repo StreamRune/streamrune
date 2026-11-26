@@ -4,6 +4,12 @@ public final class org.streamrune.sqlite.SqliteAuditStore implements org.streamr
   public <init>(org.streamrune.sqlite.SqliteDatabase)
   public void save(org.streamrune.core.audit.AuditEntry)
 
+public final class org.streamrune.sqlite.SqliteBackend implements org.streamrune.core.backend.StreamRuneBackend
+  public <init>()
+  public java.lang.String name()
+  public org.streamrune.core.backend.BackendStores open(org.streamrune.core.backend.BackendContext)
+  public void verify(javax.sql.DataSource)
+
 public final class org.streamrune.sqlite.SqliteCommandAuditQuery implements org.streamrune.core.audit.CommandAuditQuery
   public <init>(org.streamrune.sqlite.SqliteDatabase)
   public java.util.Optional<org.streamrune.core.audit.AuditEntry> findByCommandId(org.streamrune.core.types.CommandId)
@@ -153,6 +159,7 @@ public final class org.streamrune.sqlite.SqliteProjectionRepository implements o
   public java.lang.Object writeTargetIdentity()
   public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
   public static java.lang.String createIndexSql(org.streamrune.core.projection.ProjectionIndex)
+  public void afterCommit(java.lang.Runnable)
   public void checkProjectionName(org.streamrune.core.types.ProjectionName)
   public void declareIndex(org.streamrune.core.projection.ProjectionIndex)
   public void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
@@ -176,6 +183,7 @@ public final class org.streamrune.sqlite.SqliteReadModelStore implements org.str
   public org.streamrune.core.projection.OffsetStore checkpoints()
   public org.streamrune.core.projection.ProjectionRepository repository()
   public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
+  public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean, java.time.Clock)
 
 public final class org.streamrune.sqlite.SqliteSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(org.streamrune.sqlite.SqliteDatabase)

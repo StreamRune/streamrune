@@ -434,6 +434,59 @@ class StreamRuneLifecycleOrderingTest {
     }
   }
 
+  /**
+   * The explicit opener of the bundle runs strictly after every startup validator and strictly
+   * before the runner starters, so the runners start on opened stores. It does not promise that no
+   * database is touched before a validator refuses: a validator that resolves a store opens the
+   * stores itself, within {@code LIBRARY_BEFORE}, in an order CDI leaves unspecified. Arc reads an
+   * observer's priority from its event parameter, as {@link
+   * #arcResolvesObserverPriorityFromTheEventParameter_notTheMethod} shows; this reads the same
+   * annotation, so it needs no container with the producers' dependencies.
+   */
+  @Test
+  void theBackendStoresOpenAfterTheValidatorsAndBeforeTheRunners() {
+    int open = startupPriority(StreamRuneProducers.class);
+    assertEquals(Interceptor.Priority.LIBRARY_BEFORE + 50, open);
+    for (Class<?> validator :
+        List.of(
+            StreamRuneConfigValidator.class,
+            StreamRuneAuthorizationValidator.class,
+            StreamRuneRequestIdentityValidator.class,
+            SagaStateCryptoValidator.class,
+            SagaEventPathRetentionConfigurer.class,
+            ProjectionIndexDeclarer.class)) {
+      assertTrue(
+          startupPriority(validator) < open,
+          () -> validator.getSimpleName() + " must run before the explicit opener of the stores");
+    }
+    for (Class<?> runnerStarter :
+        List.of(
+            StreamRuneLifecycle.class,
+            SagaCompensationRetryLifecycle.class,
+            SseEventFeedLifecycle.class)) {
+      assertTrue(
+          open < startupPriority(runnerStarter),
+          () -> runnerStarter.getSimpleName() + " must start its runners on opened stores");
+    }
+  }
+
+  /** The {@code @Priority} on the {@code StartupEvent} parameter of the class's one observer. */
+  private static int startupPriority(Class<?> beanClass) {
+    List<Integer> priorities = new ArrayList<>();
+    for (Method method : beanClass.getDeclaredMethods()) {
+      for (java.lang.reflect.Parameter parameter : method.getParameters()) {
+        if (parameter.getType() == StartupEvent.class
+            && parameter.isAnnotationPresent(jakarta.enterprise.event.Observes.class)) {
+          Priority priority = parameter.getAnnotation(Priority.class);
+          assertNotNull(priority, () -> method + " observes StartupEvent without a @Priority");
+          priorities.add(priority.value());
+        }
+      }
+    }
+    assertEquals(1, priorities.size(), () -> beanClass + " must observe StartupEvent once");
+    return priorities.getFirst();
+  }
+
   /** streamrune.snapshot-every-n-events=0 fails StreamRuneConfigValidator's very first check. */
   @ApplicationScoped
   public static class FailingConfigInfrastructure {

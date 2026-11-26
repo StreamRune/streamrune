@@ -95,32 +95,46 @@ public class StreamRuneCryptoFactory {
    */
   @Singleton
   @Requires(condition = AnyCryptoEngineEnabled.class)
-  CryptoBackend streamRuneCryptoBackend(StreamRuneBackend backend) {
-    return cryptoBackendOf(backend);
+  CryptoBackend streamRuneCryptoBackend(
+      StreamRuneBackend backend, io.micronaut.context.env.Environment environment) {
+    return cryptoBackendOf(
+        backend,
+        isTrue(environment, org.streamrune.integration.BackendStartup.POSTGRES_KEY_STORE_PROPERTY),
+        isTrue(environment, org.streamrune.integration.BackendStartup.SQLITE_KEY_STORE_PROPERTY));
+  }
+
+  /** Whether {@code property} equals {@code true}, the comparison the engines' requires make. */
+  private static boolean isTrue(io.micronaut.context.env.Environment environment, String property) {
+    return "true".equals(environment.getProperty(property, String.class).orElse(null));
   }
 
   /**
-   * The crypto backend of {@code backend}, selected by its name. Package-private for direct
-   * testing.
+   * The crypto backend of {@code backend}, selected by its name: {@link PostgresCryptoBackend} for
+   * {@code postgres}; for {@code sqlite} the SQLite crypto backend, loaded by name, which fails
+   * naming the module {@code org.streamrune:streamrune-sqlite-crypto} when it is missing.
+   * Package-private for direct testing.
    *
-   * @throws IllegalStateException when the backend has no crypto backend in this integration
+   * @param backend the storage backend
+   * @param postgresKeyStore whether {@code streamrune.crypto.postgres.enabled} is on
+   * @param sqliteKeyStore whether {@code streamrune.crypto.sqlite.enabled} is on
+   * @throws IllegalStateException when the key-store engine of another backend is enabled, or the
+   *     SQLite crypto backend cannot be loaded
    */
-  static CryptoBackend cryptoBackendOf(StreamRuneBackend backend) {
-    if ("postgres".equals(backend.name())) {
-      return new PostgresCryptoBackend();
-    }
-    throw new IllegalStateException(
-        "streamrune.backend="
-            + backend.name()
-            + " has no crypto backend in the Micronaut integration; only postgres has one");
+  static CryptoBackend cryptoBackendOf(
+      StreamRuneBackend backend, boolean postgresKeyStore, boolean sqliteKeyStore) {
+    org.streamrune.integration.BackendStartup.requireKeyStoreEngineOfBackend(
+        backend.name(), postgresKeyStore, sqliteKeyStore);
+    return org.streamrune.integration.BackendSelection.resolveCrypto(
+        backend.name(), CryptoBackend.class, CryptoBackend::name, PostgresCryptoBackend::new);
   }
 
   /**
    * Matches when one of the crypto engines is enabled: {@code
    * streamrune.crypto.filesystem.enabled}, {@code streamrune.crypto.postgres.enabled}, {@code
-   * streamrune.crypto.vault.enabled} or {@code streamrune.crypto.aws.enabled} is {@code true} — the
-   * value each engine's own {@code @Requires(property = ..., value = "true")} matches. Public only
-   * because Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   * streamrune.crypto.sqlite.enabled}, {@code streamrune.crypto.vault.enabled} or {@code
+   * streamrune.crypto.aws.enabled} is {@code true} — the value each engine's own
+   * {@code @Requires(property = ..., value = "true")} matches. Public only because Micronaut
+   * instantiates it for {@code @Requires(condition = ...)}.
    *
    * @hidden
    */
@@ -133,6 +147,7 @@ public class StreamRuneCryptoFactory {
         java.util.List.of(
             "streamrune.crypto.filesystem.enabled",
             "streamrune.crypto.postgres.enabled",
+            "streamrune.crypto.sqlite.enabled",
             "streamrune.crypto.vault.enabled",
             "streamrune.crypto.aws.enabled");
 
@@ -242,6 +257,44 @@ public class StreamRuneCryptoFactory {
       StreamRuneMicronautCryptoProperties props,
       @Nullable StreamRuneMetrics metrics) {
     return buildPostgresDelegate(cryptoBackend, dataSource, props, metrics);
+  }
+
+  /**
+   * The SQLite key-store engine ({@code streamrune.crypto.sqlite.enabled=true} with {@code
+   * streamrune.backend=sqlite}): the crypto backend's key store with the default key table (SQLite
+   * has no table-name property), cached with the backend's in-process forget signal.
+   */
+  @Singleton
+  @Requires(property = "streamrune.crypto.sqlite.enabled", value = "true")
+  @Requires(property = "streamrune.crypto.cache.enabled", notEquals = "false")
+  @Bean(preDestroy = "close")
+  CachedCryptoEngine sqliteCryptoEngine(
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      StreamRuneMicronautCryptoProperties props,
+      @Nullable StreamRuneMetrics metrics) {
+    return wrapWithCache(
+        buildSqliteDelegate(cryptoBackend, dataSource, metrics),
+        props.cache(),
+        cryptoBackend.forgetSignal(dataSource));
+  }
+
+  /** Bare (no-cache) SQLite engine when {@code streamrune.crypto.cache.enabled=false}. */
+  @Singleton
+  @Requires(property = "streamrune.crypto.sqlite.enabled", value = "true")
+  @Requires(property = "streamrune.crypto.cache.enabled", value = "false")
+  CryptoEngine sqliteCryptoEngineUncached(
+      CryptoBackend cryptoBackend, DataSource dataSource, @Nullable StreamRuneMetrics metrics) {
+    return buildSqliteDelegate(cryptoBackend, dataSource, metrics);
+  }
+
+  /** The SQLite key-store engine, uncached, with the default key table. */
+  static CryptoEngine buildSqliteDelegate(
+      CryptoBackend cryptoBackend, DataSource dataSource, @Nullable StreamRuneMetrics metrics) {
+    return cryptoBackend.keyStoreEngine(
+        dataSource,
+        new CryptoBackend.KeyStoreEngineSettings(
+            null, StreamRuneMicronautModule.metricsOrNoop(metrics)));
   }
 
   /**
@@ -440,7 +493,8 @@ public class StreamRuneCryptoFactory {
         "No DataSource available to wire the cross-replica crypto-forget channel for the {} crypto"
             + " backend; after a GDPR erasure, peer replicas will keep serving a forgotten subject's"
             + " cached plaintext for up to the cache write-TTL ceiling ({}) — the only cross-replica"
-            + " erasure bound. Provide a Postgres DataSource for prompt (LISTEN/NOTIFY) eviction.",
+            + " erasure bound. Provide a DataSource on the selected backend's database so its forget"
+            + " signal evicts promptly.",
         backend,
         writeTtl);
     return CryptoForgetSignal.NOOP;

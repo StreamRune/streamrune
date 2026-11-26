@@ -726,6 +726,22 @@ class SqliteEventStoreTest {
     }
   }
 
+  /**
+   * A closed handle is refused first, even with both schema switches off, which would otherwise
+   * build a store that writes without the instance guard.
+   */
+  @Test
+  void aClosedHandleIsRefusedEvenWithBothSwitchesOff() throws Exception {
+    SqliteDatabase database = SqliteDatabase.open(TestDatabases.dataSource(dir.resolve("gone.db")));
+    database.migrate(SqliteSchemaSeries.EVENT_STORE);
+    database.close();
+
+    assertThatThrownBy(
+            () -> factory(database).autoInitializeSchema(false).validateSchema(false).create())
+        .isExactlyInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("is closed");
+  }
+
   /** The @Encrypted check runs before the database is touched, as on Postgres. */
   @Test
   void anEncryptedTypeWithoutAnEngineIsRefusedBeforeTheDatabaseIsTouched() throws Exception {

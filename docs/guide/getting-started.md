@@ -12,7 +12,7 @@ an in-memory event store, and a simple read model — all tested without a datab
 |---|---|---|
 | Java | 25 | `java -version`. On GraalVM, start the JVM with `-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler`: the Graal JIT is not supported (see [Supported JVMs](production.md#supported-jvms)) |
 | Gradle | 9.1 | `gradle --version`. 9.1 is the first Gradle release that runs on Java 25; StreamRune itself is built and tested with Gradle 9.3.1 (its wrapper) |
-| PostgreSQL | 17 | Only required for production; unit tests use `InMemoryEventStore`. Tested on 17 and 18; an older server is refused at startup |
+| PostgreSQL | 17 | Only required for production; unit tests use `InMemoryEventStore`. Tested on 17 and 18; an older server is refused at startup. A single-instance service can run on one SQLite file instead: see [SQLite backend](sqlite.md) |
 
 ---
 
@@ -77,6 +77,14 @@ For production persistence add the PostgreSQL module:
 ```kotlin
 // PostgreSQL-backed event store
 implementation("org.streamrune:streamrune-postgres:1.0.0")
+```
+
+or, for a small service that runs as one instance, the SQLite module (see
+[SQLite backend](sqlite.md)):
+
+```kotlin
+// SQLite-backed event store and every other store, on one file
+implementation("org.streamrune:streamrune-sqlite:1.0.0")
 ```
 
 ---

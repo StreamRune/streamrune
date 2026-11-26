@@ -77,7 +77,40 @@ dependencies {
     testImplementation(libs.agroal.pool)
     testImplementation(libs.postgresql)
     testImplementation(libs.bundles.testcontainers.pg)
+    // QuarkusSqliteSelectionTest boots the producers on streamrune.backend=sqlite. Test scope only:
+    // the integration loads the SQLite backend by name and names no SQLite type, so the published
+    // POM gains no SQLite dependency; an application adds the modules itself.
+    testImplementation(project(":streamrune-sqlite"))
+    testImplementation(project(":streamrune-crypto:streamrune-sqlite-crypto"))
 }
+
+// streamrune-sqlite's driver loads its native library and its instance guard calls flock(2)
+// through the Foreign Function and Memory API; enabling native access keeps the JVM's
+// restricted-method warnings out of the test output.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+// A test JVM without streamrune-sqlite-crypto: streamrune.backend=sqlite with a crypto engine
+// enabled must fail naming the module. BackendSelection loads the class with its own class loader,
+// so the module leaves the classpath.
+val sqliteCryptoAbsentTestClass = "org.streamrune.quarkus.QuarkusSqliteCryptoAbsentTest"
+
+val quarkusTestSourceSet = project.the<SourceSetContainer>()["test"]
+
+val sqliteCryptoAbsentTest =
+    tasks.register<Test>("sqliteCryptoAbsentTest") {
+        group = "verification"
+        description = "Boots streamrune.backend=sqlite with a crypto engine and no streamrune-sqlite-crypto."
+        testClassesDirs = quarkusTestSourceSet.output.classesDirs
+        classpath =
+            quarkusTestSourceSet.runtimeClasspath.filter {
+                !it.path.contains("streamrune-sqlite-crypto")
+            }
+        filter { includeTestsMatching(sqliteCryptoAbsentTestClass) }
+    }
+
+tasks.named<Test>("test") { filter { excludeTestsMatching(sqliteCryptoAbsentTestClass) } }
 
 // Generates a Jandex index (META-INF/jandex.idx) from the compiled classes and packages
 // it into the jar. Quarkus indexes dependency jars that ship either a Jandex index or a
@@ -190,7 +223,7 @@ val verifyMicrometerVersion = tasks.register("verifyMicrometerVersion") {
 }
 
 tasks.named("check") {
-    dependsOn(verifyMicrometerVersion)
+    dependsOn(verifyMicrometerVersion, sqliteCryptoAbsentTest)
 }
 
 // ConfigurationDocLintTest reads the guides, this module's README, the pages listed in

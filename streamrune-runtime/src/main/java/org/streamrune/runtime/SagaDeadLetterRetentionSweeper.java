@@ -76,6 +76,7 @@ public final class SagaDeadLetterRetentionSweeper implements RetentionSweeper {
   private final StreamRuneMetrics metrics;
   private final ResilientPollLoop pollLoop;
   private volatile Thread thread;
+  private volatile long closeJoinTimeoutMs = RetentionSweeperThreads.CLOSE_JOIN_TIMEOUT_MS;
   private final AtomicBoolean started = new AtomicBoolean(false);
 
   // Set false the first time countFaultedBacklog throws UnsupportedOperationException
@@ -238,15 +239,22 @@ public final class SagaDeadLetterRetentionSweeper implements RetentionSweeper {
   }
 
   /**
-   * Interrupts the background thread and resets the started guard so start() may be called again.
+   * Interrupts the background thread, waits for a sweep in flight to return, and resets the started
+   * guard so start() may be called again. It returns once the sweep thread has ended, so nothing of
+   * this sweeper touches the store any more, with two exceptions: the wait timed out after 30 s or
+   * the closing thread was interrupted while it waited (both log a WARN, and the sweep may still be
+   * running), or close() ran on the sweep thread itself, from a store calling back, which returns
+   * at once without a WARN while that sweep finishes.
    */
   @Override
   public void close() {
-    Thread t = thread;
-    if (t != null) {
-      t.interrupt();
-    }
+    RetentionSweeperThreads.stop(thread, NAME, closeJoinTimeoutMs);
     thread = null;
     started.set(false);
+  }
+
+  /** Lowers the bound on the wait for a sweep in flight; for tests. */
+  void closeJoinTimeoutMs(long millis) {
+    this.closeJoinTimeoutMs = millis;
   }
 }

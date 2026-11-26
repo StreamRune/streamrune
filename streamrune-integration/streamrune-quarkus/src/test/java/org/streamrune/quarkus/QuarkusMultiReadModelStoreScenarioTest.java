@@ -36,6 +36,6 @@ class QuarkusMultiReadModelStoreScenarioTest extends MultiReadModelStoreScenario
 
   @Override
   protected DataSource postgresql() {
-    return contract.postgresql();
+    return contract.database();
   }
 }

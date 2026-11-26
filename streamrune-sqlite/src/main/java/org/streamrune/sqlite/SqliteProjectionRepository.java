@@ -84,6 +84,8 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * with an {@link IllegalArgumentException}. A table is created by the first read or write of its
  * name through this repository, by {@link #declareIndex} or by {@link #prepareReadModel}; a
  * checkpoint commit alone creates none. Creating it is a write: it waits for SQLite's write lock.
+ * Finding it is not: a table that exists is found with a plain read of the schema, so the first
+ * read or write of a projection after a process start creates nothing and takes no lock for it.
  *
  * <p><b>Query semantics: PostgreSQL's text.</b> PostgreSQL filters and sorts on {@code
  * data->>'field'}, the JSON value as text. The paged reads here compare the same text ({@link
@@ -125,14 +127,27 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * runs out, with the operation's connection-failure message and the pool's exception as its cause.
  * So the lock is not per projection as on PostgreSQL: a dead-letter replay of one projection waits
  * for an open batch of any other, and the other way round; {@code busy_timeout} must exceed the
- * longest batch or replay the file runs. Reads do not wait: in WAL mode a read sees the last
- * committed state. An updater must therefore write through the repository it is handed; a write
- * through this repository itself, or any other writer of the file, from inside the updater waits
- * for the updater's own transaction and fails after {@code busy_timeout}. There is one exception,
- * and it is why such a write is never safe: once SQLite has rolled the updater's transaction back
- * on its own ({@code SQLITE_FULL}, an I/O error), the write lock is released, so such a write does
- * not wait and commits at once, on its own, outside the batch (which still throws and rolls back).
- * The abort of a batch on a failed statement covers the handed repository only.
+ * longest batch or replay the file runs. A read does not wait: in WAL mode it sees the last
+ * committed state. The one read that does is the first read of a projection whose table does not
+ * exist yet, which creates the table.
+ *
+ * <p><b>Inside an updater.</b> The updater writes through the repository it is handed. A call
+ * through this repository itself, or through another {@code SqliteProjectionRepository} of the same
+ * file, joins the updater's transaction when it is made on the updater's thread while the updater
+ * runs: it runs on the transaction's connection, sees the updater's uncommitted writes, commits and
+ * rolls back with the batch, and its first failed statement aborts the batch as one of the handed
+ * repository does. So a projection that is handed no repository (an {@code
+ * AT_LEAST_ONCE_IDEMPOTENT} registration routed to this store) and writes through the repository it
+ * captured is applied in one transaction with its checkpoint, and a lookup of another projection's
+ * read model from an updater needs no second connection. {@link #declareIndex} is refused there,
+ * and {@link #afterCommit} queues its action with the batch's. Only these calls join: a thread the
+ * updater started, and every other writer of the file (the event store, another store, a nested
+ * {@link #executeAtomically}), works on a connection of its own, and a write there waits for the
+ * updater's own transaction and fails after {@code busy_timeout}. There is one exception, and it is
+ * why such a write is never safe: once SQLite has rolled the updater's transaction back on its own
+ * ({@code SQLITE_FULL}, an I/O error), the write lock is released, so such a write does not wait
+ * and commits at once, on its own, outside the batch (which still throws and rolls back). The abort
+ * of a batch on a failed statement covers the handed repository and the joined calls only.
  *
  * <p>{@link #transactional()} and {@link #fencesCheckpoint()} are both {@code true}. No mode makes
  * an effect outside this database exactly-once.
@@ -197,6 +212,10 @@ public final class SqliteProjectionRepository
   // Every schema object of the name, whatever its letter case: SQLite's names are case-insensitive.
   private static final String SCHEMA_OBJECT =
       "SELECT type, tbl_name FROM sqlite_schema WHERE name = ? COLLATE NOCASE";
+
+  // A table or a view of the name, whatever its letter case: what CREATE TABLE IF NOT EXISTS finds.
+  private static final String TABLE_EXISTS =
+      "SELECT 1 FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE";
 
   /**
    * The deepest nesting SQLite's JSON functions accept ({@code json_valid} of a document nested
@@ -345,8 +364,25 @@ public final class SqliteProjectionRepository
   // never waits on this repository's. Only the transaction-scoped repository (de)serializes while
   // its transaction is open.
 
+  /**
+   * The view of the batch or replay transaction this thread holds on this repository's file while
+   * its updater runs, or {@code null} when it holds none: on any other thread, on another file,
+   * outside an updater. Every read and write of this repository asks first and, inside such a
+   * transaction, runs through the view: on the transaction's connection, with this repository's
+   * mapper, committed, rolled back and aborted with the batch (see the class Javadoc).
+   */
+  private TransactionScopedRepository joined() {
+    SqliteWriteTransaction held = SqliteWriteTransaction.heldOn(file);
+    return held == null ? null : new TransactionScopedRepository(held.batch());
+  }
+
   @Override
   public <T> void save(ProjectionName projectionName, String id, T readModel) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.save(projectionName, id, readModel);
+      return;
+    }
     validateInputs(projectionName, id);
     if (readModel == null) {
       throw new IllegalArgumentException("readModel cannot be null");
@@ -379,6 +415,10 @@ public final class SqliteProjectionRepository
 
   @Override
   public <T> Optional<T> findById(ProjectionName projectionName, String id, Class<T> type) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      return joined.findById(projectionName, id, type);
+    }
     validateInputs(projectionName, id);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
@@ -406,6 +446,10 @@ public final class SqliteProjectionRepository
 
   @Override
   public <T> List<T> findAll(ProjectionName projectionName, Class<T> type) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      return joined.findAll(projectionName, type);
+    }
     validateProjectionName(projectionName);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
@@ -434,6 +478,11 @@ public final class SqliteProjectionRepository
 
   @Override
   public void delete(ProjectionName projectionName, String id) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.delete(projectionName, id);
+      return;
+    }
     validateInputs(projectionName, id);
     ensureTableExists(projectionName);
     SqliteTransactions.write(
@@ -468,6 +517,10 @@ public final class SqliteProjectionRepository
   @Override
   public <T> Page<T> findAll(
       ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      return joined.findAll(projectionName, type, pageRequest);
+    }
     validateProjectionName(projectionName);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
@@ -489,6 +542,10 @@ public final class SqliteProjectionRepository
   @Override
   public <T> Page<T> findAllBy(
       ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      return joined.findAllBy(projectionName, type, filter, pageRequest);
+    }
     validateFilteredRead(projectionName, type, filter, pageRequest);
     refuseEncryptedKeys(type, filter, pageRequest.sort());
     return page(projectionName, type, filter, pageRequest);
@@ -691,6 +748,11 @@ public final class SqliteProjectionRepository
       throw new IllegalArgumentException("index cannot be null");
     }
     String ddl = createIndexSql(index); // validates the name and the keys before any I/O
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.declareIndex(index); // refused: not inside a batch
+      return;
+    }
     String name = indexName(index);
     String table = tableName(index.projection());
     ensureTableExists(index.projection());
@@ -822,6 +884,10 @@ public final class SqliteProjectionRepository
   @Override
   public <T> Optional<Versioned<T>> findById(
       ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      return joined.findById(projectionName, id, type, lockMode);
+    }
     validateInputs(projectionName, id);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
@@ -872,6 +938,11 @@ public final class SqliteProjectionRepository
   @Override
   public <T> void save(
       ProjectionName projectionName, String id, T readModel, long expectedVersion) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.save(projectionName, id, readModel, expectedVersion);
+      return;
+    }
     validateInputs(projectionName, id);
     if (readModel == null) {
       throw new IllegalArgumentException("readModel cannot be null");
@@ -918,6 +989,24 @@ public final class SqliteProjectionRepository
           "Optimistic lock conflict on projection '%s/%s': expected version %d"
               .formatted(projectionName.value(), id, expectedVersion));
     }
+  }
+
+  /**
+   * Runs {@code action} at once, as a write through this repository has already committed when it
+   * returns. Inside a batch or replay this thread holds on this repository's file, where such a
+   * write commits with the batch, the action is queued with the batch's own instead: it runs after
+   * the {@code COMMIT} and is discarded on a rollback.
+   *
+   * @param action what to run; must not be {@code null}
+   */
+  @Override
+  public void afterCommit(Runnable action) {
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.afterCommit(action);
+      return;
+    }
+    ProjectionRepository.super.afterCommit(action);
   }
 
   // ---- (de)serialization, kept apart from every connection scope ----
@@ -1210,16 +1299,23 @@ public final class SqliteProjectionRepository
   // ---- tables ----
 
   /**
-   * Creates {@code projectionName}'s table if it does not exist, committed before it returns, and
-   * remembers it. The {@code CREATE TABLE IF NOT EXISTS} runs under SQLite's write lock, which
-   * every writer of the file takes, so it sees any table another connection or process committed
-   * and cannot lose a creation race; one waiting for another's creation proceeds once that commits.
+   * Makes sure {@code projectionName}'s table exists, and remembers it. A table that exists is
+   * found with a plain read of the schema ({@link #tableExists}), which takes no lock: so the first
+   * read of a projection after a process start does not wait for a writer. Only a table that is
+   * missing is created, committed before this returns: the {@code CREATE TABLE IF NOT EXISTS} runs
+   * under SQLite's write lock, which every writer of the file takes, so it sees any table another
+   * connection or process committed since the probe and cannot lose a creation race; one waiting
+   * for another's creation proceeds once that commits.
    */
   private void ensureTableExists(ProjectionName projectionName) {
     if (tablesChecked.contains(projectionName)) {
       return;
     }
     String table = tableName(projectionName); // reject a name outside the rule before any I/O
+    if (tableExists(table)) {
+      tablesChecked.add(projectionName);
+      return;
+    }
     synchronized (this) {
       if (tablesChecked.contains(projectionName)) {
         return;
@@ -1234,6 +1330,25 @@ public final class SqliteProjectionRepository
             return null;
           });
       tablesChecked.add(projectionName);
+    }
+  }
+
+  /**
+   * Whether the committed schema holds a table (or a view) named {@code table}, whatever its letter
+   * case: exactly what makes {@code CREATE TABLE IF NOT EXISTS} do nothing. One read in autocommit
+   * on a borrowed connection; in WAL mode it never waits for a writer.
+   *
+   * @throws EventStoreException if the schema cannot be read
+   */
+  private boolean tableExists(String table) {
+    try (Connection conn = dataSource.getConnection();
+        PreparedStatement ps = conn.prepareStatement(TABLE_EXISTS)) {
+      ps.setString(1, table);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next();
+      }
+    } catch (SQLException e) {
+      throw new EventStoreException("Failed to look up projection table: " + table, e);
     }
   }
 
@@ -1297,6 +1412,11 @@ public final class SqliteProjectionRepository
   @Override
   public void prepareReadModel(ProjectionName projectionName) {
     validateProjectionName(projectionName);
+    TransactionScopedRepository joined = joined();
+    if (joined != null) {
+      joined.prepare(projectionName);
+      return;
+    }
     ensureTableExists(projectionName);
   }
 
@@ -1316,8 +1436,10 @@ public final class SqliteProjectionRepository
    *   <li>the updater runs with a repository bound to the transaction's connection; it never
    *       borrows a second connection, so a pool of one connection cannot deadlock. While it runs,
    *       the transaction is published on this thread for this file ({@link
-   *       SqliteWriteTransaction}), so a SQLite crypto key store on the same file reads and mints
-   *       keys inside it, and its keys commit and roll back with the batch;
+   *       SqliteWriteTransaction}): a call the updater makes through this repository itself, or
+   *       another {@code SqliteProjectionRepository} of the file, runs inside it (see the class
+   *       Javadoc), and a SQLite crypto key store on the same file reads and mints keys inside it,
+   *       so its keys commit and roll back with the batch;
    *   <li>the advance moves the checkpoint to {@code newOffset} under the monotonic guard and
    *       stamps {@code max(stored, fencingEpoch)} as the epoch.
    * </ol>
@@ -1329,17 +1451,18 @@ public final class SqliteProjectionRepository
    * checkpoint row.
    *
    * <p><b>A failed statement aborts the transaction</b>, as on PostgreSQL. The first statement of
-   * the handed repository that fails (or a read model {@code jsonb} would refuse) marks the
-   * transaction aborted: every later call of the handed repository throws an {@link
-   * EventStoreException} naming that first failure (its cause) without running a statement, and
-   * once the updater returns, even if it caught the failure, the batch throws that exception before
-   * the advance, and rolls back. So a batch never commits without a write that failed, and after
-   * SQLite rolled a transaction back on its own ({@code SQLITE_FULL}, an I/O error) no later write
-   * of the updater through the handed repository runs, and autocommits, outside the batch. The
-   * abort covers the handed repository only: a write the updater makes through another repository
-   * of the file (this one itself, for instance) after such a rollback finds the write lock released
-   * and commits at once, on its own. An {@link OptimisticLockException} (no row of the expected
-   * version) does not abort, as on PostgreSQL.
+   * the handed repository, or of a call that joined the transaction, that fails (or a read model
+   * {@code jsonb} would refuse) marks the transaction aborted: every later call of the handed
+   * repository, and every later joined call, throws an {@link EventStoreException} naming that
+   * first failure (its cause) without running a statement, and once the updater returns, even if it
+   * caught the failure, the batch throws that exception before the advance, and rolls back. So a
+   * batch never commits without a write that failed, and after SQLite rolled a transaction back on
+   * its own ({@code SQLITE_FULL}, an I/O error) no later write of the updater through the handed
+   * repository or a joined call runs, and autocommits, outside the batch. The abort covers those
+   * calls only: a write the updater makes through any other writer of the file (the event store, a
+   * thread it started) after such a rollback finds the write lock released and commits at once, on
+   * its own. An {@link OptimisticLockException} (no row of the expected version) does not abort, as
+   * on PostgreSQL.
    *
    * <p><b>Failures.</b> Every exit before the {@code COMMIT} rolls the transaction back. A fence
    * rejection, and an exception or {@link Error} of the updater, propagates unchanged. A {@link
@@ -1388,14 +1511,14 @@ public final class SqliteProjectionRepository
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.BATCH,
-        (conn, transactionScopedRepository) -> {
+        (conn, batchTransaction) -> {
           // The lock, the advance and the updater's writes in ONE transaction: the fence checks
           // run under the write lock this transaction holds until its COMMIT.
           checkpointFence.lockForBatch(conn, projectionName, fencingEpoch, firstOffset);
-          runUpdater(conn, transactionScopedRepository, projectionUpdater);
+          runUpdater(batchTransaction, projectionUpdater);
           // A statement that failed inside the updater aborted the transaction, even if the
           // updater caught it: never advance or commit past it.
-          transactionScopedRepository.requireNotAborted();
+          batchTransaction.requireNotAborted();
           checkpointFence.saveLocked(conn, projectionName, newOffset, fencingEpoch);
         });
   }
@@ -1447,36 +1570,35 @@ public final class SqliteProjectionRepository
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.REPLAY,
-        (conn, transactionScopedRepository) -> {
+        (conn, batchTransaction) -> {
           // The lock a batch takes, with no check and no checkpoint write.
           checkpointFence.lockForReplay(conn, projectionName);
-          runUpdater(conn, transactionScopedRepository, projectionUpdater);
-          transactionScopedRepository.requireNotAborted();
+          runUpdater(batchTransaction, projectionUpdater);
+          batchTransaction.requireNotAborted();
         });
   }
 
   /**
    * Runs the application's updater with the transaction published on this thread for this file
-   * ({@link SqliteWriteTransaction}): the SQLite crypto key store on the same file then mints a key
-   * on the transaction's connection, inside the transaction, instead of waiting for the write lock
-   * this thread holds. A failure it reports aborts the transaction as a failed statement of the
-   * handed repository does.
+   * ({@link SqliteWriteTransaction}). While it runs, a call on this thread through a {@code
+   * SqliteProjectionRepository} of the file, this one included, runs on the transaction's
+   * connection ({@link #joined()}), and the SQLite crypto key store on the same file mints a key
+   * there, inside the transaction, instead of waiting for the write lock this thread holds. A
+   * failure either reports aborts the transaction as a failed statement of the handed repository
+   * does.
    */
-  private void runUpdater(
-      Connection conn,
-      TransactionScopedRepository transactionScopedRepository,
-      ProjectionUpdater projectionUpdater)
+  private void runUpdater(BatchTransaction batchTransaction, ProjectionUpdater projectionUpdater)
       throws SQLException {
     SqliteWriteTransaction.publishWhile(
         file,
-        conn,
+        batchTransaction,
         failure ->
-            transactionScopedRepository.abort(
+            batchTransaction.abort(
                 new EventStoreException(
                     "A statement run on the projection transaction's connection by a component"
                         + " joining it failed",
                     failure)),
-        () -> projectionUpdater.update(transactionScopedRepository));
+        () -> projectionUpdater.update(new TransactionScopedRepository(batchTransaction)));
   }
 
   /**
@@ -1512,7 +1634,7 @@ public final class SqliteProjectionRepository
   /** What runs inside a checkpoint transaction; its first statement goes through the fence. */
   @FunctionalInterface
   private interface CheckpointTransactionBody {
-    void run(Connection conn, TransactionScopedRepository repository) throws SQLException;
+    void run(Connection conn, BatchTransaction batchTransaction) throws SQLException;
   }
 
   /**
@@ -1543,7 +1665,7 @@ public final class SqliteProjectionRepository
       CheckpointTransaction kind,
       CheckpointTransactionBody body,
       AfterCommitActions afterCommitActions) {
-    TransactionScopedRepository committed;
+    BatchTransaction committed;
     try (Connection conn = dataSource.getConnection()) {
       try {
         committed =
@@ -1551,13 +1673,12 @@ public final class SqliteProjectionRepository
                 conn,
                 kind.label,
                 c -> {
-                  var transactionScopedRepository =
-                      new TransactionScopedRepository(c, afterCommitActions, now());
-                  body.run(c, transactionScopedRepository);
+                  var batchTransaction = new BatchTransaction(c, afterCommitActions, now());
+                  body.run(c, batchTransaction);
                   // From here on the outcome may be "committed" even if the COMMIT fails, so the
                   // after-commit actions run whatever it reports.
                   afterCommitActions.commitIssued();
-                  return transactionScopedRepository;
+                  return batchTransaction;
                 });
       } catch (SQLException e) {
         EventStoreException lockFailure =
@@ -1643,16 +1764,14 @@ public final class SqliteProjectionRepository
   }
 
   /**
-   * The {@link ProjectionRepository} handed to an updater: bound to the one connection of an open
-   * write transaction, so the updater's writes commit or roll back with the checkpoint advance. It
-   * never borrows a connection; a table it needs is created on the bound connection, inside the
-   * transaction. Its rows share one {@code updated_at}, the transaction's, as PostgreSQL's {@code
-   * NOW()} does. The read models are (de)serialized while the transaction is open; a SQLite crypto
-   * key store on the same file joins the transaction for that ({@link SqliteWriteTransaction}). Its
-   * first failed statement, or one a joining component reports, aborts the transaction (see {@link
-   * #requireNotAborted}).
+   * One open batch or replay transaction: its connection and what every repository view of it
+   * shares. The views are the repository handed to the updater and, while the updater runs, each
+   * {@code SqliteProjectionRepository} of the file called on the updater's thread ({@link
+   * #joined()}); all of them run on this connection, stamp this {@code updated_at}, queue their
+   * after-commit actions here, and are aborted together by the first failed statement of any of
+   * them. Touched by the updater's thread only.
    */
-  private final class TransactionScopedRepository implements ProjectionRepository {
+  static final class BatchTransaction {
 
     private final Connection conn;
     private final AfterCommitActions afterCommitActions;
@@ -1667,11 +1786,15 @@ public final class SqliteProjectionRepository
      */
     private EventStoreException abortedBy;
 
-    private TransactionScopedRepository(
-        Connection conn, AfterCommitActions afterCommitActions, long now) {
+    private BatchTransaction(Connection conn, AfterCommitActions afterCommitActions, long now) {
       this.conn = conn;
       this.afterCommitActions = afterCommitActions;
       this.now = now;
+    }
+
+    /** The connection of the open transaction. */
+    Connection connection() {
+      return conn;
     }
 
     /**
@@ -1687,10 +1810,10 @@ public final class SqliteProjectionRepository
 
     /**
      * Refuses to go on once a statement failed: PostgreSQL aborts the transaction at its first
-     * failed statement, and so does this one. Called before every statement and by the batch and
-     * the replay after the updater returns, so an updater that catches a failure can neither run
-     * another statement (after SQLite's own rollback it would commit on its own) nor commit the
-     * transaction without the failed write.
+     * failed statement, and so does this one. Called before every statement of every view and by
+     * the batch and the replay after the updater returns, so an updater that catches a failure can
+     * neither run another statement (after SQLite's own rollback it would commit on its own) nor
+     * commit the transaction without the failed write.
      *
      * @throws EventStoreException naming the first failure, which is its cause
      */
@@ -1702,6 +1825,39 @@ public final class SqliteProjectionRepository
                 + abortedBy.getMessage(),
             abortedBy);
       }
+    }
+  }
+
+  /**
+   * A {@link ProjectionRepository} bound to the one connection of an open write transaction ({@link
+   * BatchTransaction}): the repository handed to an updater, and the view through which a call on
+   * the outer repository joins the transaction its thread holds ({@link #joined()}). Its writes
+   * commit or roll back with the checkpoint advance. It never borrows a connection; a table it
+   * needs is created on the bound connection, inside the transaction. Its rows share one {@code
+   * updated_at}, the transaction's, as PostgreSQL's {@code NOW()} does. The read models are
+   * (de)serialized, with the mapper of the repository the view belongs to, while the transaction is
+   * open; a SQLite crypto key store on the same file joins the transaction for that ({@link
+   * SqliteWriteTransaction}). Its first failed statement, or one a joining component reports,
+   * aborts the transaction for every view ({@link BatchTransaction#requireNotAborted}).
+   */
+  private final class TransactionScopedRepository implements ProjectionRepository {
+
+    private final BatchTransaction transaction;
+    private final Connection conn;
+    private final long now;
+
+    private TransactionScopedRepository(BatchTransaction transaction) {
+      this.transaction = transaction;
+      this.conn = transaction.conn;
+      this.now = transaction.now;
+    }
+
+    private EventStoreException abort(EventStoreException failure) {
+      return transaction.abort(failure);
+    }
+
+    private void requireNotAborted() {
+      transaction.requireNotAborted();
     }
 
     /**
@@ -1726,7 +1882,7 @@ public final class SqliteProjectionRepository
       if (action == null) {
         throw new IllegalArgumentException("action cannot be null");
       }
-      afterCommitActions.add(action);
+      transaction.afterCommitActions.add(action);
     }
 
     /** The outer repository's identity: this view writes to the same store, on its transaction. */
@@ -1735,9 +1891,15 @@ public final class SqliteProjectionRepository
       return SqliteProjectionRepository.this.writeTargetIdentity();
     }
 
+    /** {@code prepareReadModel} inside the transaction: the table is created on its connection. */
+    private void prepare(ProjectionName projectionName) {
+      requireNotAborted();
+      ensureTable(projectionName);
+    }
+
     private void ensureTable(ProjectionName projectionName) {
       if (tablesChecked.contains(projectionName)
-          || tablesCreatedInTransaction.contains(projectionName)) {
+          || transaction.tablesCreatedInTransaction.contains(projectionName)) {
         return;
       }
       String table = tableName(projectionName);
@@ -1746,7 +1908,7 @@ public final class SqliteProjectionRepository
       } catch (SQLException e) {
         throw abort(new EventStoreException("Failed to create projection table: " + table, e));
       }
-      tablesCreatedInTransaction.add(projectionName);
+      transaction.tablesCreatedInTransaction.add(projectionName);
     }
 
     @Override

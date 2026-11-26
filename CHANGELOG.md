@@ -84,9 +84,9 @@ jars. In brief:
   in memory alike. A `ProjectionIndex` declares the index such a read needs
   (`ProjectionRepository.declareIndex`, or a `ProjectionIndex` bean in the integrations), and the
   PostgreSQL repository creates it with the table.
-- **Stable audit pages.** `CommandAuditQuery` and `EventAuditQuery` (PostgreSQL) read a page and its
-  total in one statement, so they agree under concurrent writes, and a page beyond the last reads
-  only the count. They order by `occurredAt` with the row id as tiebreak, so entries with an equal
+- **Stable audit pages.** `CommandAuditQuery` and `EventAuditQuery` (PostgreSQL and SQLite) read a
+  page and its total in one statement, so they agree under concurrent writes, and a page beyond the
+  last reads only the count. They order by `occurredAt` with the row id as tiebreak, so entries with an equal
   timestamp keep a fixed order and appear once across the pages of a window that receives no entry
   between the reads. `CommandAuditQuery.findByCommandId` returns the later written of two entries with one timestamp.
 - **Fail-closed identity.** One rule, `RequestIdentityPolicy`, derives the caller on all three
@@ -177,8 +177,8 @@ an entry at its full key.
 
 Unreleased changes to how the integrations open their stores (Changed):
 
-- **Storage backend.** The new property `streamrune.backend` (default `postgres`, the only backend
-  in this release) selects the backend every store is opened on; any other value fails the start.
+- **Storage backend.** The new property `streamrune.backend` (`postgres`, the default, or `sqlite`)
+  selects the backend every store is opened on; any other value fails the start.
   With a `DataSource`, Spring, Quarkus and Micronaut open the stores through it once and expose them
   as a `BackendStores` bean (`org.streamrune.core.backend`, beside `StreamRuneBackend`,
   `BackendContext`, `EventStoreOptions`, `OutboxOptions` and `BackendOptionException`). The
@@ -247,15 +247,104 @@ Unreleased changes to how the integrations open their stores (Changed):
   factory and command bus, because the retention sweepers open the bundle. An application
   `CryptoEngine` bean that injects a framework store is now a circular dependency.
 
+Unreleased changes for the SQLite backend:
+
+Added
+
+- **SQLite backend.** `streamrune.backend=sqlite` runs StreamRune on one SQLite database file, for a
+  small service that runs as one instance. The new module `streamrune-sqlite` implements every store
+  of `streamrune-postgres` (event store and snapshots, offsets, sagas and saga dead letters, outbox,
+  command inbox, the command and projection dead-letter stores, audit stores and queries) and
+  `SqliteReadModelStore`, the default read-model store named `sqlite`, whose queries return
+  PostgreSQL's rows in PostgreSQL's order. Each store passes the contract suite of its interface.
+  `SqliteBackend` opens all of them on one `SqliteDatabase` handle, from an integration or with
+  `new SqliteBackend().open(context)` in plain Java. See the
+  [SQLite guide](docs/guide/sqlite.md).
+- **Startup checks on SQLite.** The handle refuses, at startup and before anything is written, a
+  `DataSource` that is not SQLite (naming the backend and the database), wrong connection settings
+  (`journal_mode=WAL`, `synchronous=FULL`, `foreign_keys`, a `busy_timeout`,
+  `transaction_mode=IMMEDIATE`; the message names the setting), a pool that hands out
+  `autoCommit=false` connections (a store write on a connection in manual-commit mode is refused
+  too, with a message that names both causes, such a pool and an application transaction), an
+  in-memory or temporary database, attached databases, a file not encoded in UTF-8 and a SQLite
+  library older than 3.45.0. The integrations run these checks when
+  the application starts.
+- **Instance guard.** An operating-system lock on `<database-file>.lock`, held from opening the
+  stores until they are closed, makes a second process on the same file fail its start with
+  `SqliteGuardException`. A database file with more than one hard link is refused. Start the JVM with
+  `--enable-native-access=ALL-UNNAMED`: the guard calls `flock(2)` through the Foreign Function and
+  Memory API.
+- **SQLite crypto.** The new module `streamrune-sqlite-crypto` adds `SqliteCryptoEngine` (keys in
+  the SQLite file), `SqliteForgottenSubjectStore`, an in-process forget signal and
+  `SqliteCryptoBackend`; `streamrune.crypto.sqlite.enabled=true` switches the key-store engine on.
+  The filesystem, Vault and AWS KMS engines run on SQLite too. On SQLite an erasure inside a
+  projection batch is refused, and a key minted inside a batch commits or rolls back with it.
+- **Single-instance defaults.** With `sqlite`, `streamrune.subscription.single-active-consumer.enabled`
+  means `false` when it is not set and `true` fails the start; a set
+  `streamrune.event-store.statement-timeout` is ignored with one WARN at startup.
+- **Native image registration.** The three integrations register the two SQLite backend classes for
+  reflection, the SQLite schema scripts as resources and the instance guard's foreign downcalls; a
+  native image of a SQLite application has not been verified end-to-end. Pass
+  `--enable-native-access=ALL-UNNAMED` to `native-image` as well.
+- **`AtomicBatchProcessorContract.locksPerProjection()`.** A store whose write lock spans every
+  projection returns `false`, which skips the one case that needs a lock per projection.
+
+Changed
+
+- **Retention sweepers wait for a sweep in flight on `close()`.** The outbox, inbox, command
+  dead-letter and saga dead-letter retention sweepers interrupt their thread and wait up to 30
+  seconds for a running sweep to return, on PostgreSQL too, so a store closed after its sweeper is
+  never written by a sweep that outlived the close. With all four mid-sweep, shutdown can take about
+  two minutes. A sweep that does not end in time logs a WARN.
+- **Quarkus opens the backend's stores at startup.** With a `DataSource` (every Quarkus application
+  with Agroal has one), the `BackendStores` bean is created by a startup observer that runs after
+  the startup validators, on PostgreSQL too: the `CryptoEngine` lookup and its ambiguity check, the
+  metrics and the tracing are resolved at startup instead of at the first use of a store. On
+  PostgreSQL no database is touched. Micronaut checks the stores in a startup listener after its
+  validators; Spring creates the bean with the other singletons.
+- **Spring health reads the head through the `EventStore` bean.** `StreamRuneHealthIndicator` reports
+  `eventStore.lastGlobalOffset` from `EventStore.lastGlobalOffset()`, as the Quarkus and Micronaut
+  checks do, instead of querying `event_stream` itself, so the detail is the same on every backend.
+  The detail `eventStore.lastEventTimestamp` is gone, on PostgreSQL too, and without an `EventStore`
+  bean the check reports no `eventStore.*` detail. The constructor that took the relay contributor
+  third now takes the `EventStore` third and the relay contributor fourth.
+- **Backend-neutral messages.** The WARN of all three integrations when a cached crypto engine has
+  no forget signal asks for "a DataSource on the selected backend's database"; the Quarkus failure
+  to build the key-store engine names the backend ("Failed to build the postgres key-store
+  engine"); the Quarkus WARN that no saga dead-letter sweeper exists names "the framework's own saga
+  dead-letter store".
+- **Leadership default in the configuration metadata.** Spring's and Micronaut's metadata for
+  `streamrune.subscription.single-active-consumer.enabled` declare no default, because it depends on
+  the backend (`true` on `postgres`, `false` on `sqlite`); the value a PostgreSQL application gets is
+  unchanged.
+- **`CachedCryptoEngine` waits at most 250 ms for a lock stripe on a cache miss.** Past that, the
+  decrypt calls the engine without the stripe and caches nothing, instead of waiting without bound
+  behind an erasure of a subject on the same stripe. An interrupted wait takes the same path. It
+  refuses a `null` subject in `deleteKey`, `reinstate` and `isKeyAvailable` with
+  `IllegalArgumentException`.
+- **The stores check their arguments as their interfaces document.** On PostgreSQL and in memory: a
+  negative `maxCount` of `EventStore.readGlobalStream` and `readStream` fails with
+  `IllegalArgumentException` before the query; the dead-letter queue, the projection dead-letter
+  store, the audit stores and queries and the forgotten-subject stores refuse `null` arguments and
+  non-positive limits up front; publishing a dead-letter `commandId` the queue already holds fails
+  with `EventStoreException` and keeps the stored entry, in memory as on PostgreSQL; the in-memory
+  event audit store refuses a duplicate `eventId` with `EventStoreException`, storing nothing of the
+  batch; a `PostgresReadModelStore` named `default` is refused.
+- **Contract suites.** `streamrune-test` adds contract suites for `DeadLetterQueue`,
+  `ProjectionDeadLetterStore`, `AuditStore`, `EventAuditStore`, `CommandAuditQuery`,
+  `EventAuditQuery`, `ComplianceReportQuery`, the crypto key store and `ForgottenSubjectStore`, and
+  extends `ProjectionRepositoryQueryContract` with the text semantics of numbers, booleans, `null`
+  and mixed types. Each runs on PostgreSQL, SQLite and the in-memory stores where they exist.
+
 ### Modules
 
-Sixteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
+Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
 aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the two test projects, which are not published:
 `streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites) and
 `streamrune-integration:streamrune-integration-tck` (the wiring contract, the configuration oracle
 and the doc reading that the tests of the three integrations share). The artifact id is the project
 name. Each jar declares a stable JPMS module name (four ship a `module-info.java`, the
-other twelve carry `Automatic-Module-Name`), bundles `LICENSE`, `NOTICE` and `LICENSE-COMMERCIAL.md`
+other fourteen carry `Automatic-Module-Name`), bundles `LICENSE`, `NOTICE` and `LICENSE-COMMERCIAL.md`
 under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 
 | Artifact (`org.streamrune:`) | Gradle project | JPMS module | Contents |
@@ -263,9 +352,11 @@ under `META-INF`, and sets `SPDX-License-Identifier: BUSL-1.1` in its manifest.
 | `streamrune-core` | `:streamrune-core` | `org.streamrune.core` | Contracts and value types: `EventStore`, `Decider`, `CommandBus`, `Projection`, `ProjectionDeliveryMode`, `QueryBus`, saga, subscription, outbox, audit, GDPR and `CryptoEngine` SPIs, typed ids, `MetricNames`. Depends only on Jackson. |
 | `streamrune-runtime` | `:streamrune-runtime` | `org.streamrune.runtime` | `StreamRune` facade, `VirtualThreadCommandBus`, interceptors, projection runners, subscriptions, `SagaRunner` and its sweepers, outbox poller and replayer, GDPR services, retention sweepers, SSE publisher. |
 | `streamrune-postgres` | `:streamrune-postgres` | `org.streamrune.postgres` | `PostgresEventStore` and its factory, the Flyway baseline, `SchemaValidator`, `PgAdvisoryLocker`, `LeaseBasedLeadership`, `JdbcProjectionRepository`, the PostgreSQL inbox, outbox, saga, dead-letter, audit and offset stores, LISTEN/NOTIFY subscriptions. |
+| `streamrune-sqlite` | `:streamrune-sqlite` | `org.streamrune.sqlite` | `SqliteBackend`, the `SqliteDatabase` handle with its instance guard, the SQLite schema series, and every store on one SQLite file: event store, snapshots, offsets, sagas, outbox, inbox, dead letters, audit, `SqliteReadModelStore`. Brings the `sqlite-jdbc` driver. |
 | `streamrune-crypto-api` | `:streamrune-crypto:streamrune-crypto-api` | `org.streamrune.crypto` | `CryptoShreddingModule` (Jackson), `CachedCryptoEngine`, `ForgottenSubjectStore`. |
 | `streamrune-filesystem-crypto` | `:streamrune-crypto:streamrune-filesystem-crypto` | `org.streamrune.crypto.filesystem` | `FileSystemCryptoEngine` — AES-256-GCM keys on disk. |
 | `streamrune-postgres-crypto` | `:streamrune-crypto:streamrune-postgres-crypto` | `org.streamrune.crypto.postgres` | `PostgresCryptoEngine`, `JdbcForgottenSubjectStore`, `PostgresCryptoForgetSignal`, the crypto Flyway baseline. |
+| `streamrune-sqlite-crypto` | `:streamrune-crypto:streamrune-sqlite-crypto` | `org.streamrune.crypto.sqlite` | `SqliteCryptoEngine`, `SqliteForgottenSubjectStore`, the in-process forget signal, `SqliteCryptoBackend`, the SQLite crypto schema series. |
 | `streamrune-vault-crypto` | `:streamrune-crypto:streamrune-vault-crypto` | `org.streamrune.crypto.vault` | `VaultCryptoEngine` — HashiCorp Vault transit engine. |
 | `streamrune-aws-kms-crypto` | `:streamrune-crypto:streamrune-aws-kms-crypto` | `org.streamrune.crypto.aws` | `AwsKmsCryptoEngine` — AWS KMS customer managed key with per-subject tombstones. |
 | `streamrune-test` | `:streamrune-test` | `org.streamrune.test` | `InMemoryEventStore`, fixtures (decider, event store, projection, saga, recorded event streams), in-memory doubles of every store and bus, fault-injecting forwarding stores, recording doubles, store contract suites. |
@@ -314,6 +405,11 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   [Supported JVMs](docs/guide/production.md#supported-jvms).
 - **PostgreSQL 17 or newer** for `streamrune-postgres` and `streamrune-postgres-crypto` — tested on 17
   and 18, and enforced at startup. The in-memory stores of `streamrune-test` need no database.
+- **SQLite 3.45.0 or newer** for `streamrune-sqlite` and `streamrune-sqlite-crypto`, enforced at
+  startup. `streamrune-sqlite` brings `org.xerial:sqlite-jdbc` 3.54.1.0 (an `api` dependency), which
+  bundles SQLite 3.54.1, and Flyway 13.11.1 (`flyway-core`). Start the JVM with
+  `--enable-native-access=ALL-UNNAMED`. The database file must be on a local disk, not NFS or SMB.
+  The instance guard supports Linux, macOS and Windows; the project's tests run on Linux and macOS.
 - **Jackson 2.19.2** (`jackson-databind` 2.19 or newer). `streamrune-core` depends on nothing else.
 - `streamrune-postgres` brings Flyway 13.11.1 (`flyway-core`, `flyway-database-postgresql`), HikariCP
   6.2.1 (an `api` dependency, Maven `compile` scope: the module builds HikariCP pools for its
@@ -352,9 +448,13 @@ the calling thread (the class javadoc of each says why); `ForwardingCommandBus` 
   row and holds that lock until commit, so appends to unrelated streams serialize and the global
   append rate does not grow with application instances. No measured capacity envelope is published.
   Scale by partitioning into separate event stores; there is no global order across partitions.
+- **SQLite serves one instance.** The SQLite backend has no subscription leadership, no statement
+  timeout and no push subscription, and one write lock serializes every write to the file. Its
+  native-image registration has not been verified with a native image of a whole application.
 - **Single writable primary.** No multi-master; use primary/standby failover. No backup/restore drill
   against a production deployment has been performed and no RPO/RTO figures are published.
-- **No embedded database mode.** `streamrune-postgres` needs a running PostgreSQL 17+;
+- **PostgreSQL needs a running server.** `streamrune-postgres` needs a running PostgreSQL 17+; the
+  SQLite backend (`streamrune-sqlite`) runs in-process on one file, for one instance only;
   `InMemoryEventStore` is for tests, in-process only, not durable and not a throughput proxy.
 - **LISTEN/NOTIFY needs a session-stable connection** and `NOTIFY` is best-effort; under PgBouncer
   transaction or statement pooling use `pollingOnly`.

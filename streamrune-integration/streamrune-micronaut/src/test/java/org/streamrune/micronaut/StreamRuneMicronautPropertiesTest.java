@@ -117,7 +117,8 @@ class StreamRuneMicronautPropertiesTest {
       assertFalse(
           org.streamrune.integration.SingleActiveConsumerSetting.enabled(
               p.getBean(StreamRuneMicronautProperties.class)
-                  .subscriptionSingleActiveConsumerEnabled()));
+                  .subscriptionSingleActiveConsumerEnabled(),
+              "postgres"));
     }
   }
 

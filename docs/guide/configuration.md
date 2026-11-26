@@ -55,7 +55,7 @@ names the property and the value:
 
 | Property | Default | Meaning |
 |---|---|---|
-| `streamrune.backend` | `postgres` | The storage backend every store is opened on. `postgres` is the only backend in this release; any other value fails the start. |
+| `streamrune.backend` | `postgres` | The storage backend every store is opened on: `postgres` or `sqlite` (needs `org.streamrune:streamrune-sqlite` on the classpath, and `streamrune-sqlite-crypto` with a crypto engine). Any other value fails the start, with or without a `DataSource`, with a message that lists `postgres, sqlite`. On `sqlite`, a `DataSource` of another database fails the start naming both; see [SQLite backend](sqlite.md). |
 
 With a `DataSource`, each integration opens the stores through the backend once and exposes them
 as a `BackendStores` bean (`org.streamrune.core.backend`). The framework's own stores are taken
@@ -81,10 +81,28 @@ The framework's store beans are declared with their interface type: `CommandInbo
 condition by a PostgreSQL class (`PostgresCommandInbox`, `PostgresReadModelStore`, …) does not find
 them.
 
-The default read-model store is named after the backend, `postgres`. A projection that declares
+The default read-model store is named after the backend: `postgres` or `sqlite`. A projection that declares
 `@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)` (the text `default`) is routed to the
 default store whatever the backend's name; `default` is reserved, so a store of that name fails the
 start. See [Read-model stores](read-model-stores.md).
+
+On `sqlite` the integrations open the backend's stores when the application starts: they verify
+the `DataSource` (a SQLite database with the required connection settings) and take the instance
+guard of the database file, so a second process on the same file fails the start. Three settings
+behave differently there:
+
+- `streamrune.subscription.single-active-consumer.enabled` means `false` when it is not set, and
+  `true` fails the start: SQLite serves one instance and needs no lease. The saga forward fence's
+  `auto` follows it, so it is off unless `streamrune.saga.forward-fence` is `on`.
+- `streamrune.event-store.statement-timeout` is ignored, because SQLite has no statement timeout;
+  setting it logs one WARN at startup asking to remove it. Waiting for the write lock is bounded by
+  the connection's `busy_timeout`.
+- `streamrune.crypto.sqlite.enabled` switches on the SQLite key-store engine, which needs
+  `streamrune.backend=sqlite`; `streamrune.crypto.postgres.enabled` needs `postgres`. Enabling the
+  key-store engine of the other backend fails the start.
+
+The connection settings, the instance guard and everything else that differs are in
+[SQLite backend](sqlite.md).
 
 ## Commands, locking and retries
 
@@ -108,24 +126,24 @@ start. See [Read-model stores](read-model-stores.md).
 | Property | Default | Meaning |
 |---|---|---|
 | `streamrune.event-store.schema.auto-initialize` | `true` | Whether the framework's Flyway migrations run at startup. |
-| `streamrune.read-model.schema.auto-initialize` | — | Whether the default read-model store (`postgres`) applies the read-model migration series (`db/readmodel-migration`: `readmodel_checkpoint`, where projections committed with their read models keep their checkpoints) at startup; unset, it follows `streamrune.event-store.schema.auto-initialize`. |
-| `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0s` sets none of its own. |
+| `streamrune.read-model.schema.auto-initialize` | — | Whether the default read-model store applies the read-model migration series (`db/readmodel-migration` on `postgres`, `db/sqlite-readmodel-migration` on `sqlite`: `readmodel_checkpoint`, where projections committed with their read models keep their checkpoints) at startup; unset, it follows `streamrune.event-store.schema.auto-initialize`. |
+| `streamrune.event-store.statement-timeout` | `30s` | Bound on every statement of the event store; `0s` sets none of its own. Ignored on `sqlite`, which has no statement timeout: a value set there logs one WARN at startup. |
 | `streamrune.polling-interval` | `5s` | Catch-up polling interval of the auto-configured projection subscriptions; at least `1ms`. |
 | `streamrune.polling-jitter` | `1s` | Random jitter added to that interval; `0s` disables it, a positive value below `1ms` fails the start. |
 | `streamrune.projections.auto-discovery.enabled` | `true` | Whether the integration builds and starts the runners of the `@ProjectionConfig` projections. |
 | `streamrune.projections.<name>.enabled` | `true` | Whether the projection of that name is discovered. |
 | `streamrune.projections.<name>.error-strategy` | — | The error strategy of that projection; unset, the one its `@ProjectionConfig` names. |
-| `streamrune.projection-dlq-enabled` | `false` | Whether the PostgreSQL projection dead-letter store is created (with a `DataSource`). |
+| `streamrune.projection-dlq-enabled` | `false` | Whether the backend's projection dead-letter store is created (with a `DataSource`). |
 | `streamrune.subscription.health.lag-threshold` | `1000` | Lag, in events, at or above which a running subscription reads `DEGRADED`. |
-| `streamrune.subscription.single-active-consumer.enabled` | `true` | Whether a lease elects one replica per subscription (with a `DataSource`). |
+| `streamrune.subscription.single-active-consumer.enabled` | — | Whether a lease elects one replica per subscription (with a `DataSource`). Unset: on with `streamrune.backend=postgres`, off with `sqlite`, where `true` fails the start (SQLite is single-instance). |
 | `streamrune.subscription.single-active-consumer.lease-ttl` | `15s` | How long a lease outlives its last renewal: the bound on failover. |
 | `streamrune.event-audit-enabled` | `false` | Whether the event audit store and its query are created (with a `DataSource`). |
 | `streamrune.query-cache.enabled` | `false` | Whether the `CachingQueryBus` is created. |
 
 Projection indexes are beans, not properties: at startup, before the projection runners start,
 each `org.streamrune.core.projection.ProjectionIndex` bean in the context is declared on the
-application's `ProjectionRepository` bean — the auto-configured `JdbcProjectionRepository` or one
-the application defines — which creates the index with its table if it does not exist (see
+application's `ProjectionRepository` bean — the default store's repository (`JdbcProjectionRepository`
+on `postgres`, `SqliteProjectionRepository` on `sqlite`) or one the application defines — which creates the index with its table if it does not exist (see
 [Reading read models](concepts.md#reading-read-models-pages-filters-and-indexes)). An index whose
 key the repository refuses, an index that cannot be created, or index beans without a repository
 bean fail the start.
@@ -134,7 +152,7 @@ bean fail the start.
 
 | Property | Default | Meaning |
 |---|---|---|
-| `streamrune.saga.enabled` | `true` | Whether the PostgreSQL saga stores are created (with a `DataSource`). |
+| `streamrune.saga.enabled` | `true` | Whether the backend's saga stores are created (with a `DataSource`). |
 | `streamrune.saga.forward-fence` | `auto` | The forward fence of the runners that set none: `auto` follows single-active-consumer, `on`, `off`. |
 | `streamrune.saga.parallelism` | `4` | Saga steps of one saga type in flight at once, 1–64, for the runners that set none. |
 | `streamrune.saga.subscriptions.<name>.parallelism` | — | The same for the saga whose subscription has that name; wins over the runner's builder. An unknown name fails startup. |
@@ -222,7 +240,8 @@ is the switch that stops it whatever the SDK. See
 | `streamrune.crypto.cache.expire-after-access` | — | How long a cached entry lives after its last access; unset, entries expire by write age only. |
 | `streamrune.crypto.filesystem.enabled` | `false` | Whether the file-system key engine is active. |
 | `streamrune.crypto.filesystem.key-directory` | `/var/lib/streamrune/keys` | Directory of the file-system engine's keys. |
-| `streamrune.crypto.postgres.enabled` | `false` | Whether the PostgreSQL key engine is active. |
+| `streamrune.crypto.postgres.enabled` | `false` | Whether the PostgreSQL key engine is active; needs `streamrune.backend=postgres`. |
+| `streamrune.crypto.sqlite.enabled` | `false` | Whether the SQLite key engine is active; needs `streamrune.backend=sqlite` and `org.streamrune:streamrune-sqlite-crypto`. Keys live in the default key table of the SQLite database. |
 | `streamrune.crypto.postgres.table-name` | `encryption_keys` | Table of the PostgreSQL engine's keys. |
 | `streamrune.crypto.vault.enabled` | `false` | Whether the Vault transit engine is active. |
 | `streamrune.crypto.vault.address` | `http://localhost:8200` | Address of the Vault server. |

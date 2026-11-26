@@ -24,7 +24,7 @@ public class StreamRuneFailureAnalyzer
     if (beanType.contains("CryptoEngine")) {
       // Name only knobs that actually exist. The old remedy named a single
       // "provider" selector key that NOTHING reads (a pre-1.0 leftover) — each backend is enabled
-      // by its own streamrune.crypto.<backend>.enabled flag (@ConditionalOnProperty on the four
+      // by its own streamrune.crypto.<backend>.enabled flag (@ConditionalOnProperty on the five
       // *CryptoEngineConfiguration classes) plus that backend's required companion settings. A
       // guard test asserts every streamrune.* key this class names is a real, bound-or-read
       // property (StreamRuneFailureAnalyzerTest), so a renamed knob can never strand an operator
@@ -34,7 +34,10 @@ public class StreamRuneFailureAnalyzer
           "Register a CryptoEngine bean, or enable exactly one built-in backend: "
               + "streamrune.crypto.filesystem.enabled=true "
               + "(with streamrune.crypto.filesystem.key-directory), "
-              + "streamrune.crypto.postgres.enabled=true (requires a DataSource bean), "
+              + "streamrune.crypto.postgres.enabled=true (requires a DataSource bean and"
+              + " streamrune.backend=postgres), "
+              + "streamrune.crypto.sqlite.enabled=true (requires a DataSource bean and"
+              + " streamrune.backend=sqlite), "
               + "streamrune.crypto.vault.enabled=true (with streamrune.crypto.vault.token; "
               + "a DataSource is required for the durable erasure tombstone store), or "
               + "streamrune.crypto.aws.enabled=true (with streamrune.crypto.aws.region and "

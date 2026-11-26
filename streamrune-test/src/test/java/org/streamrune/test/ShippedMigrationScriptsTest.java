@@ -77,6 +77,23 @@ class ShippedMigrationScriptsTest {
   }
 
   @Test
+  void listsTheSqliteSeriesWhenAskedForThem() throws Exception {
+    Path root = temp.resolve("sqlite");
+    write(root, "db/sqlite-migration/V001__baseline.sql");
+    write(root, "db/sqlite-readmodel-migration/V001__readmodel_baseline.sql");
+    write(root, "db/sqlite-crypto-migration/V001__crypto.sql");
+
+    try (var loader = new URLClassLoader(new URL[] {root.toUri().toURL()}, null)) {
+      assertEquals(
+          List.of(
+              "db/sqlite-crypto-migration/V001__crypto.sql",
+              "db/sqlite-migration/V001__baseline.sql",
+              "db/sqlite-readmodel-migration/V001__readmodel_baseline.sql"),
+          ShippedMigrationScripts.onClassPath(loader, ShippedMigrationScripts.SQLITE_DIRECTORIES));
+    }
+  }
+
+  @Test
   void refusesASeriesThatIsNotOnTheClassPath() throws Exception {
     Path root = temp.resolve("only-event-store");
     write(root, "db/streamrune-migration/V001__baseline.sql");

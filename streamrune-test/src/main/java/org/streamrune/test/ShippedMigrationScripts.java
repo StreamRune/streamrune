@@ -31,6 +31,15 @@ public final class ShippedMigrationScripts {
   public static final List<String> DIRECTORIES =
       List.of("db/streamrune-migration", "db/crypto-migration", "db/readmodel-migration");
 
+  /**
+   * The class-path directories of the SQLite backend's migration series: {@code
+   * streamrune-sqlite}'s event-store and read-model series and {@code streamrune-sqlite-crypto}'s
+   * crypto series. Only a class path that carries both modules lists them ({@link
+   * #onClassPath(ClassLoader, List)}).
+   */
+  public static final List<String> SQLITE_DIRECTORIES =
+      List.of("db/sqlite-migration", "db/sqlite-readmodel-migration", "db/sqlite-crypto-migration");
+
   private ShippedMigrationScripts() {}
 
   /**
@@ -42,8 +51,21 @@ public final class ShippedMigrationScripts {
    * @throws IllegalStateException if a series directory is not on the class path or holds no script
    */
   public static List<String> onClassPath(ClassLoader classLoader) {
+    return onClassPath(classLoader, DIRECTORIES);
+  }
+
+  /**
+   * Every {@code .sql} script directly under each of {@code directories}, as class-path resource
+   * names, sorted.
+   *
+   * @param classLoader the class loader whose class path is read
+   * @param directories the series directories, for example {@link #SQLITE_DIRECTORIES}
+   * @return the resource name of every script
+   * @throws IllegalStateException if a series directory is not on the class path or holds no script
+   */
+  public static List<String> onClassPath(ClassLoader classLoader, List<String> directories) {
     var scripts = new TreeSet<String>();
-    for (String directory : DIRECTORIES) {
+    for (String directory : directories) {
       var found = new TreeSet<String>();
       try {
         for (URL url : Collections.list(classLoader.getResources(directory))) {

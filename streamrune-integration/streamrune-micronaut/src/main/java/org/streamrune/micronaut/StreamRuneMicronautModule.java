@@ -162,7 +162,10 @@ public class StreamRuneMicronautModule {
   /**
    * The stores of the selected backend on the application's {@code DataSource}: one bundle per
    * context, which every store bean below takes its store from, closed with the context ({@code
-   * preDestroy}). Opening it touches no database; each store is built when first asked for.
+   * preDestroy}). Opening it builds no store; each store is built when first asked for. On Postgres
+   * opening touches no database; on SQLite it verifies the DataSource, checks the connection setup
+   * and takes the file's instance guard, through {@link
+   * org.streamrune.integration.BackendStartup#open}.
    *
    * <p>The {@link CryptoEngine} bean (if exactly one is present) is the engine the event store, the
    * saga store and the default read-model store encrypt {@code @Encrypted} fields with. Micronaut
@@ -204,7 +207,12 @@ public class StreamRuneMicronautModule {
               + " store, the saga store and the default read-model store. Found: "
               + cryptoEngines);
     }
-    return backend.open(
+    // Verified first unless it is the Postgres backend, which opens nothing (BackendStartup); on
+    // SQLite, open() takes the instance guard, so another process holding the file fails here. The
+    // bundle must report the backend's name: the default read-model store is named after
+    // backend.name() (readModelStores) and after stores.backendName() (postgresReadModelStore).
+    return org.streamrune.integration.BackendStartup.open(
+        backend,
         new BackendContext(
             dataSource,
             cryptoEngines.isEmpty() ? null : cryptoEngines.getFirst(),
@@ -248,6 +256,9 @@ public class StreamRuneMicronautModule {
    * @return the backend's event store factory
    * @throws IllegalArgumentException when the outbox store (paired with a mapper), the command
    *     inbox or the event audit store is not the backend's own type
+   * @param environment the environment the statement-timeout property is read from as configured
+   *     (on SQLite, which has no statement timeout, a value set there is ignored with one WARN);
+   *     {@code null} reads nothing
    * @throws IllegalStateException when {@code streamrune.event-store.statement-timeout} is refused
    */
   @Singleton
@@ -264,7 +275,18 @@ public class StreamRuneMicronautModule {
       @jakarta.annotation.Nullable org.streamrune.core.audit.EventAuditStore eventAuditStore,
       @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxEventMapper outboxEventMapper,
       @jakarta.annotation.Nullable org.streamrune.core.outbox.OutboxStore outboxStore,
-      @jakarta.annotation.Nullable CommandInbox commandInbox) {
+      @jakarta.annotation.Nullable CommandInbox commandInbox,
+      @jakarta.annotation.Nullable io.micronaut.context.env.Environment environment) {
+    // SQLite has no statement timeout: a value the application set is ignored there, with a WARN.
+    org.streamrune.integration.BackendStartup.statementTimeoutIgnored(
+        stores.backendName(),
+        environment == null
+            ? null
+            : environment
+                .getProperty(
+                    org.streamrune.integration.BackendStartup.STATEMENT_TIMEOUT_PROPERTY,
+                    String.class)
+                .orElse(null));
     boolean outboxPaired = outboxEventMapper != null && outboxStore != null;
     if (!outboxPaired && (outboxEventMapper != null || outboxStore != null)) {
       LOG.warn(
@@ -1797,7 +1819,9 @@ public class StreamRuneMicronautModule {
    * SagaEventPathRetentionConfigurer} reads it through for the forward fence's {@code auto}.
    * {@code @Requires(notEquals = "false")} kept the leadership bean for {@code off}, {@code no} or
    * {@code 0} while the fence read them as off. An unknown spelling throws, so the context does not
-   * start. Public only because Micronaut instantiates it for {@code @Requires(condition = ...)}.
+   * start. Unset, the property follows {@code streamrune.backend}: on for {@code postgres}, off for
+   * {@code sqlite}, where an explicit on fails the start (SQLite is single-instance). Public only
+   * because Micronaut instantiates it for {@code @Requires(condition = ...)}.
    *
    * @hidden
    */
@@ -1806,14 +1830,21 @@ public class StreamRuneMicronautModule {
       implements io.micronaut.context.condition.Condition {
     @Override
     public boolean matches(io.micronaut.context.condition.ConditionContext context) {
+      if (!(context.getBeanContext()
+          instanceof io.micronaut.context.ApplicationContext application)) {
+        return org.streamrune.integration.SingleActiveConsumerSetting.enabled(null, "postgres");
+      }
       String value =
-          context.getBeanContext() instanceof io.micronaut.context.ApplicationContext application
-              ? application
-                  .getProperty(
-                      org.streamrune.integration.SingleActiveConsumerSetting.PROPERTY, String.class)
-                  .orElse(null)
-              : null;
-      return org.streamrune.integration.SingleActiveConsumerSetting.enabled(value);
+          application
+              .getProperty(
+                  org.streamrune.integration.SingleActiveConsumerSetting.PROPERTY, String.class)
+              .orElse(null);
+      String backend =
+          org.streamrune.integration.BackendSelection.parse(
+              application
+                  .getProperty(org.streamrune.integration.BackendSelection.PROPERTY, String.class)
+                  .orElse(null));
+      return org.streamrune.integration.SingleActiveConsumerSetting.enabled(value, backend);
     }
   }
 

@@ -346,7 +346,7 @@ class SpringGdprAutoConfigTest {
               .filter(l -> l.endsWith("CryptoEngineConfiguration"))
               .toList();
     }
-    assertThat(engineConfigs).hasSize(4);
+    assertThat(engineConfigs).hasSize(5);
 
     var ordering =
         StreamRuneAutoConfiguration.class.getAnnotation(

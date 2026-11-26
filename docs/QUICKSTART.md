@@ -8,7 +8,9 @@ Step-by-step guide to building your first event-sourced application with StreamR
 - **Gradle 9.1 or newer** — the first Gradle release that runs on Java 25. StreamRune itself is
   built and tested with Gradle 9.3.1 (its wrapper)
 - **PostgreSQL 17 or newer** (only if using `streamrune-postgres`; the test module works without it) —
-  tested on 17 and 18; an older server is refused at startup
+  tested on 17 and 18; an older server is refused at startup. A small single-instance service can
+  run on one SQLite file instead (`streamrune-sqlite`): this guide uses PostgreSQL, and the
+  [SQLite guide](guide/sqlite.md) shows the same wiring on SQLite
 
 ---
 
@@ -415,9 +417,9 @@ command side only returns a `CommandResult`.
 
 ## 9. Encryption-at-Rest (Crypto Engine)
 
-StreamRune supports encrypting event payload data at rest per subject: the in-memory, filesystem
-and PostgreSQL engines keep one AES-256-GCM key per subject, Vault uses one transit key per subject,
-and AWS KMS encrypts each value under a data key wrapped by a single shared CMK. Five engine implementations are
+StreamRune supports encrypting event payload data at rest per subject: the in-memory, filesystem,
+PostgreSQL and SQLite engines keep one AES-256-GCM key per subject, Vault uses one transit key per subject,
+and AWS KMS encrypts each value under a data key wrapped by a single shared CMK. Six engine implementations are
 available:
 
 | Engine | Module | Best for |
@@ -425,6 +427,7 @@ available:
 | In-Memory | `streamrune-test` | Unit tests only |
 | FileSystem | `streamrune-filesystem-crypto` | Single-node deployments |
 | PostgreSQL | `streamrune-postgres-crypto` | Shared key store, HA |
+| SQLite | `streamrune-sqlite-crypto` | Keys in the application's SQLite file (`streamrune.backend=sqlite`) |
 | HashiCorp Vault | `streamrune-vault-crypto` | Enterprise key management |
 | AWS KMS | `streamrune-aws-kms-crypto` | AWS-native key management |
 
@@ -437,6 +440,7 @@ Each engine implements the `CryptoEngine` interface from `streamrune-core`.
 | InMemory | `deleteKey` (test utility) | No | None |
 | FileSystem | `deleteKey`: tombstone file, key file removed | Optional (via CachedCryptoEngine) | Directory |
 | Postgres | `deleteKey`: key row deleted, tombstone row recorded | Recommended (CachedCryptoEngine) | the `db/crypto-migration` tables |
+| SQLite | `deleteKey`: key row deleted, tombstone row recorded | Optional (via CachedCryptoEngine) | the `db/sqlite-crypto-migration` tables |
 | Vault | `deleteKey`: tombstone recorded, transit key deleted | Recommended (CachedCryptoEngine) | Vault Transit engine |
 | AWS KMS | `deleteKey`: tombstone only (shared CMK) | Recommended (CachedCryptoEngine) | KMS CMK |
 
@@ -846,6 +850,7 @@ do not take this path.
 | Architecture & concepts | [streamrune-core/README.md](../streamrune-core/README.md) |
 | Command bus & projections | [streamrune-runtime/README.md](../streamrune-runtime/README.md) |
 | PostgreSQL event store | [streamrune-postgres/README.md](../streamrune-postgres/README.md) |
+| SQLite backend | [guide/sqlite.md](guide/sqlite.md) |
 | Encryption (GDPR) | [streamrune-crypto/README.md](../streamrune-crypto/README.md) |
 | Spring / Quarkus / Micronaut | [streamrune-integration/README.md](../streamrune-integration/README.md) |
 | Full CQRS/ES demo | [streamrune-ecommerce-demo](https://github.com/StreamRune/streamrune-ecommerce-demo) (separate repository) |

@@ -23,7 +23,6 @@ import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
 import org.streamrune.crypto.postgres.PostgresCryptoBackend;
 import org.streamrune.crypto.vault.VaultCryptoEngine;
 import org.streamrune.integration.BackendSelection;
-import org.streamrune.postgres.PostgresBackend;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.kms.KmsClient;
 
@@ -91,7 +90,11 @@ public class StreamRuneCryptoProducers {
    * The crypto half of the storage backend: the {@link CryptoBackend} the crypto engines take their
    * forgotten-subject store, forget signal and key-store engine from. It follows the {@link
    * StreamRuneBackend} bean ({@code streamrune.backend}): {@link PostgresCryptoBackend} for {@code
-   * postgres}.
+   * postgres}, and for {@code sqlite} {@code org.streamrune.crypto.sqlite.SqliteCryptoBackend},
+   * loaded by name ({@link BackendSelection#resolveCrypto}); without the module {@code
+   * org.streamrune:streamrune-sqlite-crypto} the start fails naming it. The key-store engine of the
+   * other backend ({@code streamrune.crypto.postgres.enabled} on {@code sqlite}, {@code
+   * streamrune.crypto.sqlite.enabled} on {@code postgres}) fails the start here too.
    *
    * <p>Not gated: CDI has no build-time condition for "any of the four engines is enabled". Only
    * the engine producers inject it, so a Quarkus application (which removes unused beans, {@code
@@ -113,26 +116,26 @@ public class StreamRuneCryptoProducers {
      */
     @Produces
     @Singleton
-    public CryptoBackend streamRuneCryptoBackend(StreamRuneBackend backend) {
-      return cryptoBackendOf(backend);
+    public CryptoBackend streamRuneCryptoBackend(
+        StreamRuneBackend backend, StreamRuneQuarkusCryptoProperties props) {
+      return cryptoBackendOf(backend, props);
     }
   }
 
   /**
-   * The crypto backend of {@code backend}: {@link PostgresCryptoBackend} for the {@link
-   * PostgresBackend}. Package-private for direct testing.
+   * The crypto backend of {@code backend}, selected by its name: {@link PostgresCryptoBackend} for
+   * {@code postgres}, the SQLite crypto backend loaded by name for {@code sqlite}. Package-private
+   * for direct testing.
    *
-   * @throws IllegalStateException for any other backend, which has no crypto backend here yet
+   * @throws IllegalStateException if the key-store engine of another backend is enabled, or the
+   *     SQLite crypto backend cannot be loaded
    */
-  static CryptoBackend cryptoBackendOf(StreamRuneBackend backend) {
-    if (backend instanceof PostgresBackend) {
-      return new PostgresCryptoBackend();
-    }
-    throw new IllegalStateException(
-        BackendSelection.PROPERTY
-            + "="
-            + backend.name()
-            + " has no crypto backend in the Quarkus integration; only postgres has one");
+  static CryptoBackend cryptoBackendOf(
+      StreamRuneBackend backend, StreamRuneQuarkusCryptoProperties props) {
+    org.streamrune.integration.BackendStartup.requireKeyStoreEngineOfBackend(
+        backend.name(), props.postgres().enabled(), props.sqlite().enabled());
+    return BackendSelection.resolveCrypto(
+        backend.name(), CryptoBackend.class, CryptoBackend::name, PostgresCryptoBackend::new);
   }
 
   /**
@@ -195,6 +198,39 @@ public class StreamRuneCryptoProducers {
     }
 
     /** Disposer for {@link #postgresCryptoEngine}. */
+    public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
+      closeEngine(engine);
+    }
+  }
+
+  /**
+   * SQLite backend: its {@link CryptoEngine} producer and that engine's disposer, gated together on
+   * {@code streamrune.crypto.sqlite.enabled}. The engine is the SQLite crypto backend's key store
+   * ({@code org.streamrune:streamrune-sqlite-crypto}) in the application's SQLite database; the
+   * integration names no SQLite type.
+   */
+  @ApplicationScoped
+  @IfBuildProperty(name = "streamrune.crypto.sqlite.enabled", stringValue = "true")
+  public static class SqliteCryptoProducer {
+
+    private final StreamRuneCryptoProducers build = new StreamRuneCryptoProducers();
+
+    /** Creates the producer. */
+    public SqliteCryptoProducer() {}
+
+    /** Creates a SQLite-backed {@link CryptoEngine}. */
+    @Produces
+    @Singleton
+    public CryptoEngine sqliteCryptoEngine(
+        CryptoBackend cryptoBackend,
+        DataSource dataSource,
+        StreamRuneQuarkusCryptoProperties props,
+        Instance<StreamRuneMetrics> metrics) {
+      return build.buildSqliteCryptoEngine(
+          cryptoBackend, dataSource, props, resolvedOrNoop(metrics));
+    }
+
+    /** Disposer for {@link #sqliteCryptoEngine}. */
     public void disposeCryptoEngine(@Disposes CryptoEngine engine) {
       closeEngine(engine);
     }
@@ -391,7 +427,37 @@ public class StreamRuneCryptoProducers {
               new CryptoBackend.KeyStoreEngineSettings(props.postgres().tableName(), metrics));
     } catch (Exception e) {
       throw new IllegalStateException(
-          "Failed to build PostgresCryptoEngine. Check streamrune.crypto.postgres config.", e);
+          "Failed to build the "
+              + cryptoBackend.name()
+              + " key-store engine. Check streamrune.crypto.postgres config.",
+          e);
+    }
+    return wrapWithCache(delegate, props.cache(), forgetSignal(cryptoBackend, dataSource));
+  }
+
+  /**
+   * Build logic for {@link SqliteCryptoProducer#sqliteCryptoEngine}, package-private for direct
+   * testing: the crypto backend's key-store engine with the default key table (SQLite has no
+   * table-name property), wrapped in the cache with the backend's (in-process) forget signal.
+   */
+  CryptoEngine buildSqliteCryptoEngine(
+      CryptoBackend cryptoBackend,
+      DataSource dataSource,
+      StreamRuneQuarkusCryptoProperties props,
+      StreamRuneMetrics metrics) {
+    requireRuntimeEnabled(props.sqlite().enabled(), "streamrune.crypto.sqlite.enabled");
+    CryptoEngine delegate;
+    try {
+      delegate =
+          cryptoBackend.keyStoreEngine(
+              dataSource, new CryptoBackend.KeyStoreEngineSettings(null, metrics));
+    } catch (Exception e) {
+      throw new IllegalStateException(
+          "Failed to build the "
+              + cryptoBackend.name()
+              + " key-store engine on the application's DataSource: "
+              + e.getMessage(),
+          e);
     }
     return wrapWithCache(delegate, props.cache(), forgetSignal(cryptoBackend, dataSource));
   }
@@ -626,7 +692,8 @@ public class StreamRuneCryptoProducers {
         "No DataSource available to wire the cross-replica crypto-forget channel for the {} crypto"
             + " backend; after a GDPR erasure, peer replicas will keep serving a forgotten subject's"
             + " cached plaintext for up to the cache write-TTL ceiling ({}) — the only cross-replica"
-            + " erasure bound. Provide a Postgres DataSource for prompt (LISTEN/NOTIFY) eviction.",
+            + " erasure bound. Provide a DataSource on the selected backend's database so its forget"
+            + " signal evicts promptly.",
         backend,
         configuredWriteTtl);
     return CryptoForgetSignal.NOOP;

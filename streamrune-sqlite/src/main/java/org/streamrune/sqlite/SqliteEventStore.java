@@ -803,6 +803,7 @@ public final class SqliteEventStore implements EventStore {
    * @throws IllegalStateException if {@code outboxEntries} is not empty and the store has no outbox
    *     store
    * @throws IllegalArgumentException if {@code outboxEntries} is not empty and {@code events} is
+   *     empty
    * @throws NullPointerException if an argument is {@code null}
    */
   public AppendResult append(
@@ -957,27 +958,22 @@ public final class SqliteEventStore implements EventStore {
     // an unkeyed command would store its events twice.
     boolean committed = false;
     AppendResult result = null;
-    try (Connection conn = dataSource.getConnection()) {
-      SqliteTransactions.begin(conn);
-      try {
-        List<GlobalOffset> offsets = insertEvents(conn, streamId, rows, expectedVersion);
-        if (!outboxEntries.isEmpty()) {
-          outboxStore.saveAll(outboxEntries, conn);
-        }
-        writeAuditEntries(conn, streamId, events, expectedVersion);
-        SqliteTransactions.commit(conn);
-        committed = true;
-        result =
-            new AppendResult(
-                List.copyOf(offsets), new Version(expectedVersion.value() + events.size()));
-        return result;
-      } finally {
-        // The single rollback point of every exit without a commit: a SQLException, the head
-        // check's OptimisticLockException, a failed outbox write, any other Throwable.
-        if (!committed) {
-          SqliteTransactions.rollback(conn, "append");
-        }
+    // Closing the open transaction is the single rollback point of every exit without a commit: a
+    // SQLException, the head check's OptimisticLockException, a failed outbox write, any other
+    // Throwable. It also releases the file's write mutex, before the connection is returned.
+    try (Connection conn = dataSource.getConnection();
+        SqliteTransactions.OpenTransaction transaction = SqliteTransactions.open(conn, "append")) {
+      List<GlobalOffset> offsets = insertEvents(conn, streamId, rows, expectedVersion);
+      if (!outboxEntries.isEmpty()) {
+        outboxStore.saveAll(outboxEntries, conn);
       }
+      writeAuditEntries(conn, streamId, events, expectedVersion);
+      transaction.commit();
+      committed = true;
+      result =
+          new AppendResult(
+              List.copyOf(offsets), new Version(expectedVersion.value() + events.size()));
+      return result;
     } catch (SQLException e) {
       if (committed) {
         return result;
@@ -1170,35 +1166,31 @@ public final class SqliteEventStore implements EventStore {
     boolean claimLost = false;
     boolean committed = false;
     IdempotentAppendResult result = null;
-    try (Connection conn = dataSource.getConnection()) {
-      SqliteTransactions.begin(conn);
-      try {
-        if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
-          claimLost = true;
-        } else {
-          // A refusal throws here before anything else is written; the rollback below undoes the
-          // claim with the rest of the transaction.
-          if (forwardOf != null) {
-            SagaFence.requireForward(conn, forwardOf);
-          }
-          // An empty command claims its key and appends nothing: like an empty append it does not
-          // consult the stream's head.
-          List<GlobalOffset> offsets =
-              rows.isEmpty() ? List.of() : insertEvents(conn, streamId, rows, expectedVersion);
-          commandInbox.backfillOffsets(idempotencyKey, offsets, conn);
-          if (!outboxEntries.isEmpty()) {
-            outboxStore.saveAll(outboxEntries, conn);
-          }
-          writeAuditEntries(conn, streamId, events, expectedVersion);
-          SqliteTransactions.commit(conn);
-          committed = true;
-          result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
+    // Closing the open transaction is the single rollback point of every exit without a commit,
+    // the lost claim included; it also releases the file's write mutex.
+    try (Connection conn = dataSource.getConnection();
+        SqliteTransactions.OpenTransaction transaction =
+            SqliteTransactions.open(conn, "keyed append")) {
+      if (!commandInbox.tryClaim(idempotencyKey, commandType, streamId, finalVersion, conn)) {
+        claimLost = true;
+      } else {
+        // A refusal throws here before anything else is written; closing the transaction undoes
+        // the claim with the rest of it.
+        if (forwardOf != null) {
+          SagaFence.requireForward(conn, forwardOf);
         }
-      } finally {
-        // The single rollback point of every exit without a commit, the lost claim included.
-        if (!committed) {
-          SqliteTransactions.rollback(conn, "keyed append");
+        // An empty command claims its key and appends nothing: like an empty append it does not
+        // consult the stream's head.
+        List<GlobalOffset> offsets =
+            rows.isEmpty() ? List.of() : insertEvents(conn, streamId, rows, expectedVersion);
+        commandInbox.backfillOffsets(idempotencyKey, offsets, conn);
+        if (!outboxEntries.isEmpty()) {
+          outboxStore.saveAll(outboxEntries, conn);
         }
+        writeAuditEntries(conn, streamId, events, expectedVersion);
+        transaction.commit();
+        committed = true;
+        result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
       }
     } catch (SQLException e) {
       if (committed) {
@@ -1418,17 +1410,36 @@ public final class SqliteEventStore implements EventStore {
 
   /**
    * The {@link EventStoreException} of a write SQLite refused for a lock, naming {@code what}:
-   * {@link #busyMessage} for {@code SQLITE_BUSY}, {@link #lockedMessage} for {@code SQLITE_LOCKED};
+   * {@link #busyMessage} for {@code SQLITE_BUSY}, or {@link #ownBatchMessage} when the refused
+   * thread's own projection batch held the lock; {@link #lockedMessage} for {@code SQLITE_LOCKED};
    * {@code null} for any other failure.
    */
   static EventStoreException lockFailure(SQLException e, String what) {
     if (isBusy(e)) {
-      return new EventStoreException(busyMessage(what), e);
+      return new EventStoreException(
+          SqliteTransactions.isHeldByOwnBatch(e) ? ownBatchMessage(what) : busyMessage(what), e);
     }
     if (isLocked(e)) {
       return new EventStoreException(lockedMessage(what), e);
     }
     return null;
+  }
+
+  /**
+   * The message of a write that waited busy_timeout for a write lock its own thread holds: it was
+   * made from inside the updater of a projection batch or dead-letter replay on the same database
+   * file, on a connection of its own.
+   */
+  static String ownBatchMessage(String what) {
+    return "SQLite's write lock was not granted within the connection's busy_timeout, so the "
+        + what
+        + " stored nothing. This thread's own projection batch (or dead-letter replay) holds the"
+        + " write lock of the database file: the write was made from inside the batch's updater,"
+        + " on a connection of its own, so it waited for a transaction that cannot commit before"
+        + " the updater returns. Inside an updater, write read models through the repository it is"
+        + " handed or through the store's own ProjectionRepository, which join the batch; make any"
+        + " other write to the same file (an append, a saga, outbox or checkpoint write) after the"
+        + " batch, from a command handler or a saga step.";
   }
 
   /** The message of a write refused with SQLITE_LOCKED, which busy_timeout does not govern. */
@@ -1452,13 +1463,20 @@ public final class SqliteEventStore implements EventStore {
     return null;
   }
 
-  /** The message of a write that waited for SQLite's write lock longer than busy_timeout. */
+  /**
+   * The message of a write that waited for SQLite's write lock longer than busy_timeout. The likely
+   * cause comes first: StreamRune's stores never join an application's transaction, so one the
+   * application holds on the same file (a Spring {@code @Transactional} method, for example) keeps
+   * every store write waiting until busy_timeout runs out.
+   */
   static String busyMessage(String what) {
     return "SQLite's write lock was not granted within the connection's busy_timeout, so the "
         + what
-        + " stored nothing. Another connection of this process held the lock that long: a long"
-        + " transaction of the application's own, a schema migration or a stalled write. Retry"
-        + " later, or raise busy_timeout.";
+        + " stored nothing. Most likely an application transaction on the same database file holds"
+        + " the write lock: StreamRune's stores never join an application's transaction (for"
+        + " example a Spring @Transactional method on the same DataSource), so call them outside"
+        + " it. Otherwise another connection of this process held the lock that long: a schema"
+        + " migration or a stalled write. Retry later, or raise busy_timeout.";
   }
 
   private static String globalOffsetDesyncMessage(String shownStream) {
@@ -1576,20 +1594,24 @@ public final class SqliteEventStore implements EventStore {
 
     // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
     // write lock when the statement starts (waiting at most busy_timeout) and commits all of it or
-    // nothing.
+    // nothing. It queues with the other writers of the process first, on the file's write mutex.
     int written;
     try (var conn = dataSource.getConnection()) {
-      SqliteTransactions.requireAutoCommit(conn);
-      try (var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
-        SqliteStreamKeys.bind(ps, 1, streamId);
-        ps.setLong(3, version.value());
-        ps.setString(4, stateType);
-        ps.setString(5, stateJson);
-        ps.setLong(6, createdAt);
-        ps.setInt(7, snapshotVersion);
-        ps.setLong(8, snapshotPurgeGeneration);
-        written = ps.executeUpdate();
-      }
+      written =
+          SqliteTransactions.writeStatement(
+              conn,
+              c -> {
+                try (var ps = c.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
+                  SqliteStreamKeys.bind(ps, 1, streamId);
+                  ps.setLong(3, version.value());
+                  ps.setString(4, stateType);
+                  ps.setString(5, stateJson);
+                  ps.setLong(6, createdAt);
+                  ps.setInt(7, snapshotVersion);
+                  ps.setLong(8, snapshotPurgeGeneration);
+                  return ps.executeUpdate();
+                }
+              });
     } catch (SQLException e) {
       EventStoreException lockFailure = lockFailure(e, "snapshot save of stream " + shownStream);
       if (lockFailure != null) {

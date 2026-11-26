@@ -1,12 +1,9 @@
 package org.streamrune.sqlite;
 
-import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
@@ -156,23 +153,10 @@ final class FlockFileLock implements ExclusiveFileLock {
         Linker linker = Linker.nativeLinker();
         bound =
             new Natives(
-                downcall(
-                    linker,
-                    "open",
-                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
-                    Linker.Option.firstVariadicArg(2),
-                    Linker.Option.captureCallState("errno")),
-                downcall(
-                    linker,
-                    "flock",
-                    FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT),
-                    Linker.Option.captureCallState("errno")),
-                downcall(
-                    linker,
-                    "close",
-                    FunctionDescriptor.of(JAVA_INT, JAVA_INT),
-                    Linker.Option.captureCallState("errno")),
-                downcall(linker, "strerror", FunctionDescriptor.of(ADDRESS, JAVA_INT)));
+                downcall(linker, SqliteNativeDowncalls.OPEN),
+                downcall(linker, SqliteNativeDowncalls.FLOCK),
+                downcall(linker, SqliteNativeDowncalls.CLOSE),
+                downcall(linker, SqliteNativeDowncalls.STRERROR));
       } catch (IllegalCallerException | UnsupportedOperationException e) {
         throw new SqliteGuardException(
             "The SQLite instance guard locks its lock file with flock(2) through the Foreign"
@@ -202,13 +186,13 @@ final class FlockFileLock implements ExclusiveFileLock {
             + ")");
   }
 
-  private static MethodHandle downcall(
-      Linker linker, String name, FunctionDescriptor descriptor, Linker.Option... options) {
+  private static MethodHandle downcall(Linker linker, SqliteNativeDowncalls.Downcall downcall) {
+    String name = downcall.function();
     MemorySegment symbol =
         linker
             .defaultLookup()
             .find(name)
             .orElseThrow(() -> new IllegalStateException("the C library has no " + name));
-    return linker.downcallHandle(symbol, descriptor, options);
+    return linker.downcallHandle(symbol, downcall.descriptor(), downcall.options());
   }
 }

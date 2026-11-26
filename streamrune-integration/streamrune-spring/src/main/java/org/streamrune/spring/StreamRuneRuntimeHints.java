@@ -75,9 +75,10 @@ import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
 
 /**
- * Registers StreamRune core types for GraalVM native image reflection and the Flyway migration
- * scripts schema auto-initialization reads as native image resources, and provides reusable helpers
- * so applications can register their own serialisable types.
+ * Registers StreamRune core types for GraalVM native image reflection, the Flyway migration scripts
+ * schema auto-initialization reads as native image resources and the SQLite backend classes {@code
+ * streamrune.backend=sqlite} loads by name, and provides reusable helpers so applications can
+ * register their own serialisable types.
  *
  * <p>All value types and core records need constructor and field access for JSON serialisation and
  * ORM mapping when compiled to a native image. This registrar is wired automatically (see {@code
@@ -235,13 +236,41 @@ public class StreamRuneRuntimeHints implements RuntimeHintsRegistrar {
           "db/streamrune-migration/*.sql",
           "db/crypto-migration/*.sql",
           "db/readmodel-migration/*.sql",
+          "db/sqlite-migration/*.sql",
+          "db/sqlite-readmodel-migration/*.sql",
+          "db/sqlite-crypto-migration/*.sql",
           "org/flywaydb/core/internal/version.txt");
+
+  /**
+   * The classes {@code BackendSelection} loads by name for {@code streamrune.backend=sqlite}: the
+   * SQLite backend and its crypto half, each created through its public no-argument constructor.
+   * Registered by name, so this module needs no dependency on the SQLite modules; a registration of
+   * a class that is not on the image's class path is ignored.
+   *
+   * <p>The instance guard of the SQLite backend calls {@code open}, {@code flock}, {@code close}
+   * and {@code strerror} through the Foreign Function and Memory API. Spring's {@link RuntimeHints}
+   * cannot express a foreign downcall, so those are registered in this module's {@code
+   * META-INF/native-image/org.streamrune/streamrune-spring-sqlite/reachability-metadata.json}.
+   */
+  static final List<String> NATIVE_IMAGE_BACKEND_CLASSES =
+      List.of(
+          org.streamrune.integration.BackendSelection.SQLITE_BACKEND_CLASS,
+          org.streamrune.integration.BackendSelection.SQLITE_CRYPTO_BACKEND_CLASS);
 
   @Override
   public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
     registerSerializableTypes(hints, NATIVE_IMAGE_TYPES);
     for (String pattern : NATIVE_IMAGE_RESOURCES) {
       hints.resources().registerPattern(pattern);
+    }
+    for (String className : NATIVE_IMAGE_BACKEND_CLASSES) {
+      hints
+          .reflection()
+          .registerType(
+              org.springframework.aot.hint.TypeReference.of(className),
+              type ->
+                  type.withConstructor(
+                      List.of(), org.springframework.aot.hint.ExecutableMode.INVOKE));
     }
   }
 

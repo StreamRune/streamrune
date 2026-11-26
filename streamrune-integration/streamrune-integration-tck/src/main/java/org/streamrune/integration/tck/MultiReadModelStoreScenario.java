@@ -589,8 +589,7 @@ public abstract class MultiReadModelStoreScenario {
    *
    * @return the global offset of the last event in database A
    */
-  private static long appendEvents(
-      Application application, DataSource a, String prefix, int count) {
+  static long appendEvents(Application application, DataSource a, String prefix, int count) {
     VirtualThreadCommandBus bus = application.bean(VirtualThreadCommandBus.class);
     for (int i = 0; i < count; i++) {
       bus.execute(new ContractCommand(prefix + "-" + i));
@@ -619,14 +618,14 @@ public abstract class MultiReadModelStoreScenario {
             Instant.now()));
   }
 
-  private static Map<Long, Integer> onceEach(List<Long> offsets) {
+  static Map<Long, Integer> onceEach(List<Long> offsets) {
     Map<Long, Integer> once = new TreeMap<>();
     offsets.forEach(offset -> once.put(offset, 1));
     return once;
   }
 
   /** How often {@code projection} applied each event, as its read models in {@code repository}. */
-  private static Map<Long, Integer> applied(ProjectionRepository repository, String projection) {
+  static Map<Long, Integer> applied(ProjectionRepository repository, String projection) {
     Map<Long, Integer> applied = new TreeMap<>();
     for (AppliedEvent row : repository.findAll(ProjectionName.of(projection), AppliedEvent.class)) {
       applied.put(row.offset(), row.applications());
@@ -634,7 +633,7 @@ public abstract class MultiReadModelStoreScenario {
     return applied;
   }
 
-  private static List<Long> eventOffsets(DataSource a) {
+  static List<Long> eventOffsets(DataSource a) {
     List<Long> offsets = new ArrayList<>();
     query(
         a,
@@ -650,12 +649,12 @@ public abstract class MultiReadModelStoreScenario {
   }
 
   /** The last offset of {@code projection} in {@code table} of {@code database}; -1 for no row. */
-  private static long checkpoint(DataSource database, String table, String projection) {
+  static long checkpoint(DataSource database, String table, String projection) {
     return checkpointColumn(database, table, projection, "last_offset");
   }
 
   /** The epoch on {@code projection}'s row in {@code table} of {@code database}; -1 for no row. */
-  private static long epoch(DataSource database, String table, String projection) {
+  static long epoch(DataSource database, String table, String projection) {
     return checkpointColumn(database, table, projection, "epoch");
   }
 
@@ -685,7 +684,7 @@ public abstract class MultiReadModelStoreScenario {
         rs -> rs.next() && rs.getBoolean(1));
   }
 
-  private static void assertNoCheckpoint(DataSource database, String table, String projection) {
+  static void assertNoCheckpoint(DataSource database, String table, String projection) {
     assertEquals(
         -1L,
         checkpoint(database, table, projection),
@@ -693,7 +692,17 @@ public abstract class MultiReadModelStoreScenario {
   }
 
   private void awaitCheckpoint(DataSource database, String table, String projection, long offset) {
+    awaitCheckpoint(patience(), database, table, projection, offset);
+  }
+
+  /**
+   * Polls {@code projection}'s checkpoint in {@code table} of {@code database} until it is {@code
+   * offset}, or fails after {@code patience}.
+   */
+  static void awaitCheckpoint(
+      Duration patience, DataSource database, String table, String projection, long offset) {
     await(
+        patience,
         () -> checkpoint(database, table, projection) == offset,
         () ->
             projection
@@ -705,7 +714,7 @@ public abstract class MultiReadModelStoreScenario {
                 + checkpoint(database, table, projection));
   }
 
-  private static void execute(DataSource database, String... statements) {
+  static void execute(DataSource database, String... statements) {
     try (Connection connection = database.getConnection();
         Statement statement = connection.createStatement()) {
       for (String sql : statements) {
@@ -718,11 +727,11 @@ public abstract class MultiReadModelStoreScenario {
 
   /** Reads one query's result. */
   @FunctionalInterface
-  private interface ResultReader<T> {
+  interface ResultReader<T> {
     T read(ResultSet rs) throws SQLException;
   }
 
-  private static <T> T query(
+  static <T> T query(
       DataSource database, String sql, List<String> parameters, ResultReader<T> reader) {
     try (Connection connection = database.getConnection();
         PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -743,10 +752,15 @@ public abstract class MultiReadModelStoreScenario {
    * Polls {@code condition} until it holds, or fails with {@code what} after {@link #patience()}.
    */
   private void await(BooleanSupplier condition, Supplier<String> what) {
-    long deadline = System.nanoTime() + patience().toNanos();
+    await(patience(), condition, what);
+  }
+
+  /** Polls {@code condition} until it holds, or fails with {@code what} after {@code patience}. */
+  static void await(Duration patience, BooleanSupplier condition, Supplier<String> what) {
+    long deadline = System.nanoTime() + patience.toNanos();
     while (!condition.getAsBoolean()) {
       if (System.nanoTime() > deadline) {
-        fail(what.get() + " (waited " + patience() + ")");
+        fail(what.get() + " (waited " + patience + ")");
       }
       sleep(50);
     }
@@ -755,7 +769,13 @@ public abstract class MultiReadModelStoreScenario {
   /** The health check once its flattened details satisfy {@code ready}, or its last answer. */
   private Map<String, Object> awaitHealth(
       Application application, Predicate<Map<String, Object>> ready) {
-    long deadline = System.nanoTime() + patience().toNanos();
+    return awaitHealth(patience(), application, ready);
+  }
+
+  /** The health check once its flattened details satisfy {@code ready}, or its last answer. */
+  static Map<String, Object> awaitHealth(
+      Duration patience, Application application, Predicate<Map<String, Object>> ready) {
+    long deadline = System.nanoTime() + patience.toNanos();
     Map<String, Object> health = application.health();
     while (!ready.test(IntegrationWiringContract.details(health)) && System.nanoTime() < deadline) {
       sleep(50);
@@ -764,7 +784,7 @@ public abstract class MultiReadModelStoreScenario {
     return health;
   }
 
-  private static boolean reportsCaughtUp(Map<String, Object> details, Map<String, String> stores) {
+  static boolean reportsCaughtUp(Map<String, Object> details, Map<String, String> stores) {
     return stores.entrySet().stream()
         .allMatch(
             entry ->

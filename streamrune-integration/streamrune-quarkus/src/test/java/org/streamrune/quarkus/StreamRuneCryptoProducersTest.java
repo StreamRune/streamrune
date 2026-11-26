@@ -731,21 +731,22 @@ class StreamRuneCryptoProducersTest {
   @Test
   void thePostgresBackendsCryptoBackendIsThePostgresOne() {
     assertTrue(
-        StreamRuneCryptoProducers.cryptoBackendOf(new org.streamrune.postgres.PostgresBackend())
+        StreamRuneCryptoProducers.cryptoBackendOf(
+                new org.streamrune.postgres.PostgresBackend(), TestProperties.crypto(Map.of()))
             instanceof org.streamrune.crypto.postgres.PostgresCryptoBackend);
   }
 
   @Test
-  void anotherBackendHasNoCryptoBackendHereYet() {
-    org.streamrune.core.backend.StreamRuneBackend other =
+  void aBackendIsGivenTheCryptoBackendOfItsName_notOfItsClass() {
+    org.streamrune.core.backend.StreamRuneBackend wrapped =
         new org.streamrune.core.backend.StreamRuneBackend() {
           @Override
           public String name() {
-            return "sqlite";
+            return "postgres";
           }
 
           @Override
-          public void verify(DataSource dataSource) {}
+          public void verify(javax.sql.DataSource dataSource) {}
 
           @Override
           public org.streamrune.core.backend.BackendStores open(
@@ -753,12 +754,8 @@ class StreamRuneCryptoProducersTest {
             throw new UnsupportedOperationException();
           }
         };
-    var ex =
-        assertThrows(
-            IllegalStateException.class, () -> StreamRuneCryptoProducers.cryptoBackendOf(other));
-    assertEquals(
-        "streamrune.backend=sqlite has no crypto backend in the Quarkus integration; only postgres"
-            + " has one",
-        ex.getMessage());
+    assertTrue(
+        StreamRuneCryptoProducers.cryptoBackendOf(wrapped, TestProperties.crypto(Map.of()))
+            instanceof org.streamrune.crypto.postgres.PostgresCryptoBackend);
   }
 }

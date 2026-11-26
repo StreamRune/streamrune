@@ -4,6 +4,7 @@ public interface org.streamrune.integration.AuthenticatedUserResolver
   public abstract java.util.Optional<org.streamrune.core.types.UserId> currentUser()
 
 public final class org.streamrune.integration.BackendSelection
+  public static <T> T resolveCrypto(java.lang.String, java.lang.Class<T>, java.util.function.Function<? super T, java.lang.String>, java.util.function.Supplier<? extends T>)
   public static final java.lang.String PROPERTY = "streamrune.backend"
   public static final java.lang.String SQLITE_BACKEND_CLASS = "org.streamrune.sqlite.SqliteBackend"
   public static final java.lang.String SQLITE_CRYPTO_BACKEND_CLASS = "org.streamrune.crypto.sqlite.SqliteCryptoBackend"
@@ -172,8 +173,9 @@ public static final record org.streamrune.integration.SagaParallelismSetting$Par
   public java.util.Map<java.lang.String, java.lang.Integer> bySubscription()
 
 public final class org.streamrune.integration.SingleActiveConsumerSetting
-  public static boolean enabled(java.lang.String)
+  public static boolean enabled(java.lang.String, java.lang.String)
   public static final java.lang.String PROPERTY = "streamrune.subscription.single-active-consumer.enabled"
+  public static void requireBoolean(java.lang.String)
 
 public enum org.streamrune.integration.SnapshotPurgeSetting
   constants REQUIRED, NONE

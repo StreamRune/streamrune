@@ -127,7 +127,9 @@ public record StreamRuneMicronautProperties(
     // read only through SingleActiveConsumerSetting.enabled — by the leadership bean's condition
     // and the saga forward fence's auto alike — so a spelling cannot mean one thing to one and the
     // opposite to the other; an unknown spelling fails binding, naming the property.
-    @Bindable(defaultValue = "true")
+    // Unset (null), it follows streamrune.backend: on for postgres, off for sqlite, where an
+    // explicit on fails the start (SQLite is single-instance).
+    @jakarta.annotation.Nullable
         @io.micronaut.context.annotation.Property(
             name = "streamrune.subscription.single-active-consumer.enabled")
         String subscriptionSingleActiveConsumerEnabled,
@@ -266,7 +268,7 @@ public record StreamRuneMicronautProperties(
         String backend) {
 
   public StreamRuneMicronautProperties {
-    org.streamrune.integration.SingleActiveConsumerSetting.enabled(
+    org.streamrune.integration.SingleActiveConsumerSetting.requireBoolean(
         subscriptionSingleActiveConsumerEnabled);
     org.streamrune.integration.SnapshotPurgeSetting.parse(gdprSnapshotPurge);
     org.streamrune.integration.DeadLetterUnkeyedReplaySetting.parse(deadLetterUnkeyedReplay);

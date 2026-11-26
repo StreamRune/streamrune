@@ -320,13 +320,14 @@ class SqliteProjectionRepositoryAbortTest {
   }
 
   /**
-   * The abort covers the handed repository only. After SQLITE_FULL, SQLite has already rolled the
-   * batch's transaction back and released the write lock, so a write the updater makes through
-   * another repository of the file (here the outer repository) does not wait for the batch: it
-   * commits at once, on its own, while the batch itself still throws and advances nothing.
+   * The abort covers the calls that joined the transaction too. After SQLITE_FULL, SQLite has
+   * already rolled the batch's transaction back and released the write lock; a write the updater
+   * then makes through another repository of the file (here the outer repository) joined the batch,
+   * so it runs no statement and throws the abort, instead of committing on its own.
    */
   @Test
-  void afterSqliteFull_aWriteThroughAnotherRepositoryCommitsAtOnce() throws SQLException {
+  void afterSqliteFull_aWriteThroughAnotherRepositoryOfTheFileRunsNoStatement()
+      throws SQLException {
     SqliteProjectionRepository capped = full();
     var caught = new ArrayList<RuntimeException>();
 
@@ -343,7 +344,53 @@ class SqliteProjectionRepositoryAbortTest {
                       } catch (EventStoreException e) {
                         caught.add(e);
                       }
-                      repo.save(P, "outer", new Row("outer", "not part of the batch"));
+                      try {
+                        repo.save(P, "outer", new Row("outer", "joined the aborted batch"));
+                      } catch (EventStoreException e) {
+                        caught.add(e);
+                      }
+                    },
+                    null))
+        .isExactlyInstanceOf(EventStoreException.class)
+        .hasMessageStartingWith("The projection transaction was aborted by an earlier failure");
+
+    assertAbortedTransaction(caught);
+    assertThat(checkpoints.getLastOffset(P)).isEqualTo(GlobalOffset.of(1));
+  }
+
+  /**
+   * The abort covers the handed repository and the joined calls only. After SQLITE_FULL, SQLite has
+   * already rolled the batch's transaction back and released the write lock, so a write the updater
+   * makes on a connection of its own (as any other store of the file would) does not wait for the
+   * batch: it commits at once, on its own, while the batch itself still throws and advances
+   * nothing.
+   */
+  @Test
+  void afterSqliteFull_aWriteOnAConnectionOfItsOwnCommitsAtOnce() throws SQLException {
+    SqliteProjectionRepository capped = full();
+    var caught = new ArrayList<RuntimeException>();
+
+    assertThatThrownBy(
+            () ->
+                capped.executeAtomically(
+                    P,
+                    SqliteProjectionRepositoryCrashTest.Batches.of(2, 2),
+                    GlobalOffset.of(2),
+                    0L,
+                    tx -> {
+                      try {
+                        FULL.accept(tx);
+                      } catch (EventStoreException e) {
+                        caught.add(e);
+                      }
+                      try (Connection own = TestDatabases.dataSource(file).getConnection();
+                          Statement st = own.createStatement()) {
+                        st.execute(
+                            "INSERT INTO aborting_view (id, data, version, updated_at)"
+                                + " VALUES ('outer', '{}', 0, 0)");
+                      } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                      }
                     },
                     null))
         .isExactlyInstanceOf(EventStoreException.class)

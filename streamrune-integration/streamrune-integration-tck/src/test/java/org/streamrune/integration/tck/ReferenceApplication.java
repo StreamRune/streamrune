@@ -56,12 +56,14 @@ import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.integration.BackendSelection;
 import org.streamrune.integration.CommandDeadLetterRetentionValidator;
 import org.streamrune.integration.ConfigurationSpelling;
 import org.streamrune.integration.MisspelledPropertyNames;
 import org.streamrune.integration.OutboxWiringMessages;
 import org.streamrune.integration.RequestIdentityPolicy;
 import org.streamrune.integration.SagaParallelismSetting;
+import org.streamrune.integration.SingleActiveConsumerSetting;
 import org.streamrune.integration.SnapshotPurgeSetting;
 import org.streamrune.integration.SseAuthorizer;
 import org.streamrune.integration.SubscriptionLeadershipResolution;
@@ -116,6 +118,7 @@ final class ReferenceApplication implements Application {
     DEAD_LETTER_RETENTION,
     FAIL_CLOSED_IDENTITY,
     HEALTH_DETAILS,
+    HEALTH_READS_THE_HEAD,
     UNGATED_SAGA_WARNING,
     RUNNERS_STOP_FIRST,
     DOCUMENTED_DEFAULTS,
@@ -146,7 +149,8 @@ final class ReferenceApplication implements Application {
     KNOWN_SAGA_SUBSCRIPTIONS,
     BACKEND_STORES_EXPOSED,
     DEFAULT_ALIAS_ROUTED,
-    OUTBOX_IN_THE_APPEND
+    OUTBOX_IN_THE_APPEND,
+    SINGLE_INSTANCE_REFUSES_A_LEASE
   }
 
   /** The durations among the keys the contract sets, read as an integration binds them. */
@@ -243,6 +247,11 @@ final class ReferenceApplication implements Application {
     return new ReferenceApplication(dataSource, properties, extraBeans, broken);
   }
 
+  /** The selected backend: {@code streamrune.backend}, {@code postgres} when it is not set. */
+  private String backend() {
+    return properties.getOrDefault(BackendSelection.PROPERTY, "postgres");
+  }
+
   private boolean keeps(Rule rule) {
     return !broken.contains(rule);
   }
@@ -252,6 +261,12 @@ final class ReferenceApplication implements Application {
   }
 
   private void validate() {
+    if (dataSource != null
+        && "sqlite".equals(backend())
+        && keeps(Rule.SINGLE_INSTANCE_REFUSES_A_LEASE)) {
+      SingleActiveConsumerSetting.enabled(
+          properties.get(SingleActiveConsumerSetting.PROPERTY), backend());
+    }
     List<String> spelling = new ArrayList<>();
     if (keeps(Rule.MISSPELLED_NAMES)) {
       spelling.addAll(MisspelledPropertyNames.problems(DURATION_KEYS, properties::containsKey));
@@ -532,8 +547,8 @@ final class ReferenceApplication implements Application {
     if (dataSource == null) {
       return;
     }
-    stores = new ReferenceBackendStores();
-    beans.add(keeps(Rule.BACKEND_STORES_EXPOSED) ? stores : new ReferenceBackendStores());
+    stores = new ReferenceBackendStores(backend());
+    beans.add(keeps(Rule.BACKEND_STORES_EXPOSED) ? stores : new ReferenceBackendStores(backend()));
     beans.add(stores.offsetStore());
     if (!beansOf(BackendOutboxStore.class).isEmpty()) {
       beans.add(BackendOutboxStore.from(stores));
@@ -866,11 +881,18 @@ final class ReferenceApplication implements Application {
   @Override
   public Map<String, Object> health() {
     Map<String, Object> details = new LinkedHashMap<>();
-    details.put("eventStore.lastGlobalOffset", 0L);
+    if (keeps(Rule.HEALTH_READS_THE_HEAD)) {
+      details.put("eventStore.lastGlobalOffset", eventStore.lastGlobalOffset().value());
+    } else {
+      // An application that reads the head with one backend's SQL: on another it reports an error.
+      details.put("eventStore.error", "not implemented by this database's driver");
+    }
     if (keeps(Rule.HEALTH_DETAILS) && !beansOf(ContractProjection.class).isEmpty()) {
-      // The runner's role under its lease: on by default with a database, the only replica leads.
+      // The runner's role under its lease: on by default with a database of a backend that takes
+      // one, where the only replica leads; SQLite takes none.
       boolean leased =
           dataSource != null
+              && !"sqlite".equals(backend())
               && !"false"
                   .equals(properties.get("streamrune.subscription.single-active-consumer.enabled"));
       details.put(

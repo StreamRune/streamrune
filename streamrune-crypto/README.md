@@ -10,6 +10,7 @@ Umbrella module for field-level encryption of event payloads. Supports crypto sh
 | [streamrune-aws-kms-crypto](streamrune-aws-kms-crypto/README.md) | AWS KMS-backed engine -- envelope encryption under one customer managed key, which never leaves AWS |
 | [streamrune-filesystem-crypto](streamrune-filesystem-crypto/README.md) | File system-backed engine -- AES-256 keys stored in a two-level directory structure |
 | [streamrune-postgres-crypto](streamrune-postgres-crypto/README.md) | PostgreSQL-backed engine -- keys stored in an `encryption_keys` table |
+| [streamrune-sqlite-crypto](../docs/guide/sqlite.md#crypto-and-gdpr-erasure) | SQLite-backed engine -- keys stored in an `encryption_keys` table of the application's SQLite file, for `streamrune.backend=sqlite`; also the SQLite forgotten-subject store |
 | [streamrune-vault-crypto](streamrune-vault-crypto/README.md) | HashiCorp Vault Transit Engine-backed engine -- key material never leaves Vault |
 
 ## Requirements

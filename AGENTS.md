@@ -6,8 +6,8 @@ Licensing, the Developer Certificate of Origin and the contribution policy are i
 
 ## 1. The repository
 
-StreamRune is a CQRS and event-sourcing framework for Java 25 with PostgreSQL as its event store
-and integrations for Spring Boot, Quarkus and Micronaut. Applications wire it with builders and
+StreamRune is a CQRS and event-sourcing framework for Java 25 with PostgreSQL (or, for a single
+instance, one SQLite file) as its event store and integrations for Spring Boot, Quarkus and Micronaut. Applications wire it with builders and
 plain constructors, and the integrations use the same builders. It is one Gradle build: the root
 `build.gradle.kts` configures every module (there are no convention plugins), versions live in
 `gradle/libs.versions.toml` and the module list in `settings.gradle.kts`.
@@ -18,9 +18,11 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-runtime` | Command bus, projections and their runners, sagas, the outbox poller, dead-letter retry, subscriptions | no |
 | `streamrune-test` | The test kit: in-memory stores and buses, fixtures, contract suites | no |
 | `streamrune-postgres` | The PostgreSQL event store and stores, the schema migrations | yes |
+| `streamrune-sqlite` | The SQLite backend: the database handle with its instance guard, every store, the schema series | no |
 | `streamrune-crypto/streamrune-crypto-api` | Encryption at rest for event payloads: the crypto-shredding Jackson module and the caching engine | no |
 | `streamrune-crypto/streamrune-filesystem-crypto` | The crypto engine with keys in a directory | no |
 | `streamrune-crypto/streamrune-postgres-crypto`, `streamrune-vault-crypto`, `streamrune-aws-kms-crypto` | Crypto engines with keys in PostgreSQL, HashiCorp Vault and AWS KMS | yes |
+| `streamrune-crypto/streamrune-sqlite-crypto` | The crypto engine with keys in a SQLite file, and the SQLite forgotten-subject store | no |
 | `streamrune-integration/streamrune-integration-api` | What the three integrations share: metrics, request identity, startup validators | no |
 | `streamrune-integration/streamrune-spring`, `streamrune-quarkus`, `streamrune-micronaut` | The three integrations | yes |
 | `streamrune-integration/streamrune-spring-boot-starter` | The Spring Boot starter: dependencies only, no sources | — |
@@ -50,7 +52,7 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
 
 | Command | What it runs | Typical wall time |
 |---|---|---|
-| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the seven modules whose tests need no Docker, every doc-lint test and the public API check (`verifyApiSurface`, section 3). No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime tests run, under a minute when they are up to date |
+| `./gradlew quickCheck` | Compiles every source set of every module, runs `spotlessCheck`, the tests of the nine modules listed as Docker-free in the root build script (`dockerFreeModules`), every doc-lint test and the public API check (`verifyApiSurface`, section 3). No JaCoCo, no Javadoc, no Testcontainers. | about 3 minutes when the runtime and SQLite tests run, under a minute when they are up to date |
 | `./gradlew build` | What the `build` check runs in CI: every test suite, Javadoc, the coverage gates, `spotlessCheck` and the build's own verification tasks. Needs Docker. | about 7 minutes; `streamrune-postgres`'s suite is the longest |
 | `./gradlew :streamrune-core:test` | One module's tests | |
 | `./gradlew :streamrune-core:test --tests "DeadLetterRetryPolicyTest"` | One test class; `--tests` also takes a pattern such as `"*RetryPolicy*"` | |
@@ -159,6 +161,12 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   and counted against the class files). The checker is `gradle/api-check/ApiSurfaceCheck.java`;
   `testApiSurfaceCheck`, part of `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside
   it on compiled fixtures.
+- **Twin backends.** `streamrune-postgres` and `streamrune-sqlite`, and their crypto modules,
+  implement the same stores, and part of their logic exists once per backend: the event read path,
+  the crypto engine's wire format and retries, the checkpoint fence. A change to the logic of a
+  store of one backend is mirrored in its twin of the other backend in the same pull request, in
+  either direction, or the pull request says why the twin needs none. A behaviour both must share
+  gets a case in the store's contract suite in `streamrune-test`, which runs on both.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested
@@ -201,8 +209,13 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   without a lease, runners stopped before the database closes, the bound defaults, the dead-letter
   rules the command bus and its retry runner answer a keyed re-send by. Each
   integration's `*IntegrationWiringContractTest` starts its own container through the contract's
-  hooks, on the test kit's in-memory stores or on PostgreSQL. A behaviour that crosses the three
-  integrations gets a contract test first; the beans such a test adds are in `ContractBeans`.
+  hooks, on the test kit's in-memory stores or on PostgreSQL, and its
+  `*SqliteIntegrationWiringContractTest` runs the same contract on SQLite (`supportsMultiInstance()`
+  answers `false` there, leaving out what needs several instances on one database). The read-model
+  routing scenarios are `MultiReadModelStoreScenario` (two PostgreSQL databases, real leases) and
+  `SingleInstanceMultiReadModelStoreScenario` (two SQLite files, no leadership). A behaviour that
+  crosses the three integrations gets a contract test first; the beans such a test adds are in
+  `ContractBeans`.
 - **Durable multi-step flows.** A flow that writes in more than one step (an append and an offset, a
   claim and a publish, a saga step and its command) lists its crash points, one after each write,
   and has a test per crash point that stops the flow there, runs it again and asserts that it

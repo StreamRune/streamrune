@@ -22,6 +22,9 @@ public interface StreamRuneQuarkusCryptoProperties {
   /** PostgreSQL backing store config (stores keys in a database table). */
   PostgresConfig postgres();
 
+  /** SQLite backing store config (stores keys in the application's SQLite database). */
+  SqliteConfig sqlite();
+
   /** HashiCorp Vault backing store config (uses Vault Transit engine). */
   VaultConfig vault();
 
@@ -60,6 +63,17 @@ public interface StreamRuneQuarkusCryptoProperties {
      */
     @WithDefault("encryption_keys")
     String tableName();
+  }
+
+  /**
+   * SQLite engine configuration ({@code streamrune.crypto.sqlite.*}): needs {@code
+   * streamrune.backend=sqlite} and the module {@code org.streamrune:streamrune-sqlite-crypto}.
+   * SQLite has no key-table name property; the engine uses its default key table.
+   */
+  interface SqliteConfig {
+    @WithDefault("false")
+    @WithConverter(StrictBooleanConverter.class)
+    boolean enabled();
   }
 
   /** HashiCorp Vault engine configuration. */

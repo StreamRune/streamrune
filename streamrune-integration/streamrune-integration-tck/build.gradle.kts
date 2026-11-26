@@ -13,6 +13,11 @@ dependencies {
     // MultiReadModelStoreScenario builds a second PostgresReadModelStore and reads its checkpoints
     // and read models; the three integrations already depend on the module.
     api(project(":streamrune-postgres"))
+    // SingleInstanceMultiReadModelStoreScenario builds its second read-model store on a SQLite file
+    // of its own, and SqliteTestDatabases makes HikariCP pools on SQLite files for the TCK's tests on
+    // the SQLite backend. The three integrations test against streamrune-sqlite already.
+    api(project(":streamrune-sqlite"))
+    api(libs.hikaricp)
     api(platform(libs.junit.bom))
     api("org.junit.jupiter:junit-jupiter-api")
     // The tracing rules run a command against an OpenTelemetry SDK whose spans an in-memory
@@ -36,4 +41,11 @@ tasks.named<Test>("test") {
         )
         .withPropertyName("wiringContractGuides")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// The SQLite driver loads its native library and the instance guard calls flock(2) through the
+// Foreign Function and Memory API; the self-tests of the SQLite scenario open SQLite files, and the
+// guard probe they fork passes the same option.
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }

@@ -178,17 +178,18 @@ public record StreamRuneProperties(
      *     text and read only through {@link
      *     org.streamrune.integration.SingleActiveConsumerSetting#enabled}, by the bean's condition
      *     and by the saga forward fence's {@code auto} alike; an unknown spelling fails binding,
-     *     and so startup, with a message naming the property
+     *     and so startup, with a message naming the property. {@code null} when unset: the default
+     *     follows {@code streamrune.backend}, {@code true} on {@code postgres} and {@code false} on
+     *     {@code sqlite} (single-instance), where an explicit {@code true} fails startup
      * @param leaseTtl how long a granted lease stays live before another replica may take it over.
      *     This is the upper bound on failover latency: when a leader stops renewing (crash, pause,
      *     graceful close) a standby wins the name at most {@code leaseTtl} later. The renew
      *     heartbeat runs at {@code leaseTtl/3}. Default 15s.
      */
-    public record SingleActiveConsumer(
-        @DefaultValue("true") String enabled, @DefaultValue("15s") Duration leaseTtl) {
+    public record SingleActiveConsumer(String enabled, @DefaultValue("15s") Duration leaseTtl) {
 
       public SingleActiveConsumer {
-        org.streamrune.integration.SingleActiveConsumerSetting.enabled(enabled);
+        org.streamrune.integration.SingleActiveConsumerSetting.requireBoolean(enabled);
       }
     }
   }

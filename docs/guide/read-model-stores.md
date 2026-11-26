@@ -6,7 +6,7 @@ explains what a store is, which store each projection uses, and how to run more 
 an application.
 
 Most applications never need this page: with a `DataSource`, the integrations create one store,
-named after the backend (`postgres`), and every projection that writes to it checkpoints there. Read on when a projection
+named after the backend (`postgres`, or `sqlite` on the [SQLite backend](sqlite.md)), and every projection that writes to it checkpoints there. Read on when a projection
 writes somewhere else, when you want a read model in a second database, or when startup refuses a
 projection and names a store.
 
@@ -20,6 +20,7 @@ projection and names a store.
 - [Without a container](#without-a-container)
 - [Dead-letter replay per store](#dead-letter-replay-per-store)
 - [Health](#health)
+- [On SQLite](#on-sqlite)
 - [What is next](#what-is-next)
 
 ## What a store is
@@ -52,6 +53,12 @@ PostgresReadModelStore store = PostgresReadModelStore.create(
 
 `PostgresEventStoreFactory#createReadModelStore()` does the same on the event store's own
 `DataSource`, under the same schema switch, and names the store `postgres`.
+
+The SQLite implementation is `SqliteReadModelStore` (`streamrune-sqlite`), with the same parts on
+one SQLite file: `<name>_view` tables, checkpoints in `readmodel_checkpoint`, and a
+`SqliteProjectionRepository` that is both the repository and the processor, with its own series
+(`db/sqlite-readmodel-migration`). With `streamrune.backend=sqlite` it is the default store, named
+`sqlite`. See [On SQLite](#on-sqlite).
 
 The event store itself is not a read-model store. It holds what must commit with the event log or
 coordinate its consumers: events, snapshots, subscriptions, leases, sagas, the outbox, the inbox,
@@ -110,7 +117,8 @@ public class ProductSearchProjection extends BaseProjection { /* ... */ }
 
 `ReadModelStore.DEFAULT` (the text `default`) is the alias of the default store:
 `@ProjectionConfig(readModelStore = ReadModelStore.DEFAULT)` routes to the default store whatever
-the backend names it (`postgres` with the PostgreSQL backend). The alias is reserved: a store whose
+the backend names it (`postgres` with the PostgreSQL backend, `sqlite` with the SQLite one), so the
+declaration survives a switch of backend. The alias is reserved: a store whose
 `name()` is `default` fails the start.
 
 Use it when routing cannot decide alone: several transactional stores. A `writeTarget()` that no store
@@ -162,7 +170,7 @@ conditional on it. A processor declares that with `fencesCheckpoint()`.
 | `transactional()` | The projection's writes through the handed repository and the checkpoint commit in one transaction. Required by `TRANSACTIONAL_LOCAL` and `EXTERNAL_EFFECT`. |
 | `fencesCheckpoint()` | The epoch is stored durably, a stale epoch is rejected before the projection runs, and the checkpoint write is conditional on the epoch. Required by **every** registration under real leadership. |
 
-`JdbcProjectionRepository` and `PostgresSubscriptionCheckpointProcessor` fence; `AtomicBatchProcessor.nonAtomicAtLeastOnce()` does not, and is legal only with
+`JdbcProjectionRepository`, `SqliteProjectionRepository` and `PostgresSubscriptionCheckpointProcessor` fence; `AtomicBatchProcessor.nonAtomicAtLeastOnce()` does not, and is legal only with
 `SubscriptionLeadership.NOOP` (one instance per projection). A store whose processor cannot fence
 fails startup under real leadership, and the message names the store.
 
@@ -172,8 +180,8 @@ exactly like a local one.
 
 ## Several stores in one application
 
-Every `ReadModelStore` bean you define is a routing target beside the default `postgres` store,
-named by its `name()`. A second PostgreSQL database is the common case: define its `DataSource`
+Every `ReadModelStore` bean you define is a routing target beside the default store (`postgres`
+or `sqlite`), named by its `name()`. A second PostgreSQL database is the common case: define its `DataSource`
 and a store over it, then point a projection at it with `readModelStore`.
 
 The default store and the event store use the primary `DataSource`, so with a second one you must
@@ -309,16 +317,18 @@ Declare the second pool under `datasources.search.*`. The module collects store 
 
 In all three, inject your own store rather than every `ReadModelStore` bean, and reach another
 store's repository through `store.repository()`. The injectable `ProjectionRepository` bean stays
-the repository of the store named `postgres`, so a Postgres-only application is unchanged. A
+the repository of the store named after the backend (`postgres` or `sqlite`), so a single-store
+application needs nothing else. A
 `ProjectionIndex` is declared on the store of its projection; an index for a projection routed to
 no store goes to the `ProjectionRepository` bean. See each integration's README for the bean names
 and the exact collection rules.
 
 ## Replacing the default store
 
-The default store is replaced by name, and only by name. Its name is the backend's, `postgres`; its
+The default store is replaced by name, and only by name. Its name is the backend's, `postgres` or
+`sqlite`; its
 bean is the `ReadModelStore` named `streamRuneDefaultReadModelStore`, declared with that interface
-type. Define a `ReadModelStore` whose `name()` is `postgres` and it takes the default's place: the default is never created, so its database is never
+type. Define a `ReadModelStore` whose `name()` is the backend's name and it takes the default's place: the default is never created, so its database is never
 touched. A store with any other name is added beside the default and never removes it. This is the
 way to put the `postgres` store on another database, or to give an application that uses no
 database a store of its own (Quarkus always provides a `DataSource` bean, so such an application
@@ -409,9 +419,29 @@ store's subscription checkpoint. Quarkus reports it as the flat key
 lag of that database's checkpoint. The store name also labels the processor in metrics. See
 [Production](production.md#health-checks) for the details and thresholds.
 
+## On SQLite
+
+With `streamrune.backend=sqlite` the default store is a `SqliteReadModelStore` named `sqlite`, on the
+application's SQLite file; `ReadModelStore.DEFAULT` routes to it, and a store of your own named
+`sqlite` replaces it. Its queries return the rows, in the order, that PostgreSQL returns for the
+same data, and it fences its checkpoint as the PostgreSQL store does, with the epoch always `0`
+because SQLite has no leadership.
+
+One thing differs: **SQLite has one write lock for the whole file**, not one per projection. A
+batch or a dead-letter replay holds it from its `BEGIN IMMEDIATE` to its `COMMIT`, so a replay of
+one projection waits for an open batch of any other projection on the same file, and the other way
+round. It succeeds once that batch commits within the connection's `busy_timeout` and fails with
+the write-lock message otherwise, so `busy_timeout` must exceed the longest batch or replay the
+file runs. A read does not wait, except the first read of a read model whose table does not exist
+yet, which creates it.
+
+A read-model store on a second SQLite file opens its own `SqliteDatabase` handle on that file, which
+takes that file's instance guard, and is built with `SqliteReadModelStore.create(name, database,
+mapper, migrate, validate)`; the [SQLite guide](sqlite.md#plain-java) shows it. Everything else
+SQLite does differently is in that guide.
+
 ## What is next
 
-The store interface is the seam for more backends. SQLite is next, for both the event store and
-read models, aimed at small single-instance services. An Elasticsearch read-model store and an
-evitaDB one are planned for later; they would be non-transactional stores that fence their
-checkpoint. None of this is shipped, and this page will describe each backend when it is.
+The store interface is the seam for more backends. An Elasticsearch read-model store and an evitaDB
+one are planned; they would be non-transactional stores that fence their checkpoint. Neither is
+shipped, and this page will describe each when it is.

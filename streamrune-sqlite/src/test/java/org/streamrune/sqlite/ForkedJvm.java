@@ -109,6 +109,17 @@ final class ForkedJvm implements AutoCloseable {
         List.of(args));
   }
 
+  /**
+   * Starts {@code main} with {@code args} on the test class path, with native access enabled and
+   * {@code jvmOptions} besides: system properties that only take effect at JVM start.
+   */
+  static ForkedJvm start(List<String> jvmOptions, Class<?> main, String... args)
+      throws IOException {
+    List<String> jvmArgs = new ArrayList<>(List.of("--enable-native-access=ALL-UNNAMED"));
+    jvmArgs.addAll(jvmOptions);
+    return start(jvmArgs, System.getProperty("java.class.path"), main, List.of(args));
+  }
+
   private static ForkedJvm start(
       List<String> jvmArgs, String classPath, Class<?> main, List<String> args) throws IOException {
     String java =
@@ -169,6 +180,13 @@ final class ForkedJvm implements AutoCloseable {
       fail("the forked JVM did not exit within %s; output:%n%s", TIMEOUT, output());
     }
     return process.exitValue();
+  }
+
+  /** Every line the child has printed so far. */
+  List<String> lines() {
+    synchronized (output) {
+      return List.copyOf(output);
+    }
   }
 
   private String output() {

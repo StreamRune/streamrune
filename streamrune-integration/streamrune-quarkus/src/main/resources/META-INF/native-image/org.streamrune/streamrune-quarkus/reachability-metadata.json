@@ -30,12 +30,52 @@
     {
       "condition": { "typeReached": "com.zaxxer.hikari.pool.ProxyConnection$ClosedConnection" },
       "type": { "proxy": ["java.sql.Connection"] }
+    },
+    {
+      "condition": { "typeReached": "org.streamrune.integration.BackendSelection" },
+      "type": "org.streamrune.sqlite.SqliteBackend",
+      "methods": [{ "name": "<init>", "parameterTypes": [] }]
+    },
+    {
+      "condition": { "typeReached": "org.streamrune.integration.BackendSelection" },
+      "type": "org.streamrune.crypto.sqlite.SqliteCryptoBackend",
+      "methods": [{ "name": "<init>", "parameterTypes": [] }]
     }
   ],
   "resources": [
     { "glob": "db/streamrune-migration/*.sql" },
     { "glob": "db/crypto-migration/*.sql" },
     { "glob": "db/readmodel-migration/*.sql" },
+    { "glob": "db/sqlite-migration/*.sql" },
+    { "glob": "db/sqlite-readmodel-migration/*.sql" },
+    { "glob": "db/sqlite-crypto-migration/*.sql" },
     { "glob": "org/flywaydb/core/internal/version.txt" }
-  ]
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint"],
+        "options": { "firstVariadicArg": 2, "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["jint", "jint"],
+        "options": { "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "jint",
+        "parameterTypes": ["jint"],
+        "options": { "captureCallState": true }
+      },
+      {
+        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
+        "returnType": "void*",
+        "parameterTypes": ["jint"]
+      }
+    ]
+  }
 }

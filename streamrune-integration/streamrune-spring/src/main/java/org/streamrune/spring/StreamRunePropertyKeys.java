@@ -55,6 +55,7 @@ final class StreamRunePropertyKeys {
           "streamrune.crypto.cache.enabled",
           "streamrune.crypto.filesystem.enabled",
           "streamrune.crypto.postgres.enabled",
+          "streamrune.crypto.sqlite.enabled",
           "streamrune.crypto.vault.enabled",
           "streamrune.dead-letter.enabled",
           "streamrune.event-audit-enabled",

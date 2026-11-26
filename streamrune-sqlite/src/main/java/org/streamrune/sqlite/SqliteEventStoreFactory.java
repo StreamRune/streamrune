@@ -233,10 +233,15 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
    * touches the database, applies the schema series and validates them (each unless switched off),
    * and builds the store. Every call builds a new store over the same database.
    *
-   * @throws IllegalStateException if exactly one of the outbox store and the outbox mapper is set,
-   *     if no crypto engine is set and a registered event or state type carries {@code @Encrypted},
-   *     or if schema validation finds an error (a missing table or column, a missing crypto table
-   *     the engine needs)
+   * <p>The closed-handle check is a check, then an act: a {@link SqliteDatabase#close()} on another
+   * thread just after it can still let the store be built on the released handle, and a store keeps
+   * only the data source and the file, so it never notices the close. Close the handle only after
+   * every caller of this factory and every store it built have stopped.
+   *
+   * @throws IllegalStateException if the database handle is closed, if exactly one of the outbox
+   *     store and the outbox mapper is set, if no crypto engine is set and a registered event or
+   *     state type carries {@code @Encrypted}, or if schema validation finds an error (a missing
+   *     table or column, a missing crypto table the engine needs)
    * @throws UnsupportedOperationException if no crypto engine is set and the registry does not
    *     implement {@link EventTypeRegistry#registeredTypes()}
    * @throws IllegalArgumentException if the snapshot migrations are inconsistent, or the outbox
@@ -244,6 +249,9 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
    */
   @Override
   public EventStore create() {
+    // A closed handle first: with both schema switches off nothing else would notice it, and the
+    // store would write without the instance guard.
+    database.requireOpen();
     // Configuration errors, refused before the database is touched.
     if ((outboxStore == null) != (outboxEventMapper == null)) {
       throw new IllegalStateException(

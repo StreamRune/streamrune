@@ -94,6 +94,7 @@ import org.streamrune.runtime.gdpr.ForgetSubjectService;
       AwsKmsCryptoEngineConfiguration.class,
       FileSystemCryptoEngineConfiguration.class,
       PostgresCryptoEngineConfiguration.class,
+      SqliteCryptoEngineConfiguration.class,
       VaultCryptoEngineConfiguration.class
     })
 @EnableConfigurationProperties(StreamRuneProperties.class)
@@ -272,9 +273,21 @@ public class StreamRuneAutoConfiguration {
   /**
    * The stores of the backend ({@link BackendConfiguration#BACKEND}), opened once on the {@code
    * DataSource}: every store bean below that the framework builds is taken from it, so they all
-   * share one backend. Opening builds nothing and touches no database; each store is built on first
-   * use and memoized by the bundle. The bundle is closed when the context closes (its destroy
-   * method), which closes the leadership it built.
+   * share one backend. Opening builds no store: each store is built on first use and memoized by
+   * the bundle. On Postgres opening touches no database; on SQLite it verifies the DataSource,
+   * checks the connection setup and takes the file's instance guard (see below). The bundle is
+   * closed when the context closes (its destroy method), which closes the leadership it built.
+   *
+   * <p>The bundle is opened through {@link org.streamrune.integration.BackendStartup#open}: a
+   * backend other than Postgres is verified against the {@code DataSource} first (a SQLite backend
+   * on a PostgreSQL database fails naming both, a SQLite connection setup that is wrong names the
+   * setting), and SQLite's {@code open} takes the instance guard of the database file, so a second
+   * process on the same file fails the start.
+   *
+   * <p><b>Shutdown order.</b> Every framework store bean is built from this bean, so Spring records
+   * it as their dependency and destroys them, and every bean that injects them, before it; the
+   * bundle is closed last, after every user of its stores. On SQLite this matters: a store keeps
+   * writing the file after its bundle released the instance guard.
    *
    * <p>The bundle's context carries the {@link CryptoEngine} bean (if present), which the event
    * store, the saga store and the default read-model store wire into their ObjectMappers through
@@ -301,7 +314,10 @@ public class StreamRuneAutoConfiguration {
         resolveCryptoEngine(
             cryptoEngineProvider,
             "the event store, the saga store and the default read-model store");
-    return backend.open(
+    // Verified first unless it is the Postgres backend, which opens nothing (BackendStartup); on
+    // SQLite, open() takes the instance guard, so another process holding the file fails here.
+    return org.streamrune.integration.BackendStartup.open(
+        backend,
         new org.streamrune.core.backend.BackendContext(
             dataSource,
             cryptoEngine,
@@ -328,6 +344,10 @@ public class StreamRuneAutoConfiguration {
    * org.streamrune.core.outbox.OutboxEventMapper} bean, only when both exist. The crypto engine,
    * metrics and tracing come with the {@link #streamRuneBackendStores} bundle.
    *
+   * <p>On SQLite, which has no statement timeout, a {@code
+   * streamrune.event-store.statement-timeout} the application set is ignored and logged once as a
+   * WARN.
+   *
    * @throws IllegalArgumentException if one of those store beans is not the backend's own type: the
    *     store could not share the event store's transaction
    * @throws IllegalStateException if {@code streamrune.event-store.statement-timeout} is a value
@@ -345,7 +365,13 @@ public class StreamRuneAutoConfiguration {
       ObjectProvider<org.streamrune.core.audit.EventAuditStore> eventAuditStoreProvider,
       ObjectProvider<org.streamrune.core.outbox.OutboxEventMapper> outboxEventMapperProvider,
       ObjectProvider<org.streamrune.core.outbox.OutboxStore> outboxStoreProvider,
-      ObjectProvider<CommandInbox> commandInboxProvider) {
+      ObjectProvider<CommandInbox> commandInboxProvider,
+      org.springframework.core.env.Environment environment) {
+    // SQLite has no statement timeout: a value the application set is ignored there, with a WARN.
+    org.streamrune.integration.BackendStartup.statementTimeoutIgnored(
+        stores.backendName(),
+        environment.getProperty(
+            org.streamrune.integration.BackendStartup.STATEMENT_TIMEOUT_PROPERTY));
     org.streamrune.core.outbox.OutboxEventMapper outboxMapper =
         outboxEventMapperProvider.getIfAvailable();
     org.streamrune.core.outbox.OutboxStore outboxStore = outboxStoreProvider.getIfAvailable();
@@ -876,7 +902,10 @@ public class StreamRuneAutoConfiguration {
   @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
   static class HealthIndicatorConfiguration {
 
-    /** Registers a health indicator that pings the PostgreSQL DataSource. */
+    /**
+     * Registers a health indicator that pings the DataSource and reports the head of the event
+     * stream through the application's {@link EventStore}, the same on every backend.
+     */
     @Bean
     @ConditionalOnBean(DataSource.class)
     @ConditionalOnMissingBean(StreamRuneHealthIndicator.class)
@@ -884,11 +913,13 @@ public class StreamRuneAutoConfiguration {
         DataSource dataSource,
         ObjectProvider<org.streamrune.runtime.SubscriptionHealthContributor>
             healthContributorProvider,
+        ObjectProvider<EventStore> eventStoreProvider,
         ObjectProvider<org.streamrune.runtime.BackgroundRelayHealthContributor>
             relayHealthContributorProvider) {
       return new StreamRuneHealthIndicator(
           dataSource,
           healthContributorProvider.getIfAvailable(),
+          eventStoreProvider.getIfAvailable(),
           relayHealthContributorProvider.getIfAvailable());
     }
   }
@@ -1742,6 +1773,8 @@ public class StreamRuneAutoConfiguration {
    * and the bound value see the same text. {@code @ConditionalOnProperty(havingValue = "true")}
    * matched the literal {@code true} only: {@code on}, {@code yes} or {@code 1} left this bean out
    * while the fence read them as on. An unknown spelling throws, so the context does not start.
+   * Unset, the property follows {@code streamrune.backend}: on for {@code postgres}, off for {@code
+   * sqlite}, where an explicit on fails the start (SQLite is single-instance).
    */
   static final class SingleActiveConsumerEnabledCondition
       implements org.springframework.context.annotation.Condition {
@@ -1749,11 +1782,15 @@ public class StreamRuneAutoConfiguration {
     public boolean matches(
         org.springframework.context.annotation.ConditionContext context,
         org.springframework.core.type.AnnotatedTypeMetadata metadata) {
-      String value =
-          org.springframework.boot.context.properties.bind.Binder.get(context.getEnvironment())
-              .bind(SingleActiveConsumerSetting.PROPERTY, String.class)
-              .orElse(null);
-      return SingleActiveConsumerSetting.enabled(value);
+      var binder =
+          org.springframework.boot.context.properties.bind.Binder.get(context.getEnvironment());
+      String value = binder.bind(SingleActiveConsumerSetting.PROPERTY, String.class).orElse(null);
+      String backend =
+          org.streamrune.integration.BackendSelection.parse(
+              binder
+                  .bind(org.streamrune.integration.BackendSelection.PROPERTY, String.class)
+                  .orElse(null));
+      return SingleActiveConsumerSetting.enabled(value, backend);
     }
   }
 
