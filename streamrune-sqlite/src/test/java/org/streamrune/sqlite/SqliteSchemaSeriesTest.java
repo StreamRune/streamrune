@@ -16,6 +16,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
@@ -57,18 +58,19 @@ class SqliteSchemaSeriesTest {
         .isEqualTo("db/sqlite-readmodel-migration");
     assertThat(SqliteSchemaSeries.READ_MODEL.historyTable())
         .isEqualTo("flyway_schema_history_readmodel");
-    assertThat(SqliteSchemaSeries.READ_MODEL.scripts()).isEmpty();
+    assertThat(SqliteSchemaSeries.READ_MODEL.scripts())
+        .containsExactly("V001__readmodel_baseline.sql");
 
     assertThat(SqliteSchemaSeries.CRYPTO.directory()).isEqualTo("db/sqlite-crypto-migration");
     assertThat(SqliteSchemaSeries.CRYPTO.historyTable()).isEqualTo("flyway_schema_history_crypto");
-    assertThat(SqliteSchemaSeries.CRYPTO.scripts()).isEmpty();
+    assertThat(SqliteSchemaSeries.CRYPTO.scripts()).containsExactly("V001__crypto.sql");
   }
 
   @Test
   void expectedVersionIsTheHighestScriptVersion() {
     assertThat(SqliteSchemaSeries.EVENT_STORE.expectedVersion()).isEqualTo(1);
-    assertThat(SqliteSchemaSeries.READ_MODEL.expectedVersion()).isZero();
-    assertThat(SqliteSchemaSeries.CRYPTO.expectedVersion()).isZero();
+    assertThat(SqliteSchemaSeries.READ_MODEL.expectedVersion()).isEqualTo(1);
+    assertThat(SqliteSchemaSeries.CRYPTO.expectedVersion()).isEqualTo(1);
     assertThat(SqliteSchemaSeries.versionOf("V012__later.sql")).isEqualTo(12);
     assertThatIllegalArgumentException()
         .isThrownBy(() -> SqliteSchemaSeries.versionOf("R__repeatable.sql"))
@@ -190,6 +192,39 @@ class SqliteSchemaSeriesTest {
     }
   }
 
+  /**
+   * The read-model series creates {@code readmodel_checkpoint} alone, STRICT, with the Postgres
+   * columns, timestamps as epoch microseconds and no default but the epoch's.
+   */
+  @Test
+  void theReadModelSeriesCreatesItsCheckpointTableAlone() throws Exception {
+    try (SqliteDatabase db = open()) {
+      db.migrate(SqliteSchemaSeries.READ_MODEL);
+
+      assertThat(
+              query(
+                  db.dataSource(),
+                  "SELECT name, strict FROM pragma_table_list WHERE schema = 'main'"
+                      + " AND type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
+                      + " ORDER BY name"))
+          .containsExactly(
+              List.of("flyway_schema_history_readmodel", 0L), List.of("readmodel_checkpoint", 1L));
+      assertThat(
+              query(
+                  db.dataSource(),
+                  "SELECT name, type, \"notnull\", dflt_value, pk"
+                      + " FROM pragma_table_info('readmodel_checkpoint') ORDER BY cid"))
+          .containsExactly(
+              Arrays.asList("projection_name", "TEXT", 1L, null, 1L),
+              Arrays.asList("last_offset", "INTEGER", 1L, null, 0L),
+              Arrays.asList("updated_at", "INTEGER", 0L, null, 0L),
+              Arrays.asList("epoch", "INTEGER", 1L, "0", 0L));
+      assertThat(history(db.dataSource(), "flyway_schema_history_readmodel"))
+          .containsExactly(List.of("001", "V001__readmodel_baseline.sql", 1L));
+      db.validate(SqliteSchemaSeries.READ_MODEL);
+    }
+  }
+
   @Test
   void globalOffsetCounterStartsAtZero() throws Exception {
     try (SqliteDatabase db = open()) {
@@ -222,42 +257,38 @@ class SqliteSchemaSeriesTest {
     try (SqliteDatabase db = open()) {
       db.migrate(SqliteSchemaSeries.EVENT_STORE);
       db.migrate(SqliteSchemaSeries.READ_MODEL);
-      db.migrate(SqliteSchemaSeries.CRYPTO);
       db.migrate(SqliteSchemaSeries.EVENT_STORE);
 
+      // The crypto series joins them in streamrune-sqlite-crypto, which ships its scripts.
       assertThat(tables(db.dataSource()))
-          .contains(
-              "flyway_schema_history_streamrune",
-              "flyway_schema_history_readmodel",
-              "flyway_schema_history_crypto")
+          .contains("flyway_schema_history_streamrune", "flyway_schema_history_readmodel")
           .doesNotContain("flyway_schema_history");
       assertThat(history(db.dataSource(), "flyway_schema_history_streamrune"))
           .containsExactly(List.of("001", "V001__baseline.sql", 1L));
-      // An empty series on a schema that already holds tables records Flyway's baseline (version 0)
-      // in its own history table, and nothing else.
-      for (String history :
-          List.of("flyway_schema_history_readmodel", "flyway_schema_history_crypto")) {
-        assertThat(history(db.dataSource(), history))
-            .as(history)
-            .containsExactly(List.of("0", "<< Flyway Baseline >>", 1L));
-      }
+      // A series applied to a schema that already holds tables records Flyway's baseline (version
+      // 0) in its own history table, then its own scripts.
+      assertThat(history(db.dataSource(), "flyway_schema_history_readmodel"))
+          .containsExactly(
+              List.of("0", "<< Flyway Baseline >>", 1L),
+              List.of("001", "V001__readmodel_baseline.sql", 1L));
+      assertThat(tables(db.dataSource())).contains("readmodel_checkpoint");
       db.validate(SqliteSchemaSeries.EVENT_STORE);
       db.validate(SqliteSchemaSeries.READ_MODEL);
-      db.validate(SqliteSchemaSeries.CRYPTO);
     }
   }
 
+  /**
+   * The crypto series' scripts ship in streamrune-sqlite-crypto, which this module's tests do not
+   * have: migrating it here is refused naming that artifact, before the database is touched.
+   */
   @Test
-  void anEmptySeriesMigratesAndValidatesCleanlyOnAnEmptyDatabase() throws Exception {
+  void aSeriesWhoseArtifactIsMissingIsRefusedNamingIt() throws Exception {
     try (SqliteDatabase db = open()) {
-      db.migrate(SqliteSchemaSeries.READ_MODEL);
-      db.migrate(SqliteSchemaSeries.READ_MODEL);
-
-      assertThat(tables(db.dataSource())).containsExactly("flyway_schema_history_readmodel");
-      assertThat(history(db.dataSource(), "flyway_schema_history_readmodel")).isEmpty();
-      assertThat(SqliteSchemaValidator.validate(db.dataSource(), SqliteSchemaSeries.READ_MODEL))
-          .isEmpty();
-      db.validate(SqliteSchemaSeries.READ_MODEL);
+      assertThatThrownBy(() -> db.migrate(SqliteSchemaSeries.CRYPTO))
+          .isExactlyInstanceOf(IllegalStateException.class)
+          .hasMessageContaining("db/sqlite-crypto-migration/V001__crypto.sql")
+          .hasMessageContaining("streamrune-sqlite-crypto");
+      assertThat(tables(db.dataSource())).isEmpty();
     }
   }
 

@@ -9,6 +9,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.HexFormat;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -102,6 +103,17 @@ import org.streamrune.core.types.SubjectId;
  * (no unbounded growth); two subjects sharing a stripe by hash collision only serialize harmlessly.
  * As a bonus, concurrent cache-miss decrypts of the same ciphertext collapse to a single delegate
  * call.
+ *
+ * <p><b>A cache miss waits a bounded time for its stripe.</b> {@code deleteKey} holds the stripe
+ * across its delegate call, and that call may itself wait for a lock the decrypting thread holds:
+ * on SQLite an erasure waits for the database's write lock, which a projection batch holds while
+ * its updater decrypts. Waiting for the stripe without bound there would stall both until the
+ * database gave up ({@code busy_timeout}) and fail the erasure. So a cache-miss decrypt waits at
+ * most 250 ms for the stripe; past that it calls the delegate without the stripe and caches
+ * nothing, so it cannot leave a forgotten subject's plaintext in the cache. The bound sits above
+ * the time a stripe is normally held (a local transaction, a remote key call) and is a small
+ * fraction of SQLite's documented 5 s {@code busy_timeout}. An interrupted wait takes the same
+ * uncached path and keeps the thread's interrupt status.
  */
 public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
 
@@ -115,6 +127,12 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
    * cannot linger unbounded on a peer replica by mere oversight (or by an access-only config).
    */
   public static final Duration DEFAULT_EXPIRE_AFTER_WRITE = Duration.ofMinutes(5);
+
+  /**
+   * How long a cache-miss decrypt waits for its subject's stripe before it decrypts without caching
+   * (see the class javadoc).
+   */
+  static final long MISS_STRIPE_WAIT_MILLIS = 250;
 
   /** Number of lock stripes. Bounds lock memory; each subject maps to one stripe by hash. */
   private static final int LOCK_STRIPES = 64;
@@ -229,7 +247,11 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
     // subject blocks until this completes, then its invalidate removes whatever we populate — a
     // forgotten subject's plaintext is never left in the cache.
     ReentrantLock lock = stripeFor(subjectId);
-    lock.lock();
+    if (!tryStripe(lock)) {
+      // The stripe stayed held past the bound, perhaps by an erasure that waits for a lock this
+      // thread holds: decrypt without the stripe and cache nothing.
+      return delegate.decrypt(subjectId, ciphertext);
+    }
     try {
       // Double-check: another thread may have populated the cache while we waited for the lock.
       byte[] recheck = cache.getIfPresent(key);
@@ -258,6 +280,19 @@ public final class CachedCryptoEngine implements CryptoEngine, AutoCloseable {
       return result;
     } finally {
       lock.unlock();
+    }
+  }
+
+  /**
+   * Takes {@code lock} within {@link #MISS_STRIPE_WAIT_MILLIS}; {@code false} when it stays held
+   * that long or the wait is interrupted (the interrupt status is restored).
+   */
+  private static boolean tryStripe(ReentrantLock lock) {
+    try {
+      return lock.tryLock(MISS_STRIPE_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return false;
     }
   }
 

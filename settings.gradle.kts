@@ -14,6 +14,7 @@ include(
     "streamrune-crypto:streamrune-crypto-api",
     "streamrune-crypto:streamrune-filesystem-crypto",
     "streamrune-crypto:streamrune-postgres-crypto",
+    "streamrune-crypto:streamrune-sqlite-crypto",
     "streamrune-crypto:streamrune-vault-crypto",
     "streamrune-crypto:streamrune-aws-kms-crypto",
     "streamrune-test",

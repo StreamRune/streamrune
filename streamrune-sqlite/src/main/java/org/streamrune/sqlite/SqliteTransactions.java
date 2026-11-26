@@ -10,6 +10,7 @@ import org.sqlite.SQLiteConnection;
 import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
 import org.streamrune.core.EventStoreException;
+import org.streamrune.core.Internal;
 
 /**
  * How the SQLite stores run a write transaction on a borrowed connection: with SQL statements, on a
@@ -51,8 +52,14 @@ import org.streamrune.core.EventStoreException;
  * with {@link IllegalStateException}: such a connection holds the write lock while it is not in
  * use, and a transaction on it is not this helper's to commit. {@link SqliteDatabase#open} refuses
  * a data source that hands one out; the check here also catches a connection that changed later.
+ *
+ * <p>Public for {@code streamrune-sqlite-crypto}, whose key store runs its writes the same way: one
+ * implementation of the begin, commit and rollback rules for every SQLite store.
+ *
+ * @hidden
  */
-final class SqliteTransactions {
+@Internal
+public final class SqliteTransactions {
 
   private static final Logger log = LoggerFactory.getLogger(SqliteTransactions.class);
 
@@ -67,14 +74,37 @@ final class SqliteTransactions {
           + " pool to hand out connections in autocommit mode (for HikariCP: autoCommit=true, its"
           + " default), and call the store outside an application transaction.";
 
+  /** The message of the refusal of a step that needs the caller's open transaction. */
+  static final String NO_OPEN_TRANSACTION =
+      "This SQLite step must run inside the caller's open write transaction (BEGIN IMMEDIATE ..."
+          + " COMMIT, as SqliteTransactions.inTransaction runs it, together with the writes it"
+          + " guards), but the connection has no transaction open. Outside one, each statement"
+          + " commits on its own and a check reads a row another writer can change before the"
+          + " guarded write lands; nothing was written.";
+
+  /** What SQLite says when BEGIN finds a transaction open. */
+  private static final String TRANSACTION_WITHIN_TRANSACTION =
+      "cannot start a transaction within a transaction";
+
   /** What SQLite says when ROLLBACK finds no transaction: it rolled back by itself. */
   private static final String NO_TRANSACTION_ACTIVE = "no transaction is active";
 
   private SqliteTransactions() {}
 
-  /** Work run inside one write transaction by {@link #inTransaction}. */
+  /**
+   * Work run inside one write transaction by {@link #inTransaction}.
+   *
+   * @param <T> the work's result
+   */
   @FunctionalInterface
-  interface Work<T> {
+  public interface Work<T> {
+    /**
+     * Runs the work on the transaction's connection.
+     *
+     * @param conn the connection of the open transaction
+     * @return the work's result
+     * @throws SQLException if a statement fails
+     */
     T run(Connection conn) throws SQLException;
   }
 
@@ -131,11 +161,16 @@ final class SqliteTransactions {
    * Runs {@code work} in one write transaction on {@code conn} and commits it; any exit without the
    * commit rolls the transaction back through {@link #rollback}.
    *
+   * @param conn the connection, in autocommit mode
    * @param transaction what the work is, for the log record of a failed rollback (a constant, never
    *     an id)
+   * @param work the work to run in the transaction
+   * @param <T> the work's result
+   * @return the work's result
    * @throws IllegalStateException if {@code conn} is in manual-commit mode
+   * @throws SQLException if the begin, a statement of the work or the commit fails (rolled back)
    */
-  static <T> T inTransaction(Connection conn, String transaction, Work<T> work)
+  public static <T> T inTransaction(Connection conn, String transaction, Work<T> work)
       throws SQLException {
     begin(conn);
     boolean committed = false;
@@ -173,6 +208,44 @@ final class SqliteTransactions {
     if (!conn.getAutoCommit()) {
       throw new IllegalStateException(MANUAL_COMMIT_CONNECTION);
     }
+  }
+
+  /**
+   * Refuses a connection that has no transaction open, before a step whose checks are only sound
+   * inside the caller's write transaction. sqlite-jdbc exposes no transaction state, so this probes
+   * the way the driver itself does after each autocommit statement: a deferred {@code BEGIN}, which
+   * takes no lock, fails with SQLITE_ERROR ("cannot start a transaction within a transaction") when
+   * a transaction is open, and nothing changes. When it succeeds, no transaction was open: the
+   * probe's own empty transaction is rolled back and the step refused.
+   *
+   * <p>The probe cannot see two steps the caller split across two transactions; keeping a check and
+   * the write it guards in one transaction stays the caller's contract.
+   *
+   * @throws IllegalStateException if {@code conn} has no transaction open ({@link
+   *     #NO_OPEN_TRANSACTION}); nothing is left open
+   * @throws SQLException if the probe fails for another reason
+   */
+  static void requireOpenTransaction(Connection conn) throws SQLException {
+    try (Statement statement = conn.createStatement()) {
+      try {
+        statement.execute("BEGIN");
+      } catch (SQLiteException e) {
+        if (isTransactionWithinTransaction(e)) {
+          return;
+        }
+        throw e;
+      }
+      statement.execute("ROLLBACK");
+    }
+    throw new IllegalStateException(NO_OPEN_TRANSACTION);
+  }
+
+  /** Whether {@code e} is SQLite's SQLITE_ERROR refusing a BEGIN inside an open transaction. */
+  private static boolean isTransactionWithinTransaction(SQLiteException e) {
+    String message = e.getMessage();
+    return e.getResultCode() == SQLiteErrorCode.SQLITE_ERROR
+        && message != null
+        && message.contains(TRANSACTION_WITHIN_TRANSACTION);
   }
 
   /**

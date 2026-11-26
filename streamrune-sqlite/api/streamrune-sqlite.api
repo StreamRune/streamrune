@@ -138,6 +138,45 @@ public final class org.streamrune.sqlite.SqliteProjectionDeadLetterStore impleme
   public void discard(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
   public void save(org.streamrune.core.projection.ProjectionDeadLetterEntry)
 
+public final class org.streamrune.sqlite.SqliteProjectionRepository implements org.streamrune.core.projection.ProjectionRepository, org.streamrune.core.projection.AtomicBatchProcessor
+  public <T> java.util.List<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>)
+  public <T> java.util.Optional<T> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>)
+  public <T> java.util.Optional<org.streamrune.core.Versioned<T>> findById(org.streamrune.core.types.ProjectionName, java.lang.String, java.lang.Class<T>, org.streamrune.core.LockMode)
+  public <T> org.streamrune.core.Page<T> findAll(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.PageRequest)
+  public <T> org.streamrune.core.Page<T> findAllBy(org.streamrune.core.types.ProjectionName, java.lang.Class<T>, org.streamrune.core.projection.FieldEquals, org.streamrune.core.PageRequest)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T)
+  public <T> void save(org.streamrune.core.types.ProjectionName, java.lang.String, T, long)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, org.streamrune.sqlite.SqliteReadModelCheckpoints)
+  public boolean fencesCheckpoint()
+  public boolean serializesReplay()
+  public boolean transactional()
+  public java.lang.Object writeTargetIdentity()
+  public static com.fasterxml.jackson.databind.ObjectMapper createObjectMapper(org.streamrune.core.crypto.CryptoEngine, org.streamrune.core.StreamRuneMetrics)
+  public static java.lang.String createIndexSql(org.streamrune.core.projection.ProjectionIndex)
+  public void checkProjectionName(org.streamrune.core.types.ProjectionName)
+  public void declareIndex(org.streamrune.core.projection.ProjectionIndex)
+  public void delete(org.streamrune.core.types.ProjectionName, java.lang.String)
+  public void executeAtomically(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.types.GlobalOffset, long, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater, org.streamrune.core.projection.OffsetStore)
+  public void executeReplay(org.streamrune.core.types.ProjectionName, java.util.List<org.streamrune.core.EventEnvelope>, org.streamrune.core.projection.AtomicBatchProcessor$ProjectionUpdater)
+  public void prepareReadModel(org.streamrune.core.types.ProjectionName)
+  public void resetOffset(org.streamrune.core.types.ProjectionName)
+  public void stampFencingEpoch(org.streamrune.core.types.ProjectionName, long)
+
+public final class org.streamrune.sqlite.SqliteReadModelCheckpoints implements org.streamrune.core.projection.OffsetStore
+  public <init>(org.streamrune.sqlite.SqliteDatabase)
+  public <init>(org.streamrune.sqlite.SqliteDatabase, java.time.Clock)
+  public org.streamrune.core.projection.CheckpointTarget subscriptionCheckpoint()
+  public org.streamrune.core.types.GlobalOffset getLastOffset(org.streamrune.core.types.ProjectionName)
+  public void reset(org.streamrune.core.types.ProjectionName)
+  public void saveOffset(org.streamrune.core.types.ProjectionName, org.streamrune.core.types.GlobalOffset)
+
+public final class org.streamrune.sqlite.SqliteReadModelStore implements org.streamrune.core.projection.ReadModelStore
+  public java.lang.String name()
+  public org.streamrune.core.projection.AtomicBatchProcessor processor()
+  public org.streamrune.core.projection.OffsetStore checkpoints()
+  public org.streamrune.core.projection.ProjectionRepository repository()
+  public static org.streamrune.sqlite.SqliteReadModelStore create(java.lang.String, org.streamrune.sqlite.SqliteDatabase, com.fasterxml.jackson.databind.ObjectMapper, boolean, boolean)
+
 public final class org.streamrune.sqlite.SqliteSagaDeadLetterStore implements org.streamrune.core.saga.SagaDeadLetterStore
   public <init>(org.streamrune.sqlite.SqliteDatabase)
   public boolean clearShieldIfDrained(org.streamrune.core.saga.SagaId, org.streamrune.core.types.SagaType)

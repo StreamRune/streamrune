@@ -2,6 +2,7 @@ package org.streamrune.sqlite;
 
 import java.time.Duration;
 import java.time.Instant;
+import org.streamrune.core.Internal;
 
 /**
  * The one timestamp representation of every SQLite table: microseconds since the epoch
@@ -16,8 +17,14 @@ import java.time.Instant;
  *
  * <p>The application {@code Clock} stamps every timestamp; no table takes a default from SQLite's
  * clock.
+ *
+ * <p>Public for {@code streamrune-sqlite-crypto}, whose tables hold timestamps in the same
+ * representation: one conversion, so the two modules cannot round differently.
+ *
+ * @hidden
  */
-final class SqliteTimestamps {
+@Internal
+public final class SqliteTimestamps {
 
   private static final long MICROS_PER_SECOND = 1_000_000L;
   private static final long NANOS_PER_MICRO = 1_000L;
@@ -27,10 +34,12 @@ final class SqliteTimestamps {
   /**
    * The column value of {@code instant}.
    *
+   * @param instant the instant
+   * @return microseconds since the epoch, rounded half up
    * @throws IllegalArgumentException if {@code instant} is {@code null} or beyond what a 64-bit
    *     count of microseconds holds
    */
-  static long toMicros(Instant instant) {
+  public static long toMicros(Instant instant) {
     if (instant == null) {
       throw new IllegalArgumentException("instant must not be null");
     }
@@ -74,8 +83,13 @@ final class SqliteTimestamps {
     return sum;
   }
 
-  /** The instant a column value stands for. */
-  static Instant fromMicros(long micros) {
+  /**
+   * The instant a column value stands for.
+   *
+   * @param micros microseconds since the epoch
+   * @return the instant
+   */
+  public static Instant fromMicros(long micros) {
     return Instant.ofEpochSecond(
         Math.floorDiv(micros, MICROS_PER_SECOND),
         Math.floorMod(micros, MICROS_PER_SECOND) * NANOS_PER_MICRO);
