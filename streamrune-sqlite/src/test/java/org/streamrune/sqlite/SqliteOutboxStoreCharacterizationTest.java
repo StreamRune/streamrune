@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.IntFunction;
 import java.util.function.UnaryOperator;
 import javax.sql.DataSource;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
@@ -246,12 +247,20 @@ class SqliteOutboxStoreCharacterizationTest {
    * e07, … on c; every fourth (e04, e08, …) without a stream. Then c's head e03 is FAILED.
    */
   private void interleavedRows() throws SQLException {
+    interleavedRows(i -> "e%02d".formatted(i));
+  }
+
+  /** The same rows, the i-th saved (seq i) with the entry id {@code name.apply(i)}. */
+  private void interleavedRows(IntFunction<String> name) throws SQLException {
     String[] streams = {null, "a", "b", "c"};
     for (int i = 1; i <= 24; i++) {
       String s = streams[i % 4];
-      availabilityFirst.save(entry("e%02d".formatted(i), s == null ? null : stream(s)));
+      availabilityFirst.save(entry(name.apply(i), s == null ? null : stream(s)));
     }
-    sql("UPDATE outbox_events SET status = 'FAILED', processed_at = 1 WHERE entry_id = 'e03'");
+    sql(
+        "UPDATE outbox_events SET status = 'FAILED', processed_at = 1 WHERE entry_id = '"
+            + name.apply(3)
+            + "'");
   }
 
   @Test
@@ -289,16 +298,18 @@ class SqliteOutboxStoreCharacterizationTest {
   /**
    * The claim's rows come back from the driver in reverse seq order (a decorator reverses the
    * RETURNING result set; on today's SQLite they happen to come in seq order): the store still
-   * returns them in seq order, in both modes, because it sorts them itself.
+   * returns them in seq order, in both modes, because it sorts them itself. The ids run against seq
+   * (seq 1 is r24, seq 24 is r01) and every row has the same created_at, so only a sort by seq
+   * gives this order.
    */
   @Test
   void claimOrder_sortsTheReturnedRowsBySeq() throws SQLException {
     List<Long> served = new CopyOnWriteArrayList<>();
     use("reversed.db", null, delegate -> returningRowsReversed(delegate, served));
-    interleavedRows();
+    interleavedRows(i -> "r%02d".formatted(25 - i));
 
     assertThat(ids(strict.loadPending(100)))
-        .containsExactly("e01", "e02", "e04", "e08", "e12", "e16", "e20", "e24");
+        .containsExactly("r24", "r23", "r21", "r17", "r13", "r09", "r05", "r01");
     assertThat(served).containsExactly(24L, 20L, 16L, 12L, 8L, 4L, 2L, 1L);
 
     sql(
@@ -306,7 +317,7 @@ class SqliteOutboxStoreCharacterizationTest {
             + " WHERE status = 'IN_PROGRESS'");
     served.clear();
     assertThat(ids(availabilityFirst.loadPending(100)))
-        .containsExactly("e01", "e02", "e04", "e07", "e08", "e12", "e16", "e20", "e24");
+        .containsExactly("r24", "r23", "r21", "r18", "r17", "r13", "r09", "r05", "r01");
     assertThat(served).containsExactly(24L, 20L, 16L, 12L, 8L, 7L, 4L, 2L, 1L);
   }
 
