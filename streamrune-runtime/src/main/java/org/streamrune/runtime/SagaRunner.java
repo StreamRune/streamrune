@@ -485,8 +485,9 @@ public final class SagaRunner<S extends SagaState> {
    * read at each acquire. That is the number the connection budget of the integrations counts, so a
    * claim adds no connection the budget does not hold — except the claim of a saga whose own step
    * is in flight, which the timeout runner makes without a slot when none frees within its claim
-   * wait, one connection per such step at most. A step and a claim queue for a slot in arrival
-   * order; a slot is taken before the saga's step lock.
+   * wait, one step's connections (1 plus the locker's connections per lock) per such step at most.
+   * A step and a claim queue for a slot in arrival order; a slot is taken before the saga's step
+   * lock.
    *
    * @return between 1 and {@value #MAX_PARALLELISM}
    */

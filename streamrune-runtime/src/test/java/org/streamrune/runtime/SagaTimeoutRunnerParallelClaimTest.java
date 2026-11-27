@@ -532,9 +532,12 @@ class SagaTimeoutRunnerParallelClaimTest {
       hung.returnAtLast(); // saga 1's step ends
       var other = new HungSteps(p, "2"); // a saga within its deadline; its step holds the slot
       var watch = new Watch(p);
+      var loads = new java.util.concurrent.atomic.AtomicInteger();
+      p.sagaStore.runOnceBeforeTheNextLoad(loads::incrementAndGet);
 
       List<String> info = timeoutInfoDuring(p.timeoutRunner::pollOnce);
 
+      assertThat(loads).as("a postponed claim reads nothing outside the slots").hasValue(0);
       assertThat(info).noneSatisfy(line -> assertThat(line).contains("without a slot"));
       assertThat(info).anySatisfy(line -> assertThat(line).contains("were postponed"));
       assertThat(p.row("1").episodeVersion()).as("not claimed without a slot").isNull();

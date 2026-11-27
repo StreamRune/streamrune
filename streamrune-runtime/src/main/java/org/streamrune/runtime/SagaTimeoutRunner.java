@@ -651,10 +651,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   /**
    * One poll cycle: batch after batch ({@link #processBatch}) while the last one came back full —
    * its last query returned as many ids as it asked for — and made progress: it acted on at least
-   * one saga it had not seen earlier in the cycle, neither deferred nor failed. A partial or empty
-   * batch ends the cycle, and so does a batch whose sagas were all deferred, failed or seen
-   * already, a {@link #close()} or an interrupt, a poll that has lost the lease, and the
-   * {@linkplain #DRAIN_BUDGET_POLL_INTERVALS drain budget}, checked between batches.
+   * one saga it had not seen earlier in the cycle, neither deferred, failed nor postponed for want
+   * of a slot. A partial or empty batch ends the cycle, and so does a batch whose sagas were all
+   * deferred, failed, postponed for want of a slot or seen already, a {@link #close()} or an
+   * interrupt, a poll that has lost the lease (checked before every further query, batch and the
+   * waited page), and the {@linkplain #DRAIN_BUDGET_POLL_INTERVALS drain budget}.
    *
    * <p>Each batch asks the clock for its cutoff, because deadlines keep passing while a backlog
    * drains: a saga whose deadline passes during the cycle is claimed in the cycle, as the next poll
@@ -776,7 +777,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *
    * @param full whether the batch's last query returned as many ids as it asked for
    * @param acted the sagas of the batch the runner acted on: not seen earlier in the cycle, and
-   *     neither deferred nor failed
+   *     neither deferred, failed nor postponed
    * @param passedOver the sagas the batch read and did not count against {@code batchSize}: those
    *     whose claim was deferred, those to wait for, and those seen earlier in the cycle
    * @param postponed the claims of the batch postponed to the next poll because no slot freed
@@ -1019,6 +1020,16 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
         return ClaimOutcome.POSTPONED;
       }
       if (slot == null) {
+        if (!stepLock.heldNow(sagaType, sagaId)) {
+          // The step this claim waited for has ended: nothing justifies a claim without a slot,
+          // and the row is not read outside the slots.
+          deferredClaims.remove(sagaId);
+          LOG.debug(
+              "The step of saga {} has ended, and no slot of the runner freed within the claim"
+                  + " wait; its timeout claim is tried again on the next poll",
+              LogSanitizer.sanitizeForLog(sagaId.value()));
+          return ClaimOutcome.POSTPONED;
+        }
         return timeOutOne(sagaId, claimDeadline, true);
       }
       try (slot) {
