@@ -3,6 +3,7 @@ package org.streamrune.crypto.sqlite;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.streamrune.crypto.sqlite.SqliteCryptoCharacterizationTest.writeTransactionOn;
 
 import java.nio.file.Path;
 import java.time.Clock;
@@ -200,6 +201,86 @@ class SqliteCryptoCrashPointsTest {
         .forget(subject, evidence.plusSeconds(1));
     assertThat(store.forgottenAt(subject)).contains(first);
     assertThat(store.keyCreatedAt(subject)).contains(evidence);
+  }
+
+  /** Stands in for an OutOfMemoryError or a LinkageError thrown inside the transaction. */
+  private static final class InjectedCrash extends Error {
+    InjectedCrash(String where) {
+      super("injected crash " + where);
+    }
+  }
+
+  /**
+   * deleteKey: an {@link Error} after the tombstone INSERT ran, before the {@code COMMIT}. The
+   * erasure's statements all ran in ONE transaction on ONE connection, which rolls back: the key
+   * stays, no generation row or tombstone remains, and the old value still reads. The rerun is
+   * again one transaction, commits, and converges on the erased state. A tombstone (or any write of
+   * the erasure) sent through another connection or transaction fails the transcript comparison,
+   * and one committed on its own would survive the rollback.
+   */
+  @Test
+  void errorAfterTheTombstoneInsert_commitsNothing_andARerunConverges() throws Exception {
+    var recording =
+        new RecordingDataSource(SqliteFiles.dataSource(dir.resolve("crash-after-tombstone.db")));
+    try (SqliteDatabase recorded = SqliteFiles.migrated(recording)) {
+      var erasing = SqliteCryptoEngine.builder().database(recorded).build();
+      var store = new SqliteForgottenSubjectStore(recorded);
+      var subject = SubjectId.of("erase-after-tombstone");
+      byte[] ciphertext = erasing.encrypt(subject, PLAINTEXT);
+      byte[] keyBefore = keyBytes(recording);
+      var crash = new InjectedCrash("after the tombstone INSERT");
+      recording.failAfter("INSERT INTO forgotten_subjects", crash);
+      recording.resetRecording();
+
+      assertThatThrownBy(() -> erasing.deleteKey(subject)).isSameAs(crash);
+
+      assertThat(recording.transcript())
+          .isEqualTo(writeTransactionOn(1, "ROLLBACK", ERASE_STATEMENTS));
+      assertThat(keyBytes(recording)).as("the key survives").isEqualTo(keyBefore);
+      assertThat(count(recording, "forgotten_subjects")).as("no tombstone").isZero();
+      assertThat(store.isForgotten(subject)).as("the store sees no tombstone either").isFalse();
+      assertThat(count(recording, "erased_key_generations")).as("no generation row").isZero();
+      assertThat(erasing.decrypt(subject, ciphertext)).isEqualTo(PLAINTEXT);
+      recording.resetRecording();
+
+      erasing.deleteKey(subject);
+
+      assertThat(recording.transcript())
+          .isEqualTo(writeTransactionOn(1, "COMMIT", ERASE_STATEMENTS));
+      assertThat(erasing.isKeyAvailable(subject)).as("the rerun deletes the key").isFalse();
+      assertThat(store.isForgotten(subject)).as("the rerun writes the tombstone").isTrue();
+      assertThat(
+              SqliteFiles.query(recording, "SELECT max_erased_version FROM erased_key_generations"))
+          .as("the rerun records generation 1")
+          .containsExactly(List.of(1));
+      assertThatThrownBy(() -> erasing.decrypt(subject, ciphertext))
+          .isExactlyInstanceOf(KeyNotFoundException.class);
+      assertThatThrownBy(() -> erasing.encrypt(subject, PLAINTEXT))
+          .isExactlyInstanceOf(SubjectForgottenException.class);
+    }
+  }
+
+  /** The statements of an erasure of a subject with a key, in order (default key table). */
+  private static final String[] ERASE_STATEMENTS = {
+    "SELECT key_version FROM encryption_keys WHERE subject_id = ?",
+    "INSERT INTO erased_key_generations (subject_id, max_erased_version) VALUES (?, ?)"
+        + " ON CONFLICT (subject_id) DO UPDATE SET max_erased_version ="
+        + " max(erased_key_generations.max_erased_version, excluded.max_erased_version)",
+    "DELETE FROM encryption_keys WHERE subject_id = ?",
+    "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
+        + " ON CONFLICT (subject_id) DO NOTHING"
+  };
+
+  private static byte[] keyBytes(DataSource source) throws Exception {
+    List<List<Object>> rows = SqliteFiles.query(source, "SELECT key_bytes FROM encryption_keys");
+    assertThat(rows).hasSize(1);
+    return (byte[]) rows.getFirst().getFirst();
+  }
+
+  private static int count(DataSource source, String table) throws Exception {
+    return ((Number)
+            SqliteFiles.query(source, "SELECT count(*) FROM " + table).getFirst().getFirst())
+        .intValue();
   }
 
   private void assertErased(SubjectId subject, byte[] ciphertext) throws Exception {

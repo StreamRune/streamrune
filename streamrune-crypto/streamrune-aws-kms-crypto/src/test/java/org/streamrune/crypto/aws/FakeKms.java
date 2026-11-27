@@ -55,6 +55,17 @@ final class FakeKms {
   }
 
   /**
+   * Makes {@code Decrypt} answer {@code key} for {@code wrapped}, as if this fake had issued that
+   * pair under {@code keyId} and {@code context}: the deterministic data key a committed blob was
+   * sealed under (the characterization fixture), which a random {@code GenerateDataKey} could never
+   * reproduce.
+   */
+  void issueFixed(byte[] wrapped, byte[] key, String keyId, Map<String, String> context) {
+    issued.put(
+        ByteBuffer.wrap(wrapped.clone()), new Issued(key.clone(), Map.copyOf(context), keyId));
+  }
+
+  /**
    * What {@code kms:ReEncrypt} does to a wrapped data key: the same key and encryption context,
    * wrapped anew under {@code destinationKeyId}.
    */

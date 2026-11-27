@@ -8,6 +8,9 @@ dependencies {
     api(project(":streamrune-core"))
     implementation(libs.slf4j.api)
     testImplementation(project(":streamrune-test"))
+    // The characterization test pins the engine's WARN lines and their logger category (a
+    // logback ListAppender); test scope only. Quiet defaults in src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 
     // src/jmh: CryptoShreddingBenchmark (src/jmh/README.md) serializes events through the
     // ObjectMapper PostgresEventStore builds, so the benchmark measures the event store's own

@@ -17,6 +17,9 @@ dependencies {
     testImplementation(project(":streamrune-test"))
     testImplementation(libs.bundles.testcontainers.pg)
     testImplementation(libs.postgresql)
+    // The characterization test pins the engine's WARN lines and their logger category (a
+    // logback ListAppender); test scope only. Quiet defaults in src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 }
 
 // PostgresCryptoEngineTest pins the README's copy-the-DDL block to the shipped baseline by reading
