@@ -168,6 +168,18 @@ class SqliteProjectionRepositoryCharacterizationTest {
 
   record Resident(String id, @JsonUnwrapped(prefix = "home_") Address address) {}
 
+  /** An unwrapped component with a suffix only. */
+  record Worker(String id, @JsonUnwrapped(suffix = "_work") Address address) {}
+
+  /** An unwrapped component with a prefix and a suffix. */
+  record Courier(String id, @JsonUnwrapped(prefix = "drop_", suffix = "_x") Address address) {}
+
+  /** An unwrapped annotation that is switched off: the component is a nested object. */
+  record Tenant(String id, @JsonUnwrapped(enabled = false, prefix = "home_") Address address) {}
+
+  /** Two levels of unwrapping: the prefixes compose, outer first. */
+  record Household(String id, @JsonUnwrapped(prefix = "main_") Resident resident) {}
+
   record Account(String id, @Encrypted(subjectId = "id") String fieldName) {}
 
   /** An {@code @Encrypted} component named like a repository column. */
@@ -267,6 +279,123 @@ class SqliteProjectionRepositoryCharacterizationTest {
   void createIndexSql_isTodaysStatement() {
     assertThat(SqliteProjectionRepository.createIndexSql(NAME_INDEX)).isEqualTo(NAME_INDEX_DDL);
     assertThat(SqliteProjectionRepository.indexName(NAME_INDEX)).isEqualTo(NAME_INDEX_NAME);
+  }
+
+  // ── Index names and statements, as stored in databases ──────────────────────────────────────
+
+  /** The JSON-field text expression an index key holds, as today's statement spells it. */
+  private static String text(String field) {
+    String path = "'$.\"" + field + "\"'";
+    return "CASE json_type(data, "
+        + path
+        + ") WHEN 'text' THEN json_extract(data, "
+        + path
+        + ") WHEN 'null' THEN NULL ELSE data -> "
+        + path
+        + " END";
+  }
+
+  private static void assertIndex(ProjectionIndex index, String name, String columns) {
+    assertThat(SqliteProjectionRepository.indexName(index)).isEqualTo(name);
+    assertThat(SqliteProjectionRepository.createIndexSql(index))
+        .isEqualTo(
+            "CREATE INDEX IF NOT EXISTS "
+                + name
+                + " ON "
+                + index.projection().value()
+                + "_view ("
+                + columns
+                + ")");
+  }
+
+  @Test
+  void indexName_descendingKey() {
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("name", SortDirection.DESC)),
+        "p_name_desc_id_ix_e80a752cb8",
+        text("name") + " DESC, id");
+    assertIndex(
+        ProjectionIndex.forFilter(P, "name", Sort.by("qty", SortDirection.DESC)),
+        "p_name_qty_desc_id_ix_0c014575ee",
+        text("name") + ", " + text("qty") + " DESC, id");
+  }
+
+  @Test
+  void indexName_repositoryColumnsAndTheIdTiebreak() {
+    // A key on the id ends the keys: no tiebreak is appended, in any position or direction.
+    assertIndex(ProjectionIndex.forSort(P, Sort.by("id")), "p_id_ix_c1a5e715ca", "id");
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("id", SortDirection.DESC)),
+        "p_id_desc_ix_5a0bbf41a5",
+        "id DESC");
+    assertIndex(
+        new ProjectionIndex(
+            P,
+            List.of(
+                new Sort.Order("name", SortDirection.ASC),
+                new Sort.Order("id", SortDirection.DESC),
+                new Sort.Order("qty", SortDirection.ASC))),
+        "p_name_id_desc_qty_ix_e755ccd8e4",
+        text("name") + ", id DESC, " + text("qty"));
+    // version and updated_at are columns, indexed as themselves, then the id.
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("version")),
+        "p_version_id_ix_09427ad152",
+        "version, id");
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("updated_at", SortDirection.DESC)),
+        "p_updated_at_desc_id_ix_6812399027",
+        "updated_at DESC, id");
+    // A JSON field keeps its letter case in the statement and is lower-cased in the name.
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("Qty")), "p_qty_id_ix_c0232dbc4c", text("Qty") + ", id");
+  }
+
+  @Test
+  void indexName_truncationBoundary() {
+    // "p_" + field + "_id" is 49 characters: kept whole (the longest name not cut, 63 in all).
+    String f44 = "f".repeat(44);
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by(f44)),
+        "p_" + f44 + "_id_ix_87daa8b970",
+        text(f44) + ", id");
+    // 50 characters: cut to its first 49, so the id key's last letter is lost.
+    String f45 = "f".repeat(45);
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by(f45)),
+        "p_" + f45 + "_i_ix_12bf81d3a7",
+        text(f45) + ", id");
+    assertThat(SqliteProjectionRepository.indexName(ProjectionIndex.forSort(P, Sort.by(f44))))
+        .hasSize(63);
+    assertThat(SqliteProjectionRepository.indexName(ProjectionIndex.forSort(P, Sort.by(f45))))
+        .hasSize(63);
+  }
+
+  @Test
+  void indexName_longestProjectionName_isDeclaredOnTheDatabase() {
+    ProjectionName longest = ProjectionName.of("a".repeat(58));
+    ProjectionIndex index = ProjectionIndex.forFilter(longest, "name", Sort.unsorted());
+    String name = "a".repeat(49) + "_ix_b037fb7b88";
+    assertIndex(index, name, text("name") + ", id");
+
+    try (LogCapture log = LogCapture.attach(SqliteProjectionRepository.class)) {
+      repo.declareIndex(index);
+      assertThat(log.events(Level.INFO))
+          .extracting(ILoggingEvent::getFormattedMessage)
+          .containsExactly(
+              "Created projection index: CREATE INDEX IF NOT EXISTS "
+                  + name
+                  + " ON "
+                  + "a".repeat(58)
+                  + "_view ("
+                  + text("name")
+                  + ", id)");
+    }
+    // Declared again, it is found under the same name.
+    recorder.clear();
+    repo.declareIndex(index);
+    assertThat(recorder.transcript())
+        .containsExactlyElementsOf(write("#1 prepare " + SCHEMA_OBJECT));
   }
 
   @Test
@@ -974,6 +1103,50 @@ class SqliteProjectionRepositoryCharacterizationTest {
         .isEmpty();
     // An index carries no read-model type: an index on an encrypted field's name is created.
     repo.declareIndex(ProjectionIndex.forFilter(P, "ssn", Sort.unsorted()));
+  }
+
+  @Test
+  void encryptedKeyRefusal_unwrappedSuffixAndDisabledBranches() {
+    PageRequest unsorted = PageRequest.of(0, 10);
+
+    // The suffix is appended to the inner name; with a prefix too, both apply.
+    assertRefused(
+        () -> repo.findAllBy(P, Worker.class, FieldEquals.of("street_work", "x"), unsorted),
+        encryptedRefusal("street_work", "Worker"));
+    assertRefused(
+        () -> repo.findAll(P, Courier.class, PageRequest.of(0, 10, Sort.by("drop_street_x"))),
+        encryptedRefusal("drop_street_x", "Courier"));
+    // Two levels of unwrapping compose the prefixes, outer first.
+    assertRefused(
+        () -> repo.findAllBy(P, Household.class, FieldEquals.of("main_home_street", "x"), unsorted),
+        encryptedRefusal("main_home_street", "Household"));
+    assertThat(
+            catchThrowable(
+                () -> repo.findAll(P, Worker.class, PageRequest.of(0, 10, Sort.by("street")))))
+        .isNull();
+    assertThat(
+            catchThrowable(
+                () ->
+                    repo.findAllBy(P, Courier.class, FieldEquals.of("drop_street", "x"), unsorted)))
+        .isNull();
+    assertThat(
+            catchThrowable(
+                () ->
+                    repo.findAllBy(
+                        P, Household.class, FieldEquals.of("home_street", "x"), unsorted)))
+        .isNull();
+
+    // enabled = false: the component is not unwrapped, so nothing inside it is refused under any
+    // name.
+    assertThat(
+            catchThrowable(
+                () ->
+                    repo.findAllBy(P, Tenant.class, FieldEquals.of("home_street", "x"), unsorted)))
+        .isNull();
+    assertThat(
+            catchThrowable(
+                () -> repo.findAllBy(P, Tenant.class, FieldEquals.of("street", "x"), unsorted)))
+        .isNull();
   }
 
   @Test
