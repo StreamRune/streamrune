@@ -19,6 +19,7 @@ import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.runtime.GuardedTracing;
+import org.streamrune.runtime.jdbc.EventAppendSupport;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
@@ -269,7 +270,7 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
     if (eventAuditStore != null) {
       requireSameFile("eventAuditStore", eventAuditStore.file());
     }
-    SqliteEventStore.validateCryptoConfig(typeRegistry, cryptoEngine);
+    EventAppendSupport.validateCryptoConfig(typeRegistry, cryptoEngine);
     // Validated before anything is migrated: a bad migration set is a configuration error.
     SnapshotMigrationChain migrationChain = SnapshotMigrationChain.of(snapshotMigrations);
     UpcasterChain upcasterChain = new UpcasterChain(upcasters);

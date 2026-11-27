@@ -166,9 +166,11 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   implement the same stores. Each backend keeps its own statements, transactions, locks and
   connection handling; the decisions around them live once in `org.streamrune.runtime.jdbc`: the
   stream keys (`StreamKeys`), the object mappers (`StoreObjectMappers`), the cause walker
-  (`Causes`), the checkpoint fence's decisions (`CheckpointFenceRules`) and the event read path's
-  row decoding, snapshot decision and deserialization (`EventReadPath`). Each backend supplies its
-  `JdbcInstantCodec` for timestamps and flags. The rest of the stores is still mirrored by hand. The
+  (`Causes`), the checkpoint fence's decisions (`CheckpointFenceRules`), the event read path's
+  row decoding, snapshot decision and deserialization (`EventReadPath`) and the event append's
+  argument rules, serialization, spans and failure mapping (`EventAppendSupport`, over each
+  backend's `AppendFailureClassifier`). Each backend supplies its `JdbcInstantCodec` for
+  timestamps and flags. The rest of the stores is still mirrored by hand. The
   crypto cipher with its self-check and retries (`VerifiedCipher`), the v1 wire format
   (`AesGcmV1Format`) and the JDBC key store and forgotten-subject SQL (`JdbcSubjectKeyStore`,
   `JdbcForgottenSubjects`) live once in `streamrune-crypto-api`; each backend supplies only its
