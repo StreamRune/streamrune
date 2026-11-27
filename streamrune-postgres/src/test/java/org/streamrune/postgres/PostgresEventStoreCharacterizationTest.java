@@ -594,11 +594,11 @@ class PostgresEventStoreCharacterizationTest {
 
   /**
    * A row stored with {@code global_offset = -1} (no constraint refuses it), a registered type and
-   * a valid payload: the offset is parsed before the row's decoding is guarded, so the load fails
-   * with the offset's own refusal, unwrapped.
+   * a valid payload: the offset is parsed inside the row's decoding, so the load fails as a corrupt
+   * row, as on SQLite.
    */
   @Test
-  void negativeGlobalOffsetRow_isRawIllegalArgument() throws SQLException {
+  void negativeGlobalOffsetRow_isEventDeserializationException() throws SQLException {
     PostgresEventStore store = plain();
     store.append(A, events(A, 1), Version.initial());
     execute(copyOfFirstRow(-1, "N", "ContractEvent", 1));
@@ -606,6 +606,9 @@ class PostgresEventStoreCharacterizationTest {
     Throwable thrown = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("N"))));
 
     assertThat(thrown)
+        .isExactlyInstanceOf(EventDeserializationException.class)
+        .hasMessage("Failed to deserialize event data for stream: order:N");
+    assertThat(thrown.getCause())
         .isExactlyInstanceOf(IllegalArgumentException.class)
         .hasMessage("globalOffset must be >= 0")
         .hasNoCause();
@@ -613,21 +616,22 @@ class PostgresEventStoreCharacterizationTest {
   }
 
   /**
-   * The same row with an unregistered type: the offset is parsed before the type is resolved, so
-   * the offset's refusal wins over the unknown type.
+   * The same row with an unregistered type: the type is resolved first, before the offset, so the
+   * unknown type wins, as on SQLite.
    */
   @Test
-  void negativeGlobalOffsetRowWithAnUnknownType_isStillIllegalArgument() throws SQLException {
+  void negativeGlobalOffsetRowWithAnUnknownType_isUnknownEventType() throws SQLException {
     PostgresEventStore store = plain();
     store.append(A, events(A, 1), Version.initial());
     execute(copyOfFirstRow(-1, "N", "RetiredEvent", 1));
 
     Throwable thrown = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("N"))));
 
-    assertThat(thrown)
-        .isExactlyInstanceOf(IllegalArgumentException.class)
-        .hasMessage("globalOffset must be >= 0")
-        .hasNoCause();
+    assertThat(thrown).isExactlyInstanceOf(UnknownEventTypeException.class).hasNoCause();
+    assertThat(thrown.getMessage())
+        .isEqualTo(
+            "Unknown event type: 'RetiredEvent' is not registered. Registered event types:"
+                + " [ContractEvent]");
     assertThat(thrown.getSuppressed()).isEmpty();
   }
 
@@ -1602,24 +1606,62 @@ class PostgresEventStoreCharacterizationTest {
   }
 
   /**
-   * A null version reaches the statement: the store borrows a connection and fails there with the
-   * JVM's own null-pointer message.
+   * A null version is refused after the other argument checks and before the state is serialized or
+   * a connection is borrowed, with the same message as on SQLite.
    */
   @Test
   void failureMessages_snapshotWithANullVersion() {
     PostgresEventStore store = plain();
 
-    Throwable thrown =
-        catchThrowable(() -> store.saveSnapshot(A, null, new ContractState("s"), 1, 0));
+    assertRefusal(
+        () -> store.saveSnapshot(A, null, new ContractState("s"), 1, 0),
+        NullPointerException.class,
+        "version is required");
+    assertThat(recorder.transcript()).isEmpty();
+  }
 
-    assertThat(thrown)
-        .isExactlyInstanceOf(NullPointerException.class)
-        .hasMessage(
-            "Cannot invoke \"org.streamrune.core.types.Version.value()\" because \"version\" is"
-                + " null");
-    assertThat(recorder.transcript())
-        .containsExactly(
-            "open #1", "#1 prepare " + UPSERT_SNAPSHOT, "#1 queryTimeout=driver", "#1 close");
+  /** A traced store refuses a null version before any connection is borrowed or span started. */
+  @Test
+  void saveSnapshotWithANullVersion_isNullPointerWithMessage() {
+    var tracing = new RecordingTracing();
+    PostgresEventStore store = builder().tracing(tracing).build();
+    recorder.clear();
+
+    assertRefusal(
+        () -> store.saveSnapshot(A, null, new ContractState("s"), 1, 0),
+        NullPointerException.class,
+        "version is required");
+    assertThat(recorder.connectionsOpened()).isZero();
+    assertThat(recorder.transcript()).isEmpty();
+    assertThat(tracing.started).isEmpty();
+  }
+
+  /**
+   * A null version with an unregistered state class: the version is checked before the state is
+   * serialized, so the null version wins over the unresolved state type.
+   */
+  @Test
+  void saveSnapshotWithANullVersionAndAnUnregisteredState_isNullPointer() {
+    PostgresEventStore store = plain();
+    record Unregistered(String x) implements AggregateState {}
+
+    assertRefusal(
+        () -> store.saveSnapshot(A, null, new Unregistered("x"), 1, 0),
+        NullPointerException.class,
+        "version is required");
+    assertThat(recorder.connectionsOpened()).isZero();
+  }
+
+  /** A null stream and a null version: the stream is checked first and is the one reported. */
+  @Test
+  void saveSnapshotWithANullStreamAndVersion_reportsTheStream() {
+    PostgresEventStore store = plain();
+
+    assertRefusal(
+        () -> store.saveSnapshot(null, null, new ContractState("s"), 1, 0),
+        NullPointerException.class,
+        "streamId is required");
+    assertThat(recorder.connectionsOpened()).isZero();
   }
 
   @Test

@@ -562,8 +562,6 @@ public final class PostgresEventStore implements EventStore {
     this.tracing =
         GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), metrics);
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
-    // The global offset is parsed first, before the event type is resolved, as this store always
-    // did.
     this.readPath =
         new EventReadPath(
             objectMapper,
@@ -573,8 +571,7 @@ public final class PostgresEventStore implements EventStore {
             metrics,
             this.tracing,
             this.traced,
-            log,
-            row -> GlobalOffset.of(row.globalOffset()));
+            log);
     this.support = new EventAppendSupport(objectMapper, typeRegistry, this.tracing, log);
   }
 
@@ -1106,6 +1103,8 @@ public final class PostgresEventStore implements EventStore {
       // A SQLException reaching here AFTER the commit is post-commit connection cleanup failing
       // (e.g. conn.close() throwing because the connection died right after commit). The events are
       // durable — return the already-built result rather than reporting a spurious failure.
+      // Static analysis reports this guard as always false; it is reachable, because closing a
+      // pooled connection can throw after the commit.
       if (committed && appendResult != null) {
         return appendResult;
       }
@@ -1714,7 +1713,8 @@ public final class PostgresEventStore implements EventStore {
       long snapshotPurgeGeneration) {
     EventAppendSupport.requireSnapshotArguments(
         streamId, state, snapshotVersion, snapshotPurgeGeneration);
-    if (!traced || version == null) {
+    Objects.requireNonNull(version, "version is required");
+    if (!traced) {
       return writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
     }
     return support.tracedSaveSnapshot(

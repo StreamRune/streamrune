@@ -276,7 +276,6 @@ public final class SqliteEventStore implements EventStore {
     this.tracing =
         GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), metrics);
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
-    // The global offset is parsed inside the decoding's failure handling, as this store always did.
     this.readPath =
         new EventReadPath(
             objectMapper,
@@ -286,8 +285,7 @@ public final class SqliteEventStore implements EventStore {
             metrics,
             this.tracing,
             this.traced,
-            log,
-            null);
+            log);
     this.support = new EventAppendSupport(objectMapper, typeRegistry, this.tracing, log);
     this.clock = Objects.requireNonNull(clock, "clock is required");
     this.outboxStore = outboxStore;
@@ -540,6 +538,8 @@ public final class SqliteEventStore implements EventStore {
     } catch (SQLException e) {
       // Only an append that did not commit is mapped: one that committed and then failed to close
       // returned its result above.
+      // Static analysis reports this guard as always false; it is reachable, because closing a
+      // pooled connection can throw after the commit.
       if (committed) {
         return result;
       }
@@ -713,6 +713,8 @@ public final class SqliteEventStore implements EventStore {
       }
     } catch (SQLException e) {
       // Only a keyed append that did not commit is mapped, as for the unkeyed append.
+      // Static analysis reports this guard as always false; it is reachable, because closing a
+      // pooled connection can throw after the commit.
       if (committed) {
         return result;
       }

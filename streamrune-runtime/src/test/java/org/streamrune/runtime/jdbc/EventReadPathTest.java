@@ -196,7 +196,7 @@ class EventReadPathTest {
   void decideSnapshot_incompatibleButReachable_migratesFromTheStoredVersion() throws Exception {
     var db = JdbcTestDatabase.create(dir, SNAPSHOT_TABLE);
     insertSnapshot(db, "CounterState", "{\"count\":5}", 5, 1, 0);
-    EventReadPath path = path(UpcasterChain.empty(), chain(toV2()), metrics, null, false, null);
+    EventReadPath path = path(UpcasterChain.empty(), chain(toV2()), metrics, null, false);
 
     assertThat(decide(db, path, 2))
         .isEqualTo(
@@ -308,27 +308,6 @@ class EventReadPathTest {
     assertThat(e.getCause())
         .isExactlyInstanceOf(IllegalArgumentException.class)
         .hasMessage("globalOffset must be >= 0");
-  }
-
-  @Test
-  void toEnvelope_negativeOffsetParsedFirst_isRawIllegalArgumentBeforeTypeResolution() {
-    Function<RawEventRow, GlobalOffset> parseFirst = r -> GlobalOffset.of(r.globalOffset());
-    EventReadPath path =
-        path(UpcasterChain.empty(), noMigrations(), metrics, null, false, parseFirst);
-    var row = new RawEventRow(-1, "Account", "a-1", 1, "Nope", "{\"name\":\"n\"}", META, 1);
-
-    var e = assertThrows(IllegalArgumentException.class, () -> path.toEnvelope(row));
-
-    assertThat(e).hasMessage("globalOffset must be >= 0");
-  }
-
-  @Test
-  void toEnvelope_offsetParsedFirst_isTheOffsetOfTheEnvelope() {
-    Function<RawEventRow, GlobalOffset> parseFirst = r -> GlobalOffset.of(r.globalOffset());
-    EventReadPath path =
-        path(UpcasterChain.empty(), noMigrations(), metrics, null, false, parseFirst);
-
-    assertThat(path.toEnvelope(row(8, 1)).globalOffset()).isEqualTo(GlobalOffset.of(8));
   }
 
   // ── Assembling a load's history ────────────────────────────────────────────────────────────────
@@ -510,8 +489,7 @@ class EventReadPathTest {
             throw new IllegalStateException("registry closed");
           }
         };
-    EventReadPath path =
-        path(UpcasterChain.empty(), noMigrations(), failingMetrics, null, false, null);
+    EventReadPath path = path(UpcasterChain.empty(), noMigrations(), failingMetrics, null, false);
     var snapshot = new StoredSnapshot(true, "{not json", CounterState.class, v(2), -1, 0);
 
     AggregateHistory history =
@@ -603,7 +581,7 @@ class EventReadPathTest {
   @Test
   void spans_namesAttributesAndChildTiming() {
     var tracing = new RecordingTracing();
-    EventReadPath path = path(chainOf(titleToName()), noMigrations(), metrics, tracing, true, null);
+    EventReadPath path = path(chainOf(titleToName()), noMigrations(), metrics, tracing, true);
 
     // A stored snapshot the load starts from: HIT.
     var hit = new StoredSnapshot(true, "{\"count\":2}", CounterState.class, v(2), -1, 0);
@@ -694,8 +672,7 @@ class EventReadPathTest {
 
     // Not traced: nothing at all, though the tracing records every area.
     tracing.clear();
-    EventReadPath untraced =
-        path(chainOf(titleToName()), noMigrations(), metrics, tracing, false, null);
+    EventReadPath untraced = path(chainOf(titleToName()), noMigrations(), metrics, tracing, false);
     untraced.load(
         STREAM,
         0,
@@ -707,7 +684,7 @@ class EventReadPathTest {
   @Test
   void spans_recordTheErrorAndRethrow() {
     var tracing = new RecordingTracing();
-    EventReadPath path = path(UpcasterChain.empty(), noMigrations(), metrics, tracing, true, null);
+    EventReadPath path = path(UpcasterChain.empty(), noMigrations(), metrics, tracing, true);
     var corrupt = new RawEventRow(1, "Account", "a-1", 1, "Opened", "{not json", META, 1);
     var transientState =
         new StoredSnapshot(true, "{\"mode\":\"transient\"}", CryptoState.class, v(2), -1, 0);
@@ -777,8 +754,7 @@ class EventReadPathTest {
             throw new IllegalStateException("registry closed");
           }
         };
-    EventReadPath path =
-        path(UpcasterChain.empty(), noMigrations(), failingMetrics, null, false, null);
+    EventReadPath path = path(UpcasterChain.empty(), noMigrations(), failingMetrics, null, false);
     var discarded = new StoredSnapshot(true, "{not json", CounterState.class, v(2), -1, 0);
 
     path.assembleHistory(STREAM, discarded, List.of(), 0, after -> List.of(row(1, 1)));
@@ -820,7 +796,7 @@ class EventReadPathTest {
   }
 
   private EventReadPath path(UpcasterChain upcasters, SnapshotMigrationChain migrations) {
-    return path(upcasters, migrations, metrics, null, false, null);
+    return path(upcasters, migrations, metrics, null, false);
   }
 
   private static EventReadPath path(
@@ -828,8 +804,7 @@ class EventReadPathTest {
       SnapshotMigrationChain migrations,
       StreamRuneMetrics metrics,
       StreamRuneTracing tracing,
-      boolean traced,
-      Function<RawEventRow, GlobalOffset> offsetBeforeTypeResolution) {
+      boolean traced) {
     return new EventReadPath(
         MAPPER,
         REGISTRY,
@@ -838,8 +813,7 @@ class EventReadPathTest {
         metrics,
         tracing == null ? StreamRuneTracing.NOOP : tracing,
         traced,
-        LoggerFactory.getLogger(CATEGORY),
-        offsetBeforeTypeResolution);
+        LoggerFactory.getLogger(CATEGORY));
   }
 
   private static Version v(long value) {
