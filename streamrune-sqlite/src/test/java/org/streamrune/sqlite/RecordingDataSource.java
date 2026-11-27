@@ -37,7 +37,8 @@ import javax.sql.DataSource;
  *       statement;
  *   <li>{@code #n fetchSize=<k>} and {@code #n queryTimeout=<seconds>}: the statement setters;
  *   <li>{@code #n commit} and {@code #n rollback}: {@link Connection#commit()} and {@link
- *       Connection#rollback()};
+ *       Connection#rollback()}; {@code #n rollback to savepoint}: {@link
+ *       Connection#rollback(java.sql.Savepoint)};
  *   <li>{@code #n close}: the first {@link Connection#close()} of the connection.
  * </ul>
  *
@@ -108,7 +109,8 @@ final class RecordingDataSource implements DataSource {
 
   /**
    * Runs {@code hook} once, on the same connection (the real one, so its work is not recorded),
-   * right before the first statement whose SQL starts with {@code sqlPrefix} is prepared.
+   * right before the first statement whose SQL starts with {@code sqlPrefix} is prepared. When
+   * several hooks that have not run yet match one statement, each runs, in registration order.
    */
   void beforePrepare(String sqlPrefix, SqlHook hook) {
     hooks.add(new PendingHook(sqlPrefix, hook, new AtomicBoolean()));
@@ -124,17 +126,17 @@ final class RecordingDataSource implements DataSource {
   }
 
   /**
-   * Forgets the transcript, restarts the connection numbering and {@link #connectionsOpened()} at
-   * zero, and drops pending hooks and an armed close failure. {@link #openConnections()} keeps
-   * counting the connections still open.
+   * Forgets the transcript (and with it {@link #sql()}) and restarts the connection numbering and
+   * {@link #connectionsOpened()} at zero. A registered {@link #beforePrepare} hook that has not run
+   * yet and an armed {@link #failNextCloseAfterCommit()} stay in force, so a test can arm them
+   * during setup and clear the setup's events afterwards. {@link #openConnections()} keeps counting
+   * the connections still open.
    */
   void clear() {
     synchronized (transcript) {
       transcript.clear();
     }
     connectionsOpened.set(0);
-    hooks.clear();
-    failNextCloseAfterCommit.set(false);
   }
 
   private void record(String event) {
@@ -215,12 +217,11 @@ final class RecordingDataSource implements DataSource {
         case "commit":
           record("#" + n + " commit");
           Object result = delegate(method, args);
+          // Set only once the commit succeeded: a failed commit leaves its event and no commit.
           committed.set(true);
           return result;
         case "rollback":
-          if (arity == 0) {
-            record("#" + n + " rollback");
-          }
+          record("#" + n + (arity == 0 ? " rollback" : " rollback to savepoint"));
           return delegate(method, args);
         case "close":
           return close(method, args);

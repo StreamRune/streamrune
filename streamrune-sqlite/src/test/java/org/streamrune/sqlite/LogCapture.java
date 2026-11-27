@@ -9,27 +9,42 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Captures the log events of one logger category: a logback {@link ListAppender} attached to the
- * logger named after a class, detached by {@link #close()}. The logger's level is left as {@code
- * logback-test.xml} sets it (the root at {@code WARN}), so a capture sees {@code WARN} and {@code
- * ERROR} events.
+ * logger named after a class, detached by {@link #close()}.
+ *
+ * <p>While attached, the logger's level is {@code TRACE}, so a test can pin {@code INFO} and {@code
+ * DEBUG} lines although {@code logback-test.xml} sets the root to {@code WARN}, and the logger is
+ * not additive, so the captured lines stay out of the build log. {@link #close()} restores the
+ * logger's previous level (an inherited level stays inherited) and additivity.
  */
 final class LogCapture implements AutoCloseable {
 
   private final Logger logger;
   private final ListAppender<ILoggingEvent> appender;
+  private final Level previousLevel;
+  private final boolean previousAdditivity;
 
-  private LogCapture(Logger logger, ListAppender<ILoggingEvent> appender) {
+  private LogCapture(
+      Logger logger,
+      ListAppender<ILoggingEvent> appender,
+      Level previousLevel,
+      boolean previousAdditivity) {
     this.logger = logger;
     this.appender = appender;
+    this.previousLevel = previousLevel;
+    this.previousAdditivity = previousAdditivity;
   }
 
-  /** Starts capturing the events of the logger named after {@code category}. */
+  /** Starts capturing every event of the logger named after {@code category}, down to TRACE. */
   static LogCapture attach(Class<?> category) {
     Logger logger = (Logger) LoggerFactory.getLogger(category);
+    Level previousLevel = logger.getLevel();
+    boolean previousAdditivity = logger.isAdditive();
     ListAppender<ILoggingEvent> appender = new ListAppender<>();
     appender.start();
     logger.addAppender(appender);
-    return new LogCapture(logger, appender);
+    logger.setLevel(Level.TRACE);
+    logger.setAdditive(false);
+    return new LogCapture(logger, appender, previousLevel, previousAdditivity);
   }
 
   /** The captured events of exactly {@code level}, in the order they were logged. */
@@ -39,9 +54,14 @@ final class LogCapture implements AutoCloseable {
     }
   }
 
-  /** Stops capturing: detaches and stops the appender. */
+  /**
+   * Stops capturing: restores the logger's level and additivity, then detaches and stops the
+   * appender.
+   */
   @Override
   public void close() {
+    logger.setLevel(previousLevel);
+    logger.setAdditive(previousAdditivity);
     logger.detachAppender(appender);
     appender.stop();
   }

@@ -286,6 +286,96 @@ class SqliteCheckpointFenceCharacterizationTest {
     assertThat(recorder.connectionsOpened()).isEqualTo(1);
   }
 
+  /**
+   * The statements of a batch ({@code lockForBatch}, then {@code saveLocked}) and of a dead-letter
+   * replay ({@code lockForReplay}) on the caller's {@code BEGIN IMMEDIATE} transaction, in order:
+   * each method first probes for an open transaction with a {@code BEGIN} that SQLite refuses
+   * inside one, then runs its own statements. A refused stale batch runs the same probe, seed and
+   * read, and nothing after them. Outside a transaction the probe's {@code BEGIN} succeeds and is
+   * rolled back before the refusal.
+   */
+  @ParameterizedTest
+  @EnumSource(CheckpointTable.class)
+  void lockSaveAndReplay_transcripts(CheckpointTable table) throws Exception {
+    var fence = fenceOver(table);
+    String name = table.tableName();
+    String seed =
+        "INSERT INTO "
+            + name
+            + " (projection_name, last_offset, updated_at) VALUES (?, 0, ?)"
+            + " ON CONFLICT (projection_name) DO NOTHING";
+    String readForBatch = "SELECT last_offset, epoch FROM " + name + " WHERE projection_name = ?";
+    String saveLocked =
+        "INSERT INTO "
+            + name
+            + " (projection_name, last_offset, epoch, updated_at) VALUES (?, ?, ?, ?)"
+            + " ON CONFLICT (projection_name) DO UPDATE SET last_offset = excluded.last_offset,"
+            + " epoch = max("
+            + name
+            + ".epoch, excluded.epoch), updated_at = excluded.updated_at"
+            + " WHERE excluded.last_offset > "
+            + name
+            + ".last_offset";
+
+    // A batch: lock, then advance, then the caller's commit.
+    try (Connection c = beginImmediate()) {
+      fence.lockForBatch(c, P, 2L, GlobalOffset.of(1));
+      fence.saveLocked(c, P, GlobalOffset.of(3), 2L);
+      SqliteTransactions.commit(c);
+    }
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 execute BEGIN",
+            "#1 prepare " + seed,
+            "#1 prepare " + readForBatch,
+            "#1 execute BEGIN",
+            "#1 prepare " + saveLocked,
+            "#1 execute COMMIT",
+            "#1 close");
+
+    // A dead-letter replay: the probe, the seed and the read, nothing written beyond the seed.
+    recorder.clear();
+    try (Connection c = beginImmediate()) {
+      fence.lockForReplay(c, P);
+      SqliteTransactions.commit(c);
+    }
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 execute BEGIN",
+            "#1 prepare " + seed,
+            "#1 prepare " + readForBatch,
+            "#1 execute COMMIT",
+            "#1 close");
+
+    // A stale batch: refused after the read, before anything else runs.
+    recorder.clear();
+    try (Connection c = beginImmediate()) {
+      catchThrowable(() -> fence.lockForBatch(c, P, 1L, GlobalOffset.of(4)));
+      rollback(c);
+    }
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 execute BEGIN",
+            "#1 prepare " + seed,
+            "#1 prepare " + readForBatch,
+            "#1 execute ROLLBACK",
+            "#1 close");
+
+    // Outside a transaction: the probe's BEGIN succeeds and is rolled back, then the refusal.
+    recorder.clear();
+    try (Connection c = recorder.getConnection()) {
+      catchThrowable(() -> fence.lockForBatch(c, P, 0L, GlobalOffset.of(4)));
+    }
+    assertThat(recorder.transcript())
+        .containsExactly("open #1", "#1 execute BEGIN", "#1 execute ROLLBACK", "#1 close");
+  }
+
   /** A data source whose every connection request throws {@code failure}. */
   private static DataSource failingWith(Exception failure) {
     return (DataSource)

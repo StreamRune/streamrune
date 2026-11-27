@@ -239,4 +239,106 @@ class RecordingDataSourceTest {
             "#1 execute COMMIT",
             "#1 close");
   }
+
+  /**
+   * {@code clear()} forgets the events and restarts the numbering, but a hook registered and a
+   * close failure armed before it stay in force: a test arms them during setup and clears the
+   * setup's events afterwards.
+   */
+  @Test
+  void clearKeepsRegisteredHooksAndAnArmedCloseFailure() throws SQLException {
+    List<String> hookRuns = new ArrayList<>();
+    recorder.beforePrepare("INSERT INTO t", same -> hookRuns.add("ran"));
+    recorder.failNextCloseAfterCommit();
+    try (Connection setup = recorder.getConnection();
+        Statement st = setup.createStatement()) {
+      st.execute("SELECT 1");
+    }
+
+    recorder.clear();
+    assertThat(recorder.transcript()).isEmpty();
+    assertThat(recorder.sql()).isEmpty();
+    assertThat(recorder.connectionsOpened()).isZero();
+
+    Connection conn = recorder.getConnection();
+    SqliteTransactions.begin(conn);
+    try (PreparedStatement ps = conn.prepareStatement("INSERT INTO t (v) VALUES ('y')")) {
+      ps.executeUpdate();
+    }
+    SqliteTransactions.commit(conn);
+    assertThat(hookRuns).as("the hook registered before clear() runs").containsExactly("ran");
+    assertThatThrownBy(conn::close)
+        .as("the close failure armed before clear() fires")
+        .isExactlyInstanceOf(SQLException.class)
+        .hasMessage("injected close failure");
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 prepare INSERT INTO t (v) VALUES ('y')",
+            "#1 execute COMMIT",
+            "#1 close");
+  }
+
+  /**
+   * {@code commit} and {@code rollback} are recorded before they are delegated, so a failing one
+   * leaves its event; only a commit that succeeded counts as one for the close failure. SQLite
+   * refuses both on a connection in autocommit, and a {@code COMMIT} statement with no transaction
+   * open.
+   */
+  @Test
+  void aFailedCommitIsRecordedButIsNoCommit() throws SQLException {
+    recorder.failNextCloseAfterCommit();
+    Connection conn = recorder.getConnection();
+    assertThatThrownBy(conn::commit).isInstanceOf(SQLException.class);
+    assertThatThrownBy(conn::rollback).isInstanceOf(SQLException.class);
+    assertThatThrownBy(() -> SqliteTransactions.commit(conn)).isInstanceOf(SQLException.class);
+    conn.close();
+
+    assertThat(recorder.openConnections()).isZero();
+    assertThat(recorder.transcript())
+        .as("no commit succeeded, so the armed close failure did not fire")
+        .containsExactly("open #1", "#1 commit", "#1 rollback", "#1 execute COMMIT", "#1 close");
+  }
+
+  @Test
+  void aRollbackToASavepointIsDistinctFromARollback() throws SQLException {
+    try (Connection conn = recorder.getConnection()) {
+      conn.setAutoCommit(false);
+      var savepoint = conn.setSavepoint();
+      try (PreparedStatement ps = conn.prepareStatement("INSERT INTO t (v) VALUES ('s')")) {
+        ps.executeUpdate();
+      }
+      conn.rollback(savepoint);
+      conn.rollback();
+      conn.setAutoCommit(true);
+    }
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 autoCommit=false",
+            "#1 prepare INSERT INTO t (v) VALUES ('s')",
+            "#1 rollback to savepoint",
+            "#1 rollback",
+            "#1 autoCommit=true",
+            "#1 close");
+  }
+
+  /** Every hook that matches and has not run yet runs once, in registration order. */
+  @Test
+  void matchingHooksRunOnceEachInRegistrationOrder() throws SQLException {
+    List<String> runs = new ArrayList<>();
+    recorder.beforePrepare("INSERT INTO t", same -> runs.add("specific"));
+    recorder.beforePrepare("SELECT", same -> runs.add("other prefix"));
+    recorder.beforePrepare("INSERT", same -> runs.add("general"));
+
+    try (Connection conn = recorder.getConnection()) {
+      for (int i = 0; i < 2; i++) {
+        try (PreparedStatement ps = conn.prepareStatement("INSERT INTO t (v) VALUES ('h')")) {
+          ps.executeUpdate();
+        }
+      }
+    }
+    assertThat(runs).containsExactly("specific", "general");
+  }
 }
