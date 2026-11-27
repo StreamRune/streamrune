@@ -16,6 +16,22 @@ final class VirtualThreads {
   private VirtualThreads() {}
 
   /**
+   * Whether a thread of this name is one the framework starts: a projection runner, a retention
+   * sweeper, the outbox poller, a saga sweeper or timeout runner, a subscription's poll thread, the
+   * lease heartbeat, the dead-letter retry runner or the SSE feed.
+   *
+   * @param name the thread's name
+   * @return whether the framework names its threads so
+   */
+  static boolean isFramework(String name) {
+    return name.startsWith("streamrune-")
+        || name.startsWith("projection-")
+        || name.startsWith("saga-")
+        || name.endsWith("-retention-sweeper")
+        || name.equals("outbox-poller");
+  }
+
+  /**
    * The virtual threads alive now.
    *
    * @return their names by thread id

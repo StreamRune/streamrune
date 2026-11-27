@@ -28,29 +28,28 @@ import org.streamrune.runtime.health.RelayComponentNames;
 import org.streamrune.test.ScriptedSubscriptionLeadership;
 
 /**
- * The framework stops after the application: an application bean that stops a subscription on the
+ * The framework stops around the application: an application bean that stops a subscription on the
  * shutdown event, or on the before-destroyed event after a refused start, still holds its lease and
- * still has an open command bus while it stops, and the framework's other runner owners stop before
- * {@link StreamRuneLifecycle} closes the leadership they use.
+ * still has an open command bus while it stops, and the compensation-retry sweeper, which follows
+ * the lease of the saga's subscription, and the SSE feed have stopped before it.
  *
  * <p>Each test boots a real Arc container with the framework's three runner owners, a leadership
  * bean and an application bean that takes a lease at startup. The application bean observes each
- * stop event twice: at the default priority, and at {@code Interceptor.Priority.LIBRARY_AFTER +
- * 300}, later than the default, which proves the order whatever CDI does with observers of one
- * priority. It records whether its lease is still held and the bus still open each time.
+ * stop event three times: at {@code Interceptor.Priority.APPLICATION}, at the default priority and
+ * at {@code Interceptor.Priority.LIBRARY_AFTER + 300}, so the order is proved at both ends of the
+ * range the framework leaves the application, whatever CDI does with observers of one priority.
+ * Each time it records whether its lease is still held, whether the bus is still open and whether
+ * the threads of the sweeper and of the feed have ended.
  */
 class QuarkusStopOrderTest {
 
-  private static final String HELD_AND_OPEN = "lease held, bus open";
+  private static final String EXPECTED_STATE = "lease held, bus open, sweeper and feed stopped";
 
   /** What the application bean saw each time it stopped, in order. */
   static final List<String> APPLICATION_STOPS = new CopyOnWriteArrayList<>();
 
-  /** What was still running when the framework closed the leadership. */
-  static final List<String> RUNNING_AT_LEADERSHIP_CLOSE = new CopyOnWriteArrayList<>();
-
-  /** The framework threads, other than {@link StreamRuneLifecycle}'s, that must stop before it. */
-  static volatile Map<Long, String> otherOwnersThreads = Map.of();
+  /** The threads of the compensation-retry sweeper and of the SSE feed the start left running. */
+  static volatile Map<Long, String> sweeperAndFeedThreads = Map.of();
 
   /**
    * The application's subscription, reduced to what the order is about: it takes a lease of the
@@ -79,6 +78,11 @@ class QuarkusStopOrderTest {
       assertThat(leadership.tryAcquire(NAME)).isPresent();
     }
 
+    public void stopEarly(
+        @Observes @Priority(Interceptor.Priority.APPLICATION) ShutdownEvent event) {
+      record("shutdown, early");
+    }
+
     public void stop(@Observes ShutdownEvent event) {
       record("shutdown");
     }
@@ -86,6 +90,14 @@ class QuarkusStopOrderTest {
     public void stopLate(
         @Observes @Priority(Interceptor.Priority.LIBRARY_AFTER + 300) ShutdownEvent event) {
       record("shutdown, late");
+    }
+
+    public void stopBeforeDestroyEarly(
+        @Observes(notifyObserver = Reception.IF_EXISTS)
+            @Priority(Interceptor.Priority.APPLICATION)
+            @BeforeDestroyed(ApplicationScoped.class)
+            Object event) {
+      record("before-destroyed, early");
     }
 
     public void stopBeforeDestroy(
@@ -108,60 +120,56 @@ class QuarkusStopOrderTest {
               + ": lease "
               + (leadership.current(NAME).isPresent() ? "held" : "lost")
               + ", bus "
-              + (bus.isClosed() ? "closed" : "open"));
+              + (bus.isClosed() ? "closed" : "open")
+              + ", sweeper and feed "
+              + (alive(sweeperAndFeedThreads).isEmpty() ? "stopped" : "running"));
     }
   }
 
-  /**
-   * The shared leadership, which grants every lease. Closing it releases them; it first records
-   * which threads of the framework's other runner owners are still alive.
-   */
+  /** An application observer of the shutdown event that throws, which ends the notification. */
+  public static class ThrowingShutdownObserver {
+    public void onShutdown(@Observes ShutdownEvent event) {
+      throw new IllegalStateException("the application's shutdown observer fails");
+    }
+  }
+
+  /** The shared leadership, which grants every lease; closing it releases them. */
   public static class Leadership {
     @Produces
     @Singleton
     public SubscriptionLeadership leadership() {
-      return new ScriptedSubscriptionLeadership() {
-        {
-          grant();
-        }
-
-        @Override
-        public void close() {
-          RUNNING_AT_LEADERSHIP_CLOSE.addAll(alive(otherOwnersThreads).values());
-          super.close();
-        }
-      };
+      return new ScriptedSubscriptionLeadership().grant();
     }
   }
 
   @BeforeEach
   void reset() {
     APPLICATION_STOPS.clear();
-    RUNNING_AT_LEADERSHIP_CLOSE.clear();
-    otherOwnersThreads = Map.of();
+    sweeperAndFeedThreads = Map.of();
+    QuarkusRefusedStartTest.ApplicationResource.aliveWhenDestroyed = null;
   }
 
   @Test
-  void onTheShutdownEventTheApplicationStopsWhileItsLeaseAndTheBusAreOpen() throws Exception {
+  void onTheShutdownEventTheApplicationStopsBetweenTheFrameworksTwoSteps() throws Exception {
     QuarkusRefusedStartTest.applicationConfig = QuarkusRefusedStartTest.config(Map.of());
     Map<Long, String> before = QuarkusRefusedStartTest.virtualThreads();
     try (var arc = RealArcTestContainer.boot(beans())) {
       var events = arc.container().beanManager().getEvent();
       events.select(StartupEvent.class).fire(new StartupEvent());
-      watchTheOtherOwnersThreadsSince(before);
+      watchTheSweeperAndTheFeedSince(before);
 
       events.select(ShutdownEvent.class).fire(new ShutdownEvent());
 
       assertThat(APPLICATION_STOPS)
-          .containsExactly("shutdown: " + HELD_AND_OPEN, "shutdown, late: " + HELD_AND_OPEN);
+          .containsExactly(
+              "shutdown, early: " + EXPECTED_STATE,
+              "shutdown: " + EXPECTED_STATE,
+              "shutdown, late: " + EXPECTED_STATE);
     }
-    assertThat(RUNNING_AT_LEADERSHIP_CLOSE)
-        .as("threads of the framework's other runner owners when the leadership closed")
-        .isEmpty();
   }
 
   @Test
-  void afterARefusedStartTheApplicationStopsWhileItsLeaseAndTheBusAreOpen() throws Exception {
+  void afterARefusedStartTheApplicationStopsBetweenTheFrameworksTwoSteps() throws Exception {
     // The saga parallelism check refuses a property naming a subscription no saga runner is bound
     // to, after every runner started.
     QuarkusRefusedStartTest.applicationConfig =
@@ -177,22 +185,53 @@ class QuarkusStopOrderTest {
                       .select(StartupEvent.class)
                       .fire(new StartupEvent()))
           .hasStackTraceContaining("nobody");
-      watchTheOtherOwnersThreadsSince(before);
+      watchTheSweeperAndTheFeedSince(before);
     }
 
     assertThat(APPLICATION_STOPS)
         .containsExactly(
-            "before-destroyed: " + HELD_AND_OPEN, "before-destroyed, late: " + HELD_AND_OPEN);
-    assertThat(RUNNING_AT_LEADERSHIP_CLOSE)
-        .as("threads of the framework's other runner owners when the leadership closed")
-        .isEmpty();
+            "before-destroyed, early: " + EXPECTED_STATE,
+            "before-destroyed: " + EXPECTED_STATE,
+            "before-destroyed, late: " + EXPECTED_STATE);
+  }
+
+  @Test
+  void anApplicationShutdownObserverThatThrowsLeavesTheStopToTheContainersShutdown()
+      throws Exception {
+    QuarkusRefusedStartTest.applicationConfig = QuarkusRefusedStartTest.config(Map.of());
+    Map<Long, String> before = QuarkusRefusedStartTest.virtualThreads();
+    Map<Long, String> started;
+    try (var arc = RealArcTestContainer.boot(beans(ThrowingShutdownObserver.class))) {
+      var events = arc.container().beanManager().getEvent();
+      events.select(StartupEvent.class).fire(new StartupEvent());
+      started =
+          QuarkusRefusedStartTest.frameworkThreadsSince(
+              before, QuarkusRefusedStartTest.ALL_FRAMEWORK_THREADS);
+      watchTheSweeperAndTheFeedSince(before);
+
+      // The observer that throws ends the notification: neither the application's later observers
+      // nor StreamRuneLifecycle hear the event.
+      assertThatThrownBy(() -> events.select(ShutdownEvent.class).fire(new ShutdownEvent()))
+          .hasStackTraceContaining("the application's shutdown observer fails");
+    }
+
+    // The container's shutdown stops what the shutdown event left running, in the same order.
+    assertThat(APPLICATION_STOPS.stream().filter(stop -> stop.startsWith("before-destroyed")))
+        .containsExactly(
+            "before-destroyed, early: " + EXPECTED_STATE,
+            "before-destroyed: " + EXPECTED_STATE,
+            "before-destroyed, late: " + EXPECTED_STATE);
+    assertThat(QuarkusRefusedStartTest.ApplicationResource.aliveWhenDestroyed)
+        .as("the virtual threads alive when the application's resource was destroyed")
+        .isNotNull()
+        .doesNotContainKeys(started.keySet().toArray(Long[]::new));
   }
 
   /**
    * Records the threads of the compensation-retry sweeper and of the SSE feed the start left
-   * running, which must have ended when the leadership closes.
+   * running, which must have ended when the application's first stop observer runs.
    */
-  private static void watchTheOtherOwnersThreadsSince(Map<Long, String> before) throws IOException {
+  private static void watchTheSweeperAndTheFeedSince(Map<Long, String> before) throws IOException {
     Map<Long, String> started =
         QuarkusRefusedStartTest.frameworkThreadsSince(
             before, QuarkusRefusedStartTest.ALL_FRAMEWORK_THREADS);
@@ -202,9 +241,9 @@ class QuarkusStopOrderTest {
             List.of(
                 RelayComponentNames.INBOX_RETENTION_SWEEPER,
                 RelayComponentNames.SAGA_DEAD_LETTER_RETENTION_SWEEPER));
-    // Both owners started a thread: the check below has something to see.
+    // Both owners started a thread: the check has something to see.
     assertThat(started).hasSize(2);
-    otherOwnersThreads = started;
+    sweeperAndFeedThreads = started;
   }
 
   private static Map<Long, String> alive(Map<Long, String> threads) {
@@ -215,7 +254,10 @@ class QuarkusStopOrderTest {
     }
   }
 
-  private static List<Class<?>> beans() {
-    return QuarkusRefusedStartTest.beans(ApplicationSubscription.class, Leadership.class);
+  private static List<Class<?>> beans(Class<?>... extra) {
+    var beans = new java.util.ArrayList<Class<?>>(List.of(extra));
+    beans.add(ApplicationSubscription.class);
+    beans.add(Leadership.class);
+    return QuarkusRefusedStartTest.beans(beans.toArray(Class<?>[]::new));
   }
 }

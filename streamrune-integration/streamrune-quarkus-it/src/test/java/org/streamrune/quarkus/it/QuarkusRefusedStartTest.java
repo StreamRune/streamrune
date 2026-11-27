@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test;
  * bound to. That check runs after the framework's runners and the leadership started, and Quarkus
  * fires no {@code ShutdownEvent} after a failed start: only the container's shutdown stops them. In
  * production the process exits; in dev mode and in a test JVM it does not, so any thread left
- * running would outlive the application. {@link StartedThreadsProbe} records the threads the
- * startup observers started before the check; each of them must end.
+ * running would outlive the application. {@link StartedThreadsProbe} records the framework threads
+ * the startup observers started before the check; each of them must end.
  */
 @QuarkusMainTest
 @TestProfile(QuarkusRefusedStartTest.RefusedStart.class)
@@ -70,9 +70,10 @@ class QuarkusRefusedStartTest {
         .isEmpty();
   }
 
-  /** The threads {@link StartedThreadsProbe} recorded, by thread id. */
+  /** The framework threads {@link StartedThreadsProbe} recorded, by thread id. */
   private static Map<Long, String> startedThreads() {
     String recorded = System.getProperty(StartedThreadsProbe.STARTED_THREADS);
+    System.clearProperty(StartedThreadsProbe.STARTED_THREADS);
     assertThat(recorded).as("the threads the probe recorded").isNotNull();
     Map<Long, String> threads = new HashMap<>();
     Arrays.stream(recorded.split(","))

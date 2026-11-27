@@ -213,11 +213,13 @@ public class SagaCompensationRetryLifecycle {
     return builder.build();
   }
 
-  // At StreamRuneLifecycle.STOP_PRIORITY: after the application's own shutdown observers, and
-  // before StreamRuneLifecycle closes the leadership and the command bus the sweepers use. public
-  // for
-  // the same cross-classloader reason as onStart.
-  public void onStop(@Observes @Priority(StreamRuneLifecycle.STOP_PRIORITY) ShutdownEvent event) {
+  // Before the application's own shutdown observers, at
+  // StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY: a sweeper follows the lease of the saga's
+  // subscription, which the application stops in its observer. public for the same
+  // cross-classloader reason as onStart.
+  public void onStop(
+      @Observes @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
+          ShutdownEvent event) {
     stopSweepers();
   }
 
@@ -232,7 +234,7 @@ public class SagaCompensationRetryLifecycle {
    */
   public void stopBeforeDestroy(
       @Observes(notifyObserver = Reception.IF_EXISTS)
-          @Priority(StreamRuneLifecycle.STOP_PRIORITY)
+          @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
           @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
     stopSweepers();

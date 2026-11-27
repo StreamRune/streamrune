@@ -121,9 +121,12 @@ public class SseEventFeedLifecycle {
     logger.info("StreamRune: started SseEventFeed");
   }
 
-  // At StreamRuneLifecycle.STOP_PRIORITY: after the application's own shutdown observers, and
-  // before StreamRuneLifecycle closes what the framework shares.
-  public void onStop(@Observes @Priority(StreamRuneLifecycle.STOP_PRIORITY) ShutdownEvent event) {
+  // Before the application's own shutdown observers, as the compensation-retry sweepers
+  // (StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY): the feed only publishes to the
+  // endpoint's clients.
+  public void onStop(
+      @Observes @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
+          ShutdownEvent event) {
     stop();
   }
 
@@ -138,7 +141,7 @@ public class SseEventFeedLifecycle {
    */
   public void stopBeforeDestroy(
       @Observes(notifyObserver = Reception.IF_EXISTS)
-          @Priority(StreamRuneLifecycle.STOP_PRIORITY)
+          @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
           @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
     stop();
