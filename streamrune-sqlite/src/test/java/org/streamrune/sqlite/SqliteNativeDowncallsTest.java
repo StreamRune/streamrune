@@ -18,12 +18,10 @@ class SqliteNativeDowncallsTest {
     assertThat(SqliteNativeDowncalls.reachabilityMetadata())
         .isEqualTo(
             List.of(
-                "org.streamrune.sqlite.FlockFileLock jint [void*, jint, jint]"
-                    + " {\"firstVariadicArg\":2,\"captureCallState\":true}",
-                "org.streamrune.sqlite.FlockFileLock jint [jint, jint] {\"captureCallState\":true}",
-                "org.streamrune.sqlite.FlockFileLock jint [jint] {\"captureCallState\":true}",
-                "org.streamrune.sqlite.FlockFileLock void* [jint] {}"));
-    assertThat(SqliteNativeDowncalls.CONDITION_TYPE).isEqualTo(FlockFileLock.class.getName());
+                "jint [void*, jint, jint] {\"firstVariadicArg\":2,\"captureCallState\":true}",
+                "jint [jint, jint] {\"captureCallState\":true}",
+                "jint [jint] {\"captureCallState\":true}",
+                "void* [jint] {}"));
   }
 
   @Test

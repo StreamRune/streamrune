@@ -146,8 +146,6 @@ class StreamRuneRuntimeHintsTest {
       metadata = new com.fasterxml.jackson.databind.ObjectMapper().readTree(in);
     }
     assertThat(SqliteForeignDowncalls.of(metadata)).isEqualTo(SqliteForeignDowncalls.EXPECTED);
-    // The condition names the guard class itself: a rename must fail here, not in the image.
-    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
   }
 
   @Test

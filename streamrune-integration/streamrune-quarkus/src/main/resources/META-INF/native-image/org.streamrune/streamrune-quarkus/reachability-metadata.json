@@ -54,25 +54,21 @@
   "foreign": {
     "downcalls": [
       {
-        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
         "returnType": "jint",
         "parameterTypes": ["void*", "jint", "jint"],
         "options": { "firstVariadicArg": 2, "captureCallState": true }
       },
       {
-        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
         "returnType": "jint",
         "parameterTypes": ["jint", "jint"],
         "options": { "captureCallState": true }
       },
       {
-        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
         "returnType": "jint",
         "parameterTypes": ["jint"],
         "options": { "captureCallState": true }
       },
       {
-        "condition": { "typeReached": "org.streamrune.sqlite.FlockFileLock" },
         "returnType": "void*",
         "parameterTypes": ["jint"]
       }

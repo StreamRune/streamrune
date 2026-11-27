@@ -22,9 +22,6 @@ import org.streamrune.core.Internal;
 @Internal
 public final class SqliteNativeDowncalls {
 
-  /** The type whose reachability makes the downcalls registered: the guard itself, {@value}. */
-  public static final String CONDITION_TYPE = "org.streamrune.sqlite.FlockFileLock";
-
   /**
    * One downcall.
    *
@@ -50,8 +47,9 @@ public final class SqliteNativeDowncalls {
 
     /**
      * The downcall as a native-image reachability-metadata {@code foreign.downcalls} entry, in one
-     * line: condition type, return type, parameter types, options as JSON, for example {@code
-     * org.streamrune.sqlite.FlockFileLock jint [jint, jint] {"captureCallState":true}}.
+     * line: return type, parameter types, options as JSON, for example {@code jint [jint, jint]
+     * {"captureCallState":true}}. The entry carries no {@code condition}: GraalVM 25.0.1 refuses a
+     * {@code condition} on a foreign call, so the downcalls are registered unconditionally.
      *
      * @return the line
      */
@@ -67,9 +65,7 @@ public final class SqliteNativeDowncalls {
       if (capturesErrno) {
         options.add("\"captureCallState\":true");
       }
-      return CONDITION_TYPE
-          + " "
-          + canonical(descriptor.returnLayout().orElseThrow())
+      return canonical(descriptor.returnLayout().orElseThrow())
           + " "
           + parameters
           + " {"

@@ -608,7 +608,7 @@ image of a SQLite application needs:
 
 The sqlite-jdbc driver ships its own native-image metadata. Pass `--enable-native-access=ALL-UNNAMED`
 to `native-image` as well. The integrations' tests check each registration, and the guard's
-downcalls were checked in a native image built with GraalVM 25; no native image of a whole SQLite
+downcalls were checked in a native image built with GraalVM CE 25.0.1. The metadata registers them without a condition, because 25.0.1 refuses a condition on a foreign call, so every native image of an integration holds the four stubs, SQLite or not. No native image of a whole SQLite
 application has been built and run by the project yet.
 
 ## Operations
