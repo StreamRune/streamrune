@@ -176,10 +176,11 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   forgotten-subject SQL (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in
   `streamrune-crypto-api`; each backend supplies only its `JdbcCryptoDialect`. A change to a store
   of one backend mirrors by hand only its backend shell (SQL text, connections, transactions and
-  locks, clock and id-set binding, claim ordering, retention loops) in its twin of the other
-  backend, in the same pull request, in either direction, or the pull request says why the twin
-  needs none. A behaviour both must share gets a case in the store's contract suite in
-  `streamrune-test`, which runs on both.
+  locks, clock and id-set binding, claim ordering, retention loops, the append overloads and
+  Postgres NOTIFY, the saga writes, the outbox claim and status writes, SQLite's batch joining and
+  jsonb emulation) in its twin of the other backend, in the same pull request, in either direction,
+  or the pull request says why the twin needs none. A behaviour both must share gets a case in the
+  store's contract suite in `streamrune-test`, which runs on both.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
   or a top-level declaration of the script; the root `build.gradle.kts` keeps such helpers in nested

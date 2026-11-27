@@ -10,7 +10,7 @@ import org.streamrune.runtime.jdbc.JdbcInstantCodec;
 /**
  * The PostgreSQL implementation of {@link JdbcInstantCodec}: a {@code TIMESTAMPTZ} column read
  * through {@link ResultSet#getTimestamp} and bound as a {@link Timestamp}, a {@code BOOLEAN} column
- * read through {@link ResultSet#getBoolean} — exactly the decoding the Postgres stores use today. A
+ * read through {@link ResultSet#getBoolean} — exactly the decoding the Postgres stores use. A
  * required read of an unexpected SQL NULL throws {@link NullPointerException}, as {@code
  * getTimestamp(column).toInstant()} does in the stores.
  *

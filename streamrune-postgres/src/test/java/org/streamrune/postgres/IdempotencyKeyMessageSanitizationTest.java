@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.runtime.jdbc.EventAppendSupport;
 
 /**
  * The two PostgreSQL exception messages that name an idempotency key render it through {@link
@@ -51,7 +52,7 @@ class IdempotencyKeyMessageSanitizationTest {
    */
   @Test
   void inboxConflictWithoutARow_namesTheKeySanitized() {
-    assertRendersTheKeySanitized(PostgresEventStore.inboxConflictWithoutRow(FORGED).getMessage());
+    assertRendersTheKeySanitized(EventAppendSupport.inboxConflictWithoutRow(FORGED).getMessage());
   }
 
   private static void assertRendersTheKeySanitized(String message) {

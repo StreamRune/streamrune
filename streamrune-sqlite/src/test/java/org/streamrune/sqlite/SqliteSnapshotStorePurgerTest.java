@@ -30,6 +30,7 @@ import org.streamrune.core.types.AggregateType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.jdbc.StreamKeys;
 import org.streamrune.sqlite.SqliteCrashPoints.Kill;
 import org.streamrune.sqlite.SqliteCrashPoints.Point;
 import org.streamrune.test.EventStoreContract;
@@ -101,7 +102,7 @@ class SqliteSnapshotStorePurgerTest {
             conn.prepareStatement(
                 "SELECT purge_generation FROM snapshot_store"
                     + " WHERE aggregate_type = ? AND aggregate_id = ?")) {
-      SqliteStreamKeys.bind(ps, 1, stream);
+      StreamKeys.bind(ps, 1, stream);
       try (var rs = ps.executeQuery()) {
         assertThat(rs.next()).as("the purged stream keeps its row").isTrue();
         return rs.getLong(1);

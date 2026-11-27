@@ -46,7 +46,7 @@ import java.io.Serial;
  *
  * <p>Extends {@link CryptoOperationException} deliberately: every {@code catch
  * (CryptoOperationException)} and every fail-closed check that tests for that type (e.g. {@code
- * PostgresEventStore.hasCryptoCause}, which must refuse to discard an undecryptable snapshot) also
+ * EventReadPath.hasCryptoCause}, which must refuse to discard an undecryptable snapshot) also
  * covers this subtype. Only callers that need the split test for it.
  */
 public class CryptoMappingException extends CryptoOperationException {

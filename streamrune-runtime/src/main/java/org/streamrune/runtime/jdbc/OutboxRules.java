@@ -23,7 +23,7 @@ import org.streamrune.core.types.LogSanitizer;
  * order and clock. The binder and the row mapper take the caller's {@link PreparedStatement} or
  * {@link ResultSet}, read every column by name, read the timestamp columns through the backend's
  * {@link JdbcInstantCodec} and let every {@link SQLException} propagate unwrapped. The delete
- * refusal is returned, not thrown, so the store throws it where it throws it today. The helper
+ * refusal is returned, not thrown, so each store throws it where its own flow requires. The helper
  * never opens, commits, rolls back or closes a connection, never decides a lock, does not log and
  * keeps no state.
  *

@@ -11,6 +11,7 @@ import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 import org.streamrune.test.InMemoryCryptoEngine;
 
 /**
@@ -22,7 +23,7 @@ import org.streamrune.test.InMemoryCryptoEngine;
  * <p>Before the fix, {@code PostgresEventStore} built its mapper inline with the single-arg {@code
  * new CryptoShreddingModule(cryptoEngine)} (NOOP metrics) on every production construction path, so
  * the documented GDPR-outage counter stayed permanently 0. This test drives the mapper through the
- * production factory {@link PostgresEventStore#createObjectMapper(org.streamrune.core.crypto
+ * production factory {@link StoreObjectMappers#eventsAndSagas(org.streamrune.core.crypto
  * .CryptoEngine, StreamRuneMetrics)} — the exact code {@code create()} and {@code
  * builder().build()} now share — with a recording metrics collector, and asserts the counter fires.
  */
@@ -54,7 +55,7 @@ class PostgresEventStoreCryptoMetricsTest {
     var engine = new InMemoryCryptoEngine();
 
     // Build the mapper via the PRODUCTION event-store factory path (shared by create()/builder()).
-    ObjectMapper mapper = PostgresEventStore.createObjectMapper(engine, metrics);
+    ObjectMapper mapper = StoreObjectMappers.eventsAndSagas(engine, metrics);
 
     var event = new UserRegistered("user-1", "alice@example.com");
     String json = mapper.writeValueAsString(event); // encrypt

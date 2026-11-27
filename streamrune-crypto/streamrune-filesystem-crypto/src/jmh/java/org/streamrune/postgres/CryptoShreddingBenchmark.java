@@ -25,19 +25,19 @@ import org.streamrune.core.DomainEvent;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.Encrypted;
 import org.streamrune.crypto.filesystem.FileSystemCryptoEngine;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * Crypto-shredding on the event serialization path: an event with {@code @Encrypted} fields
  * serialized (each field encrypted) and deserialized (each field decrypted) by the {@link
  * ObjectMapper} {@link PostgresEventStore} reads and writes every event with ({@link
- * PostgresEventStore#createObjectMapper}, which registers {@code CryptoShreddingModule} on the
- * engine), on a real AES-256-GCM engine: {@link FileSystemCryptoEngine} with its keys in a
- * temporary directory. No network, no database.
+ * StoreObjectMappers#eventsAndSagas}, which registers {@code CryptoShreddingModule} on the engine),
+ * on a real AES-256-GCM engine: {@link FileSystemCryptoEngine} with its keys in a temporary
+ * directory. No network, no database.
  *
- * <p>The benchmark is declared in {@code org.streamrune.postgres} because {@code
- * createObjectMapper} is package-private. JMH and {@code jmhSmokeTest} run it on the class path,
- * where a package that spans two jars is one package for the class loader; neither jar is a named
- * module.
+ * <p>The benchmark is declared in {@code org.streamrune.postgres}, the event store's package. JMH
+ * and {@code jmhSmokeTest} run it on the class path, where a package that spans two jars is one
+ * package for the class loader; neither jar is a named module.
  *
  * <p>The engine is used bare, as the event store calls it, without the decrypt cache an integration
  * can put in front of it ({@code CachedCryptoEngine}): a cached decryption measures the cache, not
@@ -93,7 +93,7 @@ public class CryptoShreddingBenchmark {
     public void createEngine() throws IOException {
       keyDirectory = Files.createTempDirectory("streamrune-crypto-bench");
       var engine = FileSystemCryptoEngine.builder().keyDirectory(keyDirectory).build();
-      mapper = PostgresEventStore.createObjectMapper(engine, StreamRuneMetrics.NOOP);
+      mapper = StoreObjectMappers.eventsAndSagas(engine, StreamRuneMetrics.NOOP);
       event =
           switch (encryptedFields) {
             case 1 -> new CustomerRegistered("customer-42", "jane.doe@example.com", "standard");

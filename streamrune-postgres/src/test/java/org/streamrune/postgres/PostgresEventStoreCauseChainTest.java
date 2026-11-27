@@ -8,9 +8,10 @@ import java.sql.SQLException;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.crypto.CryptoOperationException;
+import org.streamrune.runtime.jdbc.EventReadPath;
 
 /**
- * {@link PostgresEventStore#hasCryptoCause} must walk the cause chain with a depth bound so a
+ * {@link EventReadPath#hasCryptoCause} must walk the cause chain with a depth bound so a
  * self-referential/cyclic chain terminates instead of spinning forever. Pure unit test — no
  * PostgreSQL container needed.
  *
@@ -58,13 +59,13 @@ class PostgresEventStoreCauseChainTest {
         Duration.ofSeconds(2),
         () ->
             assertFalse(
-                PostgresEventStore.hasCryptoCause(a), "no CryptoOperationException in the cycle"));
+                EventReadPath.hasCryptoCause(a), "no CryptoOperationException in the cycle"));
   }
 
   @Test
   void hasCryptoCause_detectsWrappedCryptoCause() {
     var wrapped = new RuntimeException("jackson", new CryptoOperationException("decrypt failed"));
-    assertTrue(PostgresEventStore.hasCryptoCause(wrapped));
+    assertTrue(EventReadPath.hasCryptoCause(wrapped));
   }
 
   @Test
