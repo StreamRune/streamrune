@@ -179,6 +179,12 @@ class JdbcProjectionRepositoryCharacterizationTest {
   /** An {@code @Encrypted} component named like a repository column. */
   record Odd(String id, @Encrypted(subjectId = "id") String version) {}
 
+  /** An unwrapped record with a prefix and a suffix. */
+  record Office(String id, @JsonUnwrapped(prefix = "work_", suffix = "_enc") Address address) {}
+
+  /** A disabled {@code @JsonUnwrapped}: the record is nested, not unwrapped. */
+  record Nested(String id, @JsonUnwrapped(enabled = false) Address address) {}
+
   /** What a stored {@link Item} does not bind to: its {@code name} is an unknown property. */
   record Strict(int qty) {}
 
@@ -298,6 +304,76 @@ class JdbcProjectionRepositoryCharacterizationTest {
   void createIndexSql_isTodaysStatement() {
     assertThat(JdbcProjectionRepository.createIndexSql(NAME_INDEX)).isEqualTo(NAME_INDEX_DDL);
     assertThat(JdbcProjectionRepository.indexName(NAME_INDEX)).isEqualTo(NAME_INDEX_NAME);
+  }
+
+  @Test
+  void indexName_descendingKeysAndRepositoryColumns() {
+    // A descending key adds "_desc" to the readable part and " DESC" to its column.
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("qty", SortDirection.DESC)),
+        "p_qty_desc_id_ix_95c543cea2",
+        "CREATE INDEX IF NOT EXISTS p_qty_desc_id_ix_95c543cea2 ON p_view ((data->>'qty') COLLATE"
+            + " \"C\" DESC, id COLLATE \"C\")");
+    // A repository column is its own expression; a key naming the id replaces the tiebreak.
+    assertIndex(
+        new ProjectionIndex(
+            P,
+            List.of(
+                new Sort.Order("version", SortDirection.ASC),
+                new Sort.Order("id", SortDirection.DESC))),
+        "p_version_id_desc_ix_16183b6853",
+        "CREATE INDEX IF NOT EXISTS p_version_id_desc_ix_16183b6853 ON p_view (version, id COLLATE"
+            + " \"C\" DESC)");
+    assertIndex(
+        ProjectionIndex.forSort(P, Sort.by("updated_at", SortDirection.DESC)),
+        "p_updated_at_desc_id_ix_ac57785524",
+        "CREATE INDEX IF NOT EXISTS p_updated_at_desc_id_ix_ac57785524 ON p_view (updated_at DESC,"
+            + " id COLLATE \"C\")");
+  }
+
+  @Test
+  void indexName_readablePartIsCutAt49Characters() {
+    String a41 = "a".repeat(41);
+    String a42 = "a".repeat(42);
+    String c40 = "c".repeat(40);
+
+    // 49 readable characters: kept whole (the name is exactly 63 bytes).
+    assertIndex(
+        ProjectionIndex.forFilter(ProjectionName.of(a41), "name", Sort.unsorted()),
+        a41 + "_name_id_ix_0fbeffaaa7",
+        "CREATE INDEX IF NOT EXISTS "
+            + a41
+            + "_name_id_ix_0fbeffaaa7 ON "
+            + a41
+            + "_view ((data->>'name') COLLATE \"C\", id COLLATE \"C\")");
+    // 50 readable characters: the last one is cut.
+    assertIndex(
+        ProjectionIndex.forFilter(ProjectionName.of(a42), "name", Sort.unsorted()),
+        a42 + "_name_i_ix_74cb357177",
+        "CREATE INDEX IF NOT EXISTS "
+            + a42
+            + "_name_i_ix_74cb357177 ON "
+            + a42
+            + "_view ((data->>'name') COLLATE \"C\", id COLLATE \"C\")");
+    // The readable part is lower-cased and cut mid-key; the column keeps the field's case.
+    ProjectionIndex mixed =
+        ProjectionIndex.forSort(ProjectionName.of(c40), Sort.by("SomeField", SortDirection.DESC));
+    String mixedDdl =
+        "CREATE INDEX IF NOT EXISTS "
+            + c40
+            + "_somefiel_ix_6f1cae8833 ON "
+            + c40
+            + "_view ((data->>'SomeField') COLLATE \"C\" DESC, id COLLATE \"C\")";
+    assertIndex(mixed, c40 + "_somefiel_ix_6f1cae8833", mixedDdl);
+
+    // PostgreSQL takes the 63-byte name as it is.
+    repo.declareIndex(mixed);
+    assertThat(recorder.transcript()).contains("#2 execute " + mixedDdl);
+  }
+
+  private static void assertIndex(ProjectionIndex index, String name, String ddl) {
+    assertThat(JdbcProjectionRepository.indexName(index)).isEqualTo(name);
+    assertThat(JdbcProjectionRepository.createIndexSql(index)).isEqualTo(ddl);
   }
 
   @Test
@@ -1345,6 +1421,34 @@ class JdbcProjectionRepositoryCharacterizationTest {
   }
 
   @Test
+  void encryptedKeyRefusal_unwrappedSuffixAndDisabledUnwrapping() {
+    PageRequest unsorted = PageRequest.of(0, 10);
+
+    try (LogCapture log = LogCapture.attach(JdbcProjectionRepository.class)) {
+      // The key carries the annotation's prefix and suffix.
+      assertRefused(
+          () -> repo.findAllBy(P, Office.class, FieldEquals.of("work_street_enc", "x"), unsorted),
+          encryptedRefusal("work_street_enc", "Office"));
+      assertRefused(
+          () -> repo.findAll(P, Office.class, PageRequest.of(0, 10, Sort.by("work_street_enc"))),
+          encryptedRefusal("work_street_enc", "Office"));
+      assertThat(recorder.transcript()).isEmpty();
+      assertNoLog(log);
+    }
+    // Without the suffix, or by the inner name, nothing is refused.
+    assertThat(
+            repo.findAllBy(P, Office.class, FieldEquals.of("work_street", "x"), unsorted).content())
+        .isEmpty();
+    assertThat(repo.findAllBy(P, Office.class, FieldEquals.of("street", "x"), unsorted).content())
+        .isEmpty();
+    // A disabled @JsonUnwrapped contributes no name: neither the inner one nor the component's.
+    assertThat(repo.findAllBy(P, Nested.class, FieldEquals.of("street", "x"), unsorted).content())
+        .isEmpty();
+    assertThat(repo.findAll(P, Nested.class, PageRequest.of(0, 10, Sort.by("address"))).content())
+        .isEmpty();
+  }
+
+  @Test
   void encryptedKeyRefusal_quietBranches() {
     PageRequest unsorted = PageRequest.of(0, 10);
 
@@ -1455,6 +1559,8 @@ class JdbcProjectionRepositoryCharacterizationTest {
                 repo.executeAtomically(
                     null, List.of(), GlobalOffset.of(1), 0L, handed -> ran.add("updater"), null));
 
+    // The JVM's helpful-NPE text, naming the parameter the table-name rule dereferences: a refactor
+    // must keep that dereference on a parameter named projectionName.
     assertThat(thrown)
         .isExactlyInstanceOf(NullPointerException.class)
         .hasMessage(
