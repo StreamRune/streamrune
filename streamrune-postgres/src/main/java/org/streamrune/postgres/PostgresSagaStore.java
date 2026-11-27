@@ -29,6 +29,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.SagaRows;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
@@ -127,6 +128,10 @@ import org.streamrune.runtime.jdbc.StoreObjectMappers;
  * {@link LogSanitizer#sanitizeForLog(String)}: the subscription that retries or quarantines these
  * failures logs them, and a {@link SagaId} is usually derived from correlated event data and
  * deliberately carries no charset bound (its constructor also runs on the read path).
+ *
+ * <p>The argument checks, the log-safe rendering, the refusals of a stale view and of a conflicting
+ * create, the state conversion and the decoding of the rows read are {@link SagaRows}'s; this store
+ * keeps its statements, binds, transactions and locks.
  */
 public final class PostgresSagaStore implements SagaStore {
 
@@ -521,14 +526,12 @@ public final class PostgresSagaStore implements SagaStore {
    * with capped backoff while no event is quarantined, no saga is FAULTED, no dead-letter row is
    * written and the subscription still reports RUNNING. See {@link SagaStateSerializationException}
    * for the deterministic-vs-transient taxonomy the caller must apply to the cause chain.
+   *
+   * <p>The conversion and its failure mapping are {@link SagaRows#serialize}; this method only
+   * binds the store's mapper.
    */
   private String serialize(SagaId sagaId, SagaState state) {
-    try {
-      return objectMapper.writeValueAsString(state);
-    } catch (Exception e) {
-      throw new SagaStateSerializationException(
-          "Failed to serialize saga state: " + forLog(sagaId), sagaId, e);
-    }
+    return SagaRows.serialize(objectMapper, sagaId, state);
   }
 
   private void doCreate(
@@ -540,7 +543,7 @@ public final class PostgresSagaStore implements SagaStore {
       EventId episodeCause,
       String sql) {
     // createFaulted binds no status (a SQL literal), but still takes one from doCreate: FAULTED.
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     // DO NOT MOVE THIS BELOW getConnection(); see serialize()'s javadoc for
     // why (with PostgresCryptoEngine the encryption inside it asks THIS SAME POOL for a second
     // connection). doCreate was the one write path that had it the wrong way round.
@@ -561,11 +564,11 @@ public final class PostgresSagaStore implements SagaStore {
           ps.setString(3, status.name());
           ps.setString(4, json);
           ps.setBoolean(5, deadLetterPending);
-          boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
+          boolean entersEpisode = SagaRows.entersEpisode(status); // the episode stamp rule
           ps.setBoolean(6, entersEpisode);
           ps.setBoolean(7, entersEpisode);
           ps.setBoolean(8, entersEpisode);
-          ps.setString(9, causeValue(episodeCause)); // written only when the row is born stamped
+          ps.setString(9, SagaRows.causeValue(episodeCause)); // only when the row is born stamped
         }
         inserted =
             PostgresTransactions.commitIfManual(
@@ -579,16 +582,14 @@ public final class PostgresSagaStore implements SagaStore {
       if (inserted == 0) {
         // ON CONFLICT DO NOTHING → a row already exists. Read its type: a DIFFERENT type is a
         // cross-type id collision (loud); the SAME type is the benign concurrent-create dedup.
+        // A row that vanished before its type was read reports no type: "already exists".
         String existingType = readSagaType(conn, sagaId);
-        if (existingType != null && !existingType.equals(sagaType.value())) {
-          throw new SagaTypeCollisionException(sagaId, SagaType.of(existingType), sagaType);
-        }
-        throw new OptimisticLockException("Saga " + forLog(sagaId) + " already exists");
+        SagaRows.refuseConflict(sagaId, sagaType, Optional.ofNullable(existingType));
       }
     } catch (SagaTypeCollisionException | OptimisticLockException e) {
       throw e;
     } catch (Exception e) {
-      throw new EventStoreException("Failed to create saga state: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to create saga state: " + SagaRows.forLog(sagaId), e);
     }
   }
 
@@ -627,9 +628,9 @@ public final class PostgresSagaStore implements SagaStore {
       long expectedVersion,
       EventId episodeCause,
       String failureMessage) {
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     String json = serialize(sagaId, state);
-    boolean entersEpisode = status == SagaStatus.COMPENSATING;
+    boolean entersEpisode = SagaRows.entersEpisode(status);
     int updated;
     try {
       updated =
@@ -645,17 +646,17 @@ public final class PostgresSagaStore implements SagaStore {
                 ps.setBoolean(3, entersEpisode);
                 ps.setBoolean(4, entersEpisode);
                 ps.setBoolean(5, entersEpisode);
-                ps.setString(6, causeValue(episodeCause));
+                ps.setString(6, SagaRows.causeValue(episodeCause));
                 ps.setString(7, sagaId.value());
                 ps.setString(8, sagaType.value());
                 ps.setLong(9, expectedVersion);
                 return ps.executeUpdate();
               });
     } catch (Exception e) {
-      throw new EventStoreException(failureMessage + forLog(sagaId), e);
+      throw new EventStoreException(failureMessage + SagaRows.forLog(sagaId), e);
     }
     if (updated == 0) {
-      throw staleView(sagaId, expectedVersion);
+      throw SagaRows.staleView(sagaId, expectedVersion);
     }
   }
 
@@ -672,13 +673,13 @@ public final class PostgresSagaStore implements SagaStore {
       SagaStatus status,
       long expectedVersion,
       AppliedEvent applied) {
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     if (applied == null) {
       throw new IllegalArgumentException("applied must not be null");
     }
     long eventOffset = applied.eventOffset().value();
     String json = serialize(sagaId, state);
-    boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
+    boolean entersEpisode = SagaRows.entersEpisode(status); // the episode stamp rule
     int updated;
     try {
       updated =
@@ -699,17 +700,18 @@ public final class PostgresSagaStore implements SagaStore {
                 ps.setBoolean(8, entersEpisode);
                 ps.setBoolean(9, entersEpisode);
                 // The applied event is the cause of an episode this write opens.
-                ps.setString(10, causeValue(applied.eventId()));
+                ps.setString(10, SagaRows.causeValue(applied.eventId()));
                 ps.setString(11, sagaId.value());
                 ps.setString(12, sagaType.value());
                 ps.setLong(13, expectedVersion);
                 return ps.executeUpdate();
               });
     } catch (Exception e) {
-      throw new EventStoreException("Failed to apply event to saga state: " + forLog(sagaId), e);
+      throw new EventStoreException(
+          "Failed to apply event to saga state: " + SagaRows.forLog(sagaId), e);
     }
     if (updated == 0) {
-      throw staleView(sagaId, expectedVersion);
+      throw SagaRows.staleView(sagaId, expectedVersion);
     }
   }
 
@@ -720,7 +722,7 @@ public final class PostgresSagaStore implements SagaStore {
    */
   @Override
   public boolean markFaulted(SagaId sagaId, SagaType sagaType, long expectedVersion) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_FAULTED)) {
       ps.setString(1, sagaId.value());
@@ -734,7 +736,7 @@ public final class PostgresSagaStore implements SagaStore {
             boundIdleIfManual(c);
             try (ResultSet rs = ps.executeQuery()) {
               if (!rs.next()) {
-                throw staleView(sagaId, expectedVersion);
+                throw SagaRows.staleView(sagaId, expectedVersion);
               }
               return rs.getBoolean("transitioned");
             }
@@ -742,7 +744,7 @@ public final class PostgresSagaStore implements SagaStore {
     } catch (OptimisticLockException e) {
       throw e;
     } catch (Exception e) {
-      throw new EventStoreException("Failed to mark saga FAULTED: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to mark saga FAULTED: " + SagaRows.forLog(sagaId), e);
     }
   }
 
@@ -754,7 +756,7 @@ public final class PostgresSagaStore implements SagaStore {
    */
   @Override
   public void setDeadLetterPending(SagaId sagaId, SagaType sagaType, boolean pending) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SET_DEAD_LETTER_PENDING)) {
       ps.setBoolean(1, pending);
@@ -770,7 +772,8 @@ public final class PostgresSagaStore implements SagaStore {
             return ps.executeUpdate();
           });
     } catch (Exception e) {
-      throw new EventStoreException("Failed to set saga dead-letter shield: " + forLog(sagaId), e);
+      throw new EventStoreException(
+          "Failed to set saga dead-letter shield: " + SagaRows.forLog(sagaId), e);
     }
   }
 
@@ -927,11 +930,6 @@ public final class PostgresSagaStore implements SagaStore {
     }
   }
 
-  /** The bind value of an episode cause: the event id's text, or SQL {@code NULL} for none. */
-  private static String causeValue(EventId episodeCause) {
-    return episodeCause == null ? null : episodeCause.value();
-  }
-
   /**
    * {@inheritDoc}
    *
@@ -953,107 +951,45 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public <S extends SagaState> Optional<LoadedSaga<S>> load(
       SagaId sagaId, SagaType sagaType, Class<S> stateType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     if (stateType == null) {
       throw new IllegalArgumentException("stateType must not be null");
     }
-    String stateJson = null;
-    SagaStatus status = null;
-    long version = 0;
-    Instant updatedAt = null;
-    Long episodeVersion = null;
-    Instant episodeClaimedAt = null;
-    EventId episodeCauseEventId = null;
-    boolean genesisApplied = false;
-    SagaStatus preFaultStatus = null;
-    boolean deadLetterPending = false;
-    Long lastAppliedOffset = null;
-    Long lastReplayedOffset = null;
-    boolean found;
+    SagaRows.StoredRow row;
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_BY_TYPE)) {
       ps.setString(1, sagaId.value());
       ps.setString(2, sagaType.value());
       try (ResultSet rs = ps.executeQuery()) {
-        found = rs.next();
-        if (found) {
-          stateJson = rs.getString("state_json");
-          status = SagaStatus.valueOf(rs.getString("status"));
-          version = rs.getLong("version");
-          updatedAt = rs.getTimestamp("updated_at").toInstant();
-          // Both NULL only for a row that never entered a compensation
-          // episode — every write that lands COMPENSATING stamps both (the episode stamp rule, and
-          // the saga_state_episode_stamped CHECK), so the runtime reads them with no fallback.
-          long ev = rs.getLong("episode_version");
-          episodeVersion = rs.wasNull() ? null : ev;
-          var claimedTs = rs.getTimestamp("episode_claimed_at");
-          episodeClaimedAt = claimedTs == null ? null : claimedTs.toInstant();
-          // NULL for a row that never entered an episode and for an episode opened with no event
-          // in hand (a timeout claim, an operator's compensation).
-          String cause = rs.getString("episode_cause_event_id");
-          episodeCauseEventId = cause == null ? null : new EventId(cause);
-          genesisApplied = rs.getBoolean("genesis_applied");
-          String preFaultStatusStr = rs.getString("pre_fault_status");
-          preFaultStatus = preFaultStatusStr == null ? null : SagaStatus.valueOf(preFaultStatusStr);
-          deadLetterPending = rs.getBoolean("dead_letter_pending");
-          long lastApplied = rs.getLong("last_applied_offset");
-          lastAppliedOffset = rs.wasNull() ? null : lastApplied;
-          long lastReplayed = rs.getLong("last_replayed_offset");
-          lastReplayedOffset = rs.wasNull() ? null : lastReplayed;
-        }
+        row = rs.next() ? SagaRows.StoredRow.of(rs, PostgresInstantCodec.INSTANCE) : null;
       }
     } catch (Exception e) {
-      throw new EventStoreException("Failed to load saga state: " + forLog(sagaId), e);
-    }
-    if (!found) {
-      return Optional.empty();
+      throw new EventStoreException("Failed to load saga state: " + SagaRows.forLog(sagaId), e);
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
     // A mapping/crypto failure here is a STATE-CONVERSION failure, not a storage one —
     // see serialize(). The JDBC read above keeps its EventStoreException.
-    try {
-      S state = objectMapper.readValue(stateJson, stateType);
-      return Optional.of(
-          new LoadedSaga<>(
-              state,
-              status,
-              version,
-              updatedAt,
-              episodeVersion,
-              episodeClaimedAt,
-              episodeCauseEventId,
-              genesisApplied,
-              preFaultStatus,
-              deadLetterPending,
-              lastAppliedOffset,
-              lastReplayedOffset));
-    } catch (Exception e) {
-      throw new SagaStateSerializationException(
-          "Failed to deserialize saga state: " + forLog(sagaId), sagaId, e);
-    }
+    return row == null
+        ? Optional.empty()
+        : Optional.of(SagaRows.assemble(objectMapper, sagaId, row, stateType));
   }
 
   /** {@inheritDoc} One plain read of three columns; the state is not read. */
   @Override
   public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_ROW_FACTS)) {
       ps.setString(1, sagaId.value());
       ps.setString(2, sagaType.value());
       try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return Optional.empty();
-        }
-        SagaStatus status = SagaStatus.valueOf(rs.getString("status"));
-        boolean deadLetterPending = rs.getBoolean("dead_letter_pending");
-        long lastApplied = rs.getLong("last_applied_offset");
-        return Optional.of(
-            new RowFacts(status, deadLetterPending, rs.wasNull() ? null : lastApplied));
+        return rs.next()
+            ? Optional.of(SagaRows.rowFacts(rs, PostgresInstantCodec.INSTANCE))
+            : Optional.empty();
       }
     } catch (Exception e) {
       // Every read failure, a driver's unchecked one included, is a storage failure, as in load.
-      throw new EventStoreException("Failed to load saga row facts: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to load saga row facts: " + SagaRows.forLog(sagaId), e);
     }
   }
 
@@ -1065,7 +1001,7 @@ public final class PostgresSagaStore implements SagaStore {
    */
   @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     try {
       fenceChangingWrite(
           DELETE_BY_TYPE,
@@ -1079,13 +1015,13 @@ public final class PostgresSagaStore implements SagaStore {
             return ps.executeUpdate();
           });
     } catch (Exception e) {
-      throw new EventStoreException("Failed to delete saga state: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to delete saga state: " + SagaRows.forLog(sagaId), e);
     }
   }
 
   @Override
   public List<SagaId> findTimedOut(SagaType sagaType, Instant cutoff, int limit) {
-    requireType(sagaType);
+    SagaRows.requireType(sagaType);
     if (cutoff == null) {
       throw new IllegalArgumentException("cutoff must not be null");
     }
@@ -1116,8 +1052,8 @@ public final class PostgresSagaStore implements SagaStore {
 
   @Override
   public List<SagaId> findByStatus(SagaType sagaType, SagaStatus status, int limit) {
-    requireType(sagaType);
-    requireStatus(status);
+    SagaRows.requireType(sagaType);
+    SagaRows.requireStatus(status);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_BY_STATUS)) {
       ps.setString(1, sagaType.value());
@@ -1137,8 +1073,8 @@ public final class PostgresSagaStore implements SagaStore {
 
   @Override
   public long countByStatus(SagaType sagaType, SagaStatus status) {
-    requireType(sagaType);
-    requireStatus(status);
+    SagaRows.requireType(sagaType);
+    SagaRows.requireStatus(status);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(COUNT_BY_STATUS)) {
       ps.setString(1, sagaType.value());
@@ -1154,89 +1090,27 @@ public final class PostgresSagaStore implements SagaStore {
   @Override
   public List<CompensatingSaga> findCompensating(
       SagaType sagaType, Instant updatedBefore, int limit) {
-    requireType(sagaType);
+    SagaRows.requireType(sagaType);
     if (updatedBefore == null) {
       throw new IllegalArgumentException("updatedBefore must not be null");
     }
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_COMPENSATING)) {
       ps.setString(1, sagaType.value());
-      ps.setTimestamp(2, java.sql.Timestamp.from(updatedBefore));
+      PostgresInstantCodec.INSTANCE.bindInstant(ps, 2, updatedBefore);
       ps.setInt(3, limit);
       try (ResultSet rs = ps.executeQuery()) {
         List<CompensatingSaga> result = new ArrayList<>();
         while (rs.next()) {
-          // The durable claim instant — the sweeper's give-up anchor. Never NULL on a
+          // The durable claim instant — the sweeper's give-up anchor — is never NULL on a
           // COMPENSATING row here (the episode stamp rule + the CHECK constraint); the record stays
           // nullable so a non-conforming store is refused per saga by the sweeper.
-          var claimedTs = rs.getTimestamp("episode_claimed_at");
-          result.add(
-              new CompensatingSaga(
-                  SagaId.of(rs.getString("saga_id")),
-                  rs.getTimestamp("updated_at").toInstant(),
-                  claimedTs == null ? null : claimedTs.toInstant()));
+          result.add(SagaRows.compensatingSaga(rs, PostgresInstantCodec.INSTANCE));
         }
         return result;
       }
     } catch (Exception e) {
       throw new EventStoreException("Failed to find compensating sagas", e);
     }
-  }
-
-  /**
-   * The type-scoping precondition every operation runs FIRST — before {@link #serialize} (which may
-   * call a KMS) and before borrowing a connection — so a rejected call has no side effect and no
-   * crash point. Every argument has such a check (the follow-up, pinned by {@code
-   * SagaStoreContract}): left to the JDBC bind or the mapper, a {@code null} one failed inside the
-   * storage {@code catch} as an {@link EventStoreException} the saga runtime retries as an
-   * infrastructure failure forever (a status, a cutoff), or was stored as a JSON {@code null} (a
-   * state).
-   */
-  private static void requireType(SagaType sagaType) {
-    if (sagaType == null) {
-      throw new IllegalArgumentException("sagaType must not be null");
-    }
-  }
-
-  private static void requireStatus(SagaStatus status) {
-    if (status == null) {
-      throw new IllegalArgumentException("status must not be null");
-    }
-  }
-
-  /**
-   * {@link #requireType} plus the id precondition, for every operation that takes a {@link SagaId}:
-   * run FIRST, for the same reason. A {@code null} id otherwise failed at the JDBC bind ({@code
-   * sagaId.value()}) inside the storage {@code catch}, and surfaced as an {@link
-   * EventStoreException} the saga runtime retries as infrastructure forever.
-   */
-  private static void requireKey(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) {
-      throw new IllegalArgumentException("sagaId must not be null");
-    }
-    requireType(sagaType);
-  }
-
-  /** {@link #requireKey} plus the state and the status, for every write that persists both. */
-  private static void requireWrite(
-      SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status) {
-    requireKey(sagaId, sagaType);
-    if (state == null) {
-      throw new IllegalArgumentException("state must not be null");
-    }
-    requireStatus(status);
-  }
-
-  /**
-   * The log-safe rendering of a saga id for an exception message. Every caller has passed {@link
-   * #requireKey}, so the id is never {@code null} here.
-   */
-  private static String forLog(SagaId sagaId) {
-    return LogSanitizer.sanitizeForLog(sagaId.value());
-  }
-
-  private static OptimisticLockException staleView(SagaId sagaId, long expectedVersion) {
-    return new OptimisticLockException(
-        "Stale view of saga " + forLog(sagaId) + " (expectedVersion=" + expectedVersion + ")");
   }
 }
