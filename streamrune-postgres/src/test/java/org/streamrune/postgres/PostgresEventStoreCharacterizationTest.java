@@ -1053,8 +1053,9 @@ class PostgresEventStoreCharacterizationTest {
   /** A purged snapshot row: no snapshot, no snapshot span, and its purge generation is carried. */
   @Test
   void purgedSnapshotRow_startsNoSnapshotSpan_andCarriesItsGeneration() throws SQLException {
+    var metrics = new RecordingStreamRuneMetrics();
     var tracing = new RecordingTracing();
-    PostgresEventStore store = builder().tracing(tracing).build();
+    PostgresEventStore store = builder().metrics(metrics).tracing(tracing).build();
     store.append(A, events(A, 2), Version.initial());
     store.saveSnapshot(A, new Version(1), new ContractState("s"));
     execute(
@@ -1062,15 +1063,61 @@ class PostgresEventStoreCharacterizationTest {
     recorder.clear();
     tracing.clear();
 
-    AggregateHistory history = store.load(A);
+    AggregateHistory history;
+    try (LogCapture logs = LogCapture.attach(PostgresEventStore.class)) {
+      history = store.load(A);
+
+      assertThat(logs.events(Level.ERROR)).isEmpty();
+      assertThat(logs.events(Level.WARN)).isEmpty();
+      assertThat(logs.events(Level.INFO)).isEmpty();
+    }
 
     assertThat(history.snapshotState()).isNull();
     assertThat(history.snapshotPurgeGeneration()).isEqualTo(3L);
+    assertThat(history.lastSnapshotVersion()).isEqualTo(Version.initial());
+    assertThat(history.version()).isEqualTo(new Version(2));
     assertThat(history.events()).hasSize(2);
     assertThat(tracing.names())
         .containsExactly(
             TraceAttributes.EVENT_STORE_LOAD, TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+    var load = tracing.only(TraceAttributes.EVENT_STORE_LOAD);
+    var deserialize = tracing.only(TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+    assertThat(load.attributes())
+        .isEqualTo(
+            Map.of(
+                TraceAttributes.STREAM_ID,
+                "order:A",
+                TraceAttributes.AGGREGATE_TYPE,
+                "order",
+                TraceAttributes.EVENT_COUNT,
+                2L,
+                TraceAttributes.SNAPSHOT_USED,
+                false));
+    assertThat(deserialize.attributes())
+        .isEqualTo(Map.of(TraceAttributes.EVENT_COUNT, 2L, TraceAttributes.UPCAST_COUNT, 0L));
+    assertThat(deserialize.parent).isSameAs(load);
+    assertThat(List.of(load, deserialize))
+        .allSatisfy(
+            s -> {
+              assertThat(s.kind).isEqualTo(SpanKind.INTERNAL);
+              assertThat(s.ok).isTrue();
+              assertThat(s.closed).isTrue();
+              assertThat(s.startTime).isNull();
+            });
     assertThat(recorder.sql()).containsExactly(LOAD_SNAPSHOT, LOAD_EVENTS);
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 autoCommit=false",
+            "#1 prepare " + LOAD_SNAPSHOT,
+            "#1 queryTimeout=driver",
+            "#1 prepare " + LOAD_EVENTS,
+            "#1 queryTimeout=driver",
+            "#1 fetchSize=500",
+            "#1 commit",
+            "#1 autoCommit=true",
+            "#1 close");
+    assertThat(metrics.samples(MetricNames.SNAPSHOTS_DISCARDED)).isEmpty();
   }
 
   @Test
@@ -1157,7 +1204,12 @@ class PostgresEventStoreCharacterizationTest {
     PostgresEventStore store = wired();
     recorder.failNextCloseAfterCommit();
 
-    AppendResult result = store.append(A, events(A, 2), Version.initial());
+    AppendResult result;
+    try (LogCapture logs = LogCapture.attach(PostgresEventStore.class)) {
+      result = store.append(A, events(A, 2), Version.initial());
+
+      assertNothingLogged(logs);
+    }
 
     assertThat(result.globalOffsets()).containsExactly(GlobalOffset.of(1), GlobalOffset.of(2));
     assertThat(result.finalVersion()).isEqualTo(new Version(2));
@@ -1185,8 +1237,13 @@ class PostgresEventStoreCharacterizationTest {
     PostgresEventStore store = wired();
     recorder.failNextCloseAfterCommit();
 
-    IdempotentAppendResult result =
-        store.appendWithKey(A, events(A, 2), Version.initial(), IdempotencyKey.of("k"), COMMAND);
+    IdempotentAppendResult result;
+    try (LogCapture logs = LogCapture.attach(PostgresEventStore.class)) {
+      result =
+          store.appendWithKey(A, events(A, 2), Version.initial(), IdempotencyKey.of("k"), COMMAND);
+
+      assertNothingLogged(logs);
+    }
 
     assertThat(result)
         .isEqualTo(
@@ -1383,16 +1440,57 @@ class PostgresEventStoreCharacterizationTest {
   void failureMessages_reads() {
     PostgresEventStore store = plain();
 
+    // A failed read transaction is rolled back, autocommit is restored, and the connection closes.
     recorder.beforePrepare(LOAD_SNAPSHOT, conn -> execute(conn, NO_SUCH_SCHEMA));
     Throwable load = catchThrowable(() -> store.load(A));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 autoCommit=false",
+            "#1 prepare " + LOAD_SNAPSHOT,
+            "#1 queryTimeout=driver",
+            "#1 rollback",
+            "#1 autoCommit=true",
+            "#1 close");
+
+    recorder.clear();
     recorder.beforePrepare(LOAD_EVENTS, conn -> execute(conn, NO_SUCH_SCHEMA));
     Throwable ignoring = catchThrowable(() -> store.load(A, EventStore.IGNORE_SNAPSHOT));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 prepare " + LEGACY_PROBE,
+            "#1 queryTimeout=driver",
+            "#1 close",
+            "open #2",
+            "#2 autoCommit=false",
+            "#2 prepare " + LOAD_EVENTS,
+            "#2 queryTimeout=driver",
+            "#2 fetchSize=500",
+            "#2 rollback",
+            "#2 autoCommit=true",
+            "#2 close");
+
+    recorder.clear();
     recorder.beforePrepare(READ_GLOBAL, conn -> execute(conn, NO_SUCH_SCHEMA));
     Throwable global = catchThrowable(() -> store.readGlobalStream(GlobalOffset.of(3), 10));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1", "#1 prepare " + READ_GLOBAL, "#1 queryTimeout=driver", "#1 close");
+
+    recorder.clear();
     recorder.beforePrepare(READ_STREAM, conn -> execute(conn, NO_SUCH_SCHEMA));
     Throwable stream = catchThrowable(() -> store.readStream(A, Version.initial(), 10));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1", "#1 prepare " + READ_STREAM, "#1 queryTimeout=driver", "#1 close");
+
+    recorder.clear();
     recorder.beforePrepare(LAST_GLOBAL_OFFSET, conn -> execute(conn, NO_SUCH_SCHEMA));
     Throwable last = catchThrowable(store::lastGlobalOffset);
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1", "#1 prepare " + LAST_GLOBAL_OFFSET, "#1 queryTimeout=driver", "#1 close");
 
     assertStorageFailure(load, "Failed to load stream: order:A");
     assertStorageFailure(ignoring, "Failed to load stream: order:A");
@@ -1413,10 +1511,32 @@ class PostgresEventStoreCharacterizationTest {
     recorder.beforePrepare(
         LOAD_EVENTS,
         first -> recorder.beforePrepare(LOAD_EVENTS, conn -> execute(conn, NO_SUCH_SCHEMA)));
+    recorder.clear();
 
     Throwable thrown = catchThrowable(() -> store.load(A));
 
     assertStorageFailure(thrown, "Failed to load stream: order:A");
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 autoCommit=false",
+            "#1 prepare " + LOAD_SNAPSHOT,
+            "#1 queryTimeout=driver",
+            "#1 prepare " + LOAD_EVENTS,
+            "#1 queryTimeout=driver",
+            "#1 fetchSize=500",
+            "#1 commit",
+            "#1 autoCommit=true",
+            "#1 close",
+            "open #2",
+            "#2 autoCommit=false",
+            "#2 prepare " + LOAD_EVENTS,
+            "#2 queryTimeout=driver",
+            "#2 fetchSize=500",
+            "#2 rollback",
+            "#2 autoCommit=true",
+            "#2 close");
+    assertThat(recorder.openConnections()).isZero();
   }
 
   @Test
@@ -1562,7 +1682,14 @@ class PostgresEventStoreCharacterizationTest {
     Throwable ahead = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("S"))));
     assertThat(ahead)
         .isExactlyInstanceOf(EventSchemaAheadException.class)
-        .hasMessage(PostgresEventStore.schemaAheadMessage("ContractEvent", "order:S", 5, 1))
+        .hasMessage(
+            "Event type ContractEvent for stream order:S is stored at schema_version 5 but this"
+                + " event store's upcaster chain only reaches version 1. A newer writer stamped it:"
+                + " either a replica of a newer release of this application (a rolling deployment"
+                + " that bumps this event's schema is in progress, and this replica reads it once"
+                + " it is upgraded), or an event store wired with upcasters this one lacks."
+                + " Reading it would silently mis-bind the payload, so the read is refused;"
+                + " register the same upcasters on every event store that reads this database.")
         .hasNoCause();
 
     Throwable corrupt = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("J"))));
@@ -1926,6 +2053,12 @@ class PostgresEventStoreCharacterizationTest {
         + " were written, deleted or restored outside this store. This store never renumbers"
         + " events automatically; reconstructing the intended history is a data-recovery"
         + " decision. Logged once per stream per process.";
+  }
+
+  private static void assertNothingLogged(LogCapture logs) {
+    for (Level level : List.of(Level.TRACE, Level.DEBUG, Level.INFO, Level.WARN, Level.ERROR)) {
+      assertThat(logs.events(level)).as("%s lines", level).isEmpty();
+    }
   }
 
   private static List<String> messages(LogCapture logs, Level level) {
