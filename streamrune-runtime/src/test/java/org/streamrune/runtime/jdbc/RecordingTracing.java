@@ -23,9 +23,9 @@ import org.streamrune.core.tracing.TracingArea;
 /**
  * A {@link StreamRuneTracing} that records every span it starts: its name, kind, attributes (those
  * it starts with and those set on its scope), link, status and the span that was open on the same
- * thread when it started, its parent. This module has no OpenTelemetry on its test classpath, so
- * its emitters are tested through the seam they use; {@code OpenTelemetryTracing}'s own tests cover
- * the mapping to OpenTelemetry.
+ * thread when it started, its parent. The read path's spans are tested through the seam it uses, so
+ * a test sees exactly what a store hands to its tracing; {@code OpenTelemetryTracing}'s own tests,
+ * in this module, cover the mapping to OpenTelemetry.
  */
 final class RecordingTracing implements StreamRuneTracing {
 

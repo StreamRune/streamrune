@@ -547,11 +547,13 @@ class EventReadPathTest {
     EventReadPath second = path();
 
     first.historyIgnoringSnapshot(STREAM, gapped);
+    assertThat(store.events(Level.WARN)).as("after the first load").hasSize(1);
     first.historyIgnoringSnapshot(STREAM, gapped);
+    assertThat(store.events(Level.WARN)).as("after the same instance's second load").hasSize(1);
     second.historyIgnoringSnapshot(STREAM, gapped);
+    assertThat(store.events(Level.WARN)).as("after the other instance's load").hasSize(2);
 
     List<ILoggingEvent> warnings = store.events(Level.WARN);
-    assertThat(warnings).hasSize(2);
     assertThat(warnings.getFirst().getMessage())
         .isEqualTo(
             "Stream '{}' has non-contiguous versions (expected {} but found {}, right after"
