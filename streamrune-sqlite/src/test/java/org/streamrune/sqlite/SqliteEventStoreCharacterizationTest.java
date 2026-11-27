@@ -1480,7 +1480,14 @@ class SqliteEventStoreCharacterizationTest {
     Throwable ahead = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("S"))));
     assertThat(ahead)
         .isExactlyInstanceOf(EventSchemaAheadException.class)
-        .hasMessage(SqliteEventStore.schemaAheadMessage("ContractEvent", "order:S", 5, 1))
+        .hasMessage(
+            "Event type ContractEvent for stream order:S is stored at schema_version 5 but this"
+                + " event store's upcaster chain only reaches version 1. A newer writer stamped"
+                + " it: either a replica of a newer release of this application (a rolling"
+                + " deployment that bumps this event's schema is in progress, and this replica"
+                + " reads it once it is upgraded), or an event store wired with upcasters this one"
+                + " lacks. Reading it would silently mis-bind the payload, so the read is refused;"
+                + " register the same upcasters on every event store that reads this database.")
         .hasNoCause();
 
     Throwable corrupt = catchThrowable(() -> store.load(StreamId.of(ORDER, AggregateId.of("J"))));
