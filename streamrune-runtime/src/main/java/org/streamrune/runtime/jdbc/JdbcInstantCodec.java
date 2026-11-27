@@ -9,12 +9,12 @@ import org.streamrune.core.Internal;
 /**
  * How one backend stores a timestamp and a flag column: the seam through which shared row mapping
  * reads and binds them without knowing the backend. Each backend implements it with exactly the
- * decoding its stores use today (for example a {@code TIMESTAMPTZ} read through {@link
+ * decoding its stores use (for example a {@code TIMESTAMPTZ} read through {@link
  * ResultSet#getTimestamp} on PostgreSQL, epoch microseconds in an {@code INTEGER} on SQLite).
  *
  * <p>Each method works on the caller's statement or result set and lets every {@link SQLException}
  * propagate unwrapped. A shared read says, per column, whether the store reads it as required or as
- * nullable today, and calls {@link #readInstant} or {@link #readNullableInstant} accordingly.
+ * nullable, and calls {@link #readInstant} or {@link #readNullableInstant} accordingly.
  *
  * @hidden
  */
@@ -22,9 +22,9 @@ import org.streamrune.core.Internal;
 public interface JdbcInstantCodec {
 
   /**
-   * Reads a column the store reads as NOT NULL today, decoded exactly as that store does, including
-   * what it does on an unexpected SQL NULL (on PostgreSQL a {@link NullPointerException} from
-   * {@code getTimestamp(column).toInstant()}).
+   * Reads a column the store reads as NOT NULL, decoded exactly as that store does, including what
+   * it does on an unexpected SQL NULL (on PostgreSQL a {@link NullPointerException} from {@code
+   * getTimestamp(column).toInstant()}).
    *
    * @param rs the caller's result set, positioned on a row
    * @param column the column name

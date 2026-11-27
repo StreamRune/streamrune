@@ -390,8 +390,9 @@ Unreleased changes to the PostgreSQL event store (Changed):
 
 - **A null snapshot version is refused up front.** On PostgreSQL, `saveSnapshot` with a null
   version now fails with `NullPointerException("version is required")` before any serialization or
-  connection, also when the state class is unregistered (it was an `EventStoreException` then), as
-  on SQLite.
+  connection, as on SQLite, also when the state would have been refused later (an unregistered or
+  mismatched state class, an invalid type name, a serialization failure: it was an
+  `EventStoreException` then).
 - **A negative `global_offset` reads as a corrupt row.** On PostgreSQL, an otherwise readable
   `event_stream` row with a negative `global_offset` (only reachable by hand-written SQL) now reads
   as `EventDeserializationException`, after event-type resolution, as on SQLite (it was a raw

@@ -47,9 +47,9 @@ dependencies {
     testImplementation(libs.jakarta.el) // EL implementation for @Size
 }
 
-// The SQLite driver of the store-helper tests loads its native library through the Foreign
-// Function and Memory API; enabling native access keeps the JVM's restricted-method warnings out
-// of the test output (copied from streamrune-sqlite).
+// The SQLite driver of the store-helper tests loads its native library through JNI; enabling
+// native access keeps the JVM's restricted-method warnings out of the test output (copied from
+// streamrune-sqlite).
 tasks.withType<Test>().configureEach {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }

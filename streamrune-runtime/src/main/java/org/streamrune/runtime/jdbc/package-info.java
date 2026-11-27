@@ -6,10 +6,11 @@
  *
  * <p>The helpers follow the same rules. They take the caller's {@link java.sql.Connection}, {@link
  * java.sql.PreparedStatement} or {@link java.sql.ResultSet} and never open, commit, roll back or
- * close a connection; they let every {@link java.sql.SQLException} propagate unwrapped; they never
- * decide a lock. They never know or branch on the backend: what differs between the backends stays
- * in the backend module, behind a seam such as {@code JdbcInstantCodec}. A helper that logs takes
- * the owning store's logger in a field named {@code log}, so the log category stays the store's;
- * none keeps static mutable state.
+ * close a connection; they let every {@link java.sql.SQLException} propagate unwrapped, except the
+ * append-failure mapping of {@code EventAppendSupport}, which returns the mapped exception for the
+ * store to throw; they never decide a lock. They never know or branch on the backend: what differs
+ * between the backends stays in the backend module, behind a seam such as {@code JdbcInstantCodec}.
+ * A helper that logs takes the owning store's logger in a field named {@code log}, so the log
+ * category stays the store's; none keeps static mutable state.
  */
 package org.streamrune.runtime.jdbc;
