@@ -172,7 +172,6 @@ class StreamRuneReflectionConfigTest {
     }
 
     assertThat(SqliteForeignDowncalls.of(metadata)).isEqualTo(SqliteForeignDowncalls.EXPECTED);
-    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
   }
 
   /**

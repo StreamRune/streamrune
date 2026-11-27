@@ -90,7 +90,6 @@ class StreamRuneReflectConfigTest {
       assertThat(SqliteForeignDowncalls.of(mapper.readTree(in)))
           .isEqualTo(SqliteForeignDowncalls.EXPECTED);
     }
-    assertThat(Class.forName("org.streamrune.sqlite.FlockFileLock")).isNotNull();
   }
 
   /** Parses the top-level {@code "name"} entries of reflect-config.json into loaded classes. */

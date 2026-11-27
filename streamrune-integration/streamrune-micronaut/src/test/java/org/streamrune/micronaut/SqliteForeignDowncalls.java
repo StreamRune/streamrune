@@ -3,6 +3,7 @@ package org.streamrune.micronaut;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.streamrune.sqlite.SqliteNativeDowncalls;
 
 /**
@@ -17,6 +18,8 @@ final class SqliteForeignDowncalls {
    */
   static final List<String> EXPECTED = SqliteNativeDowncalls.reachabilityMetadata();
 
+  private static final Set<String> ALLOWED = Set.of("returnType", "parameterTypes", "options");
+
   private SqliteForeignDowncalls() {}
 
   /** The downcalls of a reachability-metadata document, in the form of {@link #EXPECTED}. */
@@ -25,9 +28,20 @@ final class SqliteForeignDowncalls {
     for (JsonNode downcall : metadata.path("foreign").path("downcalls")) {
       List<String> parameters = new ArrayList<>();
       downcall.path("parameterTypes").forEach(type -> parameters.add(type.asText()));
+      // Any attribute outside returnType, parameterTypes and options is kept in the line, so an
+      // entry that carries one (a condition, a reason, a comment) fails the parity test: GraalVM
+      // 25.0.1 refuses every other attribute on a foreign call.
+      List<String> unexpected = new ArrayList<>();
+      downcall
+          .fieldNames()
+          .forEachRemaining(
+              name -> {
+                if (!ALLOWED.contains(name)) {
+                  unexpected.add(name + "=" + downcall.get(name));
+                }
+              });
       downcalls.add(
-          downcall.path("condition").path("typeReached").asText()
-              + " "
+          (unexpected.isEmpty() ? "" : "unexpected " + unexpected + " ")
               + downcall.path("returnType").asText()
               + " "
               + parameters
