@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-only logging config. logback-classic is on the test classpath solely so log-assertion
+     tests can capture events with a ListAppender; keep the INFO chatter of Flyway (every schema
+     series a test applies) and HikariCP (the pooled tests) out of the build log. A logger under
+     test must pass WARN for the capture to see its events.
+
+     The root stays at WARN, not ERROR: this module's suite runs the stores on real SQLite files,
+     concurrent writers and forked JVMs (the instance guard and crash tests), and an ERROR root
+     silences every WARN in it — including the warnings a failing test's own subsystem emits on the
+     way down (a failed rollback, a schema validation warning), which is exactly the diagnostic an
+     unrelated CI failure depends on. WARN is quiet enough for the noise this file exists to
+     suppress. -->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <root level="WARN">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

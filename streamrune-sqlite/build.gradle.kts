@@ -32,6 +32,11 @@ dependencies {
     // ('postgres'), with a real PostgresEventAuditStore. Test scope only: streamrune-postgres's own
     // tests depend on this module the same way, and neither main source set sees the other.
     testImplementation(project(":streamrune-postgres"))
+    // Log-assertion tests pin operator-facing log lines, whose only observable effect IS the line,
+    // so they need a real slf4j binding whose events a test can capture (logback ListAppender).
+    // Test scope only — no main artifact gains a logging backend. Quiet defaults in
+    // src/test/resources/logback-test.xml.
+    testImplementation(libs.logback.classic)
 }
 
 // The driver loads its native library and the instance guard calls flock(2) through the Foreign
