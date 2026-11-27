@@ -301,7 +301,9 @@ Changed
   dead-letter and saga dead-letter retention sweepers interrupt their thread and wait up to 30
   seconds for a running sweep to return, on PostgreSQL too, so a store closed after its sweeper is
   never written by a sweep that outlived the close. With all four mid-sweep, shutdown can take about
-  two minutes. A sweep that does not end in time logs a WARN.
+  two minutes. A sweep that does not end in time logs a WARN. A sweep whose store swallows the
+  interrupt (a pool or a driver that catches it and returns normally) ends the sweeper's thread
+  when it returns, instead of sleeping out the sweep interval.
 - **Quarkus opens the backend's stores at startup.** With a `DataSource` (every Quarkus application
   with Agroal has one), the `BackendStores` bean is created by a startup observer that runs after
   the startup validators, on PostgreSQL too: the `CryptoEngine` lookup and its ambiguity check, the

@@ -22,6 +22,34 @@ final class VirtualThreads {
    * @throws IOException if the dump cannot be written or read
    */
   static Map<Long, String> alive() throws IOException {
+    Map<Long, String> threads = new HashMap<>();
+    for (JsonNode thread : dump()) {
+      threads.put(thread.path("tid").asLong(), thread.path("name").asText());
+    }
+    return threads;
+  }
+
+  /**
+   * The stacks of those of {@code tids} that are alive now, one thread after the other, for a
+   * failure message.
+   *
+   * @param tids the thread ids
+   * @return the name and the stack of each
+   * @throws IOException if the dump cannot be written or read
+   */
+  static String stacks(java.util.Set<Long> tids) throws IOException {
+    StringBuilder out = new StringBuilder();
+    for (JsonNode thread : dump()) {
+      if (tids.contains(thread.path("tid").asLong())) {
+        out.append('\n').append(thread.path("name").asText()).append(':');
+        thread.path("stack").forEach(frame -> out.append("\n  at ").append(frame.asText()));
+      }
+    }
+    return out.toString();
+  }
+
+  /** The virtual threads of a JSON thread dump taken now. */
+  private static java.util.List<JsonNode> dump() throws IOException {
     Path file = Files.createTempFile("streamrune-threads", ".json");
     JsonNode dump;
     try {
@@ -33,11 +61,11 @@ final class VirtualThreads {
     } finally {
       Files.deleteIfExists(file);
     }
-    Map<Long, String> threads = new HashMap<>();
+    java.util.List<JsonNode> threads = new java.util.ArrayList<>();
     for (JsonNode container : dump.path("threadDump").path("threadContainers")) {
       for (JsonNode thread : container.path("threads")) {
         if (thread.path("virtual").asBoolean(false)) {
-          threads.put(thread.path("tid").asLong(), thread.path("name").asText());
+          threads.add(thread);
         }
       }
     }

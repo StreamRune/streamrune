@@ -63,7 +63,11 @@ class QuarkusRefusedStartTest {
       Thread.sleep(50);
       alive = alive(started);
     }
-    assertThat(alive.values()).as("threads still running after the refused start").isEmpty();
+    assertThat(alive.values())
+        .as(
+            "threads still running after the refused start%s",
+            VirtualThreads.stacks(alive.keySet()))
+        .isEmpty();
   }
 
   /** The threads {@link StartedThreadsProbe} recorded, by thread id. */

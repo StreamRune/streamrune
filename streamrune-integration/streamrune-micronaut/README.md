@@ -123,6 +123,18 @@ streamrune:
   runner-lifecycle-enabled: false
 ```
 
+**A refused start.** Some startup checks run after the runners started: the saga parallelism check,
+at `Ordered.LOWEST_PRECEDENCE`, and a `StartupEvent` listener of your own ordered after the
+framework's lifecycles (`getOrder()` above 1100) that throws. Micronaut then leaves the context neither
+running nor stoppable: `ApplicationContext.stop()` and `close()` do nothing on a context that is
+not running, so no `ShutdownEvent` is published, no `@PreDestroy` method runs, and the runners
+started before the refusal keep running. `Micronaut.run` exits the process on a failed start, so a
+deployed application is not affected. A JVM that lives on is: a test with the `test` environment
+active, where `Micronaut.run` throws `ApplicationStartupException` instead of exiting, or a test
+that calls `ApplicationContext.run` and expects the start to fail. Run such a test in a JVM of its
+own (`forkEvery = 1` on its Gradle test task, or a test task of its own), so the threads left
+running end with it.
+
 **Projection runner ownership.** The framework starts and stops only the projection runner it
 auto-assembles from your `@ProjectionConfig` beans, and only while
 `streamrune.projections.auto-discovery.enabled` is `true` (the default). A
