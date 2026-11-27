@@ -169,11 +169,13 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   (`Causes`), the checkpoint fence's decisions (`CheckpointFenceRules`), the event read path's row
   decoding, snapshot decision and deserialization (`EventReadPath`), the event append's argument
   rules, serialization, spans and failure mapping (`EventAppendSupport`, over each backend's
-  `AppendFailureClassifier`) and the saga store's argument rules, conflict refusals and row decoding
-  (`SagaRows`); saga writes stay per backend. Each backend supplies its `JdbcInstantCodec` for
-  timestamps and flags. The rest of the stores is still mirrored by hand. The crypto cipher with its
-  self-check and retries (`VerifiedCipher`), the v1 wire format (`AesGcmV1Format`) and the JDBC key
-  store and forgotten-subject SQL (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in
+  `AppendFailureClassifier`), the saga store's argument rules, conflict refusals and row decoding
+  (`SagaRows`) and the projection repository's rules and after-commit actions (`ReadModelRules`,
+  `AfterCommitActions`); saga writes, SQL generation, SQLite's jsonb emulation and batch joining
+  stay per backend. Each backend supplies its `JdbcInstantCodec` for timestamps and flags. The rest
+  of the stores is still mirrored by hand. The crypto cipher with its self-check and retries
+  (`VerifiedCipher`), the v1 wire format (`AesGcmV1Format`) and the JDBC key store and
+  forgotten-subject SQL (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in
   `streamrune-crypto-api`; each backend supplies only its `JdbcCryptoDialect`. A change to the logic
   of a store of one backend is mirrored in its twin of the other backend in the same pull request,
   in either direction, or the pull request says why the twin needs none. A behaviour both must share
