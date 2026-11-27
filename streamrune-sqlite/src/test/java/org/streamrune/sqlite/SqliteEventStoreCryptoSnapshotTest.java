@@ -32,6 +32,7 @@ import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.core.types.Version;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.StreamKeys;
 import org.streamrune.test.InMemoryCryptoEngine;
 
 /**
@@ -303,7 +304,7 @@ class SqliteEventStoreCryptoSnapshotTest {
             conn.prepareStatement(
                 "UPDATE snapshot_store SET state_payload = json_set(state_payload, '$.email',"
                     + " '###corrupt###') WHERE aggregate_type = ? AND aggregate_id = ?")) {
-      SqliteStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       assertThat(ps.executeUpdate()).isEqualTo(1);
     }
 

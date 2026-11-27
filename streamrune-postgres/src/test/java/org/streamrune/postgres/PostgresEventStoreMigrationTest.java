@@ -29,6 +29,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.jdbc.EventReadPath;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -386,7 +387,7 @@ class PostgresEventStoreMigrationTest {
 
     var ex = assertThrows(RuntimeException.class, () -> s.load(id, 2));
     assertTrue(
-        PostgresEventStore.hasCryptoCause(ex),
+        EventReadPath.hasCryptoCause(ex),
         "the propagated exception must carry the CryptoOperationException cause");
     assertEquals(0, metrics.discardCount.get(), "a crypto-caused failure must never be discarded");
   }

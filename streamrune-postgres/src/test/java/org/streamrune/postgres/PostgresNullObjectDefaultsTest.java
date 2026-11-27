@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.types.SubscriptionName;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * The optional collaborators of the PostgreSQL module's builders and factories (metrics,
@@ -56,7 +57,7 @@ class PostgresNullObjectDefaultsTest {
         refused(
             "metrics",
             "PostgresEventStore.createObjectMapper",
-            () -> PostgresEventStore.createObjectMapper(null, null)),
+            () -> StoreObjectMappers.eventsAndSagas(null, null)),
         refused(
             "metrics",
             "PostgresSagaStore.createObjectMapper",

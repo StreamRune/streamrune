@@ -28,7 +28,6 @@ import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.saga.SagaForwardFencedException;
@@ -368,7 +367,7 @@ public final class PostgresEventStore implements EventStore {
    *
    * <p>Performs no {@code @Encrypted} check: {@code objectMapper} is used as given, and a mapper
    * without the crypto module writes {@code @Encrypted} components as plaintext. When a registered
-   * type carries {@code @Encrypted}, pass {@link #createObjectMapper(CryptoEngine,
+   * type carries {@code @Encrypted}, pass {@link StoreObjectMappers#eventsAndSagas(CryptoEngine,
    * StreamRuneMetrics)} built with the engine, or use {@link #builder()}, which refuses such a type
    * without an engine.
    *
@@ -409,7 +408,7 @@ public final class PostgresEventStore implements EventStore {
    *
    * <p>Performs no {@code @Encrypted} check: {@code objectMapper} is used as given, and a mapper
    * without the crypto module writes {@code @Encrypted} components as plaintext. When a registered
-   * type carries {@code @Encrypted}, pass {@link #createObjectMapper(CryptoEngine,
+   * type carries {@code @Encrypted}, pass {@link StoreObjectMappers#eventsAndSagas(CryptoEngine,
    * StreamRuneMetrics)} built with the engine, or use {@link #builder()}, which refuses such a type
    * without an engine.
    *
@@ -673,21 +672,6 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * The {@link ObjectMapper} the event store (de)serializes events with: a test-only delegate to
-   * {@link StoreObjectMappers#eventsAndSagas}, which documents the recipe (production construction
-   * paths call it directly). Package-private: tests of this package and the crypto-shredding
-   * benchmark of {@code streamrune-filesystem-crypto} (declared in this package) call it.
-   *
-   * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
-   * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
-   *     not {@code null}
-   * @return a new {@link ObjectMapper}, independent from any other mapper instance
-   */
-  static ObjectMapper createObjectMapper(CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    return StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
-  }
-
-  /**
    * Creates a builder for PostgresEventStore with sensible defaults.
    *
    * @return builder instance
@@ -873,15 +857,6 @@ public final class PostgresEventStore implements EventStore {
               + " snapshot_store. This warning is logged once.",
           LogSanitizer.sanitizeForLog(stateType));
     }
-  }
-
-  /**
-   * Whether {@code t}'s cause chain holds a {@link CryptoOperationException}: a test-only delegate
-   * to {@link EventReadPath#hasCryptoCause}, which holds the one copy; production code calls it
-   * there.
-   */
-  static boolean hasCryptoCause(Throwable t) {
-    return EventReadPath.hasCryptoCause(t);
   }
 
   @Override
@@ -1128,15 +1103,6 @@ public final class PostgresEventStore implements EventStore {
               + " resets on return): {}",
           restoreEx.getMessage());
     }
-  }
-
-  /**
-   * The claim-lost dead end's exception: a test-only delegate to {@link
-   * EventAppendSupport#inboxConflictWithoutRow}, which holds the one copy; production code calls it
-   * there.
-   */
-  static EventStoreException inboxConflictWithoutRow(IdempotencyKey idempotencyKey) {
-    return EventAppendSupport.inboxConflictWithoutRow(idempotencyKey);
   }
 
   /**
