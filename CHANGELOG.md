@@ -392,9 +392,9 @@ Unreleased changes to the PostgreSQL event store (Changed):
   version now fails with `NullPointerException("version is required")` before any serialization or
   connection, also when the state class is unregistered (it was an `EventStoreException` then), as
   on SQLite.
-- **A negative `global_offset` reads as a corrupt row.** On PostgreSQL, an `event_stream` row with a
-  negative `global_offset` (only reachable by hand-written SQL) now reads as
-  `EventDeserializationException`, after event-type resolution, as on SQLite (it was a raw
+- **A negative `global_offset` reads as a corrupt row.** On PostgreSQL, an otherwise readable
+  `event_stream` row with a negative `global_offset` (only reachable by hand-written SQL) now reads
+  as `EventDeserializationException`, after event-type resolution, as on SQLite (it was a raw
   `IllegalArgumentException`).
 
 ### Modules

@@ -537,7 +537,7 @@ public final class SqliteEventStore implements EventStore {
       return result;
     } catch (SQLException e) {
       // Only an append that did not commit is mapped: one that committed and then failed to close
-      // returned its result above.
+      // returns its result here.
       // Static analysis reports this guard as always false; it is reachable, because closing a
       // pooled connection can throw after the commit.
       if (committed) {
