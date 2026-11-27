@@ -3,9 +3,12 @@ package org.streamrune.quarkus;
 import io.quarkus.arc.properties.IfBuildProperty;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.BeforeDestroyed;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.Reception;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.interceptor.Interceptor;
@@ -24,8 +27,9 @@ import org.streamrune.runtime.SseEventPublisher;
  * <p>Registered under the same build-time condition as the controller ({@code
  * streamrune.sse.enabled=true}). On {@link StartupEvent} the feed starts at the head of the global
  * stream, unless the endpoint is switched off at runtime ({@code streamrune.sse.enabled=false}: the
- * controller answers {@code 404}, so nothing is read for it). On {@link ShutdownEvent} the feed
- * stops. A {@code streamrune.sse.polling-interval} below one millisecond fails the start-up.
+ * controller answers {@code 404}, so nothing is read for it). On {@link ShutdownEvent}, or when the
+ * container shuts down after a failed start, the feed stops. A {@code
+ * streamrune.sse.polling-interval} below one millisecond fails the start-up.
  *
  * <p><b>Health.</b> The started feed is registered with the {@link
  * BackgroundRelayHealthContributor} as {@code sse-event-feed}, so the readiness check reports
@@ -118,6 +122,39 @@ public class SseEventFeedLifecycle {
   }
 
   public void onStop(@Observes ShutdownEvent event) {
+    stop();
+  }
+
+  /**
+   * Stops the feed when the container shuts down, before it destroys any application-scoped bean:
+   * after a failed start Quarkus fires no {@link ShutdownEvent} but still shuts the container down,
+   * see {@link StreamRuneLifecycle#stopBeforeDestroy}. After a {@link ShutdownEvent} there is
+   * nothing left to stop. {@code public} for the same reason as {@link #onStart}.
+   *
+   * @param event the container's before-destroyed event
+   * @hidden
+   */
+  @org.streamrune.core.Internal
+  public void stopBeforeDestroy(
+      @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
+          Object event) {
+    stop();
+  }
+
+  /**
+   * Stops what is still running when the container destroys this bean, the fallback {@link
+   * StreamRuneLifecycle#stopOnDestroy()} describes. {@code public} for the same reason as {@link
+   * #onStart}.
+   *
+   * @hidden
+   */
+  @PreDestroy
+  @org.streamrune.core.Internal
+  public void stopOnDestroy() {
+    stop();
+  }
+
+  private void stop() {
     SseEventFeed running = feed;
     if (running == null) {
       return;

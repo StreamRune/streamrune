@@ -5,7 +5,11 @@ import static org.mockito.Mockito.*;
 
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.enterprise.context.spi.Context;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.inject.spi.Bean;
+import jakarta.enterprise.inject.spi.BeanManager;
+import jakarta.inject.Singleton;
 import org.junit.jupiter.api.Test;
 import org.streamrune.runtime.DeadLetterRetentionSweeper;
 import org.streamrune.runtime.DeadLetterRetryRunner;
@@ -18,6 +22,29 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
 
 /** Tests for {@link StreamRuneLifecycle}. */
 class StreamRuneLifecycleTest {
+
+  /**
+   * A bean manager whose singleton context holds what {@code bus} resolves to, as Arc's holds the
+   * bus once it was created; a bus resolving to {@code null} is one nothing created.
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static BeanManager beanManagerHolding(Instance<VirtualThreadCommandBus> bus) {
+    BeanManager beanManager = mock(BeanManager.class);
+    if (!bus.isResolvable()) {
+      return beanManager;
+    }
+    VirtualThreadCommandBus created = bus.get();
+    clearInvocations(bus);
+    Bean<VirtualThreadCommandBus> bean = mock(Bean.class);
+    when(bean.getScope()).thenReturn((Class) Singleton.class);
+    Instance.Handle<VirtualThreadCommandBus> handle = mock(Instance.Handle.class);
+    when(handle.getBean()).thenReturn(bean);
+    when(bus.getHandle()).thenReturn(handle);
+    Context context = mock(Context.class);
+    when(context.get(bean)).thenReturn(created);
+    when(beanManager.getContext(Singleton.class)).thenReturn(context);
+    return beanManager;
+  }
 
   @SuppressWarnings("unchecked")
   private static <T> Instance<T> satisfied(T value) {
@@ -53,7 +80,7 @@ class StreamRuneLifecycleTest {
         dlr,
         unsatisfied(),
         bus,
-        mock(jakarta.enterprise.inject.spi.BeanManager.class));
+        beanManagerHolding(bus));
   }
 
   private static StreamRuneLifecycle lifecycle(
@@ -74,7 +101,7 @@ class StreamRuneLifecycleTest {
         dlr,
         unsatisfied(),
         bus,
-        mock(jakarta.enterprise.inject.spi.BeanManager.class));
+        beanManagerHolding(bus));
   }
 
   private static StreamRuneLifecycle lifecycleWithSagaDeadLetterSweeper(
@@ -188,6 +215,64 @@ class StreamRuneLifecycleTest {
     assertNull(lifecycle.multiProjectionRunner());
     assertNull(lifecycle.scheduledProjectionRunner());
     assertNull(lifecycle.outboxPoller());
+    assertNull(lifecycle.deadLetterRetryRunner());
+  }
+
+  @Test
+  void aBusNothingCreatedIsNotCreatedToBeClosed() {
+    Instance<VirtualThreadCommandBus> bus = satisfied(null);
+    var lifecycle = lifecycle(unsatisfied(), unsatisfied(), unsatisfied(), unsatisfied(), bus);
+
+    lifecycle.onStart(mock(StartupEvent.class));
+    lifecycle.onStop(mock(ShutdownEvent.class));
+
+    verify(bus, never()).get();
+  }
+
+  @Test
+  void aBusThatCannotBeLookedUpDoesNotStopTheShutdown() {
+    var multi = mock(MultiProjectionRunner.class);
+    Instance<VirtualThreadCommandBus> bus = unsatisfied();
+    when(bus.isResolvable()).thenReturn(true);
+    var lifecycle = lifecycle(satisfied(multi), unsatisfied(), unsatisfied(), unsatisfied(), bus);
+    when(bus.getHandle()).thenThrow(new IllegalStateException("the bus producer failed"));
+
+    lifecycle.onStart(mock(StartupEvent.class));
+    assertDoesNotThrow(() -> lifecycle.stopBeforeDestroy(new Object()));
+
+    verify(multi).close();
+    verify(bus, never()).get();
+  }
+
+  @Test
+  void theContainerShutdownAfterTheShutdownEventStopsNothingTwice() throws Exception {
+    var multi = mock(MultiProjectionRunner.class);
+    var bus = mock(VirtualThreadCommandBus.class);
+    var lifecycle =
+        lifecycle(satisfied(multi), unsatisfied(), unsatisfied(), unsatisfied(), satisfied(bus));
+
+    lifecycle.onStart(mock(StartupEvent.class));
+    lifecycle.onStop(mock(ShutdownEvent.class));
+    lifecycle.stopBeforeDestroy(new Object());
+    lifecycle.stopOnDestroy();
+
+    verify(multi, times(1)).close();
+    verify(bus, times(1)).close();
+  }
+
+  @Test
+  void theContainerShutdownStopsWhatAFailedStartLeftRunning() throws Exception {
+    var multi = mock(MultiProjectionRunner.class);
+    var dlr = mock(DeadLetterRetryRunner.class);
+    var lifecycle =
+        lifecycle(satisfied(multi), unsatisfied(), unsatisfied(), satisfied(dlr), unsatisfied());
+
+    lifecycle.onStart(mock(StartupEvent.class));
+    lifecycle.stopBeforeDestroy(new Object());
+
+    verify(multi).close();
+    verify(dlr).close();
+    assertNull(lifecycle.multiProjectionRunner());
     assertNull(lifecycle.deadLetterRetryRunner());
   }
 

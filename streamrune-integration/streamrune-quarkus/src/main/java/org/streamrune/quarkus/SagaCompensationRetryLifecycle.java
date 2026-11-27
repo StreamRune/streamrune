@@ -3,9 +3,12 @@ package org.streamrune.quarkus;
 import io.quarkus.arc.All;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.BeforeDestroyed;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.Reception;
 import jakarta.enterprise.inject.Instance;
 import jakarta.interceptor.Interceptor;
 import java.time.Clock;
@@ -25,7 +28,8 @@ import org.streamrune.runtime.SagaRunner;
 /**
  * Auto-wires a {@link SagaCompensationRetrySweeper} for every application {@link SagaRunner} bean
  * in Quarkus and owns their lifecycle. On {@link StartupEvent} it builds and starts one sweeper per
- * runner; on {@link ShutdownEvent} it stops them all.
+ * runner; on {@link ShutdownEvent}, or when the container shuts down after a failed start, it stops
+ * them all.
  *
  * <p>This is the durable, automatic recovery path for a stuck {@code COMPENSATING} saga that has no
  * {@link org.streamrune.runtime.SagaTimeoutRunner} (empty {@code timeout()}) and receives no
@@ -211,6 +215,35 @@ public class SagaCompensationRetryLifecycle {
 
   // public for the same cross-classloader reason as onStart.
   public void onStop(@Observes ShutdownEvent event) {
+    stopSweepers();
+  }
+
+  /**
+   * Stops the sweepers when the container shuts down, before it destroys any application-scoped
+   * bean: after a failed start Quarkus fires no {@link ShutdownEvent} but still shuts the container
+   * down, see {@link StreamRuneLifecycle#stopBeforeDestroy}. After a {@link ShutdownEvent} there is
+   * nothing left to stop. {@code public} for the same reason as {@link #onStart}.
+   *
+   * @param event the container's before-destroyed event
+   * @hidden
+   */
+  @org.streamrune.core.Internal
+  public void stopBeforeDestroy(
+      @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
+          Object event) {
+    stopSweepers();
+  }
+
+  /**
+   * Stops what is still running when the container destroys this bean, the fallback {@link
+   * StreamRuneLifecycle#stopOnDestroy()} describes. {@code public} for the same reason as {@link
+   * #onStart}.
+   *
+   * @hidden
+   */
+  @PreDestroy
+  @org.streamrune.core.Internal
+  public void stopOnDestroy() {
     stopSweepers();
   }
 
