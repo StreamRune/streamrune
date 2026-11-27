@@ -31,6 +31,8 @@ public class org.streamrune.quarkus.SagaCompensationRetryLifecycle
   public <init>(java.util.List<org.streamrune.runtime.SagaRunner<?>>, jakarta.enterprise.inject.Instance<org.streamrune.core.saga.SagaStore>, jakarta.enterprise.inject.Instance<org.streamrune.core.subscription.SubscriptionLeadership>, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, jakarta.enterprise.inject.Instance<org.streamrune.runtime.BackgroundRelayHealthContributor>, org.streamrune.quarkus.StreamRuneQuarkusProperties)
   public void onStart(io.quarkus.runtime.StartupEvent)
   public void onStop(io.quarkus.runtime.ShutdownEvent)
+  public void stopBeforeDestroy(java.lang.Object)
+  public void stopOnDestroy()
 
 public class org.streamrune.quarkus.SagaEventPathRetentionConfigurer
   protected <init>()
@@ -68,6 +70,8 @@ public class org.streamrune.quarkus.SseEventFeedLifecycle
   public boolean isRunning()
   public void onStart(io.quarkus.runtime.StartupEvent)
   public void onStop(io.quarkus.runtime.ShutdownEvent)
+  public void stopBeforeDestroy(java.lang.Object)
+  public void stopOnDestroy()
 
 public class org.streamrune.quarkus.StreamRuneAuthorizationValidator
   protected <init>()
@@ -155,6 +159,8 @@ public class org.streamrune.quarkus.StreamRuneLifecycle
   public org.streamrune.runtime.ScheduledProjectionRunner scheduledProjectionRunner()
   public void onStart(io.quarkus.runtime.StartupEvent)
   public void onStop(io.quarkus.runtime.ShutdownEvent)
+  public void stopBeforeDestroy(java.lang.Object)
+  public void stopOnDestroy()
 
 public class org.streamrune.quarkus.StreamRuneProducers
   public <init>()

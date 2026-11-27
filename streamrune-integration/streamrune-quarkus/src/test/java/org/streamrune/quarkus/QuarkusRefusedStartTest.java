@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.streamrune.core.AggregateLocker;
 import org.streamrune.core.EventStore;
@@ -44,6 +45,7 @@ import org.streamrune.runtime.SagaDeadLetterRetentionSweeper;
 import org.streamrune.runtime.SagaRunner;
 import org.streamrune.runtime.SseEventFeed;
 import org.streamrune.runtime.SseEventPublisher;
+import org.streamrune.runtime.VirtualThreadCommandBus;
 import org.streamrune.runtime.health.RelayComponentNames;
 import org.streamrune.test.InMemoryCommandInbox;
 import org.streamrune.test.InMemoryEventStore;
@@ -69,6 +71,9 @@ class QuarkusRefusedStartTest {
   private static final Duration SETTLE = Duration.ofSeconds(10);
 
   static volatile SmallRyeConfig applicationConfig;
+
+  /** How many command buses the fixture's producer created. */
+  static final AtomicInteger BUSES_CREATED = new AtomicInteger();
 
   /** The configuration, the runners the framework would build, and what they read. */
   public static class Infrastructure {
@@ -133,6 +138,13 @@ class QuarkusRefusedStartTest {
     @Singleton
     public EventStore eventStore() {
       return new InMemoryEventStore(SimpleEventTypeRegistry.builder().build());
+    }
+
+    @Produces
+    @Singleton
+    public VirtualThreadCommandBus commandBus(EventStore eventStore) {
+      BUSES_CREATED.incrementAndGet();
+      return VirtualThreadCommandBus.builder().eventStore(eventStore).build();
     }
 
     @Produces
@@ -251,13 +263,18 @@ class QuarkusRefusedStartTest {
     try {
       Map<Long, String> before = virtualThreads();
       Map<Long, String> started;
+      VirtualThreadCommandBus bus;
       try (var arc = RealArcTestContainer.boot(beans())) {
         var events = arc.container().beanManager().getEvent();
         events.select(StartupEvent.class).fire(new StartupEvent());
         started = frameworkThreadsSince(before, ALL_FRAMEWORK_THREADS);
+        assertThat(started.values()).containsAll(ALL_FRAMEWORK_THREADS);
+        // The application uses the command bus, so the container creates it.
+        bus = arc.container().select(VirtualThreadCommandBus.class).get();
 
         events.select(ShutdownEvent.class).fire(new ShutdownEvent());
         awaitEnded(started);
+        assertThat(bus.isClosed()).as("the command bus after the shutdown event").isTrue();
       }
       assertThat(alive(started)).isEmpty();
       assertThat(log.messages())
@@ -287,6 +304,7 @@ class QuarkusRefusedStartTest {
   private static void assertTheRefusedStartLeavesNoThread(
       List<Class<?>> beans, String refusal, List<String> required) throws Exception {
     ApplicationResource.aliveWhenDestroyed = null;
+    BUSES_CREATED.set(0);
     Map<Long, String> before = virtualThreads();
     Map<Long, String> started;
     try (var arc = RealArcTestContainer.boot(beans)) {
@@ -307,6 +325,8 @@ class QuarkusRefusedStartTest {
         .as("the virtual threads alive when the application's resource was destroyed")
         .isNotNull()
         .doesNotContainKeys(started.keySet().toArray(Long[]::new));
+    // Nothing used the command bus: the shutdown does not create it only to close it.
+    assertThat(BUSES_CREATED).hasValue(0);
   }
 
   /** Waits until none of {@code threads} is alive, and fails naming those that still are. */
@@ -348,6 +368,7 @@ class QuarkusRefusedStartTest {
   private static final class CapturedLog {
     private final java.util.logging.Logger logger =
         java.util.logging.Logger.getLogger("org.streamrune.quarkus");
+    private final java.util.logging.Level originalLevel = logger.getLevel();
     private final List<String> messages = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final java.util.logging.Handler handler =
         new java.util.logging.Handler() {
@@ -365,6 +386,7 @@ class QuarkusRefusedStartTest {
 
     CapturedLog() {
       logger.addHandler(handler);
+      logger.setLevel(java.util.logging.Level.INFO);
     }
 
     List<String> messages() {
@@ -373,6 +395,7 @@ class QuarkusRefusedStartTest {
 
     void close() {
       logger.removeHandler(handler);
+      logger.setLevel(originalLevel);
     }
   }
 

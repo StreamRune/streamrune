@@ -132,9 +132,7 @@ public class SseEventFeedLifecycle {
    * nothing left to stop. {@code public} for the same reason as {@link #onStart}.
    *
    * @param event the container's before-destroyed event
-   * @hidden
    */
-  @org.streamrune.core.Internal
   public void stopBeforeDestroy(
       @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
@@ -145,11 +143,8 @@ public class SseEventFeedLifecycle {
    * Stops what is still running when the container destroys this bean, the fallback {@link
    * StreamRuneLifecycle#stopOnDestroy()} describes. {@code public} for the same reason as {@link
    * #onStart}.
-   *
-   * @hidden
    */
   @PreDestroy
-  @org.streamrune.core.Internal
   public void stopOnDestroy() {
     stop();
   }

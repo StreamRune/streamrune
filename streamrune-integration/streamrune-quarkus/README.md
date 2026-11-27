@@ -504,11 +504,13 @@ does not start a second set.
 **Stop what you start on `StartupEvent` the same way.** A subscription, a `SagaTimeoutRunner` or a
 runner the application builds in a `StartupEvent` observer and stops on `ShutdownEvent` outlives a
 refused start in dev mode and in a test JVM, and keeps using the closed container. Stop it as well
-from an observer of `@BeforeDestroyed(ApplicationScoped.class)` (with `notifyObserver =
-Reception.IF_EXISTS`) or from a `@PreDestroy` method of an `@ApplicationScoped` bean, and make the
-stop idempotent, since after a normal shutdown it runs after the `ShutdownEvent`. Not from the
-`@PreDestroy` of a `@Singleton` bean: it runs after the `DataSource` closed, in an order
-unspecified against the framework's stores.
+from an observer of `@BeforeDestroyed(ApplicationScoped.class)` on an `@ApplicationScoped` bean
+(with `notifyObserver = Reception.IF_EXISTS`), as the framework does, and make the stop idempotent,
+since after a normal shutdown it runs after the `ShutdownEvent`. A `@PreDestroy` method is only a
+fallback: Arc destroys the application-scoped beans in no fixed order, so it may run after the
+`DataSource` closed (the lease's resign then fails and the lease lingers until its TTL), and a
+`@Singleton` bean's runs after every application-scoped bean is gone, in an order unspecified
+against the framework's stores.
 
 **Your own runner replaces the framework's.** When the application declares its own bean of any of
 these runner types (a plain `@Produces DeadLetterRetryRunner`, say), the framework neither builds

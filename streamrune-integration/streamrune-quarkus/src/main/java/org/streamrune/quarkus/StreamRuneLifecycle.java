@@ -36,7 +36,8 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * {@link DeadLetterRetentionSweeper} and {@link DeadLetterRetryRunner}. On {@link ShutdownEvent},
  * stops them in reverse order, closes the {@link SubscriptionLeadership} and closes the {@link
  * VirtualThreadCommandBus} if it was created. After a failed start, which fires no {@link
- * ShutdownEvent}, it does the same when the container shuts down ({@link #stopBeforeDestroy}).
+ * ShutdownEvent}, it does the same when the container shuts down ({@link #stopBeforeDestroy}), with
+ * {@link #stopOnDestroy()} as the fallback.
  *
  * <p>The runner producers are dependent-scoped optional beans ({@link ProjectionProducer}, {@link
  * StreamRuneProducers}): when a feature is disabled or has no registrations, {@link Instance#get()}
@@ -259,9 +260,7 @@ public class StreamRuneLifecycle {
    * {@link #onStart}.
    *
    * @param event the container's before-destroyed event
-   * @hidden
    */
-  @org.streamrune.core.Internal
   public void stopBeforeDestroy(
       @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
@@ -271,13 +270,11 @@ public class StreamRuneLifecycle {
   /**
    * Stops what is still running when the container destroys this bean: the fallback for a shutdown
    * whose before-destroyed observers did not all run, as an observer that throws ends the
-   * notification. Otherwise {@link #stopBeforeDestroy} has stopped everything already. {@code
-   * public} for the same reason as {@link #onStart}.
-   *
-   * @hidden
+   * notification. It may run after the {@code DataSource} closed, as Arc destroys the
+   * application-scoped beans in no fixed order. Otherwise {@link #stopBeforeDestroy} has stopped
+   * everything already. {@code public} for the same reason as {@link #onStart}.
    */
   @PreDestroy
-  @org.streamrune.core.Internal
   public void stopOnDestroy() {
     stop();
   }
@@ -307,7 +304,8 @@ public class StreamRuneLifecycle {
 
     // Stop the renew heartbeat and resign the held leases AFTER every runner has stopped, so a
     // runner never loses leadership mid-batch. The shutdown event and the before-destroyed event
-    // both come before the DataSource closes, so the resign still reaches the database.
+    // both come before the DataSource closes, so the resign still reaches the database (the
+    // @PreDestroy fallback may not).
     closeQuietly(leadership, "SubscriptionLeadership");
     leadership = null;
 
