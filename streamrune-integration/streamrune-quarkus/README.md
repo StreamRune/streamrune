@@ -437,8 +437,8 @@ which keeps the bus producer itself even in an application that injects no `Comm
 |---|---|
 | `StreamRuneProducers` | CDI producers for the buses, stores, and interceptors |
 | `ProjectionProducer` | Discovers `@ProjectionConfig` projections, builds runners |
-| `StreamRuneLifecycle` | Starts/stops projection runners, outbox poller, DLQ retry runner and the retention sweepers on `StartupEvent`/`ShutdownEvent` |
-| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it on `ShutdownEvent` |
+| `StreamRuneLifecycle` | Starts/stops projection runners, outbox poller, DLQ retry runner and the retention sweepers on `StartupEvent`/`ShutdownEvent`, and stops them when the container shuts down after a refused start |
+| `SseEventFeedLifecycle` | With `streamrune.sse.enabled=true`: starts the `SseEventFeed` that publishes stored events to the SSE endpoint on `StartupEvent` and stops it on `ShutdownEvent`, or when the container shuts down after a refused start |
 | `StreamRuneQuarkusProperties` | `@ConfigMapping` for `streamrune.*` properties |
 | `StreamRuneRequestFilter` | JAX-RS `@Provider` that builds the `RequestContext`: `X-Trace-Id` / `X-Correlation-Id` (generated when missing), and the user id and `X-User-Role` (baggage `role`, trusted-gateway mode only) as `RequestIdentityPolicy` allows (see [Request identity](#request-identity)); aborts with `400` for an id the request edge refuses |
 | `StreamRuneRequestIdentityValidator` | Startup observer: logs the request-identity mode once and refuses startup when a command bus authorizes against the request identity but requests can have no identity |
@@ -487,14 +487,35 @@ wrapped in `new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolde
 `StreamRuneLifecycle` observes `StartupEvent` and starts whichever of these beans exist:
 `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga
 dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner`. On
-`ShutdownEvent` it closes them in reverse order and closes the `VirtualThreadCommandBus`. Do not
+`ShutdownEvent` it closes them in reverse order, closes the subscription leadership and closes the
+`VirtualThreadCommandBus` if it was created. Do not
 inject the runner types directly — ask `StreamRuneLifecycle` for the running instances.
+
+**A refused start stops them too.** Quarkus fires no `ShutdownEvent` after a failed start, for
+example when a startup check refuses it after the runners started (the saga parallelism check, or
+an observer of your own). It still shuts the container down, and `StreamRuneLifecycle`,
+`SseEventFeedLifecycle` and the saga compensation-retry sweepers' lifecycle then stop what they
+started when the container fires `@BeforeDestroyed(ApplicationScoped.class)`: before it destroys
+any application-scoped bean, the Agroal `DataSource` among them, so the runners stop while the
+pool is still open and resign their leases. In production the process exits either way; in dev
+mode and in a test JVM nothing the framework started outlives the failed start, and a live reload
+does not start a second set.
+
+**Stop what you start on `StartupEvent` the same way.** A subscription, a `SagaTimeoutRunner` or a
+runner the application builds in a `StartupEvent` observer and stops on `ShutdownEvent` outlives a
+refused start in dev mode and in a test JVM, and keeps using the closed container. Stop it as well
+from an observer of `@BeforeDestroyed(ApplicationScoped.class)` (with `notifyObserver =
+Reception.IF_EXISTS`) or from a `@PreDestroy` method of an `@ApplicationScoped` bean, and make the
+stop idempotent, since after a normal shutdown it runs after the `ShutdownEvent`. Not from the
+`@PreDestroy` of a `@Singleton` bean: it runs after the `DataSource` closed, in an order
+unspecified against the framework's stores.
 
 **Your own runner replaces the framework's.** When the application declares its own bean of any of
 these runner types (a plain `@Produces DeadLetterRetryRunner`, say), the framework neither builds
 nor starts its default of that type, and it does not start yours either: you start and stop it
 (for example from your own `StartupEvent`/`ShutdownEvent` observers). Spring
-(`@ConditionalOnMissingBean`) and Micronaut (`@Requires(missingBeans = ...)`) behave the same.
+(`@ConditionalOnMissingBean`) and Micronaut (`@Requires(missingBeans = ...)`) behave the same. On
+Quarkus, stop it on a refused start too, as described above.
 
 **Projection runner ownership.** The framework starts and stops only the projection runner it
 auto-assembles from your `@ProjectionConfig` beans, and only while
