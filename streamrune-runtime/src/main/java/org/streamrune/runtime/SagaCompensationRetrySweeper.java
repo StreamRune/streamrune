@@ -242,12 +242,12 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * produced it: {@link #sweepOnce()} replaces it on every exit, so a cycle that re-drives nothing
    * — standby at the leadership gate, a failed {@code findCompensating}, retry switched off —
    * leaves it empty. Every saga therefore gets one real attempt after a restart, an outage of the
-   * store or a standby period alike; bounded by the sagas one cycle re-drives, each at most once.
-   * Because the evidence is one cycle deep, more than {@code batchSize} due sagas that keep failing
-   * rotate through the batches (a re-drive moves a saga to the back of the {@code updated_at}
-   * order), so one saga is seldom in two consecutive batches and the horizon may not apply to it;
-   * the inbox-retention key-age guard then ends the episode. Only ever touched by the single sweep
-   * thread (or a test thread), never concurrently.
+   * store or a standby period alike; bounded by the sagas one cycle re-drives, each at most once. A
+   * re-drive that fails transiently writes nothing, so the same due sagas head the first batch of
+   * every cycle and the horizon applies to them; while more than {@code batchSize} of them keep
+   * failing, the sagas behind them wait until the head ones end or are given up (the drain ends on
+   * a batch that ended no episode). Only ever touched by the single sweep thread (or a test
+   * thread), never concurrently.
    */
   private volatile java.util.Set<org.streamrune.core.saga.SagaId> previouslyReDriven =
       java.util.Set.of();

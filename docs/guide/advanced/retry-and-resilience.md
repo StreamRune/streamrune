@@ -286,6 +286,9 @@ DLQ entries:
   other failure, instead of sitting at the front of the oldest-first retry batch forever.
 - Under the default policy it replays keyed entries only (see
   [Which entries are replayed automatically](#which-entries-are-replayed-automatically)).
+- Each poll cycle retries up to `batchSize` due entries per batch, one after the other, and queries
+  the next batch at once while batches come back full and replay at least one entry, for at most 10
+  poll intervals per cycle; `streamrune.dlq.pending` is sampled once per cycle, at its start.
 - Replay is idempotent whenever the bus reports `supportsIdempotentExecution()` (true when a
   `CommandInbox` is configured): the entry re-executes via `CommandBus.execute(command, key)` under
   the command's **original** `IdempotencyKey` when it ran keyed (persisted on the entry, column

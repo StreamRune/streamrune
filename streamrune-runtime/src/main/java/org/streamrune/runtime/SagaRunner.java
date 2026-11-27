@@ -179,13 +179,16 @@ import org.streamrune.core.types.SubscriptionName;
  * repeat; a command that committed answers with its recorded result on any rerun. See {@link
  * #asEventListener()}.
  *
- * <p><b>Shared slots.</b> Each step takes one of the runner's slots before its saga's step lock and
- * gives it back when it ends; the deadline claims of the {@link SagaTimeoutRunner} built from this
- * runner take the same slots. Steps and deadline claims of the saga type together never exceed the
- * runner's budgeted steps, {@link #parallelism()} per bound subscription, which is what the
- * integrations' connection budget counts. Steps and claims get slots in arrival order. A page
- * delivered on a thread that already holds a slot of the runner — a claim's compensation delivered
- * on the appending thread — runs its items on that thread, one after the other, under that slot.
+ * <p><b>Shared slots.</b> Each step of a delivered page takes one of the runner's slots before its
+ * saga's step lock and gives it back when it ends; the deadline claims of the {@link
+ * SagaTimeoutRunner} built from this runner take the same slots. Steps and deadline claims of the
+ * saga type together stay within the runner's budgeted steps, {@link #parallelism()} per bound
+ * subscription, which is what the integrations' connection budget counts — except the claim of a
+ * saga whose own step is in flight, which the timeout runner makes without a slot when none frees
+ * within its claim wait. Replay feeds, operator calls and sweeper resumes take no slot. Steps and
+ * claims get slots in arrival order. A page delivered on a thread that already holds a slot of the
+ * runner — a claim's compensation delivered on the appending thread — runs its items on that
+ * thread, one after the other, under that slot.
  *
  * <p><b>Concurrency:</b> Saga writes are CAS-protected ({@link SagaStore#createGenesisPending},
  * {@link SagaStore#applyEvent}, {@link SagaStore#claimCompensating}, {@link SagaStore#update},
@@ -477,11 +480,13 @@ public final class SagaRunner<S extends SagaState> {
    *
    * <p>The steps of every page of this runner and the deadline claims of the {@link
    * SagaTimeoutRunner} built from it ({@link SagaTimeoutRunner.Builder#sagaRunner}) share one set
-   * of slots: together they never exceed the runner's budgeted steps, this parallelism per bound
+   * of slots: together they stay within the runner's budgeted steps, this parallelism per bound
    * subscription (one page per subscription built with {@code sagaRunner(runner)}, at least one),
    * read at each acquire. That is the number the connection budget of the integrations counts, so a
-   * claim never adds a connection the budget does not hold. A step and a claim queue for a slot in
-   * arrival order; a slot is taken before the saga's step lock.
+   * claim adds no connection the budget does not hold — except the claim of a saga whose own step
+   * is in flight, which the timeout runner makes without a slot when none frees within its claim
+   * wait, one connection per such step at most. A step and a claim queue for a slot in arrival
+   * order; a slot is taken before the saga's step lock.
    *
    * @return between 1 and {@value #MAX_PARALLELISM}
    */
@@ -490,8 +495,8 @@ public final class SagaRunner<S extends SagaState> {
   }
 
   /**
-   * The most steps and deadline claims of this runner in flight at once: the parallelism per bound
-   * subscription, as of now.
+   * The most steps and deadline claims of this runner holding a slot at once: the parallelism per
+   * bound subscription, as of now.
    */
   int budgetedSteps() {
     SagaParallelismSnapshot now = snapshot;

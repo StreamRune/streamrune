@@ -199,7 +199,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * How many times {@code batchSize} the poll over-fetches retry-eligible rows so a page of
    * not-yet-due entries at the head cannot starve due entries behind them. The store returns rows
    * least-recently-active first (most-likely-due first), so due entries concentrate at the front of
-   * this window and the poll still processes at most {@code batchSize} of them per cycle.
+   * this window and the poll still processes at most {@code batchSize} of them per batch.
    */
   private static final int RETRYABLE_OVERFETCH_FACTOR = 10;
 
@@ -700,7 +700,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     // genuinely-due entries behind them, poll after poll. Over-fetch a wider window (the store
     // orders it least-recently-active first, i.e. most-likely-due first) and process up to
     // `batchSize` entries that are actually DUE, skipping the not-due ones instead of letting them
-    // consume the batch budget. This bounds the read while keeping the per-cycle retry throughput
+    // consume the batch budget. This bounds the read while keeping the per-batch retry throughput
     // at batchSize.
     //
     // Only entries whose replay can be deduplicated against the caller's own retry are replayed on
