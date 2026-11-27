@@ -15,7 +15,7 @@ micronaut-application = "4.2.1"
 # Core
 # 2.19+ required: jackson-databind 2.19 added creator-property renaming for @JsonUnwrapped
 # targets (records) — the framework's unwrapped-envelope crypto round-trip depends on it.
-jackson = "2.19.2"
+jackson = "2.23.0"
 hikaricp = "6.2.1"
 dropwizard-metrics = "4.2.40"
 dropwizard-metrics5 = "5.0.8"
