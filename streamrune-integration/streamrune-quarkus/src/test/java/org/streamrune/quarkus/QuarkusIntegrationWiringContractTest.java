@@ -130,6 +130,7 @@ class QuarkusIntegrationWiringContractTest extends IntegrationWiringContract {
           StreamRuneCryptoProducers.AwsKmsCryptoProducer.class,
           StreamRuneLifecycle.class,
           StreamRuneConfigValidator.class,
+          ProjectionKeysValidator.class,
           StreamRuneAuthorizationValidator.class,
           StreamRuneRequestIdentityValidator.class,
           ProjectionIndexDeclarer.class,

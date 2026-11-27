@@ -87,7 +87,7 @@ public class ProjectionProducer {
    */
   static final String FRAMEWORK_SCHEDULED_RUNNER = "streamRuneScheduledProjectionRunner";
 
-  private static boolean autoDiscoveryEnabled(Config config) {
+  static boolean autoDiscoveryEnabled(Config config) {
     return org.streamrune.integration.RelaxedBoolean.parse(
         config
             .getOptionalValue("streamrune.projections.auto-discovery.enabled", String.class)
@@ -486,7 +486,7 @@ public class ProjectionProducer {
    * Walks the class hierarchy to find {@link ProjectionConfig}, supporting CDI-proxied beans where
    * the annotation may be on a superclass.
    */
-  private static ProjectionConfig findProjectionConfig(Class<?> clazz) {
+  static ProjectionConfig findProjectionConfig(Class<?> clazz) {
     while (clazz != null && clazz != Object.class) {
       ProjectionConfig pc = clazz.getAnnotation(ProjectionConfig.class);
       if (pc != null) {

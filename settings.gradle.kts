@@ -22,6 +22,7 @@ include(
     "streamrune-integration:streamrune-integration-api",
     "streamrune-integration:streamrune-spring",
     "streamrune-integration:streamrune-quarkus",
+    "streamrune-integration:streamrune-quarkus-it",
     "streamrune-integration:streamrune-micronaut",
     "streamrune-integration:streamrune-spring-boot-starter",
     "streamrune-integration:streamrune-e2e",

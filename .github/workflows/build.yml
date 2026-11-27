@@ -8,10 +8,10 @@ name: Build
 # are tested. The `build` job below runs everything against the newest supported server (18, the
 # default of the shared PostgresTestImage); the `postgres-17` job re-runs exactly the
 # PostgreSQL-backed suites (`postgresTest`: streamrune-postgres, streamrune-postgres-crypto,
-# streamrune-spring, streamrune-quarkus, streamrune-e2e) against postgres:17-alpine. It is a
-# separate job, not a matrix leg of `build`, so `build` keeps the exact job name
-# verifyReleaseChecks looks up and the 17 leg skips the compile/coverage/Javadoc work that does not
-# depend on the server version.
+# streamrune-spring, streamrune-quarkus, streamrune-quarkus-it, streamrune-micronaut,
+# streamrune-e2e) against postgres:17-alpine. It is a separate job, not a matrix leg of `build`,
+# so `build` keeps the exact job name verifyReleaseChecks looks up and the 17 leg skips the
+# compile/coverage/Javadoc work that does not depend on the server version.
 #
 # Release gate: verifyReleaseChecks in the root build.gradle.kts (dependsOn'd by the Central upload
 # task) asks the GitHub Actions API for this workflow's runs (.github/workflows/build.yml) on the

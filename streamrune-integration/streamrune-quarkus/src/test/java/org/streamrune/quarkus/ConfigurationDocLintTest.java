@@ -56,8 +56,13 @@ class ConfigurationDocLintTest {
           new ReadElsewhere("streamrune.projections.<name>.error-strategy", null, "lookup"),
           new ReadElsewhere("streamrune.saga.subscriptions.<name>.parallelism", null, "lookup"));
 
-  /** The map {@link StreamRuneQuarkusProperties.SagaConfig#subscriptions()} binds. */
-  private static final String SUBSCRIPTIONS_MAP = "streamrune.saga.subscriptions";
+  /**
+   * The maps that declare the keys read by name, so that the configuration accepts them: {@link
+   * StreamRuneQuarkusProperties.SagaConfig#subscriptions()} and {@link
+   * StreamRuneQuarkusProperties#projections()}.
+   */
+  private static final List<String> LOOKUP_MAPS =
+      List.of("streamrune.saga.subscriptions", "streamrune.projections");
 
   /** {@code @WithName} where present, else SmallRye's kebab case of the method name. */
   private static final KeyNaming SMALLRYE =
@@ -111,12 +116,15 @@ class ConfigurationDocLintTest {
     bound.putAll(
         ConfigurationOracle.ofConfigMapping(
             crypto, StreamRuneQuarkusCryptoProperties.class, "streamrune.crypto", SMALLRYE));
-    // The mapping declares every key under streamrune.saga.subscriptions as one map, so that the
-    // configuration accepts them; the one key it accepts is documented as the lookup it is read by,
-    // streamrune.saga.subscriptions.<name>.parallelism, not as a key of its own.
-    if (bound.remove(SUBSCRIPTIONS_MAP) == null) {
-      throw new IllegalStateException(
-          SUBSCRIPTIONS_MAP + " is no longer bound by the mapping; drop its replacement here");
+    // The mapping declares every key under streamrune.saga.subscriptions and under
+    // streamrune.projections as one map each, so that the configuration accepts them; the keys
+    // each accepts are documented as the lookups they are read by (LOOKUPS), not as a key of its
+    // own.
+    for (String map : LOOKUP_MAPS) {
+      if (bound.remove(map) == null) {
+        throw new IllegalStateException(
+            map + " is no longer bound by the mapping; drop its replacement here");
+      }
     }
     return ConfigurationOracle.merge(bound, LOOKUPS);
   }

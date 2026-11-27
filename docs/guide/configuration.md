@@ -46,10 +46,18 @@ names the property and the value:
   for the setting and the bean condition alike, which takes `true`/`false`, `on`/`off`, `yes`/`no`,
   `y`/`n`, `t`/`f` and `1`/`0` in any case.
 - **A name that reads like a property but is none.** Quarkus refuses every `streamrune.` name its
-  configuration mapping does not declare. Spring and Micronaut ignore a name they do not bind, with
-  two exceptions they refuse, naming the property to set instead: a duration property written with
-  a `-ms` suffix, and the outbox retry multiplier written as `retry-multiplier` instead of
-  `retry-backoff-multiplier`.
+  configuration mapping does not declare. Under `streamrune.projections.` the names hold the names
+  of the application's projections, so the mapping declares every name there, and the start is
+  refused for one that is not `auto-discovery.enabled`, or `<name>.enabled` or
+  `<name>.error-strategy` for the name of a `@ProjectionConfig` projection; as SmallRye does, it
+  checks no name set in the process environment or a `.env` file, and none when
+  `quarkus.config.mapping.validate-unknown=false`. The `<name>` is checked against the projection
+  beans of the running application, so write a key for a projection that exists in one profile
+  only under that profile (`%prod.streamrune.projections.<name>.enabled`); while
+  `streamrune.projections.auto-discovery.enabled=false` no `<name>` is checked, because none is
+  read. Spring and Micronaut ignore a name they do not bind, with two exceptions they refuse,
+  naming the property to set instead: a duration property written with a `-ms` suffix, and the
+  outbox retry multiplier written as `retry-multiplier` instead of `retry-backoff-multiplier`.
 
 ## Backend
 

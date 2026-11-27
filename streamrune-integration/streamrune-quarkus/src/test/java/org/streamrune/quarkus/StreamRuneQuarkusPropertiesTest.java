@@ -463,4 +463,33 @@ class StreamRuneQuarkusPropertiesTest {
       assertTrue(failure.getMessage().contains(key), failure.getMessage());
     }
   }
+
+  /**
+   * The projection keys the discovery reads by name bind from a properties source — SmallRye
+   * refuses a key under {@code streamrune} that no member declares — while a name beside them stays
+   * refused.
+   */
+  @Test
+  void theProjectionKeysBindAndANameBesideThemIsStillRefused() {
+    var p =
+        TestProperties.of(
+            Map.of(
+                "streamrune.projections.auto-discovery.enabled", "true",
+                "streamrune.projections.orders.enabled", "false",
+                "streamrune.projections.order-totals.error-strategy", "SKIP"));
+    assertEquals(
+        Map.of(
+            "auto-discovery.enabled", java.util.Optional.of("true"),
+            "orders.enabled", java.util.Optional.of("false"),
+            "order-totals.error-strategy", java.util.Optional.of("SKIP")),
+        p.projections());
+
+    RuntimeException failure =
+        assertThrows(
+            RuntimeException.class,
+            () -> TestProperties.of(Map.of("streamrune.projection.orders.enabled", "false")));
+    assertTrue(
+        failure.getMessage().contains("streamrune.projection.orders.enabled"),
+        failure.getMessage());
+  }
 }

@@ -18,6 +18,7 @@ plugins {
     alias(libs.plugins.jmh) apply false
     alias(libs.plugins.pitest) apply false
     alias(libs.plugins.graalvm) apply false
+    alias(libs.plugins.quarkus) apply false
     alias(libs.plugins.versions)
     alias(libs.plugins.version.catalog.update)
     // Declared directly (not via the version catalog) because this plugin is part of the
@@ -626,6 +627,7 @@ val postgresBackedModules =
         ":streamrune-crypto:streamrune-postgres-crypto",
         ":streamrune-integration:streamrune-spring",
         ":streamrune-integration:streamrune-quarkus",
+        ":streamrune-integration:streamrune-quarkus-it",
         ":streamrune-integration:streamrune-micronaut",
         ":streamrune-integration:streamrune-e2e")
 
@@ -1112,6 +1114,8 @@ subprojects {
     // sources (end-to-end crash-recovery tests). Publishing it would upload an
     // empty org.streamrune:streamrune-e2e jar to Maven Central — immutable
     // pollution — so it is excluded here alongside the umbrella parents.
+    // :streamrune-integration:streamrune-quarkus-it is test-only too: a Quarkus application the
+    // Quarkus Gradle plugin builds and starts on streamrune-quarkus.
     // :streamrune-integration:streamrune-integration-tck holds what the three integrations' TESTS
     // share (the configuration oracle); it is test infrastructure, not an API, and is excluded too.
     // (The Spring Boot starter, also sources-free, IS published on purpose: a
@@ -1122,6 +1126,7 @@ subprojects {
             ":streamrune-crypto",
             ":streamrune-outbox",
             ":streamrune-integration:streamrune-e2e",
+            ":streamrune-integration:streamrune-quarkus-it",
             ":streamrune-integration:streamrune-integration-tck")
     if (project.path !in umbrellaPaths) {
         // ── Every published jar carries a stable JPMS module name ────────────────
