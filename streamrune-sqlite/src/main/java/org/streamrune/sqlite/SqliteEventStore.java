@@ -1,22 +1,15 @@
 package org.streamrune.sqlite;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -28,22 +21,16 @@ import org.sqlite.SQLiteException;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.CommandInbox;
-import org.streamrune.core.DomainEvent;
-import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
-import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
-import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.core.crypto.CryptoMappingException;
-import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.saga.SagaForwardFencedException;
@@ -55,9 +42,6 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
-import org.streamrune.core.types.AggregateId;
-import org.streamrune.core.types.AggregateType;
-import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
@@ -67,6 +51,9 @@ import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.EventReadPath;
+import org.streamrune.runtime.jdbc.EventReadPath.RawEventRow;
+import org.streamrune.runtime.jdbc.EventReadPath.StoredSnapshot;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 import org.streamrune.runtime.jdbc.StreamKeys;
 
@@ -218,21 +205,11 @@ public final class SqliteEventStore implements EventStore {
           + " created_at = excluded.created_at"
           + " WHERE snapshot_store.purge_generation = excluded.purge_generation";
 
-  private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
-
-  /**
-   * What {@link #resolveSnapshot} returns for a stored snapshot the load discards: the whole stream
-   * replays from its start.
-   */
-  private static final Object DISCARDED_SNAPSHOT = new Object();
-
   private final DataSource dataSource;
   private final Path file;
   private final ObjectMapper objectMapper;
   private final EventTypeRegistry typeRegistry;
   private final UpcasterChain upcasterChain;
-  private final SnapshotMigrationChain snapshotMigrations;
-  private final StreamRuneMetrics metrics;
   private final StreamRuneTracing tracing;
   private final boolean traced;
   private final Clock clock;
@@ -244,8 +221,12 @@ public final class SqliteEventStore implements EventStore {
   // The legacy-snapshot probe of an IGNORE_SNAPSHOT load runs at most once per store instance.
   private final AtomicBoolean legacySnapshotProbed = new AtomicBoolean(false);
 
-  // Streams whose non-contiguity WARN fired once for this instance.
-  private final Set<String> gapWarnedStreams = ConcurrentHashMap.newKeySet();
+  /**
+   * The read path of this instance: snapshot decision and migration, event decoding, the load's
+   * history and the contiguity guards, with their spans, logs (under this store's category) and
+   * metrics. Owns this instance's once-per-stream version-gap warning state.
+   */
+  private final EventReadPath readPath;
 
   /**
    * Package-private: {@link SqliteEventStoreFactory} is the public entry point.
@@ -284,12 +265,24 @@ public final class SqliteEventStore implements EventStore {
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
     this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
     this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
-    this.snapshotMigrations =
+    SnapshotMigrationChain migrations =
         Objects.requireNonNull(snapshotMigrations, "snapshotMigrations is required");
-    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
+    Objects.requireNonNull(metrics, "metrics is required");
     this.tracing =
-        GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), this.metrics);
+        GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), metrics);
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
+    // The global offset is parsed inside the decoding's failure handling, as this store always did.
+    this.readPath =
+        new EventReadPath(
+            objectMapper,
+            typeRegistry,
+            this.upcasterChain,
+            migrations,
+            metrics,
+            this.tracing,
+            this.traced,
+            log,
+            null);
     this.clock = Objects.requireNonNull(clock, "clock is required");
     this.outboxStore = outboxStore;
     this.outboxEventMapper = outboxEventMapper;
@@ -319,55 +312,8 @@ public final class SqliteEventStore implements EventStore {
 
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    if (expectedSnapshotVersion < EventStore.IGNORE_SNAPSHOT) {
-      throw new IllegalArgumentException(
-          "expectedSnapshotVersion must be >= "
-              + EventStore.IGNORE_SNAPSHOT
-              + " (IGNORE_SNAPSHOT skips reading any snapshot, 0 skips the version check), got "
-              + expectedSnapshotVersion);
-    }
-    if (!traced) {
-      return loadHistory(streamId, expectedSnapshotVersion);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_LOAD,
-            SpanKind.INTERNAL,
-            streamAttributes(streamId));
-    try {
-      AggregateHistory history = loadHistory(streamId, expectedSnapshotVersion);
-      scope.setAttribute(TraceAttributes.EVENT_COUNT, (long) history.events().size());
-      scope.setAttribute(TraceAttributes.SNAPSHOT_USED, history.snapshotState() != null);
-      scope.recordSuccess();
-      return history;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  private static SpanAttributes streamAttributes(StreamId streamId) {
-    return SpanAttributes.builder()
-        .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-        .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
-        .build();
-  }
-
-  /** What the load read of a stream's snapshot row, before any deserialization. */
-  private record StoredSnapshot(
-      boolean stored,
-      String stateJson,
-      Class<?> stateClass,
-      Version version,
-      int migrateFromVersion,
-      long purgeGeneration) {
-
-    static final StoredSnapshot NONE =
-        new StoredSnapshot(false, null, null, Version.initial(), -1, 0);
+    return readPath.load(
+        streamId, expectedSnapshotVersion, () -> loadHistory(streamId, expectedSnapshotVersion));
   }
 
   private AggregateHistory loadHistory(StreamId streamId, int expectedSnapshotVersion) {
@@ -385,66 +331,25 @@ public final class SqliteEventStore implements EventStore {
       throw new EventStoreException("Failed to load stream: " + streamText(streamId), e);
     }
 
-    Object snapshotState =
-        snapshot.stored() && traced
-            ? resolveSnapshotTraced(streamId, snapshot, expectedSnapshotVersion)
-            : resolveSnapshot(streamId, snapshot, expectedSnapshotVersion);
-    if (snapshotState == DISCARDED_SNAPSHOT) {
-      // The event read was narrowed to the versions after the discarded snapshot: read the whole
-      // stream again.
-      List<EventEnvelope> replayEvents = deserialize(readRawEvents(streamId, Version.initial()));
-      Version replayLast =
-          replayEvents.isEmpty() ? Version.initial() : replayEvents.getLast().version();
-      return new AggregateHistory(
-          null, replayEvents, replayLast, Version.initial(), snapshot.purgeGeneration());
-    }
-    List<EventEnvelope> events = deserialize(rawRows);
-    warnIfNonContiguous(streamId, snapshot.version(), events);
-    Version lastVersion = events.isEmpty() ? snapshot.version() : events.getLast().version();
-    return new AggregateHistory(
-        (AggregateState) snapshotState,
-        events,
-        lastVersion,
-        snapshot.version(),
-        snapshot.purgeGeneration());
+    return readPath.assembleHistory(
+        streamId,
+        snapshot,
+        rawRows,
+        expectedSnapshotVersion,
+        after -> readRawEvents(streamId, after));
   }
 
   /**
    * Reads the stream's snapshot row and decides, without deserializing it, whether the load can
-   * start from it: compatible and of a resolvable type, or migratable by a complete chain from a
-   * resolvable stored type. Otherwise the load replays every event. A purged row has no state and
-   * is no snapshot; its purge generation is read all the same.
+   * start from it (see {@link EventReadPath#decideSnapshot}). A stream without a row replays every
+   * event.
    */
   private StoredSnapshot readSnapshot(Connection conn, StreamId streamId, int expectedVersion)
       throws SQLException {
     try (var ps = conn.prepareStatement(LOAD_SNAPSHOT)) {
       StreamKeys.bind(ps, 1, streamId);
       try (var rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return StoredSnapshot.NONE;
-        }
-        long purgeGeneration = rs.getLong("purge_generation");
-        String stateType = rs.getString("state_type");
-        if (stateType == null) {
-          return new StoredSnapshot(false, null, null, Version.initial(), -1, purgeGeneration);
-        }
-        int storedVersion = rs.getInt("snapshot_version");
-        // A retired or renamed state type is undeserializable: discard, never crash the load.
-        Class<?> stateClass = resolveStateTypeOrNull(stateType);
-        boolean compatible = expectedVersion == 0 || storedVersion == expectedVersion;
-        boolean usable =
-            stateClass != null
-                && (compatible || snapshotMigrations.canReach(storedVersion, expectedVersion));
-        if (!usable) {
-          return new StoredSnapshot(true, null, null, Version.initial(), -1, purgeGeneration);
-        }
-        return new StoredSnapshot(
-            true,
-            rs.getString("state_payload"),
-            stateClass,
-            new Version(rs.getLong("version")),
-            compatible ? -1 : storedVersion,
-            purgeGeneration);
+        return rs.next() ? readPath.decideSnapshot(rs, expectedVersion) : StoredSnapshot.NONE;
       }
     }
   }
@@ -457,7 +362,7 @@ public final class SqliteEventStore implements EventStore {
       ps.setLong(3, after.value());
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
-          rows.add(readRawRow(rs));
+          rows.add(EventReadPath.readRawRow(rs));
         }
       }
     }
@@ -473,197 +378,10 @@ public final class SqliteEventStore implements EventStore {
     }
   }
 
-  private Object resolveSnapshotTraced(
-      StreamId streamId, StoredSnapshot snapshot, int expectedSnapshotVersion) {
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .build());
-    try {
-      Object state = resolveSnapshot(streamId, snapshot, expectedSnapshotVersion);
-      boolean hit = snapshot.stateJson() != null && state != DISCARDED_SNAPSHOT;
-      scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, hit ? "HIT" : "DISCARDED");
-      scope.setAttribute(TraceAttributes.STREAM_VERSION, hit ? snapshot.version().value() : 0L);
-      scope.recordSuccess();
-      return state;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /**
-   * The state of the snapshot the load read, deserialized and, when pending, migrated: {@code null}
-   * when there is no usable snapshot, {@link #DISCARDED_SNAPSHOT} when the stored one cannot be
-   * used. A crypto failure is never discarded: a transient one is a plain {@link
-   * EventStoreException}, a deterministic one an {@link EventDeserializationException}.
-   */
-  private Object resolveSnapshot(
-      StreamId streamId, StoredSnapshot snapshot, int expectedSnapshotVersion) {
-    if (snapshot.stateJson() == null) {
-      return null;
-    }
-    AggregateState deserialized;
-    try {
-      deserialized =
-          (AggregateState) objectMapper.readValue(snapshot.stateJson(), snapshot.stateClass());
-    } catch (IOException | RuntimeException e) {
-      // Wider than IOException: a root-level property failure (a corrupt Base64 ciphertext) is a
-      // raw RuntimeException and must reach the discard below too.
-      if (hasCryptoCause(e)) {
-        if (hasTransientCryptoCause(e)) {
-          throw new EventStoreException(
-              "Failed to deserialize snapshot state for stream: " + streamText(streamId), e);
-        }
-        throw new EventDeserializationException(
-            "Failed to deserialize snapshot state for stream: " + streamText(streamId), e);
-      }
-      log.error(
-          "Snapshot for stream {} is undeserializable ({}); discarding the derived snapshot cache"
-              + " and replaying all events from the beginning. This usually means an"
-              + " aggregate-state field was renamed or removed without bumping the snapshot"
-              + " version — bump SnapshotPolicy's snapshotVersion so fresh snapshots are written.",
-          LogSanitizer.sanitizeForLog(streamId.value()),
-          e.toString(),
-          e);
-      recordSnapshotDiscarded("deserialize_failure", streamId);
-      return DISCARDED_SNAPSHOT;
-    }
-    if (snapshot.migrateFromVersion() < 0) {
-      return deserialized;
-    }
-    int from = snapshot.migrateFromVersion();
-    Optional<AggregateState> migrated;
-    try {
-      migrated = snapshotMigrations.migrate(deserialized, from, expectedSnapshotVersion);
-    } catch (RuntimeException e) {
-      if (hasCryptoCause(e)) {
-        if (hasTransientCryptoCause(e)) {
-          throw new EventStoreException(
-              "Snapshot migration failed for stream: " + streamText(streamId), e);
-        }
-        throw new EventDeserializationException(
-            "Snapshot migration failed for stream: " + streamText(streamId), e);
-      }
-      log.error(
-          "Snapshot migration for stream {} failed ({}); discarding the derived snapshot"
-              + " cache and replaying all events from the beginning. This means a registered"
-              + " SnapshotMigration step has a bug — inspect the migration chain for the"
-              + " version this stream's snapshot was stored at.",
-          LogSanitizer.sanitizeForLog(streamId.value()),
-          e.toString(),
-          e);
-      recordSnapshotDiscarded("migration_failure", streamId);
-      return DISCARDED_SNAPSHOT;
-    }
-    // canReach held when the row was read; a chain that then fails to apply is a bug of the chain
-    // itself, a hard failure rather than a silent discard.
-    return migrated.orElseThrow(
-        () ->
-            new EventStoreException(
-                "Snapshot migration chain reported reachable from version "
-                    + from
-                    + " to "
-                    + expectedSnapshotVersion
-                    + " but failed to apply for stream: "
-                    + streamText(streamId)));
-  }
-
-  /** Records a discarded snapshot; a failing metrics backend must not wedge the load. */
-  private void recordSnapshotDiscarded(String reason, StreamId streamId) {
-    try {
-      metrics.recordSnapshotDiscarded(reason);
-    } catch (RuntimeException e) {
-      log.warn(
-          "Metrics recordSnapshotDiscarded({}) failed for stream {}",
-          reason,
-          LogSanitizer.sanitizeForLog(streamId.value()),
-          e);
-    }
-  }
-
-  private List<EventEnvelope> deserialize(List<RawEventRow> rows) {
-    if (!traced) {
-      return toEnvelopes(rows);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) rows.size())
-                .put(TraceAttributes.UPCAST_COUNT, upcastCount(rows))
-                .build());
-    try {
-      List<EventEnvelope> events = toEnvelopes(rows);
-      scope.recordSuccess();
-      return events;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  private long upcastCount(List<RawEventRow> rows) {
-    if (upcasterChain.isEmpty()) {
-      return 0;
-    }
-    long count = 0;
-    for (RawEventRow row : rows) {
-      if (row.schemaVersion() < upcasterChain.currentVersion(new EventType(row.eventType()))) {
-        count++;
-      }
-    }
-    return count;
-  }
-
-  private List<EventEnvelope> toEnvelopes(List<RawEventRow> rows) {
-    return rows.stream().map(this::toEnvelope).toList();
-  }
-
-  /** A global or stream read's events, under the read span when one is current and traced. */
-  private List<EventEnvelope> readEvents(List<RawEventRow> rows, String readKind, Instant started) {
-    if (!traced || rows.isEmpty()) {
-      return toEnvelopes(rows);
-    }
-    TraceScope scope =
-        tracing.startChild(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_READ,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) rows.size())
-                .put(TraceAttributes.READ_KIND, readKind)
-                .build(),
-            started);
-    try {
-      List<EventEnvelope> events = toEnvelopes(rows);
-      scope.recordSuccess();
-      return events;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
   /** The {@link EventStore#IGNORE_SNAPSHOT} load: every event, never a snapshot. */
   private AggregateHistory loadIgnoringSnapshot(StreamId streamId) {
     warnIfLegacySnapshotExists();
-    List<EventEnvelope> events = deserialize(readRawEvents(streamId, Version.initial()));
-    warnIfNonContiguous(streamId, Version.initial(), events);
-    Version version = events.isEmpty() ? Version.initial() : events.getLast().version();
-    return new AggregateHistory(null, events, version, Version.initial());
+    return readPath.historyIgnoringSnapshot(streamId, readRawEvents(streamId, Version.initial()));
   }
 
   /**
@@ -695,56 +413,6 @@ public final class SqliteEventStore implements EventStore {
             + " snapshot policy to never(), consider purging the now-unused rows from"
             + " snapshot_store. This warning is logged once.",
         LogSanitizer.sanitizeForLog(stateType));
-  }
-
-  /**
-   * Once per stream and store instance, a WARN when a loaded stream's versions are not contiguous:
-   * rows written, deleted or restored outside the store. Never renumbers.
-   */
-  private void warnIfNonContiguous(
-      StreamId streamId, Version baseline, List<EventEnvelope> events) {
-    long expected = baseline.value();
-    for (EventEnvelope event : events) {
-      long actual = event.version().value();
-      if (actual != expected + 1) {
-        if (gapWarnedStreams.add(streamId.value())) {
-          log.warn(
-              "Stream '{}' has non-contiguous versions (expected {} but found {}, right after"
-                  + " version {}) — rows were written, deleted or restored outside this store."
-                  + " This store never renumbers events automatically; reconstructing the intended"
-                  + " history is a data-recovery decision. Logged once per stream per process.",
-              LogSanitizer.sanitizeForLog(streamId.value()),
-              expected + 1,
-              actual,
-              expected);
-        }
-        return;
-      }
-      expected = actual;
-    }
-  }
-
-  /** True when {@code t}'s cause chain (bounded) holds a {@link CryptoOperationException}. */
-  static boolean hasCryptoCause(Throwable t) {
-    return Causes.find(t, CryptoOperationException.class) != null;
-  }
-
-  /**
-   * True when {@code t}'s cause chain holds a bare {@link CryptoOperationException}, not the
-   * deterministic {@link CryptoMappingException}: engine-raised key-store evidence, retried rather
-   * than quarantined (see {@code PostgresEventStore.hasTransientCryptoCause}).
-   */
-  static boolean hasTransientCryptoCause(Throwable t) {
-    return Causes.anyMatch(
-        t, c -> c instanceof CryptoOperationException && !(c instanceof CryptoMappingException));
-  }
-
-  private Class<?> resolveStateTypeOrNull(String stateType) {
-    try {
-      return typeRegistry.resolveStateType(stateType);
-    } catch (UnknownEventTypeException _) {
-      return null;
-    }
   }
 
   // ── Append ────────────────────────────────────────────────────────────────────────────────────
@@ -1612,35 +1280,27 @@ public final class SqliteEventStore implements EventStore {
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
     Objects.requireNonNull(afterOffset, "afterOffset is required");
-    requireMaxCount(maxCount);
+    // SQLite reads LIMIT -1 as no limit at all: a negative maxCount is refused before the query.
+    EventReadPath.requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(READ_GLOBAL)) {
       ps.setLong(1, afterOffset.value());
       ps.setInt(2, maxCount);
-      long expectedNext = -1;
+      var contiguity = readPath.globalContiguity(afterOffset);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
-          long offset = rs.getLong("global_offset");
-          if (expectedNext == -1) {
-            expectedNext = offset;
-          } else if (offset != expectedNext) {
-            log.warn(
-                "non-contiguous global_offset observed after {}: expected {}, got {}",
-                afterOffset,
-                expectedNext,
-                offset);
+          if (!contiguity.admits(rs.getLong("global_offset"))) {
             break;
           }
-          rawRows.add(readRawRow(rs));
-          expectedNext++;
+          rawRows.add(EventReadPath.readRawRow(rs));
         }
       }
     } catch (SQLException e) {
       throw new EventStoreException("Failed to read global stream from offset: " + afterOffset, e);
     }
-    return readEvents(rawRows, "GLOBAL", started);
+    return readPath.readEvents(rawRows, "GLOBAL", started);
   }
 
   /**
@@ -1670,7 +1330,8 @@ public final class SqliteEventStore implements EventStore {
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(afterVersion, "afterVersion is required");
-    requireMaxCount(maxCount);
+    // SQLite reads LIMIT -1 as no limit at all: a negative maxCount is refused before the query.
+    EventReadPath.requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows = new ArrayList<>();
     try (var conn = dataSource.getConnection();
@@ -1680,123 +1341,12 @@ public final class SqliteEventStore implements EventStore {
       ps.setInt(4, maxCount);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
-          rawRows.add(readRawRow(rs));
+          rawRows.add(EventReadPath.readRawRow(rs));
         }
       }
     } catch (SQLException e) {
       throw new EventStoreException("Failed to read stream: " + streamText(streamId), e);
     }
-    return readEvents(rawRows, "STREAM", started);
-  }
-
-  /**
-   * A negative {@code maxCount} is refused: SQLite reads {@code LIMIT -1} as no limit at all, which
-   * would return the whole stream for a request of at most a negative number of events.
-   */
-  private static void requireMaxCount(int maxCount) {
-    if (maxCount < 0) {
-      throw new IllegalArgumentException("maxCount must not be negative, got " + maxCount);
-    }
-  }
-
-  /** One event row's raw columns, read while the connection is open; decoded after it closed. */
-  private record RawEventRow(
-      long globalOffset,
-      String aggregateType,
-      String aggregateId,
-      long version,
-      String eventType,
-      String payloadJson,
-      String metadataJson,
-      int schemaVersion) {
-
-    String streamText() {
-      return LogSanitizer.sanitizeForLog(aggregateType + StreamId.SEPARATOR + aggregateId);
-    }
-  }
-
-  private static RawEventRow readRawRow(ResultSet rs) throws SQLException {
-    return new RawEventRow(
-        rs.getLong("global_offset"),
-        rs.getString("aggregate_type"),
-        rs.getString("aggregate_id"),
-        rs.getLong("version"),
-        rs.getString("event_type"),
-        rs.getString("payload"),
-        rs.getString("metadata"),
-        rs.getInt("schema_version"));
-  }
-
-  /**
-   * The message of the refusal to read an event stored at a {@code schema_version} above this
-   * reader's: the text {@code PostgresEventStore} uses.
-   */
-  static String schemaAheadMessage(
-      String eventType, String stream, int storedVersion, int readerVersion) {
-    return "Event type "
-        + eventType
-        + " for stream "
-        + stream
-        + " is stored at schema_version "
-        + storedVersion
-        + " but this event store's upcaster chain only reaches version "
-        + readerVersion
-        + ". A newer writer stamped it: either a replica of a newer release of this application"
-        + " (a rolling deployment that bumps this event's schema is in progress, and this replica"
-        + " reads it once it is upgraded), or an event store wired with upcasters this one lacks."
-        + " Reading it would silently mis-bind the payload, so the read is refused; register the"
-        + " same upcasters on every event store that reads this database.";
-  }
-
-  /**
-   * Decodes one raw row, upcasting it when it is stored below the reader's version, with the
-   * classification of {@code PostgresEventStore}: {@link EventSchemaAheadException} for a row
-   * stored above the reader's version, a plain {@link EventStoreException} for a transient crypto
-   * failure, {@link EventDeserializationException} for every other failure to bind the stored row.
-   */
-  private EventEnvelope toEnvelope(RawEventRow row) {
-    EventType eventType = new EventType(row.eventType());
-    int schemaVersion = row.schemaVersion();
-    Class<?> eventClass = typeRegistry.resolveEventType(eventType);
-    try {
-      int currentVersion = upcasterChain.currentVersion(eventType);
-      if (schemaVersion > currentVersion) {
-        throw new EventSchemaAheadException(
-            schemaAheadMessage(
-                LogSanitizer.sanitizeForLog(eventType.value()),
-                row.streamText(),
-                schemaVersion,
-                currentVersion),
-            eventType,
-            schemaVersion,
-            currentVersion);
-      }
-      Object event;
-      if (!upcasterChain.isEmpty() && schemaVersion < currentVersion) {
-        Map<String, Object> rawData = objectMapper.readValue(row.payloadJson(), MAP_TYPE);
-        Map<String, Object> upcasted = upcasterChain.upcast(eventType, rawData, schemaVersion);
-        event = objectMapper.convertValue(upcasted, eventClass);
-      } else {
-        event = objectMapper.readValue(row.payloadJson(), eventClass);
-      }
-      EventMetadata metadata = objectMapper.readValue(row.metadataJson(), EventMetadata.class);
-      return new EventEnvelope(
-          GlobalOffset.of(row.globalOffset()),
-          StreamId.of(new AggregateType(row.aggregateType()), new AggregateId(row.aggregateId())),
-          new Version(row.version()),
-          eventType,
-          (DomainEvent) event,
-          metadata);
-    } catch (IOException | RuntimeException e) {
-      if (e instanceof EventStoreException ese) {
-        throw ese;
-      }
-      if (hasTransientCryptoCause(e)) {
-        throw new EventStoreException(
-            "Failed to deserialize event data for stream: " + row.streamText(), e);
-      }
-      throw new EventDeserializationException(
-          "Failed to deserialize event data for stream: " + row.streamText(), e);
-    }
+    return readPath.readEvents(rawRows, "STREAM", started);
   }
 }
