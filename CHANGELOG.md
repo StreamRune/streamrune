@@ -386,6 +386,17 @@ Unreleased fixes to the Quarkus integration (Fixed):
   `streamrune.security.trust-user-id-header` is the running application's setting, not the
   build's. Its injecting constructor takes `Instance`s of the three.
 
+Unreleased changes to the PostgreSQL event store (Changed):
+
+- **A null snapshot version is refused up front.** On PostgreSQL, `saveSnapshot` with a null
+  version now fails with `NullPointerException("version is required")` before any serialization or
+  connection, also when the state class is unregistered (it was an `EventStoreException` then), as
+  on SQLite.
+- **A negative `global_offset` reads as a corrupt row.** On PostgreSQL, an otherwise readable
+  `event_stream` row with a negative `global_offset` (only reachable by hand-written SQL) now reads
+  as `EventDeserializationException`, after event-type resolution, as on SQLite (it was a raw
+  `IllegalArgumentException`).
+
 ### Modules
 
 Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three

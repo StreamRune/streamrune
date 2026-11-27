@@ -96,7 +96,6 @@ public final class EventReadPath {
   private final StreamRuneTracing tracing;
   private final boolean traced;
   private final Logger log;
-  private final Function<RawEventRow, GlobalOffset> offsetBeforeTypeResolution;
 
   // Streams whose non-contiguity WARN fired once for this instance.
   private final Set<String> gapWarnedStreams = ConcurrentHashMap.newKeySet();
@@ -211,12 +210,6 @@ public final class EventReadPath {
    * @param guardedTracing the store's tracing, already guarded; never guarded here
    * @param traced whether the store's {@link TracingArea#EVENT_STORE} area is traced
    * @param log the store's logger, so every log line keeps the store's category
-   * @param offsetBeforeTypeResolution {@code null} to parse a row's global offset inside the
-   *     decoding's failure handling, when the envelope is built, so a negative offset is an {@link
-   *     EventDeserializationException}; otherwise the function that parses it first, before the
-   *     event type is resolved and outside that handling, so a negative offset is the raw {@link
-   *     IllegalArgumentException}. It keeps each backend's placement until the backends align it,
-   *     and is removed then.
    */
   public EventReadPath(
       ObjectMapper objectMapper,
@@ -226,8 +219,7 @@ public final class EventReadPath {
       StreamRuneMetrics metrics,
       StreamRuneTracing guardedTracing,
       boolean traced,
-      Logger log,
-      Function<RawEventRow, GlobalOffset> offsetBeforeTypeResolution) {
+      Logger log) {
     this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
     this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
     this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
@@ -237,7 +229,6 @@ public final class EventReadPath {
     this.tracing = Objects.requireNonNull(guardedTracing, "guardedTracing is required");
     this.traced = traced;
     this.log = Objects.requireNonNull(log, "log is required");
-    this.offsetBeforeTypeResolution = offsetBeforeTypeResolution;
   }
 
   // ── Rows ──────────────────────────────────────────────────────────────────────────────────────
@@ -717,8 +708,6 @@ public final class EventReadPath {
    * {@link #readEvents}, {@link #assembleHistory} and {@link #historyIgnoringSnapshot}.
    */
   EventEnvelope toEnvelope(RawEventRow row) {
-    GlobalOffset offsetParsedFirst =
-        offsetBeforeTypeResolution == null ? null : offsetBeforeTypeResolution.apply(row);
     EventType eventType = new EventType(row.eventType());
     int schemaVersion = row.schemaVersion();
     Class<?> eventClass = typeRegistry.resolveEventType(eventType);
@@ -745,9 +734,7 @@ public final class EventReadPath {
       }
       EventMetadata metadata = objectMapper.readValue(row.metadataJson(), EventMetadata.class);
       return new EventEnvelope(
-          offsetBeforeTypeResolution != null
-              ? offsetParsedFirst
-              : GlobalOffset.of(row.globalOffset()),
+          GlobalOffset.of(row.globalOffset()),
           StreamId.of(new AggregateType(row.aggregateType()), new AggregateId(row.aggregateId())),
           new Version(row.version()),
           eventType,
