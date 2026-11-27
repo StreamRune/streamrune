@@ -2,9 +2,12 @@ package org.streamrune.quarkus;
 
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.BeforeDestroyed;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.Reception;
 import jakarta.enterprise.inject.Any;
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.spi.Bean;
@@ -13,6 +16,7 @@ import jakarta.inject.Named;
 import jakarta.interceptor.Interceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.streamrune.core.subscription.SubscriptionLeadership;
 import org.streamrune.runtime.DeadLetterRetentionSweeper;
 import org.streamrune.runtime.DeadLetterRetryRunner;
 import org.streamrune.runtime.InboxRetentionSweeper;
@@ -27,9 +31,13 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * Explicit lifecycle for StreamRune background components in Quarkus.
  *
  * <p>On {@link StartupEvent}, materializes and starts every runner whose bean exists: {@link
- * MultiProjectionRunner}, {@link ScheduledProjectionRunner}, {@link OutboxPoller}, and {@link
- * DeadLetterRetryRunner}. On {@link ShutdownEvent}, stops them in reverse order and closes the
- * {@link VirtualThreadCommandBus}.
+ * MultiProjectionRunner}, {@link ScheduledProjectionRunner}, {@link OutboxPoller}, {@link
+ * OutboxRetentionSweeper}, {@link InboxRetentionSweeper}, {@link SagaDeadLetterRetentionSweeper},
+ * {@link DeadLetterRetentionSweeper} and {@link DeadLetterRetryRunner}. On {@link ShutdownEvent},
+ * stops them in reverse order, closes the {@link SubscriptionLeadership} and closes the {@link
+ * VirtualThreadCommandBus} if it was created. After a failed start, which fires no {@link
+ * ShutdownEvent}, it does the same when the container shuts down ({@link #stopBeforeDestroy}), with
+ * {@link #stopOnDestroy()} as the fallback.
  *
  * <p>The runner producers are dependent-scoped optional beans ({@link ProjectionProducer}, {@link
  * StreamRuneProducers}): when a feature is disabled or has no registrations, {@link Instance#get()}
@@ -64,6 +72,7 @@ public class StreamRuneLifecycle {
   private DeadLetterRetentionSweeper deadLetterRetentionSweeper;
   private DeadLetterRetryRunner deadLetterRetryRunner;
   private org.streamrune.core.subscription.SubscriptionLeadership leadership;
+  private boolean stopped;
 
   @jakarta.inject.Inject
   public StreamRuneLifecycle(
@@ -223,7 +232,7 @@ public class StreamRuneLifecycle {
     }
 
     // Materialize the leadership bean (if produced) so this lifecycle owns the single instance and
-    // can release its advisory locks + dedicated connection on shutdown, after the runners stop.
+    // can stop its renew heartbeat and resign the held leases on shutdown, after the runners stop.
     // The runners resolve the same singleton and acquire leadership lazily; nothing to start here.
     // An unsatisfied instance leaves nothing for this lifecycle to close.
     leadership =
@@ -232,6 +241,50 @@ public class StreamRuneLifecycle {
 
   // public for the same cross-classloader reason as onStart.
   public void onStop(@Observes ShutdownEvent event) {
+    stop();
+  }
+
+  /**
+   * Stops what {@link #onStart} started when the container shuts down. Quarkus fires no {@link
+   * ShutdownEvent} after a failed start: when a startup observer refuses the start (one of the
+   * framework's checks, some of which run after the runners started, or one of the application's),
+   * Quarkus still shuts the container down, and without this the runners would outlive it. In
+   * production the process exits; in dev mode and in a test JVM it does not, and a live reload
+   * would start a second set beside them.
+   *
+   * <p>Arc fires this event before it destroys any application-scoped bean, the application's
+   * {@code DataSource} among them, and before the singleton context, where the backend stores close
+   * the leadership: the runners stop while what they use is still open. After a {@link
+   * ShutdownEvent} there is nothing left to stop. Notified only if this bean exists: a start
+   * refused before {@link #onStart} ran started nothing here. {@code public} for the same reason as
+   * {@link #onStart}.
+   *
+   * @param event the container's before-destroyed event
+   */
+  public void stopBeforeDestroy(
+      @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
+          Object event) {
+    stop();
+  }
+
+  /**
+   * Stops what is still running when the container destroys this bean: the fallback for a shutdown
+   * whose before-destroyed observers did not all run, as an observer that throws ends the
+   * notification. It may run after the {@code DataSource} closed, as Arc destroys the
+   * application-scoped beans in no fixed order. Otherwise {@link #stopBeforeDestroy} has stopped
+   * everything already. {@code public} for the same reason as {@link #onStart}.
+   */
+  @PreDestroy
+  public void stopOnDestroy() {
+    stop();
+  }
+
+  /** Stops everything this lifecycle started, once; never throws. */
+  private void stop() {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
     closeQuietly(deadLetterRetryRunner, "DeadLetterRetryRunner");
     deadLetterRetryRunner = null;
     closeQuietly(deadLetterRetentionSweeper, "DeadLetterRetentionSweeper");
@@ -249,13 +302,31 @@ public class StreamRuneLifecycle {
     closeQuietly(multiProjectionRunner, "MultiProjectionRunner");
     multiProjectionRunner = null;
 
-    // Release advisory locks + the dedicated connection AFTER every runner has stopped, so a runner
-    // never loses leadership mid-batch, and BEFORE the DataSource closes.
+    // Stop the renew heartbeat and resign the held leases AFTER every runner has stopped, so a
+    // runner never loses leadership mid-batch. The shutdown event and the before-destroyed event
+    // both come before the DataSource closes, so the resign still reaches the database (the
+    // @PreDestroy fallback may not).
     closeQuietly(leadership, "SubscriptionLeadership");
     leadership = null;
 
-    if (commandBusInstance.isResolvable()) {
-      closeQuietly(commandBusInstance.get(), "VirtualThreadCommandBus");
+    closeQuietly(existingCommandBus(), "VirtualThreadCommandBus");
+  }
+
+  /**
+   * The command bus if the container has created it, or {@code null}. Looked up in its context, so
+   * a bus nothing used is not created during shutdown only to be closed; a failure to look it up is
+   * logged, never thrown, so the rest of the shutdown still runs.
+   */
+  private VirtualThreadCommandBus existingCommandBus() {
+    try {
+      if (!commandBusInstance.isResolvable()) {
+        return null;
+      }
+      Bean<VirtualThreadCommandBus> bean = commandBusInstance.getHandle().getBean();
+      return beanManager.getContext(bean.getScope()).get(bean);
+    } catch (RuntimeException e) {
+      logger.warn("StreamRune: failed to look up the VirtualThreadCommandBus to stop it", e);
+      return null;
     }
   }
 
