@@ -11,7 +11,6 @@ import com.fasterxml.jackson.core.exc.StreamConstraintsException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.cfg.JsonNodeFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -37,7 +36,6 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -68,6 +66,7 @@ import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * SQLite-backed {@link ProjectionRepository} and {@link AtomicBatchProcessor}: the SQLite port of
@@ -349,14 +348,7 @@ public final class SqliteProjectionRepository
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    Objects.requireNonNull(metrics, "metrics is required");
-    var mapper = new ObjectMapper();
-    mapper.registerModule(new JavaTimeModule());
-    mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-    if (cryptoEngine != null) {
-      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
-    }
-    return mapper;
+    return StoreObjectMappers.readModels(cryptoEngine, metrics);
   }
 
   // Connection discipline: a read model is turned into JSON before a connection is borrowed and

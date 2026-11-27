@@ -17,6 +17,7 @@ import org.sqlite.SQLiteErrorCode;
 import org.sqlite.SQLiteException;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.Internal;
+import org.streamrune.runtime.jdbc.Causes;
 
 /**
  * How the SQLite stores run a write transaction on a borrowed connection: with SQL statements, on a
@@ -331,13 +332,7 @@ public final class SqliteTransactions {
    * @return {@code true} when this thread's own batch held the write lock the write waited for
    */
   static boolean isHeldByOwnBatch(Throwable e) {
-    Throwable t = e;
-    for (int depth = 0; t != null && depth < 50; depth++, t = t.getCause()) {
-      if (t instanceof WriteLockHeldByOwnBatch) {
-        return true;
-      }
-    }
-    return false;
+    return Causes.find(e, WriteLockHeldByOwnBatch.class) != null;
   }
 
   /**

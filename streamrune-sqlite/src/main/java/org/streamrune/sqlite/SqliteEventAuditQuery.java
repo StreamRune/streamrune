@@ -22,6 +22,7 @@ import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.UserId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * The SQLite {@link EventAuditQuery} over the {@code event_audit_log} table {@link
@@ -189,7 +190,7 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
     long fromMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(from, "from is required"));
     long toMicros = SqliteTimestamps.toMicros(Objects.requireNonNull(to, "to is required"));
     return (ps, first) -> {
-      SqliteStreamKeys.bind(ps, first, streamId);
+      StreamKeys.bind(ps, first, streamId);
       ps.setLong(first + 2, fromMicros);
       ps.setLong(first + 3, toMicros);
     };
@@ -289,7 +290,7 @@ public final class SqliteEventAuditQuery implements EventAuditQuery {
     return new EventAuditEntry(
         EventId.of(rs.getString("event_id")),
         new EventType(rs.getString("event_type")),
-        SqliteStreamKeys.read(rs),
+        StreamKeys.read(rs),
         new Version(rs.getLong("version")),
         CommandId.of(rs.getString("command_id")),
         CorrelationId.of(rs.getString("correlation_id")),

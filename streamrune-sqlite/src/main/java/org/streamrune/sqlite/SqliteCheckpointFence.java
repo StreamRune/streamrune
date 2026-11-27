@@ -12,8 +12,8 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.runtime.jdbc.CheckpointFenceRules;
 
 /**
  * The checkpoint-row fence over one {@link CheckpointTable}: every read and write of a projection's
@@ -50,6 +50,8 @@ import org.streamrune.core.types.ProjectionName;
  * ProjectionCommitFencedException.Guard}; the caller rolls its transaction back, so neither its
  * writes nor the checkpoint move. A {@link #lockForReplay} seeds the row and checks nothing, under
  * the same write lock, so a dead-letter replay and a live batch of one projection never interleave.
+ * The decisions and their messages are {@link CheckpointFenceRules}, shared with Postgres; this
+ * fence holds the lock, runs the statements and throws where the rules say.
  *
  * <p>SQLite has no leadership: the runners always pass epoch {@code 0}, and the epoch fence never
  * fires. It is kept whole so that the fencing contract applies unchanged and the store stays
@@ -218,8 +220,8 @@ final class SqliteCheckpointFence {
       throws SQLException {
     SqliteTransactions.requireOpenTransaction(c);
     Checkpoint checkpoint = seedAndRead(c, name);
-    rejectStaleEpoch(name, fencingEpoch, checkpoint.epoch());
-    rejectOverlappingBatch(name, firstOffsetOfBatch, checkpoint.offset());
+    CheckpointFenceRules.rejectStaleEpoch(name, fencingEpoch, checkpoint.epoch());
+    CheckpointFenceRules.rejectOverlappingBatch(name, firstOffsetOfBatch, checkpoint.offset());
     return checkpoint.offset();
   }
 
@@ -270,15 +272,7 @@ final class SqliteCheckpointFence {
       ps.setLong(4, now());
       int updated = ps.executeUpdate();
       if (updated == 0) {
-        throw new ProjectionCommitFencedException(
-            ProjectionCommitFencedException.Guard.MONOTONIC,
-            "Projection '"
-                + shown(name)
-                + "' offset advance to "
-                + newOffset.value()
-                + " was rejected by the monotonic guard (stored offset already at/past it): the"
-                + " batch is already applied. Rolling back so the read-model write is not committed"
-                + " a second time.");
+        throw CheckpointFenceRules.monotonicRejection(name, newOffset);
       }
     }
   }
@@ -317,8 +311,11 @@ final class SqliteCheckpointFence {
         SqliteTransactions.write(
             ds,
             "projection fencing stamp",
-            "fencing stamp of projection " + shown(name),
-            "Failed to stamp fencing epoch " + fencingEpoch + " for projection: " + shown(name),
+            "fencing stamp of projection " + CheckpointFenceRules.shown(name),
+            "Failed to stamp fencing epoch "
+                + fencingEpoch
+                + " for projection: "
+                + CheckpointFenceRules.shown(name),
             c -> {
               int stamped;
               try (PreparedStatement ps = c.prepareStatement(stampSql)) {
@@ -331,8 +328,10 @@ final class SqliteCheckpointFence {
                   ? OptionalLong.of(readStoredEpoch(c, name))
                   : OptionalLong.empty();
             });
-    if (unstamped.isPresent() && unstamped.getAsLong() > fencingEpoch) {
-      throw new ProjectionEpochRegressionException(name, fencingEpoch, unstamped.getAsLong());
+    // Thrown here, after the write committed or rolled back: inside the callback it would be
+    // wrapped as an EventStoreException.
+    if (unstamped.isPresent()) {
+      CheckpointFenceRules.rejectEpochRegression(name, fencingEpoch, unstamped.getAsLong());
     }
   }
 
@@ -351,7 +350,7 @@ final class SqliteCheckpointFence {
       return readStoredEpoch(conn, name);
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to read fencing epoch for projection: " + shown(name), e);
+          "Failed to read fencing epoch for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -374,7 +373,8 @@ final class SqliteCheckpointFence {
         return rs.next() ? GlobalOffset.of(rs.getLong(1)) : GlobalOffset.initial();
       }
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to read offset for projection: " + shown(name), e);
+      throw new EventStoreException(
+          "Failed to read offset for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -443,8 +443,8 @@ final class SqliteCheckpointFence {
     SqliteTransactions.write(
         ds,
         "projection offset " + what,
-        "offset " + what + " of projection " + shown(name),
-        "Failed to " + what + " offset for projection: " + shown(name),
+        "offset " + what + " of projection " + CheckpointFenceRules.shown(name),
+        "Failed to " + what + " offset for projection: " + CheckpointFenceRules.shown(name),
         work);
   }
 
@@ -469,55 +469,6 @@ final class SqliteCheckpointFence {
     }
   }
 
-  /**
-   * Fences out a commit whose caller epoch is below the epoch stored on the checkpoint row: a
-   * superseded leader whose lease a newer one took over (bumping the epoch). A {@code fencingEpoch}
-   * of {@code 0} is unfenced and always passes, so a single-node deployment commits unfenced.
-   */
-  private static void rejectStaleEpoch(ProjectionName name, long fencingEpoch, long storedEpoch) {
-    if (fencingEpoch != 0L && fencingEpoch < storedEpoch) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.EPOCH_FENCE,
-          "Projection '"
-              + shown(name)
-              + "' commit fenced out: caller epoch "
-              + fencingEpoch
-              + " is below the stored epoch "
-              + storedEpoch
-              + " — a newer leader has taken over the lease. Rolling back the stale leader's write"
-              + " (epoch fencing).");
-    }
-  }
-
-  /**
-   * Rejects a batch whose first event offset is at or before the committed checkpoint: it overlaps
-   * events already applied by another writer (a concurrent or failed-over stale leader, or a
-   * redelivery). A forward batch always starts strictly after the checkpoint (the runners read the
-   * global stream from the stored offset); an overlapping start means part of the batch would be
-   * applied a second time. An empty batch ({@code null} first offset) is governed solely by the
-   * monotonic guard on the advance.
-   */
-  private static void rejectOverlappingBatch(
-      ProjectionName name, GlobalOffset firstOffsetOfBatch, long storedOffset) {
-    if (firstOffsetOfBatch == null) {
-      return;
-    }
-    long firstOffset = firstOffsetOfBatch.value();
-    if (firstOffset <= storedOffset) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.OVERLAP,
-          "Projection '"
-              + shown(name)
-              + "' batch starting at offset "
-              + firstOffset
-              + " overlaps the committed checkpoint ("
-              + storedOffset
-              + "): those events were already applied by another writer (a concurrent or"
-              + " failed-over stale leader, or a redelivery). Rolling back so the read-model write is"
-              + " not applied a second time.");
-    }
-  }
-
   /** The epoch stored on the row, or {@code 0} when there is none, on {@code conn}. */
   private long readStoredEpoch(Connection conn, ProjectionName name) throws SQLException {
     try (PreparedStatement ps = conn.prepareStatement(epochSql)) {
@@ -534,10 +485,5 @@ final class SqliteCheckpointFence {
 
   private static void requireName(ProjectionName name) {
     Objects.requireNonNull(name, "projectionName is required");
-  }
-
-  /** A projection name rendered for an exception message: caller text, so sanitized. */
-  private static String shown(ProjectionName name) {
-    return LogSanitizer.sanitizeForLog(name.value());
   }
 }

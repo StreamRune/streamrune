@@ -19,6 +19,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * The SQLite {@link DeadLetterQueue}: failed commands in the {@code dead_letter_queue} table of a
@@ -185,7 +186,7 @@ public final class SqliteDeadLetterQueue implements DeadLetterQueue {
             ps.setString(1, request.commandId().value());
             ps.setString(2, request.commandType());
             ps.setString(3, request.commandPayload());
-            SqliteStreamKeys.bind(ps, 4, request.streamId());
+            StreamKeys.bind(ps, 4, request.streamId());
             ps.setString(6, request.errorType());
             ps.setString(7, request.errorMessage());
             ps.setInt(8, request.attempts());
@@ -425,7 +426,7 @@ public final class SqliteDeadLetterQueue implements DeadLetterQueue {
         rs.getString("command_type"),
         rs.getString("payload"),
         // The decode door: a stored stream must read back whatever ingress rules say today.
-        SqliteStreamKeys.read(rs),
+        StreamKeys.read(rs),
         rs.getString("error_type"),
         rs.getString("error_message"),
         rs.getInt("attempts"),

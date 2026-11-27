@@ -27,6 +27,7 @@ import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * The SQLite {@link OutboxStore}: the {@code outbox_events} table of a {@link SqliteDatabase}, with
@@ -388,7 +389,7 @@ public final class SqliteOutboxStore implements OutboxStore {
         ps.setString(1, entry.id().value());
         ps.setString(2, entry.payload());
         ps.setString(3, entry.payloadType());
-        SqliteStreamKeys.bind(ps, 4, entry.streamId());
+        StreamKeys.bind(ps, 4, entry.streamId());
         bindTraceLink(ps, 6, entry.traceLink());
         ps.setLong(8, createdAt);
         ps.addBatch();
@@ -843,7 +844,7 @@ public final class SqliteOutboxStore implements OutboxStore {
         OutboxEntryId.of(rs.getString("entry_id")),
         rs.getString("payload"),
         rs.getString("payload_type"),
-        SqliteStreamKeys.read(rs),
+        StreamKeys.read(rs),
         status,
         rs.getInt("attempts"),
         rs.getString("last_error"),

@@ -3,7 +3,6 @@ package org.streamrune.sqlite;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -65,9 +64,11 @@ import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.UpcasterChain;
-import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
+import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * The SQLite {@link EventStore}: events, snapshots and the global stream in one database file, with
@@ -251,7 +252,7 @@ public final class SqliteEventStore implements EventStore {
    *
    * @param database the open database handle whose data source the store borrows connections from
    * @param objectMapper the mapper of events and snapshot states, from {@link
-   *     #createObjectMapper(CryptoEngine, StreamRuneMetrics)}
+   *     StoreObjectMappers#eventsAndSagas(CryptoEngine, StreamRuneMetrics)}
    * @param typeRegistry resolves stored event and state types
    * @param upcasterChain the upcasters applied on read
    * @param snapshotMigrations the snapshot migrations applied on load
@@ -294,21 +295,6 @@ public final class SqliteEventStore implements EventStore {
     this.outboxEventMapper = outboxEventMapper;
     this.commandInbox = commandInbox;
     this.eventAuditStore = eventAuditStore;
-  }
-
-  /**
-   * The mapper the store (de)serializes with: {@link JavaTimeModule} always, plus {@link
-   * CryptoShreddingModule} with {@code metrics} when {@code cryptoEngine} is not {@code null}, as
-   * on Postgres.
-   */
-  static ObjectMapper createObjectMapper(CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    Objects.requireNonNull(metrics, "metrics is required");
-    var mapper = new ObjectMapper();
-    mapper.registerModule(new JavaTimeModule());
-    if (cryptoEngine != null) {
-      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
-    }
-    return mapper;
   }
 
   /**
@@ -432,7 +418,7 @@ public final class SqliteEventStore implements EventStore {
   private StoredSnapshot readSnapshot(Connection conn, StreamId streamId, int expectedVersion)
       throws SQLException {
     try (var ps = conn.prepareStatement(LOAD_SNAPSHOT)) {
-      SqliteStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       try (var rs = ps.executeQuery()) {
         if (!rs.next()) {
           return StoredSnapshot.NONE;
@@ -467,7 +453,7 @@ public final class SqliteEventStore implements EventStore {
       throws SQLException {
     List<RawEventRow> rows = new ArrayList<>();
     try (var ps = conn.prepareStatement(LOAD_EVENTS)) {
-      SqliteStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       ps.setLong(3, after.value());
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
@@ -740,13 +726,7 @@ public final class SqliteEventStore implements EventStore {
 
   /** True when {@code t}'s cause chain (bounded) holds a {@link CryptoOperationException}. */
   static boolean hasCryptoCause(Throwable t) {
-    Throwable c = t;
-    for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
-      if (c instanceof CryptoOperationException) {
-        return true;
-      }
-    }
-    return false;
+    return Causes.find(t, CryptoOperationException.class) != null;
   }
 
   /**
@@ -755,13 +735,8 @@ public final class SqliteEventStore implements EventStore {
    * than quarantined (see {@code PostgresEventStore.hasTransientCryptoCause}).
    */
   static boolean hasTransientCryptoCause(Throwable t) {
-    Throwable c = t;
-    for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
-      if (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException)) {
-        return true;
-      }
-    }
-    return false;
+    return Causes.anyMatch(
+        t, c -> c instanceof CryptoOperationException && !(c instanceof CryptoMappingException));
   }
 
   private Class<?> resolveStateTypeOrNull(String stateType) {
@@ -1283,7 +1258,7 @@ public final class SqliteEventStore implements EventStore {
     }
 
     try (var head = conn.prepareStatement(STREAM_HEAD_VERSION)) {
-      SqliteStreamKeys.bind(head, 1, streamId);
+      StreamKeys.bind(head, 1, streamId);
       try (var rs = head.executeQuery()) {
         rs.next();
         long actualHead = rs.getLong(1);
@@ -1306,7 +1281,7 @@ public final class SqliteEventStore implements EventStore {
         long offset = base + i + 1;
         EventRow row = rows.get(i);
         insert.setLong(1, offset);
-        SqliteStreamKeys.bind(insert, 2, streamId);
+        StreamKeys.bind(insert, 2, streamId);
         insert.setLong(4, row.version());
         insert.setString(5, row.eventType());
         insert.setString(6, row.payloadJson());
@@ -1354,7 +1329,7 @@ public final class SqliteEventStore implements EventStore {
    * conflicts.
    */
   static boolean isGlobalOffsetCollision(SQLException e) {
-    SQLiteException sqlite = sqliteCause(e);
+    SQLiteException sqlite = Causes.find(e, SQLiteException.class);
     return sqlite != null
         && sqlite.getResultCode() == SQLiteErrorCode.SQLITE_CONSTRAINT_PRIMARYKEY
         && sqlite.getMessage() != null
@@ -1369,7 +1344,7 @@ public final class SqliteEventStore implements EventStore {
    * as Postgres maps its serialization failure).
    */
   static boolean isRetryableConflict(SQLException e) {
-    SQLiteException sqlite = sqliteCause(e);
+    SQLiteException sqlite = Causes.find(e, SQLiteException.class);
     if (sqlite == null) {
       return false;
     }
@@ -1384,7 +1359,7 @@ public final class SqliteEventStore implements EventStore {
    * write lock was not granted within {@code busy_timeout}.
    */
   static boolean isBusy(SQLException e) {
-    SQLiteException sqlite = sqliteCause(e);
+    SQLiteException sqlite = Causes.find(e, SQLiteException.class);
     if (sqlite == null) {
       return false;
     }
@@ -1398,7 +1373,7 @@ public final class SqliteEventStore implements EventStore {
    * the same cache), for which SQLite does not wait, whatever {@code busy_timeout} says.
    */
   static boolean isLocked(SQLException e) {
-    SQLiteException sqlite = sqliteCause(e);
+    SQLiteException sqlite = Causes.find(e, SQLiteException.class);
     if (sqlite == null) {
       return false;
     }
@@ -1450,17 +1425,6 @@ public final class SqliteEventStore implements EventStore {
         + " of the same connection (or of the same shared cache). SQLite does not wait for that"
         + " lock, so busy_timeout does not apply; nothing was stored. Finish the other statement"
         + " (close its result set) or do not share the connection or the cache.";
-  }
-
-  /** The first {@link SQLiteException} of {@code e}'s cause chain, walked at most 50 deep. */
-  private static SQLiteException sqliteCause(Throwable e) {
-    Throwable t = e;
-    for (int depth = 0; t != null && depth < 50; depth++, t = t.getCause()) {
-      if (t instanceof SQLiteException sqlite) {
-        return sqlite;
-      }
-    }
-    return null;
   }
 
   /**
@@ -1602,7 +1566,7 @@ public final class SqliteEventStore implements EventStore {
               conn,
               c -> {
                 try (var ps = c.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
-                  SqliteStreamKeys.bind(ps, 1, streamId);
+                  StreamKeys.bind(ps, 1, streamId);
                   ps.setLong(3, version.value());
                   ps.setString(4, stateType);
                   ps.setString(5, stateJson);
@@ -1711,7 +1675,7 @@ public final class SqliteEventStore implements EventStore {
     List<RawEventRow> rawRows = new ArrayList<>();
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(READ_STREAM)) {
-      SqliteStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       ps.setLong(3, afterVersion.value());
       ps.setInt(4, maxCount);
       try (var rs = ps.executeQuery()) {
