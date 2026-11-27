@@ -10,14 +10,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.LockMode;
-import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.Page;
 import org.streamrune.core.PageRequest;
 import org.streamrune.core.Sort;
@@ -34,6 +32,8 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.runtime.jdbc.AfterCommitActions;
+import org.streamrune.runtime.jdbc.ReadModelRules;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
@@ -86,6 +86,13 @@ import org.streamrune.runtime.jdbc.StoreObjectMappers;
  * framework default sized for an event-store append would cancel legitimate work there, and a
  * cancelled batch is simply retried, failing again. Bound read-model work with the session setting,
  * sized for the largest batch and view you run.
+ *
+ * <p>The projection-name rule, the argument checks, the refusal of a filter or sort on an {@code
+ * Encrypted} component, the conversion of stored JSON back into read models, the index name and
+ * statement template and the optimistic-lock conflict are {@link ReadModelRules}'s, one instance
+ * per repository; the after-commit actions of a checkpoint transaction are {@link
+ * AfterCommitActions}'. This repository keeps its statements and their key expressions, its
+ * transactions and locks, and its record of the tables it created.
  */
 public final class JdbcProjectionRepository implements ProjectionRepository, AtomicBatchProcessor {
 
@@ -98,23 +105,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   private final PostgresCheckpointFence checkpointFence;
 
   /**
-   * The projection names this repository stores read models under: lower-case ASCII letters, digits
-   * and underscores, starting with a letter or an underscore, at most 58 characters. The table is
-   * the name plus {@code _view}, so it never exceeds PostgreSQL's 63-byte identifier limit (it is
-   * never truncated), is never case-folded, and is never a keyword — no keyword ends in {@code
-   * _view}. The name is used exactly as given, never rewritten, so two different names always have
-   * two different tables.
+   * The rules of this repository, built once over its mapper. It holds the per-instance cache of
+   * each read-model type's {@code Encrypted} JSON names, and the transaction-scoped repository
+   * handed to an updater uses this same instance.
    */
-  private static final Pattern TABLE_NAMED_PROJECTION = Pattern.compile("[a-z_][a-z0-9_]{0,57}");
-
-  private static final Set<String> DIRECT_COLUMNS = Set.of("id", "updated_at", "version");
-
-  /**
-   * A sort, filter or index field: a top-level read-model field (or a repository column) of ASCII
-   * letters, digits and underscores, so it is safe to splice into a statement as {@code
-   * data->>'field'}. No nested path.
-   */
-  private static final Pattern FIELD = Pattern.compile("[A-Za-z0-9_]+");
+  private final ReadModelRules rules;
 
   // Rows fetched per driver round trip in findAll. pgjdbc honors fetchSize only inside an
   // explicit transaction (autocommit off); under autocommit it materializes the whole result
@@ -123,11 +118,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   // Cache to track which tables have been checked/created (avoids race condition)
   private final Set<ProjectionName> tablesChecked = ConcurrentHashMap.newKeySet();
-
-  // The JSON names of each read-model type's @Encrypted record components (see
-  // refuseEncryptedKeys).
-  private final ConcurrentHashMap<Class<?>, Set<String>> encryptedFields =
-      new ConcurrentHashMap<>();
 
   private static final String UPSERT =
       "INSERT INTO %1$s (id, data, version, updated_at) VALUES (?, ?::jsonb, 0, NOW()) "
@@ -217,6 +207,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
     this.dataSource = dataSource;
     this.objectMapper = objectMapper;
+    this.rules = new ReadModelRules(objectMapper);
     this.checkpointFence = new PostgresCheckpointFence(CheckpointTable.READ_MODEL);
   }
 
@@ -231,7 +222,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   @Override
   public <T> void save(ProjectionName projectionName, String id, T readModel) {
-    validateInputs(projectionName, id);
+    ReadModelRules.validateInputs(projectionName, id);
     if (readModel == null) {
       throw new IllegalArgumentException("readModel cannot be null");
     }
@@ -246,24 +237,26 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             return null;
           });
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to save projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to save projection: " + ReadModelRules.shown(projectionName, id), e);
     }
   }
 
   private void saveJsonOn(Connection conn, ProjectionName projectionName, String id, String json) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(UPSERT, table))) {
       ps.setString(1, id);
       ps.setString(2, json);
       ps.executeUpdate();
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to save projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to save projection: " + ReadModelRules.shown(projectionName, id), e);
     }
   }
 
   @Override
   public <T> Optional<T> findById(ProjectionName projectionName, String id, Class<T> type) {
-    validateInputs(projectionName, id);
+    ReadModelRules.validateInputs(projectionName, id);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
     }
@@ -272,14 +265,16 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     try (var conn = dataSource.getConnection()) {
       json = findJsonByIdOn(conn, projectionName, id);
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to find projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to find projection: " + ReadModelRules.shown(projectionName, id), e);
     }
-    return json.map(j -> fromJson(j, type, "Failed to find projection: ", projectionName, id));
+    return json.map(
+        j -> rules.fromJson(j, type, "Failed to find projection: ", projectionName, id));
   }
 
   private Optional<String> findJsonByIdOn(
       Connection conn, ProjectionName projectionName, String id) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(SELECT_BY_ID, table))) {
       ps.setString(1, id);
       try (var rs = ps.executeQuery()) {
@@ -289,13 +284,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         return Optional.empty();
       }
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to find projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to find projection: " + ReadModelRules.shown(projectionName, id), e);
     }
   }
 
   @Override
   public <T> List<T> findAll(ProjectionName projectionName, Class<T> type) {
-    validateProjectionName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
     }
@@ -316,13 +312,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         conn.setAutoCommit(true);
       }
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to find all projections: " + shown(projectionName), e);
+      throw new EventStoreException(
+          "Failed to find all projections: " + ReadModelRules.shown(projectionName), e);
     }
-    return fromJson(rows, type, "Failed to find all projections: ", projectionName);
+    return rules.fromJson(rows, type, "Failed to find all projections: ", projectionName);
   }
 
   private List<String> findAllJsonOn(Connection conn, ProjectionName projectionName) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     List<String> rows = new ArrayList<>();
     try (var ps = conn.prepareStatement(String.format(SELECT_ALL, table))) {
       // Streams only when the connection is in an explicit transaction: the public findAll
@@ -335,13 +332,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       }
       return rows;
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to find all projections: " + shown(projectionName), e);
+      throw new EventStoreException(
+          "Failed to find all projections: " + ReadModelRules.shown(projectionName), e);
     }
   }
 
   @Override
   public void delete(ProjectionName projectionName, String id) {
-    validateInputs(projectionName, id);
+    ReadModelRules.validateInputs(projectionName, id);
     ensureTableExists(projectionName);
     try (var conn = dataSource.getConnection()) {
       PostgresTransactions.commitIfManual(
@@ -352,17 +350,19 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
             return null;
           });
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to delete projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to delete projection: " + ReadModelRules.shown(projectionName, id), e);
     }
   }
 
   private void deleteOn(Connection conn, ProjectionName projectionName, String id) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(DELETE, table))) {
       ps.setString(1, id);
       ps.executeUpdate();
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to delete projection: " + shown(projectionName, id), e);
+      throw new EventStoreException(
+          "Failed to delete projection: " + ReadModelRules.shown(projectionName, id), e);
     }
   }
 
@@ -377,14 +377,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   @Override
   public <T> Page<T> findAll(
       ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
-    validateProjectionName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
     }
     if (pageRequest == null) {
       throw new IllegalArgumentException("pageRequest cannot be null");
     }
-    refuseEncryptedKeys(type, null, pageRequest.sort());
+    rules.refuseEncryptedKeys(type, null, pageRequest.sort());
     return page(projectionName, type, null, pageRequest);
   }
 
@@ -398,102 +398,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   @Override
   public <T> Page<T> findAllBy(
       ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
-    validateFilteredRead(projectionName, type, filter, pageRequest);
-    refuseEncryptedKeys(type, filter, pageRequest.sort());
+    ReadModelRules.validateFilteredRead(projectionName, type, filter, pageRequest);
+    rules.refuseEncryptedKeys(type, filter, pageRequest.sort());
     return page(projectionName, type, filter, pageRequest);
-  }
-
-  /**
-   * Refuses a filter or sort on an {@code Encrypted} record component of {@code type}: its stored
-   * text is ciphertext under a crypto-aware mapper (so it matches and orders nothing meaningful),
-   * plaintext under a crypto-blind one; refused in every wiring so the mistake fails at the first
-   * call. The component is matched by its Java name and by the JSON name this repository's mapper
-   * gives it.
-   */
-  private void refuseEncryptedKeys(Class<?> type, FieldEquals filter, Sort sort) {
-    Set<String> encrypted = encryptedFields.computeIfAbsent(type, this::encryptedJsonFields);
-    if (encrypted.isEmpty()) {
-      return;
-    }
-    if (filter != null && encrypted.contains(filter.field())) {
-      throw encryptedKey(type, filter.field());
-    }
-    for (Sort.Order order : sort.orders()) {
-      if (!DIRECT_COLUMNS.contains(order.field()) && encrypted.contains(order.field())) {
-        throw encryptedKey(type, order.field());
-      }
-    }
-  }
-
-  private Set<String> encryptedJsonFields(Class<?> type) {
-    return encryptedJsonFields(type, new HashSet<>());
-  }
-
-  /**
-   * The JSON names of {@code type}'s {@code Encrypted} components, and of those of the records it
-   * embeds with {@code @JsonUnwrapped} (with the annotation's prefix and suffix). One level of
-   * {@code @JsonUnwrapped} is what is supported: Jackson does not round-trip a record unwrapped
-   * inside an unwrapped record (the walk goes deeper, but such a read model cannot be read back). A
-   * type that is not a record ({@code Map}, a class) is not checked.
-   */
-  private Set<String> encryptedJsonFields(Class<?> type, Set<Class<?>> visiting) {
-    if (!type.isRecord() || !visiting.add(type)) {
-      return Set.of();
-    }
-    var components = new HashSet<String>();
-    var names = new HashSet<String>();
-    for (var component : type.getRecordComponents()) {
-      if (component.isAnnotationPresent(org.streamrune.core.crypto.Encrypted.class)) {
-        components.add(component.getName());
-      }
-      var unwrapped = unwrapped(type, component);
-      if (unwrapped != null && unwrapped.enabled()) {
-        for (String inner : encryptedJsonFields(component.getType(), visiting)) {
-          names.add(unwrapped.prefix() + inner + unwrapped.suffix());
-        }
-      }
-    }
-    visiting.remove(type);
-    if (!components.isEmpty()) {
-      names.addAll(components);
-      var description =
-          objectMapper.getSerializationConfig().introspect(objectMapper.constructType(type));
-      for (var property : description.findProperties()) {
-        if (components.contains(property.getInternalName())) {
-          names.add(property.getName());
-        }
-      }
-    }
-    return Set.copyOf(names);
-  }
-
-  /**
-   * The {@code @JsonUnwrapped} of a record component: the annotation is not a record-component
-   * annotation, so Java puts it on the accessor and the field.
-   */
-  private static com.fasterxml.jackson.annotation.JsonUnwrapped unwrapped(
-      Class<?> type, java.lang.reflect.RecordComponent component) {
-    var onAccessor =
-        component.getAccessor().getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
-    if (onAccessor != null) {
-      return onAccessor;
-    }
-    try {
-      return type.getDeclaredField(component.getName())
-          .getAnnotation(com.fasterxml.jackson.annotation.JsonUnwrapped.class);
-    } catch (NoSuchFieldException e) {
-      return null;
-    }
-  }
-
-  private static IllegalArgumentException encryptedKey(Class<?> type, String field) {
-    return new IllegalArgumentException(
-        "Field '"
-            + LogSanitizer.sanitizeForLog(field)
-            + "' of "
-            + type.getSimpleName()
-            + " is @Encrypted: its stored text is ciphertext, so it cannot be filtered or sorted"
-            + " (keep a separate, non-sensitive field for the query)");
   }
 
   private <T> Page<T> page(
@@ -505,25 +412,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       rows = pageJsonOn(conn, projectionName, sql, filter, pageRequest);
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to find paginated projections: " + shown(projectionName), e);
+          "Failed to find paginated projections: " + ReadModelRules.shown(projectionName), e);
     }
-    return fromJson(rows, type, projectionName);
-  }
-
-  private static void validateFilteredRead(
-      ProjectionName projectionName, Class<?> type, FieldEquals filter, PageRequest pageRequest) {
-    if (projectionName == null) {
-      throw new IllegalArgumentException("projectionName cannot be null");
-    }
-    if (type == null) {
-      throw new IllegalArgumentException("type cannot be null");
-    }
-    if (filter == null) {
-      throw new IllegalArgumentException("filter cannot be null");
-    }
-    if (pageRequest == null) {
-      throw new IllegalArgumentException("pageRequest cannot be null");
-    }
+    return rules.fromJson(rows, type, projectionName);
   }
 
   /**
@@ -541,11 +432,11 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    *     outside the rules
    */
   static String pageSql(ProjectionName projectionName, FieldEquals filter, Sort sort) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     String condition = filter == null ? null : filterExpression(filter.field()) + " = ?";
     String where = condition == null ? "" : " WHERE " + condition;
     String gate = " WHERE total.n > ?" + (condition == null ? "" : " AND " + condition);
-    List<Sort.Order> keys = keysWithIdTiebreak(sort.orders());
+    List<Sort.Order> keys = ReadModelRules.keysWithIdTiebreak(sort.orders());
     var selected = new ArrayList<String>();
     var inner = new ArrayList<String>();
     var outer = new ArrayList<String>();
@@ -602,25 +493,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       return new Page<>(content, totalElements, pageRequest.page(), pageRequest.size());
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to find paginated projections: " + shown(projectionName), e);
+          "Failed to find paginated projections: " + ReadModelRules.shown(projectionName), e);
     }
-  }
-
-  private <T> Page<T> fromJson(Page<String> rows, Class<T> type, ProjectionName projectionName) {
-    return new Page<>(
-        fromJson(rows.content(), type, "Failed to find paginated projections: ", projectionName),
-        rows.totalElements(),
-        rows.page(),
-        rows.size());
-  }
-
-  /** {@code orders}, then {@code id} ascending unless an order already names the id. */
-  private static List<Sort.Order> keysWithIdTiebreak(List<Sort.Order> orders) {
-    var keys = new ArrayList<>(orders);
-    if (orders.stream().noneMatch(order -> "id".equals(order.field()))) {
-      keys.add(new Sort.Order("id", SortDirection.ASC));
-    }
-    return keys;
   }
 
   /**
@@ -629,7 +503,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * The field rule keeps the name safe to splice into the statement.
    */
   private static String keyExpression(String field) {
-    validateField(field);
+    ReadModelRules.validateField(field);
     return switch (field) {
       case "id" -> "id COLLATE \"C\"";
       case "version", "updated_at" -> field;
@@ -641,21 +515,12 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * The SQL a filter compares: a read-model field ({@link FieldEquals} refuses the column names).
    */
   private static String filterExpression(String field) {
-    validateField(field);
+    ReadModelRules.validateField(field);
     return jsonFieldExpression(field);
   }
 
   private static String jsonFieldExpression(String field) {
     return "(data->>'" + field + "') COLLATE \"C\"";
-  }
-
-  private static void validateField(String field) {
-    if (!FIELD.matcher(field).matches()) {
-      throw new IllegalArgumentException(
-          "A sort, filter or index field must be a top-level read-model field of ASCII letters,"
-              + " digits and underscores (no nested path): "
-              + LogSanitizer.sanitizeForLog(field));
-    }
   }
 
   // ---- declared indexes ----
@@ -720,7 +585,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     }
     String ddl = createIndexSql(index); // validates the name and the keys before any I/O
     String name = indexName(index);
-    String table = tableName(index.projection());
+    String table = ReadModelRules.tableName(index.projection());
     ensureTableExists(index.projection());
     SQLException lost = null;
     for (int attempt = 1; ; attempt++) {
@@ -805,55 +670,28 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     if (index == null) {
       throw new IllegalArgumentException("index cannot be null");
     }
-    String table = tableName(index.projection());
-    return "CREATE INDEX IF NOT EXISTS "
-        + indexName(index)
-        + " ON "
-        + table
-        + " ("
-        + indexColumns(index)
-        + ")";
+    String table = ReadModelRules.tableName(index.projection());
+    return ReadModelRules.createIndexSql(indexName(index), table, indexColumns(index));
   }
 
   /** The column list of {@code index}'s statement: each key's expression and direction, id last. */
   private static String indexColumns(ProjectionIndex index) {
     var columns = new ArrayList<String>();
-    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
+    for (Sort.Order key : ReadModelRules.keysWithIdTiebreak(index.keys())) {
       columns.add(
           keyExpression(key.field()) + (key.direction() == SortDirection.DESC ? " DESC" : ""));
     }
     return String.join(", ", columns);
   }
 
-  private static final int INDEX_NAME_HASH_DIGITS = 10;
-  private static final String INDEX_NAME_MARK = "_ix_";
-  private static final int POSTGRES_IDENTIFIER_BYTES = 63;
-
-  /** The deterministic name of {@code index} (see {@link #declareIndex}). */
+  /**
+   * The deterministic name of {@code index} (see {@link #declareIndex}), from {@link
+   * ReadModelRules#indexName} over this backend's column list. The table name is checked before the
+   * keys, so a bad projection name fails before a bad key.
+   */
   static String indexName(ProjectionIndex index) {
-    String table = tableName(index.projection());
-    String columns = indexColumns(index); // validates every key
-    var readable = new StringBuilder(index.projection().value());
-    for (Sort.Order key : keysWithIdTiebreak(index.keys())) {
-      readable.append('_').append(key.field().toLowerCase(java.util.Locale.ROOT));
-      if (key.direction() == SortDirection.DESC) {
-        readable.append("_desc");
-      }
-    }
-    int room = POSTGRES_IDENTIFIER_BYTES - INDEX_NAME_MARK.length() - INDEX_NAME_HASH_DIGITS;
-    String prefix = readable.length() > room ? readable.substring(0, room) : readable.toString();
-    return prefix + INDEX_NAME_MARK + sha256Hex(table + "|" + columns, INDEX_NAME_HASH_DIGITS);
-  }
-
-  private static String sha256Hex(String text, int digits) {
-    try {
-      byte[] hash =
-          java.security.MessageDigest.getInstance("SHA-256")
-              .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-      return java.util.HexFormat.of().formatHex(hash).substring(0, digits);
-    } catch (java.security.NoSuchAlgorithmException e) {
-      throw new IllegalStateException("SHA-256 is required of every Java platform", e);
-    }
+    return ReadModelRules.indexName(
+        index, ReadModelRules.tableName(index.projection()), indexColumns(index));
   }
 
   /**
@@ -904,7 +742,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   @Override
   public <T> Optional<Versioned<T>> findById(
       ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
-    validateInputs(projectionName, id);
+    ReadModelRules.validateInputs(projectionName, id);
     if (type == null) {
       throw new IllegalArgumentException("type cannot be null");
     }
@@ -917,14 +755,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       row = findVersionedJsonByIdOn(conn, projectionName, id, lockMode);
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to find projection with lock: " + shown(projectionName, id), e);
+          "Failed to find projection with lock: " + ReadModelRules.shown(projectionName, id), e);
     }
-    return fromJson(row, type, projectionName, id);
+    return rules.fromJson(row, type, projectionName, id);
   }
 
   private Optional<Versioned<String>> findVersionedJsonByIdOn(
       Connection conn, ProjectionName projectionName, String id, LockMode lockMode) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     String sql =
         String.format(
             lockMode == LockMode.PESSIMISTIC ? SELECT_BY_ID_FOR_UPDATE : SELECT_BY_ID_VERSIONED,
@@ -941,24 +779,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       }
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to find projection with lock: " + shown(projectionName, id), e);
+          "Failed to find projection with lock: " + ReadModelRules.shown(projectionName, id), e);
     }
-  }
-
-  private <T> Optional<Versioned<T>> fromJson(
-      Optional<Versioned<String>> row, Class<T> type, ProjectionName projectionName, String id) {
-    return row.map(
-        r ->
-            new Versioned<>(
-                fromJson(
-                    r.data(), type, "Failed to find projection with lock: ", projectionName, id),
-                r.version()));
   }
 
   @Override
   public <T> void save(
       ProjectionName projectionName, String id, T readModel, long expectedVersion) {
-    validateInputs(projectionName, id);
+    ReadModelRules.validateInputs(projectionName, id);
     if (readModel == null) {
       throw new IllegalArgumentException("readModel cannot be null");
     }
@@ -978,7 +806,9 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
           });
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to save projection with version check: " + shown(projectionName, id), e);
+          "Failed to save projection with version check: "
+              + ReadModelRules.shown(projectionName, id),
+          e);
     }
   }
 
@@ -988,61 +818,41 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       String id,
       String json,
       long expectedVersion) {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     try (var ps = conn.prepareStatement(String.format(VERSIONED_UPDATE, table))) {
       ps.setString(1, json);
       ps.setString(2, id);
       ps.setLong(3, expectedVersion);
       int updated = ps.executeUpdate();
       if (updated == 0) {
-        throw new OptimisticLockException(
-            "Optimistic lock conflict on projection '%s/%s': expected version %d"
-                .formatted(projectionName.value(), id, expectedVersion));
+        throw ReadModelRules.optimisticLockConflict(projectionName, id, expectedVersion);
       }
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to save projection with version check: " + shown(projectionName, id), e);
+          "Failed to save projection with version check: "
+              + ReadModelRules.shown(projectionName, id),
+          e);
     }
   }
 
-  // The (de)serialisation step, kept apart from every connection scope (see the note above save).
+  // The serialisation step, kept apart from every connection scope (see the note above save). The
+  // reverse step is rules.fromJson, under the same discipline.
 
   private String toJson(
       Object readModel, String failure, ProjectionName projectionName, String id) {
     try {
       return objectMapper.writeValueAsString(readModel);
     } catch (JsonProcessingException e) {
-      throw new EventStoreException(failure + shown(projectionName, id), e);
+      throw new EventStoreException(failure + ReadModelRules.shown(projectionName, id), e);
     }
-  }
-
-  private <T> T fromJson(
-      String json, Class<T> type, String failure, ProjectionName projectionName, String id) {
-    try {
-      return objectMapper.readValue(json, type);
-    } catch (JsonProcessingException e) {
-      throw new EventStoreException(failure + shown(projectionName, id), e);
-    }
-  }
-
-  private <T> List<T> fromJson(
-      List<String> rows, Class<T> type, String failure, ProjectionName projectionName) {
-    List<T> results = new ArrayList<>(rows.size());
-    try {
-      for (String json : rows) {
-        results.add(objectMapper.readValue(json, type));
-      }
-    } catch (JsonProcessingException e) {
-      throw new EventStoreException(failure + shown(projectionName), e);
-    }
-    return results;
   }
 
   private void ensureTableExists(ProjectionName projectionName) {
     if (tablesChecked.contains(projectionName)) {
       return;
     }
-    tableName(projectionName); // reject a name outside the rule before touching the database
+    // Reject a name outside the rule before touching the database.
+    ReadModelRules.tableName(projectionName);
 
     synchronized (this) {
       if (tablesChecked.contains(projectionName)) {
@@ -1060,7 +870,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
           }
           if (!lostCreationRace(failure) || attempt == TABLE_CREATION_ATTEMPTS) {
             throw new EventStoreException(
-                "Failed to create projection table: " + tableName(projectionName), failure);
+                "Failed to create projection table: " + ReadModelRules.tableName(projectionName),
+                failure);
           }
           logLostCreationRace(projectionName);
           lost = failure;
@@ -1100,7 +911,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     log.debug(
         "Projection table {} was created concurrently by another session; creating it again finds"
             + " it",
-        tableName(projectionName));
+        ReadModelRules.tableName(projectionName));
   }
 
   /**
@@ -1116,7 +927,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
   private static void createTable(Connection conn, ProjectionName projectionName)
       throws SQLException {
-    String table = tableName(projectionName);
+    String table = ReadModelRules.tableName(projectionName);
     String createSql =
         "CREATE TABLE IF NOT EXISTS "
             + table
@@ -1132,32 +943,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
   }
 
   /**
-   * The read-model table of {@code projectionName}: the name plus {@code _view}. A name outside
-   * {@link #TABLE_NAMED_PROJECTION} is rejected, not rewritten: the old mapping replaced every
-   * other character with {@code _} and let PostgreSQL fold the case and truncate at 63 bytes, so
-   * {@code order-summary}, {@code order.summary} and {@code order_summary}, or {@code Orders} and
-   * {@code orders}, silently shared one table — rows overwrote each other, {@code findAll} returned
-   * the other projection's rows, and a rebuild of one corrupted the other. The rule also keeps the
-   * name safe to splice into SQL. The old reserved-word check ran on the name before {@code _view}
-   * was appended and rejected harmless names such as {@code order}; it is gone.
-   */
-  private static String tableName(ProjectionName projectionName) {
-    String name = projectionName.value();
-    if (!TABLE_NAMED_PROJECTION.matcher(name).matches()) {
-      throw new IllegalArgumentException(
-          "Projection name '"
-              + LogSanitizer.sanitizeForLog(name)
-              + "' cannot name a read-model table: it must match [a-z_][a-z0-9_]{0,57} —"
-              + " lower-case ASCII letters, digits and underscores, starting with a letter or an"
-              + " underscore, at most 58 characters (the table is the name plus '_view'). The name"
-              + " is used exactly as given, never rewritten, so that no two projection names share"
-              + " a table: rename the projection, e.g. 'order_summary' instead of 'order-summary'"
-              + " or 'OrderSummary'.");
-    }
-    return name + "_view";
-  }
-
-  /**
    * Rejects, at registration, a projection name this repository cannot store read models under —
    * one outside {@code [a-z_][a-z0-9_]{0,57}}. The projection runners call it for every
    * registration before they read an event, so the name fails at startup instead of on the
@@ -1170,8 +955,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    */
   @Override
   public void checkProjectionName(ProjectionName projectionName) {
-    validateProjectionName(projectionName);
-    tableName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
+    ReadModelRules.tableName(projectionName);
   }
 
   /**
@@ -1220,8 +1005,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * logged and never fails the committed batch. An action that throws an {@link Error} ends the
    * run: after a clean commit the Error propagates from this method, and when {@code commit()} or
    * closing the connection threw, it is added as suppressed to that exception, which stays the one
-   * thrown. {@code CacheAwareProjection} evicts the query cache this way. The private {@code
-   * AfterCommitActions} class lists the crash and failure points.
+   * thrown. {@code CacheAwareProjection} evicts the query cache this way. {@link
+   * AfterCommitActions} lists the crash and failure points.
    *
    * <p>Implements {@link AtomicBatchProcessor#executeAtomically}. The {@code offsetStore} parameter
    * is ignored — the offset is saved internally, in {@code readmodel_checkpoint}, within the same
@@ -1249,7 +1034,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       long fencingEpoch,
       ProjectionUpdater projectionUpdater,
       OffsetStore offsetStore) {
-    tableName(projectionName); // reject a name outside the rule before touching the database
+    // Reject a name outside the rule before touching the database.
+    ReadModelRules.tableName(projectionName);
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.BATCH,
@@ -1284,7 +1070,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    */
   @Override
   public void prepareReadModel(ProjectionName projectionName) {
-    validateProjectionName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
     ensureTableExists(projectionName);
   }
 
@@ -1335,8 +1121,8 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
       ProjectionName projectionName,
       List<EventEnvelope> batch,
       ProjectionUpdater projectionUpdater) {
-    validateProjectionName(projectionName);
-    tableName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
+    ReadModelRules.tableName(projectionName);
     runCheckpointTransaction(
         projectionName,
         CheckpointTransaction.REPLAY,
@@ -1361,18 +1147,13 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * after the connection is back in the pool, and also when {@code commit()} or closing the
    * connection failed after the COMMIT was issued. A transaction that rolled back discards them.
    * The actions run with the transaction's exception in flight, and an Error from one rides on it
-   * as suppressed instead of replacing it.
+   * as suppressed instead of replacing it ({@link AfterCommitActions#runCheckpointTransaction}). A
+   * failing action is logged at WARN on this repository's logger.
    */
   private void runCheckpointTransaction(
       ProjectionName projectionName, CheckpointTransaction kind, CheckpointTransactionBody body) {
-    var afterCommitActions = new AfterCommitActions(projectionName);
-    try {
-      commitUnderCheckpointLock(kind, body, afterCommitActions);
-    } catch (Throwable inFlight) {
-      afterCommitActions.runIfCommitIssued(inFlight);
-      throw inFlight;
-    }
-    afterCommitActions.runIfCommitIssued(null);
+    AfterCommitActions.runCheckpointTransaction(
+        projectionName, log, actions -> commitUnderCheckpointLock(kind, body, actions));
   }
 
   /**
@@ -1402,118 +1183,6 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
           // Tables created inside the transaction survive only after commit
           return () -> tablesChecked.addAll(transactionScopedRepository.tablesEnsuredInTransaction);
         });
-  }
-
-  /**
-   * The actions registered through {@link TransactionScopedRepository#afterCommit} during one
-   * {@link #executeAtomically} transaction. They run, in registration order, once the transaction's
-   * COMMIT has been issued, and are discarded if the transaction rolls back before that.
-   *
-   * <p>{@code CacheAwareProjection} registers its query-cache eviction here. Run before the commit,
-   * the eviction would let a query landing between the projection's writes and the commit read the
-   * pre-batch rows (READ COMMITTED: the batch's writes are invisible to other connections until the
-   * commit) and cache them, and the cache would then serve the pre-batch read model until the
-   * entry's TTL ran out.
-   *
-   * <p>Crash and failure points:
-   *
-   * <ul>
-   *   <li>Failure before the COMMIT is issued (an updater throw, a fence or overlap rejection, the
-   *       monotonic offset guard): the transaction rolls back and the actions are discarded. The
-   *       read model did not change, so whatever the cache holds still matches it.
-   *   <li>{@code commit()} throws: the outcome is unknown (the connection can drop after the server
-   *       committed), so the actions run anyway. An unneeded eviction costs one cache miss; a
-   *       missing one serves the pre-batch read model until the TTL.
-   *   <li>An action throws a {@link RuntimeException}: logged, and the remaining actions still run.
-   *       It never fails {@link #executeAtomically}: the batch is committed, and reporting it as
-   *       failed would make the runner retry it, have the overlap guard reject the retry, and drop
-   *       the projection to standby.
-   *   <li>An action throws an {@link Error}: the actions after it do not run. After a clean commit
-   *       the Error propagates from {@link #executeAtomically}; the batch and its checkpoint stay
-   *       committed. When {@code commit()} or closing the connection threw, that exception is
-   *       already in flight and stays the one thrown, with the Error added as suppressed: it
-   *       reports the commit's unknown outcome, which the runner's retry resolves (the overlap
-   *       guard rejects it if the server committed), and an Error from cache-eviction code must not
-   *       hide it.
-   *   <li>The process dies between the commit and the actions: the batch is committed and the
-   *       checkpoint advanced, and the actions are lost. For the query cache that is safe: the
-   *       {@code CachingQueryBus} cache lives in the same process's memory and dies with it, so the
-   *       restarted process reads the committed read model on its first miss. No eviction is needed
-   *       at startup or recovery. An action whose effect outlives the process is not covered and
-   *       must not rely on running.
-   * </ul>
-   *
-   * <p>An action registered after the actions ran (from an action, or through a repository kept
-   * past {@link #executeAtomically}) runs at once: the writes are committed. One registered after a
-   * rollback is discarded. Not thread-safe: the transaction-scoped repository, like the connection
-   * it is bound to, belongs to the thread running the transaction.
-   */
-  private static final class AfterCommitActions {
-
-    private final ProjectionName projectionName;
-    private final List<Runnable> queued = new ArrayList<>();
-    private boolean commitIssued;
-    private boolean ran;
-
-    private AfterCommitActions(ProjectionName projectionName) {
-      this.projectionName = projectionName;
-    }
-
-    private void add(Runnable action) {
-      if (ran) {
-        runGuarded(action);
-      } else {
-        queued.add(action);
-      }
-    }
-
-    private void commitIssued() {
-      commitIssued = true;
-    }
-
-    /**
-     * Runs the queued actions, in registration order, if the COMMIT was issued.
-     *
-     * @param inFlight the exception {@link #executeAtomically} is throwing ({@code commit()} or
-     *     closing the connection failed after the COMMIT was issued), or {@code null} after a clean
-     *     commit
-     */
-    private void runIfCommitIssued(Throwable inFlight) {
-      if (!commitIssued) {
-        return;
-      }
-      ran = true;
-      try {
-        for (Runnable action : queued) {
-          runGuarded(action);
-        }
-      } catch (Error actionError) {
-        // An Error ends the run. With nothing in flight it propagates, as it always has.
-        // With the batch's exception in flight it must not replace it: that exception reports the
-        // commit's unknown outcome, so the Error rides on it as suppressed. The JVM can throw one
-        // preallocated Error instance more than once, and suppressing an exception on itself throws
-        // an IllegalArgumentException that would replace the one in flight.
-        if (inFlight == null) {
-          throw actionError;
-        }
-        if (actionError != inFlight) {
-          inFlight.addSuppressed(actionError);
-        }
-      }
-      queued.clear();
-    }
-
-    private void runGuarded(Runnable action) {
-      try {
-        action.run();
-      } catch (RuntimeException e) {
-        log.warn(
-            "Projection '{}' after-commit action failed; the batch stays committed and the"
-                + " remaining after-commit actions still run",
-            projectionName.value(),
-            e);
-      }
-    }
   }
 
   /**
@@ -1572,7 +1241,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         createTableInTransaction(projectionName);
       } catch (SQLException e) {
         throw new EventStoreException(
-            "Failed to create projection table: " + tableName(projectionName), e);
+            "Failed to create projection table: " + ReadModelRules.tableName(projectionName), e);
       }
       tablesEnsuredInTransaction.add(projectionName);
     }
@@ -1612,7 +1281,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
     @Override
     public <T> void save(ProjectionName projectionName, String id, T readModel) {
-      validateInputs(projectionName, id);
+      ReadModelRules.validateInputs(projectionName, id);
       if (readModel == null) {
         throw new IllegalArgumentException("readModel cannot be null");
       }
@@ -1626,23 +1295,23 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
     @Override
     public <T> Optional<T> findById(ProjectionName projectionName, String id, Class<T> type) {
-      validateInputs(projectionName, id);
+      ReadModelRules.validateInputs(projectionName, id);
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
       ensureTableOnConnection(projectionName);
       return findJsonByIdOn(conn, projectionName, id)
-          .map(j -> fromJson(j, type, "Failed to find projection: ", projectionName, id));
+          .map(j -> rules.fromJson(j, type, "Failed to find projection: ", projectionName, id));
     }
 
     @Override
     public <T> List<T> findAll(ProjectionName projectionName, Class<T> type) {
-      validateProjectionName(projectionName);
+      ReadModelRules.validateProjectionName(projectionName);
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return fromJson(
+      return rules.fromJson(
           findAllJsonOn(conn, projectionName),
           type,
           "Failed to find all projections: ",
@@ -1651,7 +1320,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
 
     @Override
     public void delete(ProjectionName projectionName, String id) {
-      validateInputs(projectionName, id);
+      ReadModelRules.validateInputs(projectionName, id);
       ensureTableOnConnection(projectionName);
       deleteOn(conn, projectionName, id);
     }
@@ -1659,28 +1328,28 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     @Override
     public <T> Page<T> findAll(
         ProjectionName projectionName, Class<T> type, PageRequest pageRequest) {
-      validateProjectionName(projectionName);
+      ReadModelRules.validateProjectionName(projectionName);
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
       if (pageRequest == null) {
         throw new IllegalArgumentException("pageRequest cannot be null");
       }
-      refuseEncryptedKeys(type, null, pageRequest.sort());
+      rules.refuseEncryptedKeys(type, null, pageRequest.sort());
       String sql = pageSql(projectionName, null, pageRequest.sort());
       ensureTableOnConnection(projectionName);
-      return fromJson(
+      return rules.fromJson(
           pageJsonOn(conn, projectionName, sql, null, pageRequest), type, projectionName);
     }
 
     @Override
     public <T> Page<T> findAllBy(
         ProjectionName projectionName, Class<T> type, FieldEquals filter, PageRequest pageRequest) {
-      validateFilteredRead(projectionName, type, filter, pageRequest);
-      refuseEncryptedKeys(type, filter, pageRequest.sort());
+      ReadModelRules.validateFilteredRead(projectionName, type, filter, pageRequest);
+      rules.refuseEncryptedKeys(type, filter, pageRequest.sort());
       String sql = pageSql(projectionName, filter, pageRequest.sort());
       ensureTableOnConnection(projectionName);
-      return fromJson(
+      return rules.fromJson(
           pageJsonOn(conn, projectionName, sql, filter, pageRequest), type, projectionName);
     }
 
@@ -1695,7 +1364,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
     @Override
     public <T> Optional<Versioned<T>> findById(
         ProjectionName projectionName, String id, Class<T> type, LockMode lockMode) {
-      validateInputs(projectionName, id);
+      ReadModelRules.validateInputs(projectionName, id);
       if (type == null) {
         throw new IllegalArgumentException("type cannot be null");
       }
@@ -1703,14 +1372,14 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
         throw new IllegalArgumentException("lockMode cannot be null");
       }
       ensureTableOnConnection(projectionName);
-      return fromJson(
+      return rules.fromJson(
           findVersionedJsonByIdOn(conn, projectionName, id, lockMode), type, projectionName, id);
     }
 
     @Override
     public <T> void save(
         ProjectionName projectionName, String id, T readModel, long expectedVersion) {
-      validateInputs(projectionName, id);
+      ReadModelRules.validateInputs(projectionName, id);
       if (readModel == null) {
         throw new IllegalArgumentException("readModel cannot be null");
       }
@@ -1875,7 +1544,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    */
   @Override
   public void stampFencingEpoch(ProjectionName projectionName, long fencingEpoch) {
-    validateProjectionName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
     checkpointFence.stampEpoch(dataSource, projectionName, fencingEpoch);
   }
 
@@ -1888,33 +1557,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    * @param projectionName unique name of the projection to reset
    */
   public void resetOffset(ProjectionName projectionName) {
-    validateProjectionName(projectionName);
+    ReadModelRules.validateProjectionName(projectionName);
     checkpointFence.reset(dataSource, projectionName);
-  }
-
-  /**
-   * A projection name rendered for an exception message: the name and the row id are caller text,
-   * so both pass through {@link LogSanitizer#sanitizeForLog} before they are embedded.
-   */
-  private static String shown(ProjectionName projectionName) {
-    return LogSanitizer.sanitizeForLog(projectionName.value());
-  }
-
-  /** {@code projection/id} rendered for an exception message, both parts sanitized. */
-  private static String shown(ProjectionName projectionName, String id) {
-    return shown(projectionName) + "/" + LogSanitizer.sanitizeForLog(id);
-  }
-
-  private void validateInputs(ProjectionName projectionName, String id) {
-    validateProjectionName(projectionName);
-    if (id == null || id.isBlank()) {
-      throw new IllegalArgumentException("id cannot be null or blank");
-    }
-  }
-
-  private void validateProjectionName(ProjectionName projectionName) {
-    if (projectionName == null) {
-      throw new IllegalArgumentException("projectionName cannot be null");
-    }
   }
 }
