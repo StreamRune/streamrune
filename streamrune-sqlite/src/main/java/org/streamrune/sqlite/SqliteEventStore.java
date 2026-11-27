@@ -95,7 +95,8 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * mapped the same way as a second line. An offset collision on {@code global_offset} ({@code
  * SQLITE_CONSTRAINT_PRIMARYKEY}) means the counter fell behind the stored events: an {@link
  * EventStoreException} that says how to re-seed it, because a retry reserves the same offsets. The
- * read path classifies a stored event it cannot read exactly as {@code PostgresEventStore} does.
+ * read path classifies a stored event it cannot read exactly as {@code PostgresEventStore} does:
+ * both take the classification, snapshot decision and deserialization from {@link EventReadPath}.
  *
  * <p><b>Timestamps.</b> The store stamps {@code created_at} of the event and snapshot rows with the
  * application {@link Clock} it was built with, as epoch microseconds; there is no database clock.
