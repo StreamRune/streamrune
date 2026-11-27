@@ -175,6 +175,72 @@ class SagaSlotsTest {
   }
 
   @Test
+  void aStepArrivingDuringAContinuousRunOfTimedClaims_isLetInWithinOneRoundOfThem()
+      throws Exception {
+    var slots = new SagaSlots(() -> 2);
+    var stop = new AtomicBoolean();
+    var claimsAfterTheStepAsked = new AtomicInteger();
+    var stepAsked = new AtomicBoolean();
+    var claims = new java.util.ArrayList<Thread>();
+    for (int i = 0; i < 4; i++) {
+      claims.add(
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    while (!stop.get()) {
+                      try (SagaSlots.Slot slot =
+                          slots.tryAcquire(java.time.Duration.ofSeconds(5))) {
+                        if (slot == null) {
+                          continue;
+                        }
+                        if (stepAsked.get()) {
+                          claimsAfterTheStepAsked.incrementAndGet();
+                        }
+                        Thread.sleep(1);
+                      } catch (InterruptedException e) {
+                        return;
+                      }
+                    }
+                  }));
+    }
+    awaitUntil("the claims keep both slots busy", () -> slots.waiting() >= 1);
+    stepAsked.set(true);
+    try (SagaSlots.Slot _ = slots.acquire()) {
+      assertThat(claimsAfterTheStepAsked.get())
+          .as("only the claims queued before the step go ahead of it")
+          .isLessThanOrEqualTo(4 + 2);
+    } finally {
+      stop.set(true);
+      for (Thread t : claims) {
+        t.join();
+      }
+    }
+  }
+
+  @Test
+  void aWaiterThatFailsWithAnythingButAnInterrupt_leavesNoTicketInTheQueue() throws Exception {
+    var failOnce = new AtomicBoolean(true);
+    var slots =
+        new SagaSlots(
+            () -> {
+              if (failOnce.getAndSet(false)) {
+                throw new IllegalStateException("the limit cannot be read");
+              }
+              return 1;
+            });
+
+    assertThatThrownBy(slots::acquire).isInstanceOf(IllegalStateException.class);
+
+    assertThat(slots.waiting()).isZero();
+    assertThat(slots.inUse()).isZero();
+    assertThat(slots.heldByCurrentThread()).isFalse();
+    try (SagaSlots.Slot slot = slots.tryAcquire(java.time.Duration.ofSeconds(5))) {
+      assertThat(slot).as("the next acquire is not stuck behind a lost ticket").isNotNull();
+    }
+    assertThat(slots.inUse()).isZero();
+  }
+
+  @Test
   void anInterruptedWaiter_leavesTheQueueHoldingNothing_andTheNextOneGoesAhead() throws Exception {
     var slots = new SagaSlots(() -> 1);
     var order = new CopyOnWriteArrayList<String>();

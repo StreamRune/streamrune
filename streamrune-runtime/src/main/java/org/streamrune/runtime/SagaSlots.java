@@ -8,10 +8,13 @@ import java.util.function.IntSupplier;
 
 /**
  * The slots one {@link SagaRunner} shares between the steps of its pages and the deadline claims of
- * the {@link SagaTimeoutRunner} built from it: a step or a claim runs only while it holds a slot,
- * so the steps and deadline claims of one saga type together never exceed the runner's budgeted
- * steps — its parallelism per bound subscription, the number the connection budget counts ({@link
- * SagaParallelismDefault#stepsInFlightAtMost}).
+ * the {@link SagaTimeoutRunner} built from it: a step of a delivered page or a claim runs only
+ * while it holds a slot, so the steps and deadline claims of one saga type together stay within the
+ * runner's budgeted steps — its parallelism per bound subscription, the number the connection
+ * budget counts ({@link SagaParallelismDefault#stepsInFlightAtMost}). The one exception is the
+ * claim of a saga whose own step is in flight at that moment and has been on the polls that passed
+ * the saga over: when no slot frees within its claim wait, the timeout runner makes that claim
+ * without a slot (see {@link SagaTimeoutRunner}).
  *
  * <p><b>The limit is read at every acquire.</b> It is the supplier's value at that moment, at least
  * 1. The runner tells the gate when its parallelism or its bound subscriptions change ({@link
@@ -36,16 +39,25 @@ import java.util.function.IntSupplier;
  * holds ({@link #heldByCurrentThread()}), instead of handing the items to workers that would queue
  * for slots while the caller holds one and waits for them.
  *
- * <p><b>Lock order.</b> A slot is taken first: before the saga's {@link SagaStepLock} and before
- * any aggregate lock. No thread asks for a slot while it holds a step lock or an aggregate lock;
- * the reentrant entry above takes nothing. A thread that waits for a slot therefore waits for
- * holders that run, or that wait for a lock whose holder is a slot holder too, or a path that takes
- * no slot (a replay feed, an operator's call, a sweeper resume) and never waits for one: no cycle
- * of waits passes through the slots.
+ * <p><b>Lock order.</b> A step or a claim takes its slot first: before the saga's {@link
+ * SagaStepLock} and before any aggregate lock; the reentrant entry above takes nothing. A thread
+ * that waits for a slot then waits for holders that run, or that wait for a lock whose holder is a
+ * slot holder too, or a path that takes no slot (a replay feed, an operator's call, a sweeper
+ * resume) and never waits for one. One case asks for a slot while it holds a lock: a delivery made
+ * on the appending thread, as the test module's in-memory subscription and application listener
+ * plumbing do. There an application thread that holds its command's aggregate lock delivers a page
+ * whose items ask for this gate's slots, and a step of another runner — holding that runner's slot,
+ * its saga's step lock and an aggregate lock — can deliver a page of this runner. Every wait that
+ * can close a cycle there ends: a nested delivery takes the subscription's delivery lock with a try
+ * only, an aggregate-lock wait ends at the command bus's lock timeout, and a step-lock wait at the
+ * step bound or the claim wait; the delivery then fails retry-later, as {@link SagaStepLock}
+ * describes for its own lock order. No cycle of waits through the slots lasts.
  *
  * <p><b>A timed acquire.</b> {@link #tryAcquire} waits in the same queue for at most a bound and
- * gives up holding nothing. The timeout runner's claims use it, bounded by the claim wait: a slot
- * held by a step that does not return then delays a claim by one claim wait, not for ever.
+ * gives up holding nothing. The timeout runner's claims use it, bounded by the claim wait, so a
+ * slot held by a step that does not return delays a claim by at most one claim wait per poll: the
+ * claim then goes to the next poll, or, when it is the claim of that very saga, is made without a
+ * slot.
  */
 final class SagaSlots {
 
@@ -128,30 +140,30 @@ final class SagaSlots {
     // whose interrupt status is set takes a free slot nobody waits for, as a step takes a free
     // step lock. It fails only where it would have to wait (the await below).
     lock.lock();
+    boolean acquired = false;
     try {
       waiting.addLast(ticket);
       long left = timeoutNanos;
-      try {
-        while (waiting.peekFirst() != ticket || inUse >= currentLimit()) {
-          if (timeoutNanos < 0) {
-            changed.await();
-          } else if (left <= 0) {
-            waiting.remove(ticket);
-            changed.signalAll(); // the thread behind this one may be first now
-            return null;
-          } else {
-            left = changed.awaitNanos(left);
-          }
+      while (waiting.peekFirst() != ticket || inUse >= currentLimit()) {
+        if (timeoutNanos < 0) {
+          changed.await();
+        } else if (left <= 0) {
+          return null; // the finally below takes the ticket out of the queue
+        } else {
+          left = changed.awaitNanos(left);
         }
-      } catch (InterruptedException interrupted) {
-        waiting.remove(ticket);
-        changed.signalAll(); // the thread behind this one may be first now
-        throw interrupted;
       }
       waiting.removeFirst();
       inUse++;
+      acquired = true;
       changed.signalAll(); // the next in line may fit as well
     } finally {
+      // Every exit without a slot — the bound, an interrupt, or anything else thrown while the
+      // thread waited (the limit's supplier, an Error) — takes the ticket out of the queue, so it
+      // never stays at the head and blocks every later acquire.
+      if (!acquired && waiting.remove(ticket)) {
+        changed.signalAll(); // the thread behind this one may be first now
+      }
       lock.unlock();
     }
     held[0] = 1;
