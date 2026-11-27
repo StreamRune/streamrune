@@ -623,6 +623,16 @@ public final class EventAppendSupport {
    * the same stream. The store calls it after its append connection is returned, so a claim loser
    * never holds one connection while the inbox borrows another.
    *
+   * <p>Without the check, the claim loser would be handed the winner's offsets and final version
+   * with {@code alreadyApplied=true}: a fabricated success for a command whose events were never
+   * appended and never will be (the key stays claimed), carrying another stream's metadata back to
+   * the caller. The command bus's sequential pre-check refuses these same inputs, so this
+   * concurrent path reaches the same verdict through the same shared guard ({@link
+   * CommandInbox.InboxResult#requireBoundTo}). The refusal is an {@link IllegalArgumentException},
+   * not an {@link EventStoreException}, on purpose: the bus classifies it as deterministic (its
+   * default dead-letter eligibility excludes it), so a colliding key is neither retried nor
+   * dead-lettered against a conflict that can never resolve.
+   *
    * @param inbox the store's command inbox
    * @param key the key
    * @param commandType the command type presenting the key
