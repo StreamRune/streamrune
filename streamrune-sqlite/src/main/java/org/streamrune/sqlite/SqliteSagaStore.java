@@ -30,6 +30,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.SagaRows;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
@@ -115,6 +116,11 @@ import org.streamrune.runtime.jdbc.StoreObjectMappers;
  * IllegalArgumentException} naming it, before it serializes or borrows a connection, and a negative
  * {@code limit} likewise (SQLite would read it as "no limit"). Saga ids in exception messages pass
  * through {@link LogSanitizer#sanitizeForLog(String)}.
+ *
+ * <p>The argument checks, the log-safe rendering, the refusals of a stale view and of a conflicting
+ * create, the state conversion and the decoding of the rows read are {@link SagaRows}'s; this store
+ * keeps its statements, binds, transactions and the JVM clock. A refusal is thrown after the write
+ * transaction returns, never inside it.
  */
 public final class SqliteSagaStore implements SagaStore {
 
@@ -396,7 +402,7 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public void createFaulted(SagaId sagaId, SagaType sagaType, SagaState initialState) {
-    requireWrite(sagaId, sagaType, initialState, SagaStatus.FAULTED);
+    SagaRows.requireWrite(sagaId, sagaType, initialState, SagaStatus.FAULTED);
     String json = serialize(sagaId, initialState);
     String existingType =
         write(
@@ -414,7 +420,10 @@ public final class SqliteSagaStore implements SagaStore {
                 return ps.executeUpdate() == 1 ? null : storedType(conn, sagaId);
               }
             });
-    refuseConflict(sagaId, sagaType, existingType);
+    if (existingType != null) {
+      SagaRows.refuseConflict(
+          sagaId, sagaType, existingType.isEmpty() ? Optional.empty() : Optional.of(existingType));
+    }
   }
 
   /** The two forward inserts: the row, its shield, and the episode stamp of a COMPENSATING row. */
@@ -426,9 +435,9 @@ public final class SqliteSagaStore implements SagaStore {
       SagaStatus status,
       boolean deadLetterPending,
       EventId episodeCause) {
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     String json = serialize(sagaId, state);
-    boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
+    boolean entersEpisode = SagaRows.entersEpisode(status); // the episode stamp rule
     String existingType =
         write(
             sagaId,
@@ -446,11 +455,14 @@ public final class SqliteSagaStore implements SagaStore {
                 ps.setBoolean(7, deadLetterPending);
                 setNullableLong(ps, 8, entersEpisode ? 1L : null);
                 setNullableLong(ps, 9, entersEpisode ? now : null);
-                ps.setString(10, entersEpisode ? causeValue(episodeCause) : null);
+                ps.setString(10, entersEpisode ? SagaRows.causeValue(episodeCause) : null);
                 return ps.executeUpdate() == 1 ? null : storedType(conn, sagaId);
               }
             });
-    refuseConflict(sagaId, sagaType, existingType);
+    if (existingType != null) {
+      SagaRows.refuseConflict(
+          sagaId, sagaType, existingType.isEmpty() ? Optional.empty() : Optional.of(existingType));
+    }
   }
 
   /**
@@ -461,23 +473,11 @@ public final class SqliteSagaStore implements SagaStore {
     try (PreparedStatement ps = conn.prepareStatement(SELECT_TYPE)) {
       ps.setString(1, sagaId.value());
       try (ResultSet rs = ps.executeQuery()) {
-        // A row that made the insert do nothing exists in this transaction; "" stands for none.
+        // A row that made the insert do nothing exists in this transaction; "" stands for none,
+        // which the caller hands SagaRows as no stored type ("already exists").
         return rs.next() ? rs.getString(1) : "";
       }
     }
-  }
-
-  /**
-   * Throws for an insert that found a row: {@code existingType} is {@code null} when it inserted.
-   */
-  private static void refuseConflict(SagaId sagaId, SagaType sagaType, String existingType) {
-    if (existingType == null) {
-      return;
-    }
-    if (!existingType.isEmpty() && !existingType.equals(sagaType.value())) {
-      throw new SagaTypeCollisionException(sagaId, SagaType.of(existingType), sagaType);
-    }
-    throw new OptimisticLockException("Saga " + forLog(sagaId) + " already exists");
   }
 
   /**
@@ -531,9 +531,9 @@ public final class SqliteSagaStore implements SagaStore {
       long expectedVersion,
       EventId episodeCause,
       String failureMessage) {
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     String json = serialize(sagaId, state);
-    boolean entersEpisode = status == SagaStatus.COMPENSATING;
+    boolean entersEpisode = SagaRows.entersEpisode(status);
     int updated =
         write(
             sagaId,
@@ -549,7 +549,7 @@ public final class SqliteSagaStore implements SagaStore {
                 ps.setBoolean(5, entersEpisode);
                 ps.setLong(6, now);
                 ps.setBoolean(7, entersEpisode);
-                ps.setString(8, causeValue(episodeCause));
+                ps.setString(8, SagaRows.causeValue(episodeCause));
                 ps.setString(9, sagaId.value());
                 ps.setString(10, sagaType.value());
                 ps.setLong(11, expectedVersion);
@@ -557,7 +557,7 @@ public final class SqliteSagaStore implements SagaStore {
               }
             });
     if (updated == 0) {
-      throw staleView(sagaId, expectedVersion);
+      throw SagaRows.staleView(sagaId, expectedVersion);
     }
   }
 
@@ -577,13 +577,13 @@ public final class SqliteSagaStore implements SagaStore {
       SagaStatus status,
       long expectedVersion,
       AppliedEvent applied) {
-    requireWrite(sagaId, sagaType, state, status);
+    SagaRows.requireWrite(sagaId, sagaType, state, status);
     if (applied == null) {
       throw new IllegalArgumentException("applied must not be null");
     }
     long eventOffset = applied.eventOffset().value();
     String json = serialize(sagaId, state);
-    boolean entersEpisode = status == SagaStatus.COMPENSATING; // the episode stamp rule
+    boolean entersEpisode = SagaRows.entersEpisode(status); // the episode stamp rule
     int updated =
         write(
             sagaId,
@@ -604,7 +604,7 @@ public final class SqliteSagaStore implements SagaStore {
                 ps.setLong(10, now);
                 ps.setBoolean(11, entersEpisode);
                 // The applied event is the cause of an episode this write opens.
-                ps.setString(12, causeValue(applied.eventId()));
+                ps.setString(12, SagaRows.causeValue(applied.eventId()));
                 ps.setString(13, sagaId.value());
                 ps.setString(14, sagaType.value());
                 ps.setLong(15, expectedVersion);
@@ -612,7 +612,7 @@ public final class SqliteSagaStore implements SagaStore {
               }
             });
     if (updated == 0) {
-      throw staleView(sagaId, expectedVersion);
+      throw SagaRows.staleView(sagaId, expectedVersion);
     }
   }
 
@@ -629,7 +629,7 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public boolean markFaulted(SagaId sagaId, SagaType sagaType, long expectedVersion) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     Boolean transitioned =
         write(
             sagaId,
@@ -656,7 +656,7 @@ public final class SqliteSagaStore implements SagaStore {
               return !SagaStatus.FAULTED.name().equals(prior);
             });
     if (transitioned == null) {
-      throw staleView(sagaId, expectedVersion);
+      throw SagaRows.staleView(sagaId, expectedVersion);
     }
     return transitioned;
   }
@@ -671,7 +671,7 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public void setDeadLetterPending(SagaId sagaId, SagaType sagaType, boolean pending) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     write(
         sagaId,
         "saga dead-letter shield",
@@ -696,7 +696,7 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public void delete(SagaId sagaId, SagaType sagaType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     write(
         sagaId,
         "saga delete",
@@ -719,102 +719,42 @@ public final class SqliteSagaStore implements SagaStore {
   @Override
   public <S extends SagaState> Optional<LoadedSaga<S>> load(
       SagaId sagaId, SagaType sagaType, Class<S> stateType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     if (stateType == null) {
       throw new IllegalArgumentException("stateType must not be null");
     }
-    StoredRow row;
+    SagaRows.StoredRow row;
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_BY_TYPE)) {
       ps.setString(1, sagaId.value());
       ps.setString(2, sagaType.value());
       try (ResultSet rs = ps.executeQuery()) {
-        row = rs.next() ? StoredRow.of(rs) : null;
+        row = rs.next() ? SagaRows.StoredRow.of(rs, SqliteInstantCodec.SAGA_ROWS) : null;
       }
     } catch (SQLException | RuntimeException e) {
-      throw new EventStoreException("Failed to load saga state: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to load saga state: " + SagaRows.forLog(sagaId), e);
     }
-    if (row == null) {
-      return Optional.empty();
-    }
-    S state;
-    try {
-      state = objectMapper.readValue(row.stateJson(), stateType);
-    } catch (Exception e) {
-      throw new SagaStateSerializationException(
-          "Failed to deserialize saga state: " + forLog(sagaId), sagaId, e);
-    }
-    return Optional.of(
-        new LoadedSaga<>(
-            state,
-            row.status(),
-            row.version(),
-            row.updatedAt(),
-            row.episodeVersion(),
-            row.episodeClaimedAt(),
-            row.episodeCause(),
-            row.genesisApplied(),
-            row.preFaultStatus(),
-            row.deadLetterPending(),
-            row.lastAppliedOffset(),
-            row.lastReplayedOffset()));
-  }
-
-  /** The columns of {@link #SELECT_BY_TYPE}, read while the connection is open. */
-  private record StoredRow(
-      String stateJson,
-      SagaStatus status,
-      long version,
-      Instant updatedAt,
-      Long episodeVersion,
-      Instant episodeClaimedAt,
-      EventId episodeCause,
-      boolean genesisApplied,
-      SagaStatus preFaultStatus,
-      boolean deadLetterPending,
-      Long lastAppliedOffset,
-      Long lastReplayedOffset) {
-
-    static StoredRow of(ResultSet rs) throws SQLException {
-      Long claimedAt = nullableLong(rs, "episode_claimed_at");
-      String cause = rs.getString("episode_cause_event_id");
-      String preFault = rs.getString("pre_fault_status");
-      return new StoredRow(
-          rs.getString("state_json"),
-          SagaStatus.valueOf(rs.getString("status")),
-          rs.getLong("version"),
-          SqliteTimestamps.fromMicros(rs.getLong("updated_at")),
-          nullableLong(rs, "episode_version"),
-          claimedAt == null ? null : SqliteTimestamps.fromMicros(claimedAt),
-          cause == null ? null : new EventId(cause),
-          rs.getInt("genesis_applied") != 0,
-          preFault == null ? null : SagaStatus.valueOf(preFault),
-          rs.getInt("dead_letter_pending") != 0,
-          nullableLong(rs, "last_applied_offset"),
-          nullableLong(rs, "last_replayed_offset"));
-    }
+    // Deserialize (and decrypt, if any field is @Encrypted) after the connection is returned.
+    return row == null
+        ? Optional.empty()
+        : Optional.of(SagaRows.assemble(objectMapper, sagaId, row, stateType));
   }
 
   /** {@inheritDoc} One plain read of three columns; the state is not read. */
   @Override
   public Optional<RowFacts> loadRowFacts(SagaId sagaId, SagaType sagaType) {
-    requireKey(sagaId, sagaType);
+    SagaRows.requireKey(sagaId, sagaType);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_ROW_FACTS)) {
       ps.setString(1, sagaId.value());
       ps.setString(2, sagaType.value());
       try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          return Optional.empty();
-        }
-        return Optional.of(
-            new RowFacts(
-                SagaStatus.valueOf(rs.getString("status")),
-                rs.getInt("dead_letter_pending") != 0,
-                nullableLong(rs, "last_applied_offset")));
+        return rs.next()
+            ? Optional.of(SagaRows.rowFacts(rs, SqliteInstantCodec.SAGA_ROWS))
+            : Optional.empty();
       }
     } catch (SQLException | RuntimeException e) {
-      throw new EventStoreException("Failed to load saga row facts: " + forLog(sagaId), e);
+      throw new EventStoreException("Failed to load saga row facts: " + SagaRows.forLog(sagaId), e);
     }
   }
 
@@ -825,7 +765,7 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public List<SagaId> findTimedOut(SagaType sagaType, Instant cutoff, int limit) {
-    requireType(sagaType);
+    SagaRows.requireType(sagaType);
     if (cutoff == null) {
       throw new IllegalArgumentException("cutoff must not be null");
     }
@@ -852,8 +792,8 @@ public final class SqliteSagaStore implements SagaStore {
    */
   @Override
   public List<SagaId> findByStatus(SagaType sagaType, SagaStatus status, int limit) {
-    requireType(sagaType);
-    requireStatus(status);
+    SagaRows.requireType(sagaType);
+    SagaRows.requireStatus(status);
     requireLimit(limit);
     return sagaIds(
         SELECT_BY_STATUS,
@@ -867,8 +807,8 @@ public final class SqliteSagaStore implements SagaStore {
 
   @Override
   public long countByStatus(SagaType sagaType, SagaStatus status) {
-    requireType(sagaType);
-    requireStatus(status);
+    SagaRows.requireType(sagaType);
+    SagaRows.requireStatus(status);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(COUNT_BY_STATUS)) {
       ps.setString(1, sagaType.value());
@@ -889,7 +829,7 @@ public final class SqliteSagaStore implements SagaStore {
   @Override
   public List<CompensatingSaga> findCompensating(
       SagaType sagaType, Instant updatedBefore, int limit) {
-    requireType(sagaType);
+    SagaRows.requireType(sagaType);
     if (updatedBefore == null) {
       throw new IllegalArgumentException("updatedBefore must not be null");
     }
@@ -897,19 +837,12 @@ public final class SqliteSagaStore implements SagaStore {
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(SELECT_COMPENSATING)) {
       ps.setString(1, sagaType.value());
-      ps.setLong(2, SqliteTimestamps.toMicros(updatedBefore));
+      SqliteInstantCodec.SAGA_ROWS.bindInstant(ps, 2, updatedBefore);
       ps.setInt(3, limit);
       try (ResultSet rs = ps.executeQuery()) {
         List<CompensatingSaga> result = new ArrayList<>();
         while (rs.next()) {
-          // Never NULL on a COMPENSATING row here (the episode stamp rule and the CHECK
-          // constraint); the record stays nullable so a non-conforming store is refused per saga.
-          Long claimedAt = nullableLong(rs, "episode_claimed_at");
-          result.add(
-              new CompensatingSaga(
-                  SagaId.of(rs.getString("saga_id")),
-                  SqliteTimestamps.fromMicros(rs.getLong("updated_at")),
-                  claimedAt == null ? null : SqliteTimestamps.fromMicros(claimedAt)));
+          result.add(SagaRows.compensatingSaga(rs, SqliteInstantCodec.SAGA_ROWS));
         }
         return result;
       }
@@ -945,8 +878,8 @@ public final class SqliteSagaStore implements SagaStore {
     return SqliteTransactions.write(
         dataSource,
         transaction,
-        transaction + " of saga " + forLog(sagaId),
-        failureMessage + forLog(sagaId),
+        transaction + " of saga " + SagaRows.forLog(sagaId),
+        failureMessage + SagaRows.forLog(sagaId),
         work);
   }
 
@@ -958,14 +891,12 @@ public final class SqliteSagaStore implements SagaStore {
   /**
    * Converts saga state to its stored JSON, before any connection is borrowed. A failure is a
    * state-conversion failure, never a storage one (see the class Javadoc).
+   *
+   * <p>The conversion and its failure mapping are {@link SagaRows#serialize}; this method only
+   * binds the store's mapper.
    */
   private String serialize(SagaId sagaId, SagaState state) {
-    try {
-      return objectMapper.writeValueAsString(state);
-    } catch (Exception e) {
-      throw new SagaStateSerializationException(
-          "Failed to serialize saga state: " + forLog(sagaId), sagaId, e);
-    }
+    return SagaRows.serialize(objectMapper, sagaId, state);
   }
 
   private static void bindKey(
@@ -985,57 +916,10 @@ public final class SqliteSagaStore implements SagaStore {
     }
   }
 
-  private static Long nullableLong(ResultSet rs, String column) throws SQLException {
-    long value = rs.getLong(column);
-    return rs.wasNull() ? null : value;
-  }
-
-  /** The bind value of an episode cause: the event id's text, or SQL {@code NULL} for none. */
-  private static String causeValue(EventId episodeCause) {
-    return episodeCause == null ? null : episodeCause.value();
-  }
-
-  private static void requireType(SagaType sagaType) {
-    if (sagaType == null) {
-      throw new IllegalArgumentException("sagaType must not be null");
-    }
-  }
-
-  private static void requireStatus(SagaStatus status) {
-    if (status == null) {
-      throw new IllegalArgumentException("status must not be null");
-    }
-  }
-
-  private static void requireKey(SagaId sagaId, SagaType sagaType) {
-    if (sagaId == null) {
-      throw new IllegalArgumentException("sagaId must not be null");
-    }
-    requireType(sagaType);
-  }
-
-  private static void requireWrite(
-      SagaId sagaId, SagaType sagaType, SagaState state, SagaStatus status) {
-    requireKey(sagaId, sagaType);
-    if (state == null) {
-      throw new IllegalArgumentException("state must not be null");
-    }
-    requireStatus(status);
-  }
-
   /** SQLite reads a negative {@code LIMIT} as "no limit"; the store refuses it instead. */
   static void requireLimit(int limit) {
     if (limit < 0) {
       throw new IllegalArgumentException("limit must not be negative, got " + limit);
     }
-  }
-
-  private static String forLog(SagaId sagaId) {
-    return LogSanitizer.sanitizeForLog(sagaId.value());
-  }
-
-  private static OptimisticLockException staleView(SagaId sagaId, long expectedVersion) {
-    return new OptimisticLockException(
-        "Stale view of saga " + forLog(sagaId) + " (expectedVersion=" + expectedVersion + ")");
   }
 }
