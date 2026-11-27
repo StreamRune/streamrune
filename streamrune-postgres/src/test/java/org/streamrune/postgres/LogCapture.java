@@ -9,16 +9,22 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Captures the log events of one logger category: a logback {@link ListAppender} attached to the
- * logger named after a class until {@link #close()} detaches it. A test pins a log line through its
- * category, level and formatted text.
+ * logger named after a class until {@link #close()} detaches it. While attached the logger runs at
+ * {@code TRACE}, so INFO and DEBUG lines are captured too; {@link #close()} restores its previous
+ * level (possibly inherited) and additivity. A test pins a log line through its category, level and
+ * formatted text.
  */
 final class LogCapture implements AutoCloseable {
 
   private final Logger logger;
   private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+  private final Level previousLevel;
+  private final boolean previousAdditive;
 
   private LogCapture(Logger logger) {
     this.logger = logger;
+    this.previousLevel = logger.getLevel();
+    this.previousAdditive = logger.isAdditive();
   }
 
   /** Starts capturing the events of the logger named after {@code category}. */
@@ -26,6 +32,7 @@ final class LogCapture implements AutoCloseable {
     var capture = new LogCapture((Logger) LoggerFactory.getLogger(category));
     capture.appender.start();
     capture.logger.addAppender(capture.appender);
+    capture.logger.setLevel(Level.TRACE);
     return capture;
   }
 
@@ -36,10 +43,15 @@ final class LogCapture implements AutoCloseable {
     }
   }
 
-  /** Detaches and stops the appender; the captured events stay readable. */
+  /**
+   * Detaches and stops the appender and restores the logger's previous level and additivity; the
+   * captured events stay readable.
+   */
   @Override
   public void close() {
     logger.detachAppender(appender);
     appender.stop();
+    logger.setLevel(previousLevel);
+    logger.setAdditive(previousAdditive);
   }
 }

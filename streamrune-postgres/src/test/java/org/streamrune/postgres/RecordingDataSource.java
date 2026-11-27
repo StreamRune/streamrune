@@ -39,7 +39,9 @@ import org.postgresql.jdbc.PgStatement;
  *   <li>{@code #n queryTimeout=driver} — the statement was unwrapped to {@link PgStatement}, the
  *       way {@code StatementTimeout.applyTo} does before setting its millisecond timeout on the
  *       real statement (which still applies);
- *   <li>{@code #n commit}, {@code #n rollback} (either form), {@code #n close}.
+ *   <li>{@code #n commit}, {@code #n rollback}, {@code #n rollback to savepoint} — recorded before
+ *       the real call, so a failing commit or rollback still leaves its event;
+ *   <li>{@code #n close}.
  * </ul>
  *
  * <p>Two fault and race hooks: {@link #beforePrepare} runs caller code on the real connection right
@@ -109,8 +111,9 @@ final class RecordingDataSource implements DataSource {
 
   /**
    * Runs {@code hook} once, on the real (unrecorded) connection the statement belongs to, right
-   * before the first statement whose SQL starts with {@code sqlPrefix} is prepared. Nothing the
-   * hook does is recorded; the {@code prepare} event follows it.
+   * before the first statement whose SQL starts with {@code sqlPrefix} is prepared. Every pending
+   * hook that matches one statement runs, in registration order. Nothing a hook does is recorded;
+   * the {@code prepare} event follows the hooks.
    */
   synchronized void beforePrepare(String sqlPrefix, SqlHook hook) {
     if (sqlPrefix == null || hook == null) {
@@ -120,9 +123,9 @@ final class RecordingDataSource implements DataSource {
   }
 
   /**
-   * Makes the next {@code close()} of a connection that committed (a {@code commit()} returned on
-   * it) throw {@code SQLException("injected close failure")} after the real close ran and the
-   * {@code close} event was recorded. One-shot.
+   * Makes the next {@code close()} of a connection that committed (a {@code commit()} returned
+   * normally on it) throw {@code SQLException("injected close failure")} after the real close ran
+   * and the {@code close} event was recorded. One-shot.
    */
   synchronized void failNextCloseAfterCommit() {
     failNextCloseAfterCommit = true;
@@ -160,13 +163,17 @@ final class RecordingDataSource implements DataSource {
     return fail;
   }
 
-  private synchronized SqlHook takeHook(String sql) {
-    for (int i = 0; i < hooks.size(); i++) {
-      if (sql.startsWith(hooks.get(i).sqlPrefix())) {
-        return hooks.remove(i).hook();
+  /** Removes and returns every pending hook whose prefix {@code sql} starts with, in order. */
+  private synchronized List<SqlHook> takeHooks(String sql) {
+    List<SqlHook> matching = new ArrayList<>();
+    for (var it = hooks.iterator(); it.hasNext(); ) {
+      PendingHook pending = it.next();
+      if (sql.startsWith(pending.sqlPrefix())) {
+        matching.add(pending.hook());
+        it.remove();
       }
     }
-    return null;
+    return matching;
   }
 
   @Override
@@ -214,10 +221,15 @@ final class RecordingDataSource implements DataSource {
       String name = method.getName();
       switch (name) {
         case "setAutoCommit" -> record("#" + n + " autoCommit=" + args[0]);
+        case "commit" -> record("#" + n + " commit");
+        case "rollback" ->
+            record(
+                "#"
+                    + n
+                    + (args == null || args.length == 0 ? " rollback" : " rollback to savepoint"));
         case "prepareStatement", "prepareCall" -> {
           String sql = (String) args[0];
-          SqlHook hook = takeHook(sql);
-          if (hook != null) {
+          for (SqlHook hook : takeHooks(sql)) {
             hook.run(real);
           }
           record("#" + n + " prepare " + sql);
@@ -240,11 +252,7 @@ final class RecordingDataSource implements DataSource {
       }
       Object result = RecordingDataSource.invoke(real, method, args);
       switch (name) {
-        case "commit" -> {
-          committed = true;
-          record("#" + n + " commit");
-        }
-        case "rollback" -> record("#" + n + " rollback");
+        case "commit" -> committed = true;
         case "createStatement", "prepareStatement", "prepareCall" -> {
           return wrapStatement((Statement) result, (Connection) proxy, method.getReturnType());
         }

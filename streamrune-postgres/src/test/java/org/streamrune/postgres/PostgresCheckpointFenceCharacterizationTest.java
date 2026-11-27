@@ -181,6 +181,11 @@ class PostgresCheckpointFenceCharacterizationTest {
         c -> {
           var e = fenced(() -> fence.lockForBatch(c, P, 4L, GlobalOffset.of(10)));
           assertSame(Guard.EPOCH_FENCE, e.guard());
+          assertEquals(
+              "Projection 'p' commit fenced out: caller epoch 4 is below the stored epoch 5 — a"
+                  + " newer leader has taken over the lease. Rolling back the stale leader's write"
+                  + " (epoch fencing).",
+              e.getMessage());
         });
   }
 

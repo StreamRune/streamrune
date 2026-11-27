@@ -9,7 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeAll;
@@ -180,5 +183,95 @@ class RecordingDataSourceTest {
             "#3 autoCommit=false",
             "#3 commit",
             "#3 close");
+  }
+
+  @Test
+  void clearKeepsPendingHooksAndTheCloseFailureArm() throws Exception {
+    var recorder = new RecordingDataSource(dataSource);
+    var runs = new AtomicInteger();
+    recorder.beforePrepare("SELECT 1", c -> runs.incrementAndGet());
+    recorder.failNextCloseAfterCommit();
+    try (Connection before = recorder.getConnection()) {
+      assertTrue(before.isValid(1));
+    }
+
+    recorder.clear();
+
+    Connection conn = recorder.getConnection();
+    conn.setAutoCommit(false);
+    conn.prepareStatement("SELECT 1").close();
+    assertEquals(1, runs.get(), "a hook registered before clear() still runs after it");
+    conn.commit();
+    var failure = assertThrows(SQLException.class, conn::close);
+    assertEquals("injected close failure", failure.getMessage());
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1", "#1 autoCommit=false", "#1 prepare SELECT 1", "#1 commit", "#1 close");
+  }
+
+  @Test
+  void commitAndRollbackAreRecordedBeforeDelegating() throws Exception {
+    var recorder = new RecordingDataSource(dataSource);
+    recorder.failNextCloseAfterCommit();
+
+    // pgjdbc refuses commit and rollback in autocommit mode: the events are recorded all the same.
+    try (Connection conn = recorder.getConnection()) {
+      assertThrows(SQLException.class, conn::commit);
+      assertThrows(SQLException.class, conn::rollback);
+    }
+    // The refused commit did not count as committed: that close did not consume the arm.
+    Connection committed = recorder.getConnection();
+    committed.setAutoCommit(false);
+    committed.commit();
+    assertThrows(SQLException.class, committed::close);
+
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 commit",
+            "#1 rollback",
+            "#1 close",
+            "open #2",
+            "#2 autoCommit=false",
+            "#2 commit",
+            "#2 close");
+  }
+
+  @Test
+  void rollbackToSavepointIsDistinctFromRollback() throws Exception {
+    var recorder = new RecordingDataSource(dataSource);
+    try (Connection conn = recorder.getConnection()) {
+      conn.setAutoCommit(false);
+      Savepoint savepoint = conn.setSavepoint();
+      conn.rollback(savepoint);
+      conn.rollback();
+      conn.setAutoCommit(true);
+    }
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 autoCommit=false",
+            "#1 rollback to savepoint",
+            "#1 rollback",
+            "#1 autoCommit=true",
+            "#1 close");
+  }
+
+  @Test
+  void everyMatchingHookRunsOnceInRegistrationOrder() throws Exception {
+    var recorder = new RecordingDataSource(dataSource);
+    List<String> runs = new ArrayList<>();
+    recorder.beforePrepare("SELECT", c -> runs.add("broad"));
+    recorder.beforePrepare("UPDATE", c -> runs.add("other"));
+    recorder.beforePrepare("SELECT 1", c -> runs.add("narrow"));
+
+    try (Connection conn = recorder.getConnection()) {
+      conn.prepareStatement("SELECT 1").close();
+      assertThat(runs).containsExactly("broad", "narrow");
+      conn.prepareStatement("SELECT 1").close();
+      assertThat(runs).containsExactly("broad", "narrow");
+      conn.prepareStatement("UPDATE pg_class SET relname = relname WHERE false").close();
+    }
+    assertThat(runs).containsExactly("broad", "narrow", "other");
   }
 }
