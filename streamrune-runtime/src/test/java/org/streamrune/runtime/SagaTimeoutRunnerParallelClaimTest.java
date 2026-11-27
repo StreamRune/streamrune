@@ -24,6 +24,7 @@ import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.saga.SagaStatus;
 import org.streamrune.runtime.SagaStepLockFixture.Advanced;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
+import org.streamrune.runtime.SagaStepLockFixture.Refund;
 import org.streamrune.runtime.SagaStepLockFixture.Release;
 import org.streamrune.runtime.SagaStepLockFixture.Reserve;
 import org.streamrune.runtime.SagaStepLockFixture.Ship;
@@ -157,11 +158,17 @@ class SagaTimeoutRunnerParallelClaimTest {
       var dispatching = new AtomicInteger();
       var most = new AtomicInteger();
       var slotsSeen = new AtomicInteger();
+      // The first two commands wait for each other, so two dispatch at once whatever the timing.
+      var firstTwo = new CountDownLatch(2);
       p.bus.beforeEveryCommand =
           command -> {
             most.accumulateAndGet(dispatching.incrementAndGet(), Math::max);
             slotsSeen.accumulateAndGet(p.runner.slots().inUse(), Math::max);
             try {
+              if (firstTwo.getCount() > 0) {
+                firstTwo.countDown();
+                await(firstTwo);
+              }
               Thread.sleep(20);
             } catch (InterruptedException e) {
               Thread.currentThread().interrupt();
@@ -289,7 +296,7 @@ class SagaTimeoutRunnerParallelClaimTest {
 
   @Test
   void theWaitsOfTwoSagasInSteps_overlap() {
-    Duration bound = Duration.ofSeconds(1);
+    Duration bound = Duration.ofSeconds(2);
     try (var p = new SagaStepLockFixture(new SagaStepLock(), bound, false)) {
       var hung = new HungSteps(p, "1", "2");
       p.clock.advance(TIMEOUT);
@@ -386,7 +393,7 @@ class SagaTimeoutRunnerParallelClaimTest {
    */
   @Test
   void aClaimToWaitFor_thatGetsNoSlotWithinItsWait_isMadeWithoutASlot_underneathTheStep() {
-    Duration bound = Duration.ofSeconds(1);
+    Duration bound = Duration.ofSeconds(2);
     try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
       parallelism(p, 1);
       var hung = new HungSteps(p, "1");
@@ -423,7 +430,7 @@ class SagaTimeoutRunnerParallelClaimTest {
 
   @Test
   void withTheFenceOff_aClaimToWaitForThatGetsNoSlot_isDeferredPastTheWait() {
-    Duration bound = Duration.ofSeconds(1);
+    Duration bound = Duration.ofSeconds(2);
     try (var p = new SagaStepLockFixture(new SagaStepLock(), bound, false)) {
       parallelism(p, 1);
       var hung = new HungSteps(p, "1");
@@ -451,7 +458,7 @@ class SagaTimeoutRunnerParallelClaimTest {
    */
   @Test
   void whileAHungStepHoldsTheOnlySlot_anotherSagasClaimGoesToTheNextPoll_andTheHungSagaIsClaimed() {
-    Duration bound = Duration.ofMillis(500);
+    Duration bound = Duration.ofSeconds(1);
     try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
       parallelism(p, 1);
       open(p, "2"); // before the step that holds the only slot
@@ -482,6 +489,278 @@ class SagaTimeoutRunnerParallelClaimTest {
 
       assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(p.row("2").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.runner.slots().inUse()).isZero();
+    }
+  }
+
+  /**
+   * Counts the compensation commands dispatched and the most slots held whenever a command is
+   * dispatched, from the moment it is installed.
+   */
+  private static final class Watch {
+    final AtomicInteger compensations = new AtomicInteger();
+    final AtomicInteger mostSlots = new AtomicInteger();
+
+    Watch(SagaStepLockFixture p) {
+      p.bus.beforeEveryCommand =
+          command -> {
+            mostSlots.accumulateAndGet(p.runner.slots().inUse(), Math::max);
+            if (command instanceof Release || command instanceof Refund) {
+              compensations.incrementAndGet();
+            }
+          };
+    }
+  }
+
+  /**
+   * A saga the poll waits for whose step ends before the waiting poll, while a step of another saga
+   * holds the runner's only slot: its claim is not made without a slot, the polls that passed it
+   * over are forgotten, and the next poll claims it on a slot like any other saga.
+   */
+  @Test
+  void aClaimToWaitFor_whoseStepHasEnded_isNotMadeWithoutASlot_andTakesASlotOnTheNextPoll() {
+    Duration bound = Duration.ofMillis(500);
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
+      parallelism(p, 1);
+      var hung = new HungSteps(p, "1");
+      p.clock.advance(TIMEOUT);
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        p.timeoutRunner.pollOnce();
+      }
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1")))
+          .isEqualTo(SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING);
+      hung.returnAtLast(); // saga 1's step ends
+      var other = new HungSteps(p, "2"); // a saga within its deadline; its step holds the slot
+      var watch = new Watch(p);
+
+      List<String> info = timeoutInfoDuring(p.timeoutRunner::pollOnce);
+
+      assertThat(info).noneSatisfy(line -> assertThat(line).contains("without a slot"));
+      assertThat(info).anySatisfy(line -> assertThat(line).contains("were postponed"));
+      assertThat(p.row("1").episodeVersion()).as("not claimed without a slot").isNull();
+      assertThat(watch.compensations.get()).as("steps and claims: the one step").isZero();
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1"))).isZero();
+      assertThat(p.timeoutRunner.claimsDeferredPastTheWait()).isZero();
+      assertThat(p.runner.slots().inUse()).as("only the other step's slot").isEqualTo(1);
+
+      other.returnAtLast();
+      p.timeoutRunner.pollOnce();
+
+      assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(watch.compensations.get()).isEqualTo(2);
+      assertThat(watch.mostSlots.get()).isLessThanOrEqualTo(1);
+      assertThat(p.runner.slots().inUse()).isZero();
+    }
+  }
+
+  /**
+   * Saga 1 is a re-pick: claimed, its refund failing transiently. A correlated event resumes its
+   * episode on the event path, and that resume step hangs across three polls, which pass the saga
+   * over. Once the step has ended, the polls that passed it over are forgotten.
+   */
+  private static void aRePickPassedOverThreeTimes(SagaStepLockFixture p) {
+    open(p, "1");
+    p.refund.failure = () -> new IllegalStateException("connection reset");
+    p.clock.advance(TIMEOUT);
+    p.timeoutRunner.pollOnce();
+    assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATING);
+    p.clock.advance(TIMEOUT.plusSeconds(1)); // idle long enough to be re-picked
+    var release = new CountDownLatch(1);
+    var reached = new CountDownLatch(1);
+    p.bus.beforeEveryCommand =
+        command -> {
+          if (command instanceof Release r && r.orderId().equals("1")) {
+            reached.countDown();
+            park(release);
+          }
+        };
+    EventEnvelope advanced = p.append(new Advanced("1"));
+    CompletableFuture<Void> resume = onAnotherThread(() -> p.deliver(advanced));
+    await(reached);
+    for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+      p.timeoutRunner.pollOnce();
+    }
+    assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1")))
+        .isEqualTo(SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING);
+    p.bus.beforeEveryCommand = null;
+    release.countDown();
+    outcomeOf(resume); // the resume's refund fails again: the episode stays a re-pick
+    assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATING);
+  }
+
+  @Test
+  void aRePickPassedOverWhileAResumeStepHeldItsLock_isResumedOnASlot_andItsCountIsForgotten() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), Duration.ofMillis(500))) {
+      parallelism(p, 1);
+      aRePickPassedOverThreeTimes(p);
+      var watch = new Watch(p);
+
+      p.timeoutRunner.pollOnce();
+
+      assertThat(watch.compensations.get()).as("resumed: Release and Refund again").isEqualTo(2);
+      assertThat(watch.mostSlots.get()).isEqualTo(1);
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1"))).isZero();
+    }
+  }
+
+  @Test
+  void aRePickPassedOverWhileAResumeStepHeldItsLock_isNotResumedWithoutASlot_onceThatStepEnded() {
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), Duration.ofMillis(500))) {
+      parallelism(p, 1);
+      aRePickPassedOverThreeTimes(p);
+      var other = new HungSteps(p, "2"); // a saga within its deadline; its step holds the slot
+      var watch = new Watch(p);
+
+      List<String> info = timeoutInfoDuring(p.timeoutRunner::pollOnce);
+
+      assertThat(info).noneSatisfy(line -> assertThat(line).contains("without a slot"));
+      assertThat(watch.compensations.get()).as("steps and claims: the one step").isZero();
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1"))).isZero();
+
+      other.returnAtLast();
+      p.refund.failure = null;
+      p.timeoutRunner.pollOnce();
+
+      assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(watch.mostSlots.get()).isLessThanOrEqualTo(1);
+      assertThat(p.runner.slots().inUse()).isZero();
+    }
+  }
+
+  /**
+   * A step that does not return holds the runner's only slot, and eight other sagas are past their
+   * deadline. Each poll waits one claim wait for the first of them and postpones the rest at once;
+   * the hung saga is claimed underneath its step by the fourth poll, about five claim waits after
+   * the first, not eight claim waits a poll later.
+   */
+  @Test
+  void whileAHungStepHoldsTheOnlySlot_aPollCostsOneClaimWait_andTheHungSagaIsClaimedInTime() {
+    Duration bound = Duration.ofSeconds(1);
+    String[] others = {"2", "3", "4", "5", "6", "7", "8", "9"};
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
+      parallelism(p, 1);
+      open(p, others);
+      var hung = new HungSteps(p, "1");
+      p.clock.advance(TIMEOUT);
+
+      long first = System.nanoTime();
+      List<String> passing =
+          timeoutInfoDuring(
+              () -> {
+                for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+                  long start = System.nanoTime();
+                  p.timeoutRunner.pollOnce();
+                  assertThat(Duration.ofNanos(System.nanoTime() - start))
+                      .as("one claim wait for the first saga, the other seven postponed at once")
+                      .isGreaterThanOrEqualTo(bound)
+                      .isLessThan(bound.multipliedBy(4));
+                }
+              });
+      assertThat(passing)
+          .as("logged on the first cycle of the streak")
+          .filteredOn(line -> line.contains("were postponed"))
+          .singleElement()
+          .satisfies(line -> assertThat(line).startsWith("8 deadline claim(s)"));
+      long start = System.nanoTime();
+      List<String> info = timeoutInfoDuring(p.timeoutRunner::pollOnce);
+      Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+      assertThat(took)
+          .as("one claim wait for the batch, one for the hung saga")
+          .isGreaterThanOrEqualTo(bound.multipliedBy(2))
+          .isLessThan(bound.multipliedBy(5));
+      assertThat(Duration.ofNanos(System.nanoTime() - first))
+          .as("three polls of one claim wait, the fourth of two")
+          .isLessThan(bound.multipliedBy(9));
+      assertThat(p.row("1").episodeVersion()).as("claimed underneath the hung step").isNotNull();
+      assertThat(info).anySatisfy(line -> assertThat(line).contains("goes on without a slot"));
+      for (String order : others) {
+        assertThat(p.row(order).episodeVersion()).isNull();
+      }
+
+      hung.returnAtLast();
+      p.timeoutRunner.pollOnce();
+
+      assertThat(compensated(p, "1")).isTrue();
+      assertThat(compensated(p, others)).isTrue();
+      assertThat(p.runner.slots().inUse()).isZero();
+    }
+  }
+
+  /**
+   * {@code close()} while three claim workers are in flight: two inside a compensation command, one
+   * waiting for the step lock of a saga whose step does not return. Each is interrupted, the close
+   * returns long before the claim wait, nothing is left holding a slot, and the runner starts
+   * again.
+   */
+  @Test
+  void aCloseWithClaimWorkersInFlight_interruptsEachOfThem_andTheRunnerStartsAgain() {
+    Duration claimWait = Duration.ofSeconds(20);
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), claimWait)) {
+      parallelism(p, 4);
+      var timeouts =
+          SagaTimeoutRunner.<State>builder()
+              .decider(p.saga)
+              .sagaStore(p.sagaStore)
+              .commandBus(p.bus)
+              .sagaType(SagaStepLockFixture.TYPE)
+              .clock(p.clock)
+              .sagaRunner(p.runner)
+              .claimWait(claimWait)
+              .pollInterval(Duration.ofHours(1))
+              .build();
+      var ending = new HungSteps(p, "1", "2");
+      var hung = new HungSteps(p, "3");
+      p.clock.advance(TIMEOUT);
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        timeouts.pollOnce();
+      }
+      ending.returnAtLast(); // the steps of sagas 1 and 2 end; saga 3's does not
+      var inCompensation = new CountDownLatch(2);
+      var interrupted = new ConcurrentHashMap<String, Boolean>();
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (command instanceof Release release) {
+              inCompensation.countDown();
+              long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+              while (!Thread.currentThread().isInterrupted() && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+              }
+              interrupted.put(release.orderId(), Thread.currentThread().isInterrupted());
+              // A command that does not stop on an interrupt: it completes, and so does the saga.
+              Thread.interrupted();
+            }
+          };
+
+      timeouts.start();
+      await(inCompensation);
+      p.awaitWaitingFor("3", 1);
+      long start = System.nanoTime();
+      timeouts.close();
+      Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+      assertThat(took).as("no worker waited out its claim wait").isLessThan(Duration.ofSeconds(10));
+      awaitUntil("both compensations saw their interrupt", () -> interrupted.size() == 2);
+      assertThat(interrupted).containsEntry("1", true).containsEntry("2", true);
+      assertThat(p.lock.waitingFor(SagaStepLockFixture.TYPE, SagaStepLockFixture.sagaOf("3")))
+          .as("the claim waiting for the step lock was interrupted")
+          .isZero();
+      assertThat(p.row("3").episodeVersion()).isNull();
+      assertThat(timeouts.isAlive()).isFalse();
+      assertThat(timeouts.isStarted()).isFalse();
+      assertThat(p.runner.slots().inUse()).as("only the hung step's slot").isEqualTo(1);
+
+      hung.returnAtLast();
+      assertThat(p.runner.slots().inUse()).isZero();
+      p.bus.beforeEveryCommand = null;
+      p.clock.advance(TIMEOUT.plusSeconds(1)); // the claimed episodes are re-picked
+      timeouts.start();
+      try {
+        awaitUntil(
+            "the restarted runner compensates all three", () -> compensated(p, "1", "2", "3"));
+      } finally {
+        timeouts.close();
+      }
       assertThat(p.runner.slots().inUse()).isZero();
     }
   }

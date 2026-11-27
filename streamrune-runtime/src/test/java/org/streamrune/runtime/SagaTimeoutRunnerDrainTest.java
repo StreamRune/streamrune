@@ -5,6 +5,9 @@ import static org.streamrune.runtime.SagaStepLockFixture.TIMEOUT;
 import static org.streamrune.runtime.SagaStepLockFixture.TYPE;
 import static org.streamrune.runtime.SagaStepLockFixture.await;
 import static org.streamrune.runtime.SagaStepLockFixture.awaitUntil;
+import static org.streamrune.runtime.SagaStepLockFixture.onAnotherThread;
+import static org.streamrune.runtime.SagaStepLockFixture.outcomeOf;
+import static org.streamrune.runtime.SagaStepLockFixture.park;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -32,6 +35,7 @@ import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.runtime.SagaStepLockFixture.Opened;
 import org.streamrune.runtime.SagaStepLockFixture.Release;
+import org.streamrune.runtime.SagaStepLockFixture.Reserve;
 import org.streamrune.runtime.SagaStepLockFixture.State;
 import org.streamrune.test.ForwardingSagaStore;
 
@@ -269,6 +273,57 @@ class SagaTimeoutRunnerDrainTest {
       assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
       assertThat(p.sagaStore.timeoutQueryLimits).containsExactly(1);
       assertThat(untouched(p, 3)).isEqualTo(2);
+      anchor.close();
+    }
+  }
+
+  /**
+   * Saga 1 was passed over on three polls while its step was in flight, and its step has ended: the
+   * next poll would claim it in its page of sagas to wait for, after its last batch. The lease is
+   * lost during that last batch, a partial one, so the page is not run.
+   */
+  @Test
+  void aLeaseLostDuringTheLastBatch_skipsThePageOfSagasToWaitFor() {
+    var leadership = new RecordingLeadership();
+    leadership.grant(LEASE);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+      var timeouts = builder(p, 10).build();
+      var release = new CountDownLatch(1);
+      var reached = new CountDownLatch(1);
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (command instanceof Reserve reserve && reserve.orderId().equals("1")) {
+              reached.countDown();
+              park(release);
+            }
+          };
+      var opened = p.append(new Opened("1"));
+      var step = onAnotherThread(() -> p.deliver(opened));
+      await(reached);
+      p.clock.advance(TIMEOUT.plusSeconds(1));
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        timeouts.pollOnce();
+      }
+      assertThat(timeouts.deferralsOf(SagaStepLockFixture.sagaOf("1")))
+          .isEqualTo(SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING);
+      release.countDown();
+      assertThat(outcomeOf(step)).isNull();
+      p.deliver(p.append(new Opened("2")));
+      p.clock.advance(TIMEOUT.plusSeconds(1));
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (command instanceof Release r && r.orderId().equals("2")) {
+              leadership.revoke(LEASE);
+            }
+          };
+
+      timeouts.pollOnce();
+
+      assertThat(p.row("2").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.row("1").episodeVersion()).as("not claimed after the lease was lost").isNull();
+      assertThat(timeouts.claimsDeferredPastTheWait()).isZero();
       anchor.close();
     }
   }
