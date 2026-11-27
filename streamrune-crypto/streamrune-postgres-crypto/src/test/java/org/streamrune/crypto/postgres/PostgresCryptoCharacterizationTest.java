@@ -39,6 +39,7 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.VerifiedCipher;
 
 /**
  * Freezes today's observable behaviour of {@link PostgresCryptoEngine} and {@link
@@ -119,9 +120,9 @@ class PostgresCryptoCharacterizationTest {
   }
 
   /**
-   * The seam installation: how a faulty {@link PostgresCryptoEngine.CipherFactory} reaches the
-   * engine — today the package-private builder method, as {@code
-   * PostgresCryptoEngineCipherIntegrationTest} installs it.
+   * The seam installation: how a faulty {@link VerifiedCipher.CipherFactory} reaches the engine —
+   * today the package-private builder method, as {@code PostgresCryptoEngineCipherIntegrationTest}
+   * installs it.
    */
   private PostgresCryptoEngine engineWith(FaultyCiphers ciphers) {
     return PostgresCryptoEngine.builder()
@@ -669,7 +670,7 @@ class PostgresCryptoCharacterizationTest {
    * order: throw from {@code create}, initialise under a key of its own (a tag failure on decrypt),
    * or initialise in encrypt mode instead of decrypt mode (other bytes, no tag failure).
    */
-  private static final class FaultyCiphers implements PostgresCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     private final Map<Integer, Deque<Fault>> faults = new HashMap<>();
 
     FaultyCiphers throwing(int mode, Exception failure) {

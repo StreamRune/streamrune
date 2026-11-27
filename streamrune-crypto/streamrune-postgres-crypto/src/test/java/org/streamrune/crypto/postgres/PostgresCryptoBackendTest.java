@@ -69,7 +69,8 @@ class PostgresCryptoBackendTest {
     assertEquals(
         Set.of("cryptokeys", "forgotten_subjects", "erased_key_generations"),
         engine.requiredCryptoTables());
-    assertSame(metrics, field(engine, "metrics"));
+    // The engine hands its metrics to its VerifiedCipher, which records both crypto meters.
+    assertSame(metrics, field(field(engine, "verified"), "metrics"));
     assertNotSame(
         engine,
         backend.keyStoreEngine(DATA_SOURCE, new KeyStoreEngineSettings("CryptoKeys", metrics)));

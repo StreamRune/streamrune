@@ -34,6 +34,7 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.InMemoryForgottenSubjectStore;
+import org.streamrune.crypto.VerifiedCipher;
 import software.amazon.awssdk.services.kms.model.GenerateDataKeyRequest;
 
 /**
@@ -198,13 +199,15 @@ class AwsKmsCryptoEngineCipherTest {
     GCMParameterSpec params = new GCMParameterSpec(128, new byte[12]);
 
     assertNotSame(
-        AwsKmsCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params),
-        AwsKmsCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
-    Field factory = AwsKmsCryptoEngine.class.getDeclaredField("cipherFactory");
+        VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params),
+        VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
+    Field verified = AwsKmsCryptoEngine.class.getDeclaredField("verified");
+    verified.setAccessible(true);
+    Field factory = VerifiedCipher.class.getDeclaredField("ciphers");
     factory.setAccessible(true);
     assertSame(
-        AwsKmsCryptoEngine.FRESH_CIPHERS,
-        factory.get(plainEngine()),
+        VerifiedCipher.FRESH_CIPHERS,
+        factory.get(verified.get(plainEngine())),
         "an engine built without the test seam uses the production factory");
   }
 
@@ -236,8 +239,15 @@ class AwsKmsCryptoEngineCipherTest {
   }
 
   @Test
-  void theEngineKeepsNoCipherBetweenOperations() {
-    for (Field field : AwsKmsCryptoEngine.class.getDeclaredFields()) {
+  void theEngineKeepsNoCipherBetweenOperations() throws Exception {
+    // The engine holds its cipher seam as a field; neither it nor the seam may hold a cipher.
+    assertSame(
+        VerifiedCipher.class, AwsKmsCryptoEngine.class.getDeclaredField("verified").getType());
+    List<Field> fields = new ArrayList<>();
+    for (Class<?> owner : List.of(AwsKmsCryptoEngine.class, VerifiedCipher.class)) {
+      fields.addAll(List.of(owner.getDeclaredFields()));
+    }
+    for (Field field : fields) {
       assertFalse(
           ThreadLocal.class.isAssignableFrom(field.getType())
               || Cipher.class.isAssignableFrom(field.getType()),
@@ -272,7 +282,7 @@ class AwsKmsCryptoEngineCipherTest {
    * initialised under a key of its own (a wrong result) or in encrypt mode instead of decrypt mode
    * (a result that is not the plaintext and raises no tag failure).
    */
-  private static final class FaultyCiphers implements AwsKmsCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     final List<Cipher> created = new ArrayList<>();
     final List<Integer> modes = new ArrayList<>();
     private int wrongKeyMode = -1;

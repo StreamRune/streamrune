@@ -95,7 +95,8 @@ class SqliteCryptoBackendTest {
     assertThat(engine).isExactlyInstanceOf(SqliteCryptoEngine.class);
     assertThat(engine.requiredCryptoTables())
         .isEqualTo(Set.of("cryptokeys", "forgotten_subjects", "erased_key_generations"));
-    assertThat(field(engine, "metrics")).isSameAs(metrics);
+    // The engine hands its metrics to its VerifiedCipher, which records both crypto meters.
+    assertThat(field(field(engine, "verified"), "metrics")).isSameAs(metrics);
     assertThat(SqliteFiles.query(dataSource, "SELECT name FROM sqlite_schema")).isEmpty();
     assertThat(
             backend.keyStoreEngine(dataSource, new KeyStoreEngineSettings("CryptoKeys", metrics)))

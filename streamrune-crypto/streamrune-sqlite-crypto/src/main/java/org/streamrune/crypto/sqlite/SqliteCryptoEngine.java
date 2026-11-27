@@ -2,10 +2,7 @@ package org.streamrune.crypto.sqlite;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.security.Key;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -18,10 +15,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 import javax.crypto.AEADBadTagException;
-import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +27,8 @@ import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.crypto.SubjectForgottenException;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.AesGcmV1Format;
+import org.streamrune.crypto.VerifiedCipher;
 import org.streamrune.sqlite.SqliteDatabase;
 import org.streamrune.sqlite.SqliteSchemaSeries;
 import org.streamrune.sqlite.SqliteTimestamps;
@@ -125,45 +122,18 @@ public final class SqliteCryptoEngine implements CryptoEngine {
   // configured name must be a plain identifier; names starting with sqlite_ are SQLite's own.
   private static final Pattern SAFE_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
-  private static final String ALGORITHM = "AES/GCM/NoPadding";
-  private static final int GCM_TAG_LENGTH = 128;
-  private static final int GCM_IV_LENGTH = 12;
-  private static final byte FORMAT_VERSION = 1;
-  private static final int HEADER_LENGTH = 2;
-
-  /** Highest key generation the single-byte header can carry. */
-  private static final int MAX_KEY_VERSION = Byte.MAX_VALUE;
-
   private static final Logger log = LoggerFactory.getLogger(SqliteCryptoEngine.class);
-
-  /** The {@code outcome} of {@code streamrune.crypto.decrypt_retried}. */
-  private static final String RETRY_RECOVERED = "RECOVERED";
-
-  private static final String RETRY_FAILED = "FAILED";
-
-  /**
-   * Creates the cipher of one operation, initialised for {@code mode} under {@code key}.
-   * Package-private so a test can inject a fault; production always uses {@link #FRESH_CIPHERS}.
-   */
-  @FunctionalInterface
-  interface CipherFactory {
-    Cipher create(int mode, Key key, AlgorithmParameterSpec params) throws GeneralSecurityException;
-  }
-
-  /** A new cipher for every encryption, every check of one and every decryption attempt. */
-  static final CipherFactory FRESH_CIPHERS =
-      (mode, key, params) -> {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(mode, key, params);
-        return cipher;
-      };
 
   private final SqliteCryptoStatements statements;
   private final String tableName;
   private final Clock clock;
-  private final SecureRandom random = new SecureRandom();
-  private final StreamRuneMetrics metrics;
-  private final CipherFactory cipherFactory;
+
+  // The cipher seam, the encryption self-check and the one-retry decryption, shared with the other
+  // AES-GCM engines; its WARN lines go to this engine's logger.
+  private final VerifiedCipher verified;
+
+  // The v1 wire format (see the class comment), sealing and opening through the cipher seam above.
+  private final AesGcmV1Format format;
 
   private SqliteCryptoEngine(Builder builder) {
     this.tableName = validateTableName(builder.tableName);
@@ -171,8 +141,8 @@ public final class SqliteCryptoEngine implements CryptoEngine {
         new SqliteCryptoStatements(
             builder.database.dataSource(), builder.database.file(), "crypto key-store write");
     this.clock = builder.clock;
-    this.metrics = builder.metrics;
-    this.cipherFactory = builder.cipherFactory;
+    this.verified = new VerifiedCipher(builder.metrics, log, builder.cipherFactory);
+    this.format = new AesGcmV1Format(verified);
   }
 
   /**
@@ -224,17 +194,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
       // leaves a committed key that the caller's retry loads (no second mint). Inside a batch the
       // mint shares the batch's fate (see the class Javadoc).
       key = keyForEncryption(subjectId);
-      byte[] iv = new byte[GCM_IV_LENGTH];
-      random.nextBytes(iv);
-      Cipher cipher =
-          cipherFactory.create(
-              Cipher.ENCRYPT_MODE, key.key(), new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-      byte[] ciphertext = cipher.doFinal(plaintext);
-      result = new byte[HEADER_LENGTH + GCM_IV_LENGTH + ciphertext.length];
-      result[0] = FORMAT_VERSION;
-      result[1] = (byte) key.version();
-      System.arraycopy(iv, 0, result, HEADER_LENGTH, GCM_IV_LENGTH);
-      System.arraycopy(ciphertext, 0, result, HEADER_LENGTH + GCM_IV_LENGTH, ciphertext.length);
+      result = format.seal(key.key(), key.version(), plaintext);
     } catch (KeyNotFoundException | SubjectForgottenException e) {
       throw e;
     } catch (Exception e) {
@@ -244,7 +204,16 @@ public final class SqliteCryptoEngine implements CryptoEngine {
               + SqliteCryptoStatements.lockAdvice(e),
           e);
     }
-    verifyEncryption(subjectId, key, result, plaintext);
+    // The check reads the value the way decrypt does: its header against the key's generation,
+    // then its value with a second, independent cipher. The header check runs inside the one
+    // attempt, so a rejection fails the check as transient like any other failure of it.
+    verified.verify(
+        subjectId,
+        plaintext,
+        () -> {
+          AesGcmV1Format.validateHeader(subjectId.redacted(), result, key.version());
+          return format.openOnce(key.key(), result);
+        });
     return result;
   }
 
@@ -260,92 +229,6 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     return statements.write(conn -> loadOrCreateKey(conn, subjectId));
   }
 
-  /**
-   * Checks a fresh encryption the way decrypt reads it: its header against the key's generation,
-   * then its value with an independent cipher, compared with the plaintext. Any failure throws the
-   * transient {@link CryptoOperationException} before the value is returned.
-   */
-  private void verifyEncryption(
-      SubjectId subjectId, VersionedKey key, byte[] encrypted, byte[] plaintext) {
-    Exception failure = null;
-    try {
-      validateCiphertextHeader(subjectId.redacted(), encrypted, key.version());
-      if (MessageDigest.isEqual(plaintext, open(key.key(), encrypted))) {
-        return;
-      }
-    } catch (GeneralSecurityException | RuntimeException e) {
-      failure = e;
-    }
-    throw selfCheckFailed(subjectId, failure);
-  }
-
-  /**
-   * Counts and logs a failed encryption check; the returned exception is the transient type. A
-   * checked failure of the check is its cause; an unchecked one is attached as suppressed, so the
-   * classifiers that walk the cause chain do not read it as permanent evidence.
-   */
-  private CryptoOperationException selfCheckFailed(SubjectId subjectId, Exception failure) {
-    metrics.recordEncryptSelfCheckFailed();
-    log.warn(
-        "Encryption self-check failed for subject {}: the encrypted value did not decrypt to its"
-            + " plaintext and is discarded; the operation fails as transient and is retried",
-        subjectId.redacted());
-    boolean unchecked = failure instanceof RuntimeException;
-    CryptoOperationException transientFailure =
-        new CryptoOperationException(
-            "Encryption self-check failed for subject: "
-                + subjectId.redacted()
-                + " — the encrypted value did not decrypt to its plaintext and is discarded"
-                + " (transient; retrying encrypts it again)",
-            unchecked ? null : failure);
-    if (unchecked) {
-      transientFailure.addSuppressed(failure);
-    }
-    return transientFailure;
-  }
-
-  /** One decryption attempt with a cipher of its own. */
-  private byte[] open(SecretKey key, byte[] encrypted) throws GeneralSecurityException {
-    Cipher cipher =
-        cipherFactory.create(
-            Cipher.DECRYPT_MODE,
-            key,
-            new GCMParameterSpec(GCM_TAG_LENGTH, encrypted, HEADER_LENGTH, GCM_IV_LENGTH));
-    return cipher.doFinal(
-        encrypted, HEADER_LENGTH + GCM_IV_LENGTH, encrypted.length - HEADER_LENGTH - GCM_IV_LENGTH);
-  }
-
-  /**
-   * Decrypts, and retries once with a fresh cipher when the authentication tag does not match. A
-   * second mismatch propagates with the first attached as suppressed: the value itself is bad.
-   */
-  private byte[] openWithOneRetry(SubjectId subjectId, SecretKey key, byte[] encrypted)
-      throws GeneralSecurityException {
-    try {
-      return open(key, encrypted);
-    } catch (AEADBadTagException first) {
-      try {
-        byte[] plaintext = open(key, encrypted);
-        retried(subjectId, RETRY_RECOVERED);
-        return plaintext;
-      } catch (AEADBadTagException second) {
-        retried(subjectId, RETRY_FAILED);
-        second.addSuppressed(first);
-        throw second;
-      }
-    }
-  }
-
-  /** Counts and logs a retried decryption with its outcome. */
-  private void retried(SubjectId subjectId, String outcome) {
-    metrics.recordDecryptRetried(outcome);
-    log.warn(
-        "Decryption for subject {} failed its authentication tag and was retried once with a fresh"
-            + " cipher; outcome {}",
-        subjectId.redacted(),
-        outcome);
-  }
-
   @Override
   public byte[] decrypt(SubjectId subjectId, byte[] ciphertext) {
     if (subjectId == null) {
@@ -359,8 +242,8 @@ public final class SqliteCryptoEngine implements CryptoEngine {
       if (key == null) {
         throw new KeyNotFoundException("Key not found for subject: " + subjectId.redacted());
       }
-      validateCiphertextHeader(subjectId.redacted(), ciphertext, key.version());
-      return openWithOneRetry(subjectId, key.key(), ciphertext);
+      AesGcmV1Format.validateHeader(subjectId.redacted(), ciphertext, key.version());
+      return verified.openWithOneRetry(subjectId, () -> format.openOnce(key.key(), ciphertext));
     } catch (KeyNotFoundException | CryptoOperationException e) {
       throw e;
     } catch (AEADBadTagException e) {
@@ -375,62 +258,6 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     } catch (Exception e) {
       throw new CryptoOperationException(
           "Decryption failed for subject: " + subjectId.redacted(), e);
-    }
-  }
-
-  /**
-   * Rejects values this engine cannot have produced before touching the cipher, and routes a value
-   * written under a DESTROYED key generation ({@code [1, currentKeyVersion)}) to {@link
-   * KeyNotFoundException}. Every other rejection is the deterministic {@link
-   * CryptoMappingException}. The destroyed-generation check runs before the length check: a value
-   * too short to decrypt can still carry a readable two-byte header naming an erased generation.
-   */
-  private static void validateCiphertextHeader(
-      String subjectDigest, byte[] ciphertext, int currentKeyVersion) {
-    if (ciphertext.length >= HEADER_LENGTH && ciphertext[0] == FORMAT_VERSION) {
-      int blobVersion = ciphertext[1];
-      if (blobVersion >= 1 && blobVersion < currentKeyVersion) {
-        throw new KeyNotFoundException(
-            "Ciphertext was written under key generation "
-                + blobVersion
-                + ", which a GDPR erasure destroyed; the current key generation is "
-                + currentKeyVersion
-                + " for subject: "
-                + subjectDigest);
-      }
-    }
-    int minLength = HEADER_LENGTH + GCM_IV_LENGTH + GCM_TAG_LENGTH / 8;
-    if (ciphertext.length < minLength) {
-      throw new CryptoMappingException(
-          "Ciphertext too short for subject: "
-              + subjectDigest
-              + " — expected at least "
-              + minLength
-              + " bytes, got "
-              + ciphertext.length);
-    }
-    if (ciphertext[0] != FORMAT_VERSION) {
-      throw new CryptoMappingException(
-          "Unsupported ciphertext format version "
-              + ciphertext[0]
-              + " for subject: "
-              + subjectDigest
-              + " — this engine reads format "
-              + FORMAT_VERSION
-              + "; the blob may come from a different CryptoEngine or a newer StreamRune version");
-    }
-    int blobVersion = ciphertext[1];
-    if (blobVersion != currentKeyVersion) {
-      throw new CryptoMappingException(
-          "Unsupported key version "
-              + blobVersion
-              + " for subject: "
-              + subjectDigest
-              + " — this subject's current key generation is "
-              + currentKeyVersion
-              + " and destroyed generations are 1.."
-              + (currentKeyVersion - 1)
-              + "; the blob may be corrupted or come from a different CryptoEngine");
     }
   }
 
@@ -635,12 +462,12 @@ public final class SqliteCryptoEngine implements CryptoEngine {
       }
     }
     int next = maxErased + 1;
-    if (next > MAX_KEY_VERSION) {
+    if (next > AesGcmV1Format.MAX_KEY_VERSION) {
       throw new CryptoOperationException(
           "Key-generation limit reached for subject: "
               + subjectId.redacted()
               + " — the subject has been erased and re-registered "
-              + (MAX_KEY_VERSION - 1)
+              + (AesGcmV1Format.MAX_KEY_VERSION - 1)
               + " times, exhausting the single-byte generation counter. Re-register this person"
               + " under a fresh subject id.");
     }
@@ -731,7 +558,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     private String tableName = DEFAULT_TABLE_NAME;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private Clock clock = Clock.systemUTC();
-    private CipherFactory cipherFactory = FRESH_CIPHERS;
+    private VerifiedCipher.CipherFactory cipherFactory = VerifiedCipher.FRESH_CIPHERS;
 
     private Builder() {}
 
@@ -774,7 +601,7 @@ public final class SqliteCryptoEngine implements CryptoEngine {
     }
 
     /** Test-only seam: creates the cipher of every operation. */
-    Builder cipherFactory(CipherFactory cipherFactory) {
+    Builder cipherFactory(VerifiedCipher.CipherFactory cipherFactory) {
       this.cipherFactory = cipherFactory;
       return this;
     }

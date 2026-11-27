@@ -31,6 +31,7 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.types.SubjectId;
 import org.streamrune.crypto.InMemoryForgottenSubjectStore;
+import org.streamrune.crypto.VerifiedCipher;
 
 /**
  * Freezes today's observable behaviour of {@link AwsKmsCryptoEngine}'s cipher seam before the
@@ -67,9 +68,8 @@ class AwsKmsCryptoCharacterizationTest {
   private final CountingMetrics metrics = new CountingMetrics();
 
   /**
-   * The seam installation: how a faulty {@link AwsKmsCryptoEngine.CipherFactory} reaches the engine
-   * — today the package-private builder method, as {@code AwsKmsCryptoEngineCipherTest} installs
-   * it.
+   * The seam installation: how a faulty {@link VerifiedCipher.CipherFactory} reaches the engine —
+   * today the package-private builder method, as {@code AwsKmsCryptoEngineCipherTest} installs it.
    */
   private AwsKmsCryptoEngine engineWith(FaultyCiphers ciphers) {
     return AwsKmsCryptoEngine.builder()
@@ -345,7 +345,7 @@ class AwsKmsCryptoCharacterizationTest {
    * Creates real AES/GCM ciphers; faults queued per mode apply to the next cipher of that mode, in
    * order. With nothing queued it is transparent.
    */
-  private static final class FaultyCiphers implements AwsKmsCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     private final Map<Integer, Deque<Fault>> faults = new HashMap<>();
 
     FaultyCiphers throwing(int mode, Exception failure) {

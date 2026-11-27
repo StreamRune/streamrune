@@ -53,6 +53,7 @@ import org.streamrune.core.projection.AtomicBatchProcessor.ProjectionUpdater;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.ProjectionName;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.VerifiedCipher;
 import org.streamrune.sqlite.SqliteDatabase;
 import org.streamrune.sqlite.SqliteProjectionRepository;
 import org.streamrune.sqlite.SqliteReadModelCheckpoints;
@@ -166,8 +167,8 @@ class SqliteCryptoCharacterizationTest {
   }
 
   /**
-   * The seam installation: how a faulty {@link SqliteCryptoEngine.CipherFactory} reaches the engine
-   * — today the package-private builder method, as {@code SqliteCryptoEngineTest} installs it.
+   * The seam installation: how a faulty {@link VerifiedCipher.CipherFactory} reaches the engine —
+   * today the package-private builder method, as {@code SqliteCryptoEngineTest} installs it.
    */
   private SqliteCryptoEngine engineWith(FaultyCiphers ciphers) {
     return SqliteCryptoEngine.builder()
@@ -1060,7 +1061,7 @@ class SqliteCryptoCharacterizationTest {
    * order: throw from {@code create}, initialise under a key of its own (a tag failure on decrypt),
    * or initialise in encrypt mode instead of decrypt mode (other bytes, no tag failure).
    */
-  private static final class FaultyCiphers implements SqliteCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     private final Map<Integer, Deque<Fault>> faults = new HashMap<>();
 
     FaultyCiphers throwing(int mode, Exception failure) {

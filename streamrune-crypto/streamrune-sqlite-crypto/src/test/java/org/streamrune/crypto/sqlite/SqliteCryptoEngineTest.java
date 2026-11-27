@@ -29,6 +29,7 @@ import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.crypto.KeyNotFoundException;
 import org.streamrune.core.types.SubjectId;
+import org.streamrune.crypto.VerifiedCipher;
 import org.streamrune.sqlite.SqliteDatabase;
 
 /**
@@ -319,15 +320,17 @@ class SqliteCryptoEngineTest {
 
   @Test
   void theProductionEngineUsesTheFreshCipherFactory() throws Exception {
-    Field factory = SqliteCryptoEngine.class.getDeclaredField("cipherFactory");
+    Field verified = SqliteCryptoEngine.class.getDeclaredField("verified");
+    verified.setAccessible(true);
+    Field factory = VerifiedCipher.class.getDeclaredField("ciphers");
     factory.setAccessible(true);
-    assertThat(factory.get(engine)).isSameAs(SqliteCryptoEngine.FRESH_CIPHERS);
+    assertThat(factory.get(verified.get(engine))).isSameAs(VerifiedCipher.FRESH_CIPHERS);
     KeyGenerator generator = KeyGenerator.getInstance("AES");
     generator.init(256);
     Key key = generator.generateKey();
     var params = new javax.crypto.spec.GCMParameterSpec(128, new byte[12]);
-    assertThat(SqliteCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params))
-        .isNotSameAs(SqliteCryptoEngine.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
+    assertThat(VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params))
+        .isNotSameAs(VerifiedCipher.FRESH_CIPHERS.create(Cipher.DECRYPT_MODE, key, params));
   }
 
   // ---- failures ----
@@ -404,7 +407,7 @@ class SqliteCryptoEngineTest {
    * of its own (a wrong result), in encrypt mode instead of decrypt mode (a result that is not the
    * plaintext and raises no tag failure), or not created at all.
    */
-  private static final class FaultyCiphers implements SqliteCryptoEngine.CipherFactory {
+  private static final class FaultyCiphers implements VerifiedCipher.CipherFactory {
     private int wrongKeyMode = -1;
     private int encryptInsteadMode = -1;
     private int throwMode = -1;
