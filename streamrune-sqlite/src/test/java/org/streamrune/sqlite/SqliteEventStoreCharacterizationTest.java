@@ -564,6 +564,144 @@ class SqliteEventStoreCharacterizationTest {
     assertThat(thrown.getSuppressed()).isEmpty();
   }
 
+  /**
+   * A keyed command with no events claims its key and backfills an empty offset list; like an empty
+   * append it never consults the stream's head (the stream is empty while the command expects
+   * version 4). A second run of the key answers from the recorded row.
+   */
+  @Test
+  void transcript_keyedCommandWithNoEvents() {
+    SqliteEventStore store = wired();
+
+    IdempotentAppendResult first =
+        store.appendWithKey(A, List.of(), new Version(4), IdempotencyKey.of("k"), COMMAND);
+
+    assertThat(first).isEqualTo(new IdempotentAppendResult(List.of(), new Version(4), false));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 prepare " + INBOX_CLAIM,
+            "#1 prepare " + INBOX_BACKFILL,
+            "#1 execute COMMIT",
+            "#1 close");
+
+    recorder.clear();
+    IdempotentAppendResult again =
+        store.appendWithKey(A, List.of(), new Version(4), IdempotencyKey.of("k"), COMMAND);
+
+    assertThat(again).isEqualTo(new IdempotentAppendResult(List.of(), new Version(4), true));
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 execute BEGIN IMMEDIATE",
+            "#1 prepare " + INBOX_CLAIM,
+            "#1 execute ROLLBACK",
+            "#1 close",
+            "open #2",
+            "#2 prepare " + INBOX_FIND,
+            "#2 close");
+    assertThat(store.lastGlobalOffset()).isEqualTo(GlobalOffset.initial());
+  }
+
+  // ── The snapshot decision's quiet branches ──────────────────────────────────────────────────
+
+  /**
+   * A stored snapshot the load cannot start from without ever deserializing it — its snapshot
+   * version is incompatible and no migration chain reaches the expected one, or its state type is
+   * no longer registered — is passed over quietly: the stream replays from its start on the same
+   * one connection, no ERROR or WARN is logged, no discard is counted, the snapshot span says
+   * DISCARDED at stream version 0, and the row's purge generation is carried. A purged row (no
+   * state) is no snapshot at all: no snapshot span, its purge generation carried.
+   */
+  @Test
+  void snapshotDecision_quietBranches() throws SQLException {
+    var metrics = new RecordingStreamRuneMetrics();
+    var tracing = new RecordingTracing();
+    SqliteEventStore store =
+        (SqliteEventStore) factory().metrics(metrics).tracing(tracing).create();
+    store.append(A, events(A, 3), Version.initial());
+    store.saveSnapshot(A, new Version(2), new ContractState("s"), 1, 0);
+    execute("UPDATE snapshot_store SET purge_generation = 2");
+
+    try (LogCapture logs = LogCapture.attach(SqliteEventStore.class)) {
+      // (a) snapshot version 1 stored, version 2 expected, no migration chain.
+      recorder.clear();
+      tracing.clear();
+      AggregateHistory incompatible = store.load(A, 2);
+      assertQuietReplay(incompatible, 2);
+      assertQuietSpans(tracing, true);
+
+      // (b) the stored state type is no longer registered.
+      execute("UPDATE snapshot_store SET state_type = 'RetiredState'");
+      recorder.clear();
+      tracing.clear();
+      AggregateHistory retired = store.load(A);
+      assertQuietReplay(retired, 2);
+      assertQuietSpans(tracing, true);
+
+      // (c) a purged row: no state at all.
+      execute(
+          "UPDATE snapshot_store SET state_type = NULL, state_payload = NULL,"
+              + " purge_generation = 3");
+      recorder.clear();
+      tracing.clear();
+      AggregateHistory purged = store.load(A);
+      assertQuietReplay(purged, 3);
+      assertQuietSpans(tracing, false);
+
+      assertThat(logs.events(Level.ERROR)).isEmpty();
+      assertThat(logs.events(Level.WARN)).isEmpty();
+    }
+    assertThat(metrics.samples(MetricNames.SNAPSHOTS_DISCARDED)).isEmpty();
+  }
+
+  private void assertQuietReplay(AggregateHistory history, long purgeGeneration) {
+    assertThat(history.snapshotState()).isNull();
+    assertThat(history.events()).extracting(e -> e.version().value()).containsExactly(1L, 2L, 3L);
+    assertThat(history.version()).isEqualTo(new Version(3));
+    assertThat(history.lastSnapshotVersion()).isEqualTo(Version.initial());
+    assertThat(history.snapshotPurgeGeneration()).isEqualTo(purgeGeneration);
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1", "#1 prepare " + LOAD_SNAPSHOT, "#1 prepare " + LOAD_EVENTS, "#1 close");
+  }
+
+  private static void assertQuietSpans(RecordingTracing tracing, boolean storedRow) {
+    if (storedRow) {
+      assertThat(tracing.names())
+          .containsExactly(
+              TraceAttributes.EVENT_STORE_LOAD,
+              TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
+              TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+      var snapshot = tracing.only(TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD);
+      assertThat(snapshot.attributes())
+          .isEqualTo(
+              Map.of(
+                  TraceAttributes.STREAM_ID, "order:A",
+                  TraceAttributes.SNAPSHOT_OUTCOME, "DISCARDED",
+                  TraceAttributes.STREAM_VERSION, 0L));
+      assertThat(snapshot.ok).isTrue();
+    } else {
+      assertThat(tracing.names())
+          .containsExactly(
+              TraceAttributes.EVENT_STORE_LOAD, TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE);
+    }
+    assertThat(tracing.only(TraceAttributes.EVENT_STORE_LOAD).attributes())
+        .isEqualTo(
+            Map.of(
+                TraceAttributes.STREAM_ID,
+                "order:A",
+                TraceAttributes.AGGREGATE_TYPE,
+                "order",
+                TraceAttributes.EVENT_COUNT,
+                3L,
+                TraceAttributes.SNAPSHOT_USED,
+                false));
+    assertThat(tracing.only(TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE).attributes())
+        .isEqualTo(Map.of(TraceAttributes.EVENT_COUNT, 3L, TraceAttributes.UPCAST_COUNT, 0L));
+  }
+
   // ── Serialization order ─────────────────────────────────────────────────────────────────────
 
   /**
@@ -625,6 +763,24 @@ class SqliteEventStoreCharacterizationTest {
                 assertThat(e.getThrowableProxy()).isNull();
               });
       assertThat(logs.events(Level.ERROR)).isEmpty();
+    }
+  }
+
+  /** A fresh instance whose first load ignores snapshots warns about the gap itself. */
+  @Test
+  void gapWarning_aFreshInstancesFirstIgnoringLoadWarns() throws SQLException {
+    SqliteEventStore writer = plain();
+    writer.append(A, events(A, 3), Version.initial());
+    execute("DELETE FROM event_stream WHERE version = 2");
+    SqliteEventStore fresh = plain();
+
+    try (LogCapture logs = LogCapture.attach(SqliteEventStore.class)) {
+      fresh.load(A, EventStore.IGNORE_SNAPSHOT);
+      assertThat(messages(logs, Level.WARN)).containsExactly(gapWarning("order:A"));
+
+      fresh.load(A, EventStore.IGNORE_SNAPSHOT);
+      fresh.load(A);
+      assertThat(messages(logs, Level.WARN)).containsExactly(gapWarning("order:A"));
     }
   }
 
@@ -844,6 +1000,36 @@ class SqliteEventStoreCharacterizationTest {
     assertThat(store.readStream(A, Version.initial(), 10)).hasSize(2);
     assertThat(store.readGlobalStream(GlobalOffset.initial(), 10)).hasSize(2);
     assertThat(engine.openAtDecrypt).hasSize(6).containsOnly(0);
+  }
+
+  /**
+   * The replay after a discarded snapshot decrypts its events only after both connections, the
+   * first read's and the re-read's, are closed.
+   */
+  @Test
+  void discardedReReadDecryptsWithNoConnectionOpen() throws SQLException {
+    var engine = new ConnectionCountingEngine(recorder);
+    SqliteEventStore store = secretStore(engine);
+    store.append(A, List.of(secret("a"), secret("b")), Version.initial());
+    store.saveSnapshot(A, new Version(1), new SecretState("subject", "a@example.com"));
+    execute("UPDATE snapshot_store SET state_payload = '{\"unknown\":1}'");
+    engine.openAtDecrypt.clear();
+    recorder.clear();
+
+    AggregateHistory history = store.load(A);
+
+    assertThat(history.snapshotState()).isNull();
+    assertThat(history.events()).hasSize(2);
+    assertThat(engine.openAtDecrypt).hasSize(2).containsOnly(0);
+    assertThat(recorder.transcript())
+        .containsExactly(
+            "open #1",
+            "#1 prepare " + LOAD_SNAPSHOT,
+            "#1 prepare " + LOAD_EVENTS,
+            "#1 close",
+            "open #2",
+            "#2 prepare " + LOAD_EVENTS,
+            "#2 close");
   }
 
   // ── A close that fails after the commit ─────────────────────────────────────────────────────
