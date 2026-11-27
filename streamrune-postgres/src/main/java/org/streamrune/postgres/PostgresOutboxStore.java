@@ -69,9 +69,10 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * Each {@link #loadPending} call first resets claims older than the configured lease back to {@code
  * PENDING} so another instance can pick them up.
  *
- * <p>The argument checks, the strict channel's stream refusal, the trace-link bind, the refusal of
- * a {@code FAILED} delete and the decoding of the rows read are {@link OutboxRules}'s; this store
- * keeps its statements, binds, transactions, the database clock and the claim order.
+ * <p>The shared argument checks (options, claim limit, id), the strict channel's stream refusal,
+ * the trace-link bind, the refusal of a {@code FAILED} delete and the decoding of the rows read are
+ * {@link OutboxRules}'s; this store keeps its other argument checks, its statements, binds,
+ * transactions, the database clock and the claim order.
  */
 public final class PostgresOutboxStore implements OutboxStore {
 
