@@ -78,7 +78,7 @@ class DeadLetterRetryRunnerTest {
     commandBus = mock(CommandBus.class);
     objectMapper = new ObjectMapper();
     // Zero initial delay: entries are due immediately, so tests not about backoff scheduling
-    // can call processBatch() right after publishing.
+    // can call pollCycle() right after publishing.
     policy =
         new DeadLetterRetryPolicy(
             3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
@@ -143,7 +143,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(dlq.all().isEmpty());
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -156,7 +156,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size());
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -176,7 +176,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new CommandBusClosedException("bus is shutting down"));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size(), "the entry must be retained");
     assertEquals(0, dlq.all().getFirst().dlqAttempts(), "no attempt counted during shutdown");
@@ -194,7 +194,7 @@ class DeadLetterRetryRunnerTest {
             new RuntimeException(
                 "dispatch failed", new CommandBusClosedException("bus is shutting down")));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size());
     assertEquals(0, dlq.all().getFirst().dlqAttempts());
@@ -214,7 +214,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new CommandBusClosedException("bus is shutting down"));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size(), "the entry must survive the shutdown window untouched");
     assertEquals(0, dlq.all().getFirst().dlqAttempts());
@@ -273,7 +273,7 @@ class DeadLetterRetryRunnerTest {
         objectMapper.writeValueAsString(new OrdersNs.CancelCommand("o-1")),
         "ambiguous-1");
 
-    fqnRunner().processBatch();
+    fqnRunner().pollCycle();
 
     verify(commandBus, never()).execute(any(Command.class), any(IdempotencyKey.class));
     assertEquals(1, dlq.all().size(), "an unresolvable entry must stay queued, not be discarded");
@@ -293,7 +293,7 @@ class DeadLetterRetryRunnerTest {
         objectMapper.writeValueAsString(new OrdersNs.CancelCommand("o-9")),
         "fqn-1");
 
-    fqnRunner().processBatch();
+    fqnRunner().pollCycle();
 
     ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
     verify(commandBus).execute(captor.capture(), any(IdempotencyKey.class));
@@ -327,7 +327,7 @@ class DeadLetterRetryRunnerTest {
         objectMapper.writeValueAsString(new OrdersNs.CancelCommand("o-2")),
         "simple-1");
 
-    runner.processBatch();
+    runner.pollCycle();
 
     ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
     verify(commandBus).execute(captor.capture(), any(IdempotencyKey.class));
@@ -388,7 +388,7 @@ class DeadLetterRetryRunnerTest {
         objectMapper.writeValueAsString(custom),
         "sealed-custom");
 
-    runner.processBatch();
+    runner.pollCycle();
 
     ArgumentCaptor<Command> captor = ArgumentCaptor.forClass(Command.class);
     verify(commandBus, times(3)).execute(captor.capture(), any(IdempotencyKey.class));
@@ -471,7 +471,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenReturn(vetoedResult());
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(
         1, dlq.all().size(), "a vetoed replay must NOT be discarded — the command never ran");
@@ -489,7 +489,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenReturn(idempotentReplayResult());
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(
         dlq.all().isEmpty(),
@@ -503,7 +503,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(false);
     when(commandBus.execute(any(Command.class))).thenReturn(vetoedResult());
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size(), "a vetoed unkeyed replay must NOT be discarded");
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -520,7 +520,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(dlq.all().isEmpty(), "entry should be discarded after exhausting retries");
   }
@@ -536,7 +536,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size());
     assertEquals(3, dlq.all().getFirst().dlqAttempts());
@@ -557,7 +557,7 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatch_samplesCommandDlqDepthAndDegradationEachCycle() {
+  void pollCycle_samplesCommandDlqDepthAndDegradationEachCycle() {
     // The runner samples the command DLQ depth gauge (streamrune.dlq.pending) and its own
     // degradation gauge every cycle, BEFORE the leadership gate, so operators can alert on a
     // growing
@@ -565,11 +565,11 @@ class DeadLetterRetryRunnerTest {
     var metrics = new RecordingStreamRuneMetrics();
     publishTestEntry("cmd-1");
     publishTestEntry("cmd-2");
-    // Not due for retry, so processBatch does not execute anything — but the depth is still
+    // Not due for retry, so pollCycle does not execute anything — but the depth is still
     // sampled.
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
 
-    runnerWithMetrics(metrics).processBatch();
+    runnerWithMetrics(metrics).pollCycle();
 
     assertEquals(2, metrics.lastDlqBacklog(), "DLQ depth gauge must reflect the 2 queued entries");
     assertEquals(1, metrics.count("dlq.backlog"), "sampled once per cycle");
@@ -590,8 +590,8 @@ class DeadLetterRetryRunnerTest {
         .thenThrow(new RuntimeException("still broken"));
 
     var runner = runnerWithMetrics(metrics);
-    runner.processBatch(); // crosses maxRetries -> terminal exhaustion (and discard)
-    runner.processBatch(); // entry is gone; the counter must NOT fire again
+    runner.pollCycle(); // crosses maxRetries -> terminal exhaustion (and discard)
+    runner.pollCycle(); // entry is gone; the counter must NOT fire again
 
     assertTrue(dlq.all().isEmpty(), "discard policy removes the exhausted entry");
     assertEquals(
@@ -618,15 +618,15 @@ class DeadLetterRetryRunnerTest {
     var runner = runnerWithMetrics(metrics);
 
     // Attempts 1 and 2 of 3 are non-terminal — the exhaustion counter must NOT fire yet.
-    runner.processBatch(); // attempt 1/3
-    runner.processBatch(); // attempt 2/3
+    runner.pollCycle(); // attempt 1/3
+    runner.pollCycle(); // attempt 2/3
     assertEquals(
         0,
         metrics.count("command.dlqExhausted"),
         "non-terminal failed attempts must not fire the exhaustion counter");
 
-    runner.processBatch(); // attempt 3/3 -> terminal exhaustion
-    runner.processBatch(); // entry now filtered out (dlq_attempts == maxRetries); no re-fire
+    runner.pollCycle(); // attempt 3/3 -> terminal exhaustion
+    runner.pollCycle(); // entry now filtered out (dlq_attempts == maxRetries); no re-fire
 
     assertEquals(1, dlq.all().size(), "no-discard policy retains the exhausted entry");
     assertEquals(3, dlq.all().getFirst().dlqAttempts());
@@ -666,7 +666,7 @@ class DeadLetterRetryRunnerTest {
         .registerCommand(OrdersNs.CancelCommand.class)
         .metrics(metrics)
         .build()
-        .processBatch();
+        .pollCycle();
 
     assertEquals(1, metrics.count("command.dlqExhausted"), "the exhaustion counter fired once");
     assertEquals(
@@ -700,7 +700,7 @@ class DeadLetterRetryRunnerTest {
             null,
             null));
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertEquals(1, dlq.all().size());
     assertEquals(
@@ -733,7 +733,7 @@ class DeadLetterRetryRunnerTest {
             null));
     dlq.updateAttempts(CommandId.of("cmd-1"), 2, Instant.now());
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(
         dlq.all().isEmpty(),
@@ -796,7 +796,7 @@ class DeadLetterRetryRunnerTest {
     // Forget the subject before the replay runs.
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("customer-1"));
 
-    cryptoAwareRunner(dlq, cryptoMapper).processBatch();
+    cryptoAwareRunner(dlq, cryptoMapper).pollCycle();
 
     verifyNoInteractions(commandBus);
     // The entry is not silently lost either: it is recorded as a failed attempt so it eventually
@@ -847,7 +847,7 @@ class DeadLetterRetryRunnerTest {
         .pollInterval(Duration.ofMinutes(1))
         .registerCommand(NestedPiiCmd.class)
         .build()
-        .processBatch();
+        .pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -881,7 +881,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    cryptoAwareRunner(dlq, cryptoMapper).processBatch();
+    cryptoAwareRunner(dlq, cryptoMapper).pollCycle();
 
     verify(commandBus).execute(any(PiiCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty(), "a non-redacted entry must replay and be discarded on success");
@@ -959,7 +959,7 @@ class DeadLetterRetryRunnerTest {
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("customer-1"));
     var runner = fixtureRunner(mapper, NonPublicCommands.HIDDEN_PII_CMD);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
@@ -968,9 +968,9 @@ class DeadLetterRetryRunnerTest {
     // Rerun convergence: every further cycle repeats the same scan to the same outcome — still no
     // dispatch — and the attempt count climbs to exhaustion under the policy (maxRetries 3,
     // discardAfterMaxRetries false: retained for inspection, not retried).
-    runner.processBatch();
-    runner.processBatch();
-    runner.processBatch();
+    runner.pollCycle();
+    runner.pollCycle();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "an exhausted entry is retained under this policy");
@@ -991,7 +991,7 @@ class DeadLetterRetryRunnerTest {
         "cmd-hidden-nested");
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-nested"));
 
-    fixtureRunner(mapper, NonPublicCommands.HIDDEN_NESTED_PII_CMD).processBatch();
+    fixtureRunner(mapper, NonPublicCommands.HIDDEN_NESTED_PII_CMD).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -1010,7 +1010,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, NonPublicCommands.HIDDEN_PII_CMD).processBatch();
+    fixtureRunner(mapper, NonPublicCommands.HIDDEN_PII_CMD).pollCycle();
 
     verify(commandBus).execute(any(NonPublicCommands.HIDDEN_PII_CMD), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty(), "a non-redacted entry must replay and be discarded on success");
@@ -1030,13 +1030,13 @@ class DeadLetterRetryRunnerTest {
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("customer-1"));
     var runner = fixtureRunner(mapper, NonPublicCommands.UNREADABLE_PII_CMD);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
     assertEquals(1, dlq.all().getFirst().dlqAttempts(), "and count one failed attempt");
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(2, dlq.all().getFirst().dlqAttempts(), "a rerun fails closed the same way");
@@ -1053,7 +1053,7 @@ class DeadLetterRetryRunnerTest {
         "cmd-unread-nested");
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-nested"));
 
-    fixtureRunner(mapper, NonPublicCommands.UNREADABLE_NESTED_PII_CMD).processBatch();
+    fixtureRunner(mapper, NonPublicCommands.UNREADABLE_NESTED_PII_CMD).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -1070,7 +1070,7 @@ class DeadLetterRetryRunnerTest {
         NonPublicCommands.UNREADABLE_MALFORMED_PATH_CMD,
         "cmd-unread-malformed");
 
-    fixtureRunner(objectMapper, NonPublicCommands.UNREADABLE_MALFORMED_PATH_CMD).processBatch();
+    fixtureRunner(objectMapper, NonPublicCommands.UNREADABLE_MALFORMED_PATH_CMD).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -1090,7 +1090,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, NonPublicCommands.UNREADABLE_LABEL_CMD).processBatch();
+    fixtureRunner(mapper, NonPublicCommands.UNREADABLE_LABEL_CMD).pollCycle();
 
     verify(commandBus)
         .execute(any(NonPublicCommands.UNREADABLE_LABEL_CMD), any(IdempotencyKey.class));
@@ -1189,7 +1189,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, AtomicRefPiiCmd.class).processBatch();
+    fixtureRunner(mapper, AtomicRefPiiCmd.class).pollCycle();
 
     verify(commandBus).execute(any(AtomicRefPiiCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty());
@@ -1213,7 +1213,7 @@ class DeadLetterRetryRunnerTest {
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-atomic"));
     var runner = fixtureRunner(mapper, AtomicRefPiiCmd.class);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
@@ -1239,7 +1239,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, EntryPiiCmd.class).processBatch();
+    fixtureRunner(mapper, EntryPiiCmd.class).pollCycle();
 
     var replayed = ArgumentCaptor.forClass(Command.class);
     verify(commandBus).execute(replayed.capture(), any(IdempotencyKey.class));
@@ -1266,14 +1266,14 @@ class DeadLetterRetryRunnerTest {
     assertEquals(CryptoShreddingModule.REDACTED, decoded.billing().getValue().cardHolder());
     var runner = fixtureRunner(mapper, EntryPiiCmd.class);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
     assertEquals(1, dlq.all().getFirst().dlqAttempts(), "and count one failed attempt");
 
-    runner.processBatch();
-    runner.processBatch();
+    runner.pollCycle();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(policy.maxRetries(), dlq.all().getFirst().dlqAttempts());
@@ -1306,7 +1306,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, PojoAtomicBillingCmd.class).processBatch();
+    fixtureRunner(mapper, PojoAtomicBillingCmd.class).pollCycle();
 
     var replayed = ArgumentCaptor.forClass(Command.class);
     verify(commandBus).execute(replayed.capture(), any(IdempotencyKey.class));
@@ -1336,7 +1336,7 @@ class DeadLetterRetryRunnerTest {
     assertEquals(CryptoShreddingModule.REDACTED, decoded.billing.get().cardHolder());
     var runner = fixtureRunner(mapper, PojoAtomicBillingCmd.class);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
@@ -1344,8 +1344,8 @@ class DeadLetterRetryRunnerTest {
 
     // Rerun convergence: the scan reads fields only and the key stays deleted, so every cycle
     // reaches the same verdict and the entry ages to exhaustion, never a dispatch.
-    runner.processBatch();
-    runner.processBatch();
+    runner.pollCycle();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(policy.maxRetries(), dlq.all().getFirst().dlqAttempts());
@@ -1371,7 +1371,7 @@ class DeadLetterRetryRunnerTest {
 
     var appender = attachRunnerLogAppender();
     try {
-      fixtureRunner(mapper, NonPublicCommands.UNREADABLE_ATOMIC_PII_CMD).processBatch();
+      fixtureRunner(mapper, NonPublicCommands.UNREADABLE_ATOMIC_PII_CMD).pollCycle();
     } finally {
       detachRunnerLogAppender(appender);
     }
@@ -1403,7 +1403,7 @@ class DeadLetterRetryRunnerTest {
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-pojo"));
     var runner = fixtureRunner(mapper, PojoBillingCmd.class);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().size(), "the entry must stay in the DLQ");
@@ -1411,9 +1411,9 @@ class DeadLetterRetryRunnerTest {
 
     // Rerun convergence: every cycle reaches the same verdict and the attempts climb to
     // exhaustion (maxRetries 3, retained for inspection), never a dispatch.
-    runner.processBatch();
-    runner.processBatch();
-    runner.processBatch();
+    runner.pollCycle();
+    runner.pollCycle();
+    runner.pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(policy.maxRetries(), dlq.all().getFirst().dlqAttempts());
@@ -1429,7 +1429,7 @@ class DeadLetterRetryRunnerTest {
     publishPayload(mapper, command, InheritedBillingCmd.class, "cmd-inherited");
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-inherited"));
 
-    fixtureRunner(mapper, InheritedBillingCmd.class).processBatch();
+    fixtureRunner(mapper, InheritedBillingCmd.class).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -1447,7 +1447,7 @@ class DeadLetterRetryRunnerTest {
         "cmd-enveloped");
     cryptoEngine.deleteKey(org.streamrune.core.types.SubjectId.of("cust-enveloped"));
 
-    fixtureRunner(mapper, EnvelopedPiiCmd.class).processBatch();
+    fixtureRunner(mapper, EnvelopedPiiCmd.class).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(1, dlq.all().getFirst().dlqAttempts());
@@ -1466,7 +1466,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, PojoBillingCmd.class).processBatch();
+    fixtureRunner(mapper, PojoBillingCmd.class).pollCycle();
 
     verify(commandBus).execute(any(PojoBillingCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty(), "a non-redacted entry must replay and be discarded on success");
@@ -1499,7 +1499,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    fixtureRunner(mapper, CyclicBillingCmd.class).processBatch();
+    fixtureRunner(mapper, CyclicBillingCmd.class).pollCycle();
 
     var replayed = ArgumentCaptor.forClass(Command.class);
     verify(commandBus).execute(replayed.capture(), any(IdempotencyKey.class));
@@ -1511,7 +1511,7 @@ class DeadLetterRetryRunnerTest {
 
   @Test
   void emptyDlqIsNoop() {
-    runner().processBatch();
+    runner().pollCycle();
     verifyNoInteractions(commandBus);
   }
 
@@ -1524,7 +1524,7 @@ class DeadLetterRetryRunnerTest {
             3, Duration.ofHours(1), 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
     publishTestEntry("cmd-1");
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(
@@ -1545,7 +1545,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty(), "the successful retry discards the entry");
@@ -1602,7 +1602,7 @@ class DeadLetterRetryRunnerTest {
             .registerCommand(TestCmd.class)
             .build();
 
-    runner.processBatch();
+    runner.pollCycle();
 
     // The command executed exactly once; the failed discard must not re-dispatch it in-cycle.
     verify(commandBus, times(1)).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -1633,7 +1633,7 @@ class DeadLetterRetryRunnerTest {
               throw new RuntimeException("still broken");
             });
 
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(
         markerBoundDuringReplay.get(),
@@ -1658,7 +1658,7 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     RequestContext ctx = observed.get();
@@ -1684,7 +1684,7 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    runner().processBatch();
+    runner().pollCycle();
 
     RequestContext ctx = observed.get();
     assertNotNull(ctx, "a correlation id alone is enough to rebind a context");
@@ -1708,7 +1708,7 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertFalse(
@@ -1744,7 +1744,7 @@ class DeadLetterRetryRunnerTest {
               return null;
             });
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     RequestContext ctx = observed.get();
@@ -1773,9 +1773,9 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
     DeadLetterRetryRunner runner = runner();
-    runner.processBatch();
-    runner.processBatch();
-    runner.processBatch();
+    runner.pollCycle();
+    runner.pollCycle();
+    runner.pollCycle();
 
     verify(commandBus, times(1)).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty(), "discarded because it SUCCEEDED, not because it was exhausted");
@@ -1793,7 +1793,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertTrue(dlq.all().isEmpty());
@@ -1812,7 +1812,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), eq(IdempotencyKey.of("dlq-replay:cmd-1")));
     verify(commandBus, never()).execute(any(Command.class));
@@ -1830,7 +1830,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runner().processBatch();
+    runner().pollCycle();
 
     verify(commandBus)
         .execute(any(TestCmd.class), eq(new IdempotencyKey("dlq-replay:cmd-1\u0001x")));
@@ -1850,7 +1850,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(false);
     when(commandBus.execute(any(Command.class))).thenReturn(null);
 
-    assertDoesNotThrow(() -> runner().processBatch());
+    assertDoesNotThrow(() -> runner().pollCycle());
 
     verify(commandBus, never()).execute(any(Command.class), any(IdempotencyKey.class));
     verify(commandBus).execute(any(TestCmd.class));
@@ -1910,7 +1910,7 @@ class DeadLetterRetryRunnerTest {
             .registerCommand(TestCmd.class)
             .build();
 
-    realRunner.processBatch();
+    realRunner.pollCycle();
 
     assertEquals(
         1,
@@ -2284,7 +2284,7 @@ class DeadLetterRetryRunnerTest {
     publishRaw(TestCmd.class.getName(), "null", "cmd-1");
     var appender = attachRunnerLogAppender();
     try {
-      runner().processBatch();
+      runner().pollCycle();
 
       verify(commandBus, never()).execute(any());
       verify(commandBus, never()).execute(any(), any());
@@ -2345,13 +2345,13 @@ class DeadLetterRetryRunnerTest {
             .build();
 
     for (int cycle = 1; cycle <= 3; cycle++) {
-      runner.processBatch();
+      runner.pollCycle();
       assertEquals(
           cycle,
           dlq.all().getFirst().dlqAttempts(),
           "cycle " + cycle + " spends exactly one attempt on the unreadable payload");
     }
-    runner.processBatch();
+    runner.pollCycle();
 
     assertEquals(3, dlq.all().getFirst().dlqAttempts(), "an exhausted entry is not read again");
     verify(commandBus, never()).execute(any());
@@ -2384,9 +2384,9 @@ class DeadLetterRetryRunnerTest {
         .thenThrow(new IllegalArgumentException("unknown product X\n2026-10-03 ERROR forged line"));
     var appender = attachRunnerLogAppender();
     try {
-      runner().processBatch();
-      runner().processBatch();
-      runner().processBatch(); // the third failure is the terminal one (maxRetries = 3)
+      runner().pollCycle();
+      runner().pollCycle();
+      runner().pollCycle(); // the third failure is the terminal one (maxRetries = 3)
 
       var lines =
           appender.list.stream()
@@ -2558,7 +2558,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    runnerWith(queue, Clock.fixed(T0, java.time.ZoneOffset.UTC)).processBatch();
+    runnerWith(queue, Clock.fixed(T0, java.time.ZoneOffset.UTC)).pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertTrue(queue.all().isEmpty(), "an entry exactly at its backoff boundary is due (>=)");
@@ -2574,7 +2574,7 @@ class DeadLetterRetryRunnerTest {
     var queue = new InMemoryDeadLetterQueue(MutableClock.startingAt(T0));
     publishInto(queue, "cmd-1");
 
-    runnerWith(queue, Clock.fixed(T0.minusNanos(1), java.time.ZoneOffset.UTC)).processBatch();
+    runnerWith(queue, Clock.fixed(T0.minusNanos(1), java.time.ZoneOffset.UTC)).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(
@@ -2599,7 +2599,7 @@ class DeadLetterRetryRunnerTest {
     Instant recentAttempt = now.plus(Duration.ofMinutes(1)); // after "now"
     queue.updateAttempts(CommandId.of("cmd-1"), 1, recentAttempt);
 
-    runnerWith(queue, Clock.fixed(now, java.time.ZoneOffset.UTC)).processBatch();
+    runnerWith(queue, Clock.fixed(now, java.time.ZoneOffset.UTC)).pollCycle();
 
     verifyNoInteractions(commandBus);
     assertEquals(
@@ -2653,7 +2653,7 @@ class DeadLetterRetryRunnerTest {
             .clock(Clock.fixed(T0.plus(Duration.ofSeconds(10)), java.time.ZoneOffset.UTC))
             .build();
 
-    runner.processBatch();
+    runner.pollCycle();
 
     verify(commandBus).execute(any(TestCmd.class), eq(IdempotencyKey.of("dlq-replay:due-1")));
     assertTrue(
@@ -2970,12 +2970,12 @@ class DeadLetterRetryRunnerTest {
     var standbyRunner = runnerWithLeadership(readCountingDlq(standbyReads), standbyView);
 
     // The leader polls first and wins leadership, draining both entries.
-    leaderRunner.processBatch();
+    leaderRunner.pollCycle();
     // The standby polls after — it is denied leadership, so it returns immediately: never reads the
     // queue, never executes anything.
-    standbyRunner.processBatch();
+    standbyRunner.pollCycle();
     // A second standby poll must STILL be denied (leadership is sticky to the leader view).
-    standbyRunner.processBatch();
+    standbyRunner.pollCycle();
 
     assertTrue(dlq.all().isEmpty(), "the leader alone must drain every entry");
     verify(commandBus, times(2)).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -3001,13 +3001,13 @@ class DeadLetterRetryRunnerTest {
     var leaderRunner = runnerWithLeadership(dlq, leaderView);
     var standbyRunner = runnerWithLeadership(dlq, standbyView);
 
-    leaderRunner.processBatch(); // leader wins, drains cmd-1
+    leaderRunner.pollCycle(); // leader wins, drains cmd-1
     assertTrue(dlq.all().isEmpty());
 
     // Publish a second entry, resign the leader, then let the standby poll: it must now win.
     publishTestEntry("cmd-2");
     leaderView.resign(SubscriptionName.of(DLQ_CONSUMER_NAME));
-    standbyRunner.processBatch();
+    standbyRunner.pollCycle();
 
     assertTrue(dlq.all().isEmpty(), "the standby must drain cmd-2 after taking over leadership");
     verify(commandBus, times(2)).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -3073,8 +3073,8 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatchStopsWhenLeadershipIsLostMidBatch() {
-    // The gate at the top of processBatch() only checks ONCE per batch and discards the acquired
+  void pollCycleStopsWhenLeadershipIsLostMidBatch() {
+    // The gate at the top of pollCycle() only checks ONCE per cycle and discards the acquired
     // lease. A batch that outlives this replica's lease TTL (e.g. paused by GC) must not keep
     // processing entries after a fresh leader has taken over — it must re-check per entry and stop
     // the moment it is no longer the leader.
@@ -3109,7 +3109,7 @@ class DeadLetterRetryRunnerTest {
         };
 
     var runner = runnerWithLeadership(dlq, leadership);
-    runner.processBatch();
+    runner.pollCycle();
 
     verify(commandBus, times(1)).execute(any(TestCmd.class), any(IdempotencyKey.class));
     assertEquals(
@@ -3127,7 +3127,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
     // runner() builds WITHOUT calling .leadership(...) — proving the default path.
-    runner().processBatch();
+    runner().pollCycle();
 
     assertTrue(dlq.all().isEmpty());
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -3266,17 +3266,17 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatch_survivesThrowingDegradationGauge_andStillRetriesEntries() {
+  void pollCycle_survivesThrowingDegradationGauge_andStillRetriesEntries() {
     // sampleObservability() called recordDlqRetryDegradation BARE while its sibling
     // recordDlqBacklog a few lines below was try/caught. Because the sample runs FIRST in every
-    // processBatch(), a metrics backend that throws aborted EVERY poll cycle before the leadership
+    // pollCycle(), a metrics backend that throws aborted EVERY poll cycle before the leadership
     // gate: the runner stayed isRunning()=true with its consecutive-failure counter climbing, yet
     // never retried a single dead-lettered command again.
     publishTestEntry("cmd-1");
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class))).thenReturn(null);
 
-    assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).processBatch());
+    assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).pollCycle());
 
     assertTrue(dlq.all().isEmpty(), "the entry must still be retried (and discarded on success)");
     verify(commandBus).execute(any(TestCmd.class), any(IdempotencyKey.class));
@@ -3296,7 +3296,7 @@ class DeadLetterRetryRunnerTest {
     when(commandBus.execute(any(Command.class), any(IdempotencyKey.class)))
         .thenThrow(new RuntimeException("still broken"));
 
-    assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).processBatch());
+    assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).pollCycle());
 
     assertTrue(dlq.all().isEmpty(), "discard policy must still remove the exhausted entry");
   }
@@ -3317,7 +3317,7 @@ class DeadLetterRetryRunnerTest {
         .thenThrow(new RuntimeException("still broken"));
     var appender = attachRunnerLogAppender();
     try {
-      assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).processBatch());
+      assertDoesNotThrow(() -> runnerWithMetrics(throwingMetrics()).pollCycle());
 
       assertEquals(3, dlq.all().getFirst().dlqAttempts(), "the entry crossed maxRetries");
       assertTrue(

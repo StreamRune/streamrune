@@ -3,7 +3,8 @@ package org.streamrune.runtime;
 /**
  * A saga step did not get its saga's {@link SagaStepLock}: another step of the same saga stayed in
  * flight in this process for longer than the step bound, or the waiting thread was interrupted (its
- * interrupt status is left set). A claim that is interrupted while it waits throws it too.
+ * interrupt status is left set). A claim that is interrupted while it waits throws it too, and so
+ * does a step interrupted while it waits for one of its runner's slots.
  *
  * <p>Nothing was read and nothing was dispatched when it is thrown. It leaves the listener like an
  * infrastructure failure, so the subscription's checkpoint does not advance and the event is

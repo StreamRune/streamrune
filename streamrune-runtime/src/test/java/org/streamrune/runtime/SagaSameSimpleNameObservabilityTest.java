@@ -121,8 +121,8 @@ class SagaSameSimpleNameObservabilityTest {
     var metrics = new GaugeRecordingMetrics();
 
     // An empty poll still samples the gauge (0), so this pins the series key, not a count.
-    timeoutRunner(Fulfillment.OrderState.class, store, metrics).processBatch(Instant.EPOCH);
-    timeoutRunner(Refund.OrderState.class, store, metrics).processBatch(Instant.EPOCH);
+    timeoutRunner(Fulfillment.OrderState.class, store, metrics).pollCycle(Instant.EPOCH);
+    timeoutRunner(Refund.OrderState.class, store, metrics).pollCycle(Instant.EPOCH);
 
     assertThat(metrics.timedOut)
         .containsExactlyInAnyOrderEntriesOf(Map.of(FULFILLMENT_TYPE, 0L, REFUND_TYPE, 0L));

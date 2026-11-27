@@ -3,13 +3,18 @@ package org.streamrune.runtime;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.StreamRuneMetrics;
+import org.streamrune.core.saga.SagaId;
 import org.streamrune.core.saga.SagaState;
 import org.streamrune.core.saga.SagaStore;
 import org.streamrune.core.saga.SagaUnstampedCompensationEpisodeException;
@@ -87,6 +92,20 @@ import org.streamrune.core.types.SubscriptionName;
  * replayer's {@code STALE_COMPENSATION_BLOCKED}, measured from the same {@code episode_claimed_at}
  * anchor — and this deliberately overrides the first-re-drive grant.
  *
+ * <p><b>A cycle drains while batches come back full.</b> After a batch that returned {@code
+ * batchSize} sagas and ended at least one episode — compensated, failed, faulted or found ended by
+ * another path — the sweeper queries again at once instead of waiting {@code retryInterval}. A
+ * partial or empty batch ends the cycle, and so does a batch whose every re-drive failed
+ * transiently, was refused or failed in the store, so the sweeper never walks a poison compensation
+ * back to back; a stop or an interrupt; a lost lease; and the {@linkplain
+ * #DRAIN_BUDGET_POLL_INTERVALS drain budget} of 10 retry intervals plus the batch in progress,
+ * measured on {@link System#nanoTime()}. The first cycle that reaches the budget and every tenth
+ * one after it log an INFO line. A saga re-driven in one batch is not re-driven again in the same
+ * cycle: a re-drive that fails transiently writes nothing, so the next query of the cycle returns
+ * it again, and it is skipped. Within a batch the sagas are re-driven one after the other. The
+ * backlog gauges are sampled once per cycle, at its start, so while a backlog drains they can be
+ * about 11 retry intervals old.
+ *
  * <p><b>Sampling-only mode.</b> The {@code streamrune.saga.compensating} and {@code
  * streamrune.saga.faulted_rows} gauges are emitted by this sweeper's per-cycle sample and by
  * nothing else, so the integrations do not withhold the sweeper when {@code
@@ -134,6 +153,28 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * The join bound {@link #close()} uses; {@link #CLOSE_JOIN_TIMEOUT_MS} unless a test shrinks it.
    */
   private volatile long closeJoinTimeoutMs = CLOSE_JOIN_TIMEOUT_MS;
+
+  /**
+   * How many retry intervals one sweep cycle may keep draining full batches before it yields to the
+   * schedule. Checked between batches, never inside one, and measured on {@link System#nanoTime()}
+   * whatever clock the builder was given.
+   */
+  static final int DRAIN_BUDGET_POLL_INTERVALS = 10;
+
+  /**
+   * How often, in consecutive cycles that reach their drain budget, the sweeper logs it at INFO: on
+   * the first such cycle and on every tenth after it; DEBUG otherwise.
+   */
+  private static final int BUDGET_YIELD_LOG_EVERY = 10;
+
+  /** {@link #DRAIN_BUDGET_POLL_INTERVALS} retry intervals in nanoseconds, saturated. */
+  private final long drainBudgetNanos;
+
+  /** The monotonic time the drain budget is measured on: System::nanoTime, or a test's ticker. */
+  private final LongSupplier drainTicker;
+
+  /** Consecutive cycles that ended on the drain budget; reset by one that ended otherwise. */
+  private final AtomicInteger budgetYieldStreak = new AtomicInteger();
 
   private final SagaRunner<S> sagaRunner;
   private final SagaStore sagaStore;
@@ -201,12 +242,12 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
    * produced it: {@link #sweepOnce()} replaces it on every exit, so a cycle that re-drives nothing
    * — standby at the leadership gate, a failed {@code findCompensating}, retry switched off —
    * leaves it empty. Every saga therefore gets one real attempt after a restart, an outage of the
-   * store or a standby period alike; bounded by {@code batchSize}. Because the evidence is one
-   * cycle deep, more than {@code batchSize} due sagas that keep failing rotate through the batches
-   * (a re-drive moves a saga to the back of the {@code updated_at} order), so one saga is seldom in
-   * two consecutive batches and the horizon may not apply to it; the inbox-retention key-age guard
-   * then ends the episode. Only ever touched by the single sweep thread (or a test thread), never
-   * concurrently.
+   * store or a standby period alike; bounded by the sagas one cycle re-drives, each at most once. A
+   * re-drive that fails transiently writes nothing, so the same due sagas head the first batch of
+   * every cycle and the horizon applies to them; while more than {@code batchSize} of them keep
+   * failing, the sagas behind them wait until the head ones end or are given up (the drain ends on
+   * a batch that ended no episode). Only ever touched by the single sweep thread (or a test
+   * thread), never concurrently.
    */
   private volatile java.util.Set<org.streamrune.core.saga.SagaId> previouslyReDriven =
       java.util.Set.of();
@@ -245,6 +286,8 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
             ? null
             : b.inboxRetentionMaxAge;
     this.batchSize = b.batchSize;
+    this.drainTicker = b.drainTicker;
+    this.drainBudgetNanos = drainBudgetNanos(b.retryInterval);
     this.clock = b.clock;
     this.metrics = b.metrics;
     Duration maxBackoff =
@@ -477,9 +520,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
   }
 
   /**
-   * Executes one sweep cycle: leadership-gated, then for each due {@code COMPENSATING} saga, decide
-   * give-up vs re-drive and delegate to {@link SagaRunner#sweepCompensation}. Package-private so
-   * tests can drive a single cycle synchronously with a fixed clock, without a background thread.
+   * Executes one sweep cycle: leadership-gated, then batch after batch of due {@code COMPENSATING}
+   * sagas while each comes back full and ended at least one episode ({@link #sweepBatch}); for each
+   * saga, decide give-up vs re-drive and delegate to {@link SagaRunner#sweepCompensation}.
+   * Package-private so tests can drive a single cycle synchronously with a fixed clock, without a
+   * background thread.
    */
   void sweepOnce() {
     // The ids this cycle re-drives become the next cycle's give-up evidence — and only the next
@@ -517,15 +562,116 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
       } else if (leadership.tryAcquire(consumerName).isEmpty()) {
         return;
       }
-      Instant now = clock.instant();
-      Instant dueCutoff = now.minus(retryInterval);
-      List<SagaStore.CompensatingSaga> due =
-          sagaStore.findCompensating(sagaType, dueCutoff, batchSize);
-      for (SagaStore.CompensatingSaga cs : due) {
-        reDrive(cs, now, reDrivenThisCycle);
-      }
+      drain(reDrivenThisCycle);
     } finally {
       previouslyReDriven = reDrivenThisCycle;
+    }
+  }
+
+  /**
+   * The batches of one cycle: the next one at once while the last came back full and ended an
+   * episode, the sweeper still leads, nothing asked it to stop, and the cycle is inside its drain
+   * budget.
+   */
+  private void drain(Set<SagaId> reDrivenThisCycle) {
+    long cycleStart = drainTicker.getAsLong();
+    Set<SagaId> seen = new HashSet<>();
+    int batches = 1;
+    boolean budgetReached = false;
+    try {
+      while (sweepBatch(seen, reDrivenThisCycle)) {
+        if (stopRequested() || !stillLeads()) {
+          return;
+        }
+        if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
+          budgetReached = true;
+          reportDrainBudgetReached(batches);
+          return;
+        }
+        batches++;
+      }
+    } finally {
+      if (!budgetReached) {
+        budgetYieldStreak.set(0);
+      }
+    }
+  }
+
+  /**
+   * One batch: the due sagas the store returns, each re-driven once unless the cycle has seen it
+   * already. Each batch reads the clock again for its cutoff and its give-up instant.
+   *
+   * @return whether the cycle may query again at once: the batch came back full and at least one of
+   *     its re-drives ended the saga's episode
+   */
+  private boolean sweepBatch(Set<SagaId> seen, Set<SagaId> reDrivenThisCycle) {
+    Instant now = clock.instant();
+    Instant dueCutoff = now.minus(retryInterval);
+    List<SagaStore.CompensatingSaga> due =
+        sagaStore.findCompensating(sagaType, dueCutoff, batchSize);
+    boolean ended = false;
+    for (SagaStore.CompensatingSaga cs : due) {
+      if (!seen.add(cs.sagaId())) {
+        continue; // re-driven earlier in this cycle and left as it was: not twice in one cycle
+      }
+      if (reDrive(cs, now, reDrivenThisCycle)) {
+        ended = true;
+      }
+    }
+    return due.size() >= batchSize && ended;
+  }
+
+  /**
+   * Whether this sweeper still leads between two batches: the lease it follows is still led here,
+   * or it still holds its own lease. A local check, not a new acquisition.
+   */
+  private boolean stillLeads() {
+    return follower != null ? follower.mayAct() : leadership.current(consumerName).isPresent();
+  }
+
+  /**
+   * Whether a {@link #close()} has asked the sweeper to stop, or the calling thread is interrupted.
+   * A sweeper that was never started is not stopping: a cycle a test drives runs to its end.
+   */
+  private boolean stopRequested() {
+    return (started.get() && !running) || Thread.currentThread().isInterrupted();
+  }
+
+  /**
+   * Logs a cycle that drained full batches until its budget: at INFO on the first of a streak of
+   * such cycles and on every {@value #BUDGET_YIELD_LOG_EVERY}th, so a sweeper that cannot keep up
+   * is visible in the logs as well as in {@code streamrune.saga.compensating}.
+   */
+  private void reportDrainBudgetReached(int batches) {
+    int streak = budgetYieldStreak.incrementAndGet();
+    if (streak == 1 || streak % BUDGET_YIELD_LOG_EVERY == 0) {
+      LOG.info(
+          "The compensation-retry sweeper of {} is draining a backlog at its full rate: {}"
+              + " consecutive cycle(s) reached the drain budget of {} retry intervals ({} full"
+              + " batches this cycle); the backlog gauges are sampled once per cycle",
+          sagaTypeName,
+          streak,
+          DRAIN_BUDGET_POLL_INTERVALS,
+          batches);
+    } else {
+      LOG.debug(
+          "The compensation-retry sweeper of {} drained {} full batches and reached its drain"
+              + " budget ({} consecutive cycles); yielding to the schedule",
+          sagaTypeName,
+          batches,
+          streak);
+    }
+  }
+
+  /**
+   * {@link #DRAIN_BUDGET_POLL_INTERVALS} times {@code interval} in nanoseconds, or {@link
+   * Long#MAX_VALUE} when the product does not fit.
+   */
+  private static long drainBudgetNanos(Duration interval) {
+    try {
+      return interval.multipliedBy(DRAIN_BUDGET_POLL_INTERVALS).toNanos();
+    } catch (ArithmeticException _) {
+      return Long.MAX_VALUE;
     }
   }
 
@@ -609,10 +755,15 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
         () -> metrics.recordSagaFaultedRows(sagaTypeName, faultedCount));
   }
 
-  private void reDrive(
-      SagaStore.CompensatingSaga cs,
-      Instant now,
-      java.util.Set<org.streamrune.core.saga.SagaId> reDrivenThisCycle) {
+  /**
+   * Re-drives (or gives up on) one due saga.
+   *
+   * @return whether the saga's episode ended: it was compensated, failed or faulted here, or found
+   *     ended by another path; {@code false} for a re-drive that failed transiently, was refused,
+   *     or failed in the store, and for a row refused for its missing stamp
+   */
+  private boolean reDrive(
+      SagaStore.CompensatingSaga cs, Instant now, Set<SagaId> reDrivenThisCycle) {
     // The give-up horizon anchors on the episode's durable, fault-cycle-immutable
     // claim instant (episode_claimed_at — the same anchor discipline as the replayer's
     // stale guard) and on nothing else. Anchoring on updatedAt was sound only while it equaled the
@@ -635,7 +786,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
               + " is unchanged. Fix the store (or repair the row), then it is re-driven normally",
           LogSanitizer.sanitizeForLog(cs.sagaId().value()),
           unstamped);
-      return;
+      return false;
     }
     // Key-age guard — the automatic-path companion of the replayer's
     // STALE_COMPENSATION_BLOCKED, anchored on the SAME durable claim instant (episodeAnchor
@@ -669,7 +820,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
           "Failed to re-drive compensation for saga {} — will retry next sweep",
           LogSanitizer.sanitizeForLog(cs.sagaId().value()),
           infra);
-      return;
+      return false;
     }
     switch (outcome) {
       // A real re-drive attempt happened — the episode reached a terminal status (COMPENSATED /
@@ -741,6 +892,10 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
         // CLAIM_LOST and the forward outcomes cannot occur on a ResumeCompensation trigger; no-op.
       }
     }
+    return switch (outcome) {
+      case COMPENSATED, FAILED, FAULTED, NOT_COMPENSATING -> true;
+      default -> false;
+    };
   }
 
   private void recordMetric(AtomicBoolean failedWarned, Runnable metricCall) {
@@ -772,6 +927,7 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private boolean compensationRetryEnabled = true;
     private Duration anchorGrace = LeaseFollower.DEFAULT_ANCHOR_GRACE;
+    private LongSupplier drainTicker = System::nanoTime;
 
     /** The saga runner whose compensation logic (and saga type) this sweeper re-drives. */
     public Builder<S> sagaRunner(SagaRunner<S> sagaRunner) {
@@ -854,7 +1010,10 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
       return this;
     }
 
-    /** Maximum sagas re-driven per sweep cycle. Defaults to 50. Must be positive. */
+    /**
+     * The most sagas one batch reads. Defaults to 50. Must be positive. A batch that comes back
+     * full and ends at least one episode is followed at once by the next batch of the same cycle.
+     */
     public Builder<S> batchSize(int batchSize) {
       this.batchSize = batchSize;
       return this;
@@ -891,6 +1050,15 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
      */
     Builder<S> anchorGrace(Duration anchorGrace) {
       this.anchorGrace = Objects.requireNonNull(anchorGrace, "anchorGrace is required");
+      return this;
+    }
+
+    /**
+     * Overrides the monotonic time the drain budget is measured on; for tests. Production uses
+     * {@link System#nanoTime()}.
+     */
+    Builder<S> drainTicker(LongSupplier drainTicker) {
+      this.drainTicker = Objects.requireNonNull(drainTicker, "drainTicker is required");
       return this;
     }
 

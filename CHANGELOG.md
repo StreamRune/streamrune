@@ -54,8 +54,14 @@ jars. In brief:
   parallelism and connection budget, `parallelism × (1 + AggregateLocker.applicationPoolConnectionsPerLock())`,
   refuses the start when the aggregate locks can take the whole pool (give the locker a pool of its
   own, raise the pool, or lower the parallelism), and warns above half the pool; a pool whose size
-  cannot be read is neither refused nor warned about. See the
-  [production guide](docs/guide/production.md#pool-sizing-for-saga-parallelism) and the
+  cannot be read is neither refused nor warned about. The timeout runner built from a runner claims
+  the sagas past their deadline in parallel on the same slots as the runner's steps, so steps and
+  deadline claims of a saga type together stay within the budgeted steps (the parallelism per bound
+  subscription), except the claim of a saga whose own step is in flight, made without a slot when
+  none frees within its claim wait, and one slow compensation delays no other claim. The timeout runner, the
+  compensation-retry sweeper and the command dead-letter retry runner query their next batch at once
+  while their batches come back full and make progress, for at most 10 poll intervals per cycle. See
+  the [production guide](docs/guide/production.md#pool-sizing-for-saga-parallelism) and the
   [saga guide](docs/guide/advanced/saga.md#saga-parallelism).
 - **Command dead-letter queue with operator-confirmed replay.** A command that keeps failing on
   infrastructure, never one the domain rejected, is parked in the dead-letter queue, and its caller

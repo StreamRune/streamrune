@@ -234,7 +234,7 @@ class DeadLetterReplayProvenanceTest {
                       try (Harness harness = new Harness()) {
                         harness.publishEntry("pay-1", correlationId, user, trace, key);
 
-                        harness.runner.processBatch();
+                        harness.runner.pollCycle();
 
                         assertTrue(harness.dlq.all().isEmpty(), "the replay succeeded");
                         List<EventEnvelope> stored = harness.stored("pay-1");
@@ -357,7 +357,7 @@ class DeadLetterReplayProvenanceTest {
                                     .run(() -> harness.bus.execute(new Pay("pay-1"), key)));
                         assertTrue(harness.dlq.all().isEmpty());
                         harness.failing.set(false);
-                        harness.runner.processBatch();
+                        harness.runner.pollCycle();
                         assertTrue(harness.stored("pay-1").isEmpty());
 
                         StreamRuneContext.continuing(cause)
@@ -411,7 +411,7 @@ class DeadLetterReplayProvenanceTest {
       assertEquals(key, harness.dlq.all().getFirst().idempotencyKey());
 
       harness.failing.set(false);
-      harness.runner.processBatch();
+      harness.runner.pollCycle();
 
       List<EventEnvelope> stored = harness.stored("pay-1");
       assertNoProvenance(stored);

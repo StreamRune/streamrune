@@ -843,6 +843,14 @@ license.
   backoff (up to one minute, jittered), and refuses at `build()` a decider without a `timeout()`, a
   non-positive `pollInterval` and a non-positive `batchSize`. It is `AutoCloseable`: `start()` begins
   polling and `close()` stops it.
+  Built from a `SagaRunner`, it claims the sagas of each query in parallel, each holding one of the
+  runner's slots, which the runner's steps share: steps and deadline claims of a saga type together
+  stay within the runner's parallelism per bound subscription, except the claim of a saga whose own
+  step is in flight, made without a slot when none frees within its claim wait, and a slot is taken
+  before the saga's step lock. Built with `stepLock(...)` it acts on one saga at a time. A poll cycle queries
+  again at once after a full batch that acted on a saga, for at most 10 poll intervals; the
+  compensation-retry sweeper and `DeadLetterRetryRunner` drain the same way, one entry after the
+  other.
 - Failure model: an exception (or a `null` router result) from `isStartEvent`,
   `correlateByEventData`, `extractSagaId`, `initialState`, `evolve`, `handle` or `compensate` is poison — the event is
   quarantined in the `SagaDeadLetterStore` as metadata only (never the payload), the saga is marked

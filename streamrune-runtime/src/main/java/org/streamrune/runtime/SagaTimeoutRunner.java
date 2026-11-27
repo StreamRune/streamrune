@@ -12,7 +12,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandBus;
@@ -118,8 +122,8 @@ import org.streamrune.core.types.SagaType;
  *       moment): the claim is made underneath the step, logged at INFO. Each forward command of the
  *       step committed before the claim, and the compensation covers it, or reaches its commit
  *       after the claim and is refused there; the step then resumes the episode. A step that does
- *       not return delays the saga's deadline by the polls that passed it over and one bounded
- *       wait, and no more;
+ *       not return delays the saga's deadline by a bounded time (see "How long a step that does not
+ *       return delays its saga's deadline" below);
  *   <li>built from a runner with the fence off, or with {@link Builder#stepLock}: the claim is
  *       never made underneath a step, however long the step lasts. The poll says so at WARN, counts
  *       {@link StreamRuneMetrics#recordSagaTimeoutClaimDeferred}, and the runner reports {@link
@@ -132,16 +136,17 @@ import org.streamrune.core.types.SagaType;
  * for two more ids for each saga it passes over — one for each of the store's two populations — and
  * handles everything it reads, so both populations keep the share {@code batchSize} gives them. It
  * reads past at most {@code batchSize} such sagas: no query asks for more than three times {@code
- * batchSize} ids, and a poll repeats its query only while the previous one passed over sagas it had
- * not counted. The sagas a poll has to wait for are tried after all the others, so their waits
- * delay no other saga's claim.
+ * batchSize} ids, and a batch repeats its query only while the previous one passed over sagas it
+ * had not counted. The sagas a poll has to wait for are tried after all the others, as one page
+ * after the cycle's last batch, so their waits delay no other saga's claim; at a limit above 1
+ * their waits overlap, at a limit of 1 they add up.
  *
- * <p><b>Fair batches:</b> each poll takes up to {@code batchSize} sagas from {@link
+ * <p><b>Fair batches:</b> each batch takes up to {@code batchSize} sagas from {@link
  * SagaStore#findTimedOut}, which serves forward timeouts (oldest start first) and {@code
  * COMPENSATING} re-picks (idle longest first) as two populations interleaved by rank. A backlog of
  * episodes whose compensation keeps failing transiently — each re-drive writes nothing, so they
  * stay the oldest rows by last write — therefore cannot hold the whole batch: forward timeouts keep
- * at least half of every poll and are claimed in deadline order, not after the outage lifts.
+ * at least half of every batch and are claimed in deadline order, not after the outage lifts.
  *
  * <p><b>A failing poll backs off.</b> When a poll itself fails — {@code findTimedOut} cannot reach
  * the store, a statement is refused — the loop logs it and retries after a capped exponential
@@ -149,6 +154,62 @@ import org.streamrune.core.types.SagaType;
  * every other background loop, and {@link #consecutiveFailures()} reports the streak. A decider
  * with no {@link SagaDecider#timeout()} is refused by {@link Builder#build()}: there is nothing to
  * poll against, and such a saga is recovered by {@link SagaCompensationRetrySweeper} instead.
+ *
+ * <p><b>Sagas are claimed in parallel, on the runner's slots.</b> The sagas a query returns run as
+ * one page, keyed by saga id: each on a virtual worker thread named {@code saga-timeout-<saga
+ * type>-claim-<n>}, which carries the poll thread's request context and trace context, so the span
+ * {@code saga/{SagaType}/timeout} of each saga is started on its worker. Each worker takes one of
+ * the slots of the {@link SagaRunner} the builder named before it acts on its saga, and keeps it
+ * until the saga's compensation has been dispatched and its terminal status written: the runner's
+ * steps and these claims share the slots, so together they stay within the runner's budgeted steps
+ * — its {@linkplain SagaRunner#parallelism() parallelism} per bound subscription, read at each
+ * acquire — and the connection budget the integrations compute for the runner's steps also holds
+ * the claims, with the one exception below. A slot is always taken before the saga's step lock,
+ * never while one is held; a claim that waits its bound for a step in flight holds its slot, and
+ * the step it waits for holds a slot of its own. One slow compensation therefore delays no other
+ * saga's claim while a slot is free. A runner built with {@link Builder#stepLock} has no runner to
+ * share slots with and acts on one saga at a time, on the poll thread; so does every runner whose
+ * limit is 1. Two workers never act on one saga in a poll: a page's keys are distinct, and a saga
+ * read once in a cycle is not acted on again in it.
+ *
+ * <p><b>While every slot is held.</b> A claim waits for a slot for at most the claim wait. A claim
+ * of a saga not waited for that gets none is postponed to the next poll, with nothing read or
+ * written, and the batch's later claims then ask for a slot once instead of each waiting as long,
+ * so a batch whose claims find every slot held costs about one claim wait. A claim whose saga has a
+ * step in flight, and that would only ask for the step lock once, is passed over before it takes a
+ * slot. The claim of a saga the poll waits for waits for its slot and its step lock within one
+ * claim wait; when no slot frees within it and a step of that saga is still in flight, it goes on
+ * without a slot: a forward saga is claimed underneath the step with the forward fence on (an INFO
+ * line) and deferred past the wait, not claimed, with it off; a compensating re-pick whose resume
+ * step holds the saga's lock is resumed (an INFO line). A claim that acts without a slot exceeds
+ * the budgeted steps by one while it runs. If that saga's step has ended by then, its claim is
+ * postponed like any other and competes for a slot from the next poll on. The runner's budgeted
+ * steps are thus exceeded only by claims of sagas whose own step is in flight, at most one per such
+ * step. Each cycle that postponed claims says so in one INFO line (the first cycle of a streak and
+ * every tenth).
+ *
+ * <p><b>How long a step that does not return delays its saga's deadline.</b> From the first poll
+ * that reads the saga past its deadline: the {@value #DEFERRALS_BEFORE_WAITING} polls that pass it
+ * over and the poll interval after each, then the fourth poll's batches and its page of the sagas
+ * it waits for, in which each claim waits at most one claim wait — side by side at a limit above 1,
+ * one after the other at a limit of 1. While every slot stays held — the case of steps that do not
+ * return — no claim acts, so each of these polls is a single batch of about one claim wait: with
+ * the defaults (a 30 s poll interval, a 5 s claim wait) and one saga to wait for, about 3 x 35 s +
+ * 10 s, two minutes. While other claims act, a poll's cycle can drain, and each of these polls can
+ * take up to the drain budget of {@value #DRAIN_BUDGET_POLL_INTERVALS} poll intervals plus the
+ * batch in progress: the sagas a poll waits for are tried after its last batch.
+ *
+ * <p><b>A cycle drains while batches come back full.</b> After a batch whose last query returned as
+ * many ids as it asked for and that acted on at least one saga it had not seen in the cycle, the
+ * runner queries again at once instead of waiting {@code pollInterval}. A partial or empty batch
+ * ends the cycle, and so does a batch whose sagas were all deferred, failed, postponed for want of
+ * a slot or seen already, a {@link #close()} or an interrupt, and a poll that has lost the lease,
+ * checked before every further query, batch and the page of sagas the poll waits for. Each batch
+ * takes its cutoff from the clock again, since deadlines keep passing while a backlog drains. One
+ * cycle drains for at most {@value #DRAIN_BUDGET_POLL_INTERVALS} poll intervals plus the batch in
+ * progress, measured on {@link System#nanoTime()}; the first cycle that reaches the budget and
+ * every tenth one after it log an INFO line. The timed-out backlog gauge is sampled once per cycle,
+ * at its start, so while a backlog drains it can be about 11 poll intervals old.
  *
  * <p>Per-saga processing errors are caught and logged (not rethrown), so a single failing saga does
  * not abort the rest of the batch.
@@ -181,6 +242,29 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
 
   /** How long a claim waits for a step in flight once it waits at all. */
   static final Duration DEFAULT_CLAIM_WAIT = Duration.ofSeconds(5);
+
+  /**
+   * How many poll intervals one poll cycle may keep draining full batches before it yields to the
+   * schedule (see {@link #pollCycle(Instant)}). After a cycle the runner waits one {@code
+   * pollInterval}, so under a sustained backlog it spends at least 10 of every 11 intervals
+   * claiming, whatever the interval, and the backlog gauge is sampled at least every 11 intervals
+   * plus one batch. The budget is checked between batches, never inside one, so a cycle can overrun
+   * it by the batch in progress. Measured on {@link System#nanoTime()}, whatever clock the builder
+   * was given, so a fixed or stepping test clock cannot stretch it.
+   */
+  static final int DRAIN_BUDGET_POLL_INTERVALS = 10;
+
+  /**
+   * How often, in consecutive poll cycles that reach their drain budget, the runner logs the
+   * saturation at INFO: on the first such cycle and on every tenth after it; DEBUG otherwise.
+   */
+  private static final int BUDGET_YIELD_LOG_EVERY = 10;
+
+  /**
+   * How often, in consecutive poll cycles that postponed claims for want of a slot, the runner logs
+   * them at INFO: on the first such cycle and on every tenth after it; DEBUG otherwise.
+   */
+  private static final int POSTPONED_LOG_EVERY = 10;
 
   private final SagaDecider<S> decider;
   private final SagaStore sagaStore;
@@ -217,6 +301,31 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   private final SagaRunner<?> boundRunner;
 
   private final Duration claimWait;
+
+  /**
+   * The slots of the {@link SagaRunner} the builder named, which this runner's claims share with
+   * that runner's steps ({@link SagaSlots}); {@code null} for a runner built with {@link
+   * Builder#stepLock}, which acts on one saga at a time.
+   */
+  private final SagaSlots slots;
+
+  /** Runs the sagas of a query as one page, keyed by saga id. */
+  private final KeyedPageExecutor claimPages;
+
+  /** The threads acting on a saga at this moment; {@link #close()} interrupts them. */
+  private final Set<Thread> claimThreads = ConcurrentHashMap.newKeySet();
+
+  /** {@link #DRAIN_BUDGET_POLL_INTERVALS} poll intervals in nanoseconds, saturated. */
+  private final long drainBudgetNanos;
+
+  /** The monotonic time the drain budget is measured on: System::nanoTime, or a test's ticker. */
+  private final LongSupplier drainTicker;
+
+  /** Consecutive poll cycles that ended on the drain budget; reset by one that ended otherwise. */
+  private final AtomicInteger budgetYieldStreak = new AtomicInteger();
+
+  /** Consecutive poll cycles that postponed a claim; reset by one that postponed none. */
+  private final AtomicInteger postponedStreak = new AtomicInteger();
 
   /**
    * The lease this runner follows: the {@link SagaRunner}'s when the builder named the runner,
@@ -275,12 +384,18 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       SagaRunner<?> boundRunner,
       Duration claimWait,
       Duration anchorGrace,
-      StreamRuneTracing tracing) {
+      StreamRuneTracing tracing,
+      LongSupplier drainTicker) {
     this.tracing = GuardedTracing.of(tracing, metrics);
     this.traced = this.tracing.enabled(TracingArea.SAGA);
     this.stepLock = stepLock;
     this.boundRunner = boundRunner;
     this.claimWait = claimWait;
+    this.slots = boundRunner != null ? boundRunner.slots() : null;
+    this.claimPages =
+        new KeyedPageExecutor("saga-timeout-" + sagaType.value() + "-claim-", this.tracing);
+    this.drainTicker = drainTicker;
+    this.drainBudgetNanos = drainBudgetNanos(pollInterval);
     this.lease = boundRunner != null ? boundRunner.lease() : SubscriptionLease.ungated();
     this.follower =
         new LeaseFollower(
@@ -346,11 +461,13 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   }
 
   /**
-   * Stops polling. Interrupts the poll thread and resets the started guard so {@link #start()} can
-   * be called again on the same instance — matches the restartable lifecycle contract (actuator
-   * restart, context refresh) of the other background components. Idempotent: closing a runner that
-   * is not started does nothing. A DI container's destroy callback, a try-with-resources block or a
-   * lifecycle that closes its {@link AutoCloseable} components stops it like them.
+   * Stops polling. Interrupts the threads acting on a saga and the poll thread, which starts no
+   * further saga, query or batch and waits for those threads, and resets the started guard so
+   * {@link #start()} can be called again on the same instance — matches the restartable lifecycle
+   * contract (actuator restart, context refresh) of the other background components. Idempotent:
+   * closing a runner that is not started does nothing. A DI container's destroy callback, a
+   * try-with-resources block or a lifecycle that closes its {@link AutoCloseable} components stops
+   * it like them.
    *
    * <p>A poll thread that does not stop within the join bound keeps the runner started and alive,
    * so {@link #start()} is refused; a later {@code close()} interrupts and joins that thread again
@@ -383,6 +500,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
           sagaType.value());
     }
     running = false;
+    // The workers acting on a saga first, then the poll thread that waits for them: a worker that
+    // waits for a slot, for a step in flight or inside a compensation command is told to stop.
+    for (Thread worker : claimThreads) {
+      worker.interrupt();
+    }
     Thread t = pollThread;
     boolean stuck = false;
     if (t != null) {
@@ -478,12 +600,13 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   }
 
   /**
-   * Runs one poll on the calling thread — what the poll thread of a started runner runs every poll
-   * interval: computes the timeout cutoff from the injected {@link Clock} and processes one batch
-   * of timed-out sagas. The cutoff is {@code now - timeout}; a {@code STARTED}/{@code RUNNING} saga
-   * whose <em>start instant</em> is before the cutoff has exceeded its (absolute) timeout, while a
-   * {@code COMPENSATING} crash-resume episode is re-picked on last-write inactivity — see {@link
-   * org.streamrune.core.saga.SagaStore#findTimedOut}. A failure propagates to the caller.
+   * Runs one poll cycle on the calling thread — what the poll thread of a started runner runs every
+   * poll interval: batch after batch of timed-out sagas while each comes back full and made
+   * progress ({@link #pollCycle(Instant)}). Each batch computes its timeout cutoff from the
+   * injected {@link Clock}: the cutoff is {@code now - timeout}; a {@code STARTED}/{@code RUNNING}
+   * saga whose <em>start instant</em> is before the cutoff has exceeded its (absolute) timeout,
+   * while a {@code COMPENSATING} crash-resume episode is re-picked on last-write inactivity — see
+   * {@link org.streamrune.core.saga.SagaStore#findTimedOut}. A failure propagates to the caller.
    *
    * <p>A runner built with {@link Builder#sagaRunner} follows that runner's lease: while this
    * process does not lead it — a standby, or a saga subscription that has not taken the lease yet —
@@ -503,8 +626,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     }
     Duration timeout =
         decider.timeout().orElseThrow(() -> new IllegalStateException("No timeout configured"));
-    Instant cutoff = clock.instant().minus(timeout);
-    processBatch(cutoff);
+    pollCycle(() -> clock.instant().minus(timeout));
   }
 
   /**
@@ -517,38 +639,204 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
   }
 
   /**
-   * Processes a single batch of timed-out sagas. Package-private for testing.
-   *
-   * <p>A saga whose claim is deferred ({@link #claimAtTheDeadline}) takes no slot. The poll asks
-   * {@link SagaStore#findTimedOut} for {@code batchSize} ids and two more for each saga it expects
-   * to pass over — the sagas the previous poll passed over. A deferred saga is a forward row, and
-   * the store gives the forward population half of what is asked for when both populations are
-   * backlogged, so two more ids per deferred saga give the forward population the one slot that
-   * saga holds and leave both populations the share {@code batchSize} gives them. Every id read is
-   * handled. When a query comes back full and the poll has passed over more sagas than it counted,
-   * it asks again with the larger number and handles the ids it has not seen; each further query
-   * needs sagas newly passed over, and the number counted stops at {@code batchSize}, so no query
-   * asks for more than three times {@code batchSize} ids.
-   *
-   * <p>A saga the poll has to wait for ({@value #DEFERRALS_BEFORE_WAITING} polls in a row passed it
-   * over) is counted as passed over when it is read and tried after every other saga of the poll,
-   * so its wait delays no other claim. Nothing here starves it: it stays selected, by its start
-   * instant, and is tried on every poll.
+   * Runs one poll cycle with {@code cutoff} for every batch. Its first batch runs whatever the
+   * lease; like every cycle, it goes on to a further query, batch or the page of sagas it waits for
+   * only while the process may act. Package-private for testing.
    */
-  void processBatch(Instant cutoff) {
+  void pollCycle(Instant cutoff) {
+    Objects.requireNonNull(cutoff, "cutoff is required");
+    pollCycle(() -> cutoff);
+  }
+
+  /**
+   * One poll cycle: batch after batch ({@link #processBatch}) while the last one came back full —
+   * its last query returned as many ids as it asked for — and made progress: it acted on at least
+   * one saga it had not seen earlier in the cycle, neither deferred, failed nor postponed for want
+   * of a slot. A partial or empty batch ends the cycle, and so does a batch whose sagas were all
+   * deferred, failed, postponed for want of a slot or seen already, a {@link #close()} or an
+   * interrupt, a poll that has lost the lease (checked before every further query, batch and the
+   * waited page), and the {@linkplain #DRAIN_BUDGET_POLL_INTERVALS drain budget}.
+   *
+   * <p>Each batch asks the clock for its cutoff, because deadlines keep passing while a backlog
+   * drains: a saga whose deadline passes during the cycle is claimed in the cycle, as the next poll
+   * would claim it. The sagas the cycle has read stay seen for the rest of it: a saga deferred,
+   * failed or resumed in one batch is read past in the next instead of being tried twice in one
+   * cycle. The sagas the cycle has to wait for are tried last, after its last batch, as one page.
+   */
+  private void pollCycle(Supplier<Instant> cutoffs) {
+    long cycleStart = drainTicker.getAsLong();
     Set<SagaId> seen = new HashSet<>();
     List<SagaId> toWaitFor = new ArrayList<>();
-    int passedOver = 0;
+    // The sagas the previous poll passed over are read past from the first query on.
     int readPast = Math.min(deferredClaims.size(), batchSize);
-    boolean firstQuery = true;
+    int batches = 1;
+    int postponed = 0;
+    boolean budgetReached = false;
+    boolean goesOn = true;
+    try {
+      while (true) {
+        Batch batch = processBatch(cutoffs.get(), seen, toWaitFor, readPast, batches == 1);
+        postponed += batch.postponed();
+        if (!batch.full() || batch.acted() == 0) {
+          break;
+        }
+        if (stopRequested() || !follower.mayAct()) {
+          goesOn = false;
+          break;
+        }
+        if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
+          budgetReached = true;
+          reportDrainBudgetReached(batches);
+          break;
+        }
+        readPast = Math.min(batch.passedOver(), batchSize);
+        batches++;
+      }
+    } finally {
+      if (!budgetReached) {
+        budgetYieldStreak.set(0);
+      }
+    }
+    // A saga this cycle did not read is not a forward saga past its deadline within the poll's
+    // reach: forget how often its claim was passed over.
+    deferredClaims.keySet().retainAll(seen);
+    if (!goesOn || toWaitFor.isEmpty() || stopRequested() || !follower.mayAct()) {
+      claimsDeferredPastTheWait = 0;
+      reportPostponed(postponed);
+      return;
+    }
+    // The sagas to wait for run as one page: at a limit above 1 their bounded waits overlap
+    // instead of adding up.
+    PageCounts waited = claimPage(toWaitFor, new AtomicBoolean());
+    claimsDeferredPastTheWait = waited.deferred();
+    reportPostponed(postponed + waited.postponed());
+  }
+
+  /**
+   * Logs the claims a cycle postponed because no slot of the runner freed within their claim wait:
+   * at INFO on the first cycle of a streak of such cycles and on every {@value
+   * #POSTPONED_LOG_EVERY}th, DEBUG otherwise, so a runner whose every slot stays held — at a limit
+   * of 1, a single step that does not return — is visible in the logs before its sagas are waited
+   * for. A cycle that postponed nothing ends the streak.
+   */
+  private void reportPostponed(int postponed) {
+    if (postponed == 0) {
+      postponedStreak.set(0);
+      return;
+    }
+    int streak = postponedStreak.incrementAndGet();
+    if (streak == 1 || streak % POSTPONED_LOG_EVERY == 0) {
+      LOG.info(
+          "{} deadline claim(s) of saga type {} were postponed to the next poll: every slot of the"
+              + " runner stayed held for the claim wait of {} ({} consecutive poll cycle(s)). Steps"
+              + " that do not return hold the slots; look at the command bus and the aggregates"
+              + " the sagas dispatch to",
+          postponed,
+          sagaType.value(),
+          claimWait,
+          streak);
+    } else {
+      LOG.debug(
+          "{} deadline claim(s) of saga type {} were postponed to the next poll ({} consecutive"
+              + " poll cycles)",
+          postponed,
+          sagaType.value(),
+          streak);
+    }
+  }
+
+  /**
+   * Logs a cycle that drained full batches until its budget: at INFO on the first of a streak of
+   * such cycles and on every {@value #BUDGET_YIELD_LOG_EVERY}th, so a runner that cannot keep up
+   * with the deadlines passing is visible in the logs as well as in {@code
+   * streamrune.saga.timed_out_backlog}.
+   */
+  private void reportDrainBudgetReached(int batches) {
+    int streak = budgetYieldStreak.incrementAndGet();
+    if (streak == 1 || streak % BUDGET_YIELD_LOG_EVERY == 0) {
+      LOG.info(
+          "The timeout runner of saga type {} is draining a backlog at its full rate: {}"
+              + " consecutive poll cycle(s) reached the drain budget of {} poll intervals ({} full"
+              + " batches this cycle); the timed-out backlog gauge is sampled once per cycle",
+          sagaType.value(),
+          streak,
+          DRAIN_BUDGET_POLL_INTERVALS,
+          batches);
+    } else {
+      LOG.debug(
+          "The timeout runner of saga type {} drained {} full batches and reached its drain budget"
+              + " ({} consecutive cycles); yielding to the schedule",
+          sagaType.value(),
+          batches,
+          streak);
+    }
+  }
+
+  /**
+   * What one batch came to.
+   *
+   * @param full whether the batch's last query returned as many ids as it asked for
+   * @param acted the sagas of the batch the runner acted on: not seen earlier in the cycle, and
+   *     neither deferred, failed nor postponed
+   * @param passedOver the sagas the batch read and did not count against {@code batchSize}: those
+   *     whose claim was deferred, those to wait for, and those seen earlier in the cycle
+   * @param postponed the claims of the batch postponed to the next poll because no slot freed
+   *     within their claim wait
+   */
+  private record Batch(boolean full, int acted, int passedOver, int postponed) {}
+
+  /**
+   * Processes one batch of timed-out sagas.
+   *
+   * <p>A saga whose claim is deferred ({@link #claimAtTheDeadline}) takes no slot of the batch, and
+   * nor does a saga the cycle has seen in an earlier batch. The batch asks {@link
+   * SagaStore#findTimedOut} for {@code batchSize} ids and two more for each saga it expects to read
+   * past — for the first batch of a cycle the sagas the previous poll passed over, for a later one
+   * the sagas the batch before it passed over. Such a saga is a forward row (or a re-pick a resume
+   * left as it was), and the store gives each population half of what is asked for when both are
+   * backlogged, so two more ids per saga give its population the slot that saga holds and leave
+   * both populations the share {@code batchSize} gives them. Every id read is handled. When a query
+   * comes back full and the batch has passed over more sagas than it counted, it asks again with
+   * the larger number and handles the ids it has not seen; each further query needs sagas newly
+   * passed over, and the number counted stops at {@code batchSize}, so no query asks for more than
+   * three times {@code batchSize} ids.
+   *
+   * <p>The new sagas of each query run as one page ({@link #claimPage}): in parallel, up to the
+   * {@link SagaRunner}'s budgeted steps, each holding one of its slots. The read-past accounting is
+   * made once the page has ended.
+   *
+   * <p>A saga the poll has to wait for ({@value #DEFERRALS_BEFORE_WAITING} polls in a row passed it
+   * over) is counted as passed over when it is read and tried after every other saga of the cycle,
+   * so its wait delays no other claim. Nothing here starves it: it stays selected, by its start
+   * instant, and is tried on every poll.
+   *
+   * @param seen the sagas read earlier in the cycle; this batch adds the ones it reads
+   * @param toWaitFor the sagas to wait for; this batch adds the ones it finds
+   * @param readPast how many sagas the first query expects to read past
+   * @param firstOfCycle whether the batch samples the timed-out backlog gauge
+   */
+  private Batch processBatch(
+      Instant cutoff,
+      Set<SagaId> seen,
+      List<SagaId> toWaitFor,
+      int readPast,
+      boolean firstOfCycle) {
+    Set<SagaId> readThisBatch = new HashSet<>();
+    int passedOver = 0;
+    int acted = 0;
+    int postponed = 0;
+    // Set once a claim of the batch has waited its whole claim wait for a slot: every slot stayed
+    // held meanwhile, so the batch's later claims ask once instead of each waiting as long.
+    AtomicBoolean slotsStayedHeld = new AtomicBoolean();
+    boolean sample = firstOfCycle;
     while (true) {
       int limit = batchSize + 2 * readPast;
       List<SagaId> timedOut = sagaStore.findTimedOut(sagaType, cutoff, limit);
-      if (firstQuery) {
-        firstQuery = false;
-        // Sample the timed-out backlog gauge each cycle so a stalled-but-alive runner (or a
+      if (sample) {
+        sample = false;
+        // Sample the timed-out backlog gauge once per cycle so a stalled-but-alive runner (or a
         // growing timeout backlog) is visible on the metrics endpoint, not only in logs. This is
-        // the number of sagas the poll's first query picked up — forward timeouts plus
+        // the number of sagas the cycle's first query picked up — forward timeouts plus
         // COMPENSATING re-picks. Decoupled from processing: a metric failure never aborts the
         // batch.
         if (metrics != StreamRuneMetrics.NOOP) {
@@ -557,32 +845,221 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
               "recordSagaTimedOutBacklog");
         }
       }
+      List<SagaId> toClaim = new ArrayList<>();
       for (SagaId sagaId : timedOut) {
-        if (!seen.add(sagaId)) {
-          continue;
+        if (!readThisBatch.add(sagaId)) {
+          continue; // read by an earlier query of this batch, and counted there
         }
-        if (deferredClaims.getOrDefault(sagaId, 0) >= DEFERRALS_BEFORE_WAITING) {
+        if (!seen.add(sagaId)) {
+          passedOver++; // read in an earlier batch of the cycle
+        } else if (deferredClaims.getOrDefault(sagaId, 0) >= DEFERRALS_BEFORE_WAITING) {
           toWaitFor.add(sagaId);
           passedOver++;
-        } else if (processTimedOutSaga(sagaId)) {
-          passedOver++;
+        } else {
+          toClaim.add(sagaId);
         }
       }
+      PageCounts page = claimPage(toClaim, slotsStayedHeld);
+      passedOver += page.deferred();
+      acted += page.acted();
+      postponed += page.postponed();
       if (timedOut.size() < limit || passedOver <= readPast || readPast == batchSize) {
-        break; // nothing more is selected, or every saga passed over was read past, or the bound
+        // nothing more is selected, or every saga passed over was read past, or the bound
+        return new Batch(timedOut.size() >= limit, acted, passedOver, postponed);
+      }
+      if (stopRequested() || !follower.mayAct()) {
+        return new Batch(false, acted, passedOver, postponed);
       }
       readPast = Math.min(passedOver, batchSize);
     }
-    // A saga this poll did not read is not a forward saga past its deadline within the poll's
-    // reach: forget how often its claim was passed over.
-    deferredClaims.keySet().retainAll(seen);
-    int stillInFlight = 0;
-    for (SagaId sagaId : toWaitFor) {
-      if (processTimedOutSaga(sagaId)) {
-        stillInFlight++;
+  }
+
+  /**
+   * What a page of sagas came to: how many the runner acted on, how many it deferred, and how many
+   * it postponed to the next poll for want of a slot.
+   */
+  private record PageCounts(int acted, int deferred, int postponed) {
+    static final PageCounts NONE = new PageCounts(0, 0, 0);
+  }
+
+  /**
+   * Runs {@code sagaIds}, which are distinct, as one page: in parallel up to the bound runner's
+   * budgeted steps, each saga on a worker that holds one of the runner's slots while it acts on the
+   * saga ({@link #actInASlot}); serially on the calling thread for a runner built with {@link
+   * Builder#stepLock}, or when the limit is 1. A saga that fails is logged and does not stop the
+   * others; an {@link Error} ends the page and is thrown. A page cut short by an interrupt of the
+   * calling thread returns what ran and leaves the thread's interrupt status set.
+   *
+   * @param slotsStayedHeld set by the first claim that waited its whole claim wait for a slot and
+   *     got none; read by the later claims of a saga not waited for, which then ask once
+   */
+  private PageCounts claimPage(List<SagaId> sagaIds, AtomicBoolean slotsStayedHeld) {
+    if (sagaIds.isEmpty()) {
+      return PageCounts.NONE;
+    }
+    Map<SagaId, ClaimOutcome> outcomes = new ConcurrentHashMap<>();
+    int parallelism = slots == null ? 1 : slots.currentLimit();
+    PageResult result =
+        claimPages.run(
+            sagaIds,
+            Function.identity(),
+            parallelism,
+            sagaId -> outcomes.put(sagaId, actInASlot(sagaId, slotsStayedHeld)),
+            NEVER_STOPS,
+            PageObserver.NONE);
+    if (result.failure() instanceof Error error) {
+      throw error;
+    }
+    if (result.failure() != null && !result.interrupted()) {
+      result.rethrow(); // a worker that ended without running its sagas: the poll fails
+    }
+    int acted = 0;
+    int deferred = 0;
+    int postponed = 0;
+    for (ClaimOutcome outcome : outcomes.values()) {
+      switch (outcome) {
+        case ACTED -> acted++;
+        case DEFERRED -> deferred++;
+        case POSTPONED -> postponed++; // neither progress nor a saga passed over
+        case FAILED, NOT_RUN -> {
+          // neither progress nor a saga passed over
+        }
       }
     }
-    claimsDeferredPastTheWait = stillInFlight;
+    return new PageCounts(acted, deferred, postponed);
+  }
+
+  /** A page never stops on the failure of a saga: each saga's failure is its own. */
+  private static final PageStopRule NEVER_STOPS = (failure, failuresInPage) -> false;
+
+  /** What acting on one saga came to. */
+  enum ClaimOutcome {
+    /** The runner claimed, resumed or skipped the saga (its row was halted or gone). */
+    ACTED,
+    /** The claim was deferred: a step of the saga is in flight in this process. */
+    DEFERRED,
+    /** Processing the saga failed; logged. */
+    FAILED,
+    /**
+     * The claim had no slot and was not made: no slot freed within its wait (or, once a claim of
+     * the batch had waited in vain, at its single ask), or, for a saga the poll waited for, its
+     * step had ended by then. Nothing was written; the next poll tries again.
+     */
+    POSTPONED,
+    /** The runner stopped before it acted on the saga. */
+    NOT_RUN
+  }
+
+  /**
+   * Acts on one saga while holding one of the bound runner's slots: the slot first, then, inside,
+   * the saga's step lock — never the other way round, so a claim never waits for a slot while it
+   * holds a step lock. A runner built with {@link Builder#stepLock} has no slots and acts at once.
+   * The thread is registered for {@link #close()} to interrupt while it runs.
+   *
+   * <p>A claim whose saga has a step in flight at that moment, and that would ask for the step lock
+   * once, is passed over at once, without a slot, and nothing is read for it.
+   *
+   * <p>Every other claim of a saga not waited for waits for its slot in arrival order for at most
+   * the claim wait. When none frees it is postponed to the next poll, with nothing read and nothing
+   * written, and it marks {@code slotsStayedHeld}: every slot stayed held for a whole claim wait,
+   * so the later claims of the batch ask for a slot once, without waiting, and are postponed at
+   * once when none is free. While every slot stays held a batch therefore costs about one claim
+   * wait, not one per saga. A claim of a saga not waited for is never made without a slot.
+   *
+   * <p>A saga the poll has to wait for ({@value #DEFERRALS_BEFORE_WAITING} polls in a row passed it
+   * over) has one claim wait for its slot and its step lock together: it waits for a slot for at
+   * most the claim wait, whatever {@code slotsStayedHeld} says, and for the step lock for what is
+   * left of it. When no slot frees within the claim wait the claim goes on without a slot only if a
+   * step of that saga is still in flight ({@link #claimAtTheDeadline}, {@link #timeOut}): then it
+   * is claimed underneath the step (forward fence on) or deferred past the wait (fence off), or, as
+   * a compensating re-pick, resumed, and a step that does not return delays its saga's deadline by
+   * a bounded time even while every slot is held. A claim that acts without a slot exceeds the
+   * runner's budgeted steps by one while it runs. If the saga's step has ended by then, the claim
+   * is postponed like any other: nothing is left to wait for, and the saga competes for a slot from
+   * the next poll on.
+   */
+  private ClaimOutcome actInASlot(SagaId sagaId, AtomicBoolean slotsStayedHeld) {
+    Thread self = Thread.currentThread();
+    claimThreads.add(self);
+    try {
+      // After the registration: a close() that set the stop before it interrupted the registered
+      // threads is seen here, and one that set it later interrupts this thread.
+      if (stopRequested()) {
+        return ClaimOutcome.NOT_RUN;
+      }
+      long claimDeadline = System.nanoTime() + claimWait.toNanos();
+      if (slots == null) {
+        return timeOutOne(sagaId, claimDeadline, false);
+      }
+      boolean waitsForTheStep = deferredClaims.getOrDefault(sagaId, 0) >= DEFERRALS_BEFORE_WAITING;
+      if (!waitsForTheStep && stepLock.heldNow(sagaType, sagaId)) {
+        // A step of the saga holds its lock: the claim, which would ask for the lock once, is
+        // passed over now, before it takes a slot that a step could use — and without waiting for
+        // a slot that the step in flight may hold itself.
+        claimDeferred(sagaId, Duration.ZERO);
+        return ClaimOutcome.DEFERRED;
+      }
+      Duration slotWait = waitsForTheStep || !slotsStayedHeld.get() ? claimWait : Duration.ZERO;
+      SagaSlots.Slot slot;
+      try {
+        slot = slots.tryAcquire(slotWait);
+      } catch (InterruptedException interrupted) {
+        self.interrupt();
+        return ClaimOutcome.NOT_RUN;
+      }
+      if (slot == null && !waitsForTheStep) {
+        // Every slot stayed held — for the whole claim wait, or at the single ask of a batch in
+        // which a claim already waited that long in vain. The claim is not made without a slot:
+        // the next poll tries again.
+        slotsStayedHeld.set(true);
+        LOG.debug(
+            "No slot of the runner was free within {} for the timeout claim of saga {}; it is tried"
+                + " again on the next poll",
+            slotWait,
+            LogSanitizer.sanitizeForLog(sagaId.value()));
+        return ClaimOutcome.POSTPONED;
+      }
+      if (slot == null) {
+        if (!stepLock.heldNow(sagaType, sagaId)) {
+          // The step this claim waited for has ended: nothing justifies a claim without a slot,
+          // and the row is not read outside the slots.
+          deferredClaims.remove(sagaId);
+          LOG.debug(
+              "The step of saga {} has ended, and no slot of the runner freed within the claim"
+                  + " wait; its timeout claim is tried again on the next poll",
+              LogSanitizer.sanitizeForLog(sagaId.value()));
+          return ClaimOutcome.POSTPONED;
+        }
+        return timeOutOne(sagaId, claimDeadline, true);
+      }
+      try (slot) {
+        return timeOutOne(sagaId, claimDeadline, false);
+      }
+    } finally {
+      claimThreads.remove(self);
+    }
+  }
+
+  /**
+   * Whether a {@link #close()} has asked the runner to stop, or the calling thread is interrupted.
+   * A runner that was never started is not stopping: {@link #pollOnce()} driven by a test runs its
+   * whole cycle.
+   */
+  private boolean stopRequested() {
+    return (started.get() && !running) || Thread.currentThread().isInterrupted();
+  }
+
+  /**
+   * Loads and processes a single timed-out saga; {@code true} when its claim was deferred. See
+   * {@link #timeOutOne}. Package-private for testing — tests call this directly to exercise the
+   * halted-guard branch without relying on store filtering.
+   *
+   * @return {@code true} when the saga's claim was deferred because a step of it is in flight in
+   *     this process: nothing was written, and the saga holds no slot of the batch
+   */
+  boolean processTimedOutSaga(SagaId sagaId) {
+    return timeOutOne(sagaId, System.nanoTime() + claimWait.toNanos(), false)
+        == ClaimOutcome.DEFERRED;
   }
 
   /**
@@ -609,13 +1086,14 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *       passed with the forward fence on.
    * </ul>
    *
-   * <p>Package-private for testing — tests call this directly to exercise the halted-guard branch
-   * without relying on store filtering.
+   * <p>A failure is caught and logged here, so one failing saga never stops the others of its page.
    *
-   * @return {@code true} when the saga's claim was deferred because a step of it is in flight in
-   *     this process: nothing was written, and the saga holds no slot of the batch
+   * @param claimDeadline the {@link System#nanoTime()} at which the claim wait of a saga the poll
+   *     has to wait for ends; what is left of it bounds the wait for the step lock
+   * @param slotless whether the claim holds no slot: a saga the poll waited for, for which no slot
+   *     freed within the claim wait; it acts only while a step of the saga is in flight
    */
-  boolean processTimedOutSaga(SagaId sagaId) {
+  private ClaimOutcome timeOutOne(SagaId sagaId, long claimDeadline, boolean slotless) {
     try {
       // Type-scoped load so a row owned by a different saga type (a cross-type SagaId collision)
       // reads as "no saga for this type" — never deserialized, routed, or compensated from —
@@ -625,13 +1103,13 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       // guards only isEmpty(), and update() does not terminal-guard FAULTED, so a halted row
       // routed there would be CAS'd back to COMPENSATING and re-compensated.
       if (selected.isEmpty() || selected.get().status().isHalted()) {
-        return false;
+        return ClaimOutcome.ACTED;
       }
-      return timeOut(sagaId, selected.get());
+      return timeOut(sagaId, selected.get(), claimDeadline, slotless);
     } catch (Exception e) {
       LOG.warn(
           "Failed to process timed-out saga: {}", LogSanitizer.sanitizeForLog(sagaId.value()), e);
-      return false;
+      return ClaimOutcome.FAILED;
     }
   }
 
@@ -639,12 +1117,29 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * Times out {@code sagaId}, which {@code selected} shows to be live: resumes its episode when it
    * is compensating, claims it at its deadline otherwise.
    *
-   * @return {@code true} when the claim was deferred
+   * <p>A compensating row is a re-pick: it has no forward claim to wait for, so the polls that
+   * passed it over (while a step of it held its lock) are forgotten here, and it competes for a
+   * slot like any claim from the next poll on. Without a slot it is resumed only while a step of
+   * the saga holds the saga's lock at that moment — a resume step that does not return — and is
+   * postponed otherwise.
    */
-  private boolean timeOut(SagaId sagaId, LoadedSaga<S> selected) {
+  private ClaimOutcome timeOut(
+      SagaId sagaId, LoadedSaga<S> selected, long claimDeadline, boolean slotless) {
     SagaTimeoutException cause =
         new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
     if (selected.status() == SagaStatus.COMPENSATING) {
+      int passedOver = deferredClaims.getOrDefault(sagaId, 0);
+      deferredClaims.remove(sagaId);
+      if (slotless) {
+        if (!stepLock.heldNow(sagaType, sagaId)) {
+          LOG.debug(
+              "No slot of the runner freed within the claim wait for the resume of saga {}, and no"
+                  + " step of it is in flight; it is tried again on the next poll",
+              LogSanitizer.sanitizeForLog(sagaId.value()));
+          return ClaimOutcome.POSTPONED;
+        }
+        logWithoutASlot(sagaId, passedOver, "its compensation is resumed");
+      }
       TraceScope scope = startTimeoutSpan(sagaId);
       try {
         resumeClaimedEpisode(sagaId, selected, cause);
@@ -655,9 +1150,25 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       } finally {
         scope.close();
       }
-      return false;
+      return ClaimOutcome.ACTED;
     }
-    return claimAtTheDeadline(sagaId, cause);
+    return claimAtTheDeadline(sagaId, cause, claimDeadline, slotless);
+  }
+
+  /**
+   * Logs at INFO a claim of a saga the poll waited for that acts without a slot: no slot freed
+   * within its claim wait, and a step of the saga is in flight at this moment.
+   */
+  private void logWithoutASlot(SagaId sagaId, int passedOver, String what) {
+    LOG.info(
+        "Saga {} is past its deadline and a step of it is in flight in this process, as on the {}"
+            + " polls that passed it over; no slot of its runner freed within the claim wait of {},"
+            + " so its claim goes on without a slot ({}) and exceeds the runner's budgeted steps by"
+            + " one while it runs",
+        LogSanitizer.sanitizeForLog(sagaId.value()),
+        passedOver,
+        claimWait,
+        what);
   }
 
   /**
@@ -707,11 +1218,22 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *       since the first read: the lock is released and the episode is resumed like a re-pick.
    * </ul>
    *
-   * @return {@code true} when the claim was deferred
+   * <p>The wait for the step is what is left of the claim wait once the claim had its slot: the
+   * slot and the step lock share one claim wait ({@link #actInASlot}). A claim that got no slot
+   * within that wait ({@code slotless}) goes on only while the saga's step is in flight: when it
+   * gets the lock, the step has ended, so it releases the lock at once, writes nothing, forgets the
+   * polls that passed the saga over, and is postponed to the next poll, where it takes a slot like
+   * any other claim.
+   *
+   * @param claimDeadline the {@link System#nanoTime()} at which the claim wait ends
+   * @param slotless whether the claim holds no slot
    */
-  private boolean claimAtTheDeadline(SagaId sagaId, SagaTimeoutException cause) {
+  private ClaimOutcome claimAtTheDeadline(
+      SagaId sagaId, SagaTimeoutException cause, long claimDeadline, boolean slotless) {
     int passedOver = deferredClaims.getOrDefault(sagaId, 0);
-    Duration wait = passedOver >= DEFERRALS_BEFORE_WAITING ? claimWait : Duration.ZERO;
+    boolean waits = passedOver >= DEFERRALS_BEFORE_WAITING;
+    Duration wait =
+        waits ? Duration.ofNanos(Math.max(0L, claimDeadline - System.nanoTime())) : Duration.ZERO;
     SagaStepLock.Hold claimHold;
     try {
       claimHold = stepLock.tryEnterClaim(sagaType, sagaId, wait);
@@ -720,16 +1242,16 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       LOG.debug(
           "The timeout claim of saga {} was interrupted while it waited for a step in flight",
           LogSanitizer.sanitizeForLog(sagaId.value()));
-      return false;
+      return ClaimOutcome.NOT_RUN;
     }
     if (claimHold == null) {
-      if (wait.isZero() || boundRunner == null || !boundRunner.forwardFence()) {
-        claimDeferred(sagaId, wait);
-        return true;
+      if (!waits || boundRunner == null || !boundRunner.forwardFence()) {
+        claimDeferred(sagaId, waits ? claimWait : Duration.ZERO);
+        return ClaimOutcome.DEFERRED;
       }
       TraceScope scope = startTimeoutSpan(sagaId);
       try {
-        claimUnderneathTheStep(sagaId, passedOver, cause);
+        claimUnderneathTheStep(sagaId, passedOver, cause, slotless);
         scope.recordSuccess();
       } catch (Throwable t) {
         scope.recordError(t);
@@ -737,7 +1259,17 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       } finally {
         scope.close();
       }
-      return false;
+      return ClaimOutcome.ACTED;
+    }
+    if (slotless) {
+      // The step this claim waited for has ended: nothing justifies a claim without a slot.
+      claimHold.close();
+      deferredClaims.remove(sagaId);
+      LOG.debug(
+          "The step of saga {} has ended, and no slot of the runner freed within the claim wait;"
+              + " its timeout claim is tried again on the next poll",
+          LogSanitizer.sanitizeForLog(sagaId.value()));
+      return ClaimOutcome.POSTPONED;
     }
     // The claim hold is taken: everything from here to its release runs inside the try whose
     // finally releases it, the start of the span included. A hold that outlived this method would
@@ -751,12 +1283,12 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
         Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
         if (current.isEmpty() || current.get().status().isHalted()) {
           scope.recordSuccess();
-          return false;
+          return ClaimOutcome.ACTED;
         }
         if (current.get().status() != SagaStatus.COMPENSATING) {
           executor.execute(sagaId, current, new SagaTrigger.ClaimTimeout(cause, claimHold));
           scope.recordSuccess();
-          return false;
+          return ClaimOutcome.ACTED;
         }
         claimedByAStep = current.get();
       } finally {
@@ -764,7 +1296,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
       resumeClaimedEpisode(sagaId, claimedByAStep, cause);
       scope.recordSuccess();
-      return false;
+      return ClaimOutcome.ACTED;
     } catch (Throwable t) {
       scope.recordError(t);
       throw t;
@@ -779,24 +1311,33 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * commands. Each forward command of the step either commits before the claim, and the
    * compensation covers it, or reaches its commit after the claim and is refused there; the step
    * then reads the row the claim wrote and resumes the episode (or stops at a saga that has already
-   * finished). Nothing waits for the step any more, so a step that does not return delays the
-   * saga's deadline by the wait and no more.
+   * finished). Nothing waits for the step after this, so a step that does not return delays the
+   * saga's deadline by a bounded time (see the class documentation).
    *
    * <p>No step lock is held: the row is read again — a step may have written since the read that
    * routed the saga here — and routed as a re-pick would be: no row, or a halted row, is left
    * alone; a {@code COMPENSATING} row resumes its episode; a forward row is claimed by the
    * executor's compare-and-swap at the version read, which a write in between makes it lose. The
-   * INFO line is written only for that claim.
+   * INFO line is written only for that claim, and for a resume made without a slot.
+   *
+   * @param slotless whether the claim holds no slot: no slot freed within its claim wait
    */
-  private void claimUnderneathTheStep(SagaId sagaId, int passedOver, SagaTimeoutException cause) {
+  private void claimUnderneathTheStep(
+      SagaId sagaId, int passedOver, SagaTimeoutException cause, boolean slotless) {
     deferredClaims.remove(sagaId);
     Optional<LoadedSaga<S>> current = sagaStore.load(sagaId, sagaType, decider.stateType());
     if (current.isEmpty() || current.get().status().isHalted()) {
       return;
     }
     if (current.get().status() == SagaStatus.COMPENSATING) {
+      if (slotless) {
+        logWithoutASlot(sagaId, passedOver, "its compensation is resumed");
+      }
       resumeClaimedEpisode(sagaId, current.get(), cause);
       return;
+    }
+    if (slotless) {
+      logWithoutASlot(sagaId, passedOver, "the claim is made underneath the step");
     }
     LOG.info(
         "Saga {} is past its deadline, and a step of it has been in flight in this process for {}"
@@ -991,6 +1532,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     private StreamRuneTracing tracing = StreamRuneTracing.NOOP;
     private Duration claimWait = DEFAULT_CLAIM_WAIT;
     private Duration anchorGrace = LeaseFollower.DEFAULT_ANCHOR_GRACE;
+    private LongSupplier drainTicker = System::nanoTime;
 
     public Builder<S> decider(SagaDecider<S> decider) {
       this.decider = decider;
@@ -1026,10 +1568,10 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     }
 
     /**
-     * Sets the most sagas one poll handles. Optional; defaults to 50. {@link
-     * SagaStore#findTimedOut} splits the batch between forward timeouts and {@code COMPENSATING}
-     * re-picks (half each when both are backlogged), so keep it at 2 or more for both to be served
-     * on every poll. Must be positive.
+     * Sets the most sagas one batch handles; a poll cycle drains batch after batch while they come
+     * back full. Optional; defaults to 50. {@link SagaStore#findTimedOut} splits the batch between
+     * forward timeouts and {@code COMPENSATING} re-picks (half each when both are backlogged), so
+     * keep it at 2 or more for both to be served in every batch. Must be positive.
      */
     public Builder<S> batchSize(int batchSize) {
       this.batchSize = batchSize;
@@ -1128,12 +1670,16 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
      * still in flight is made underneath it (the step's later forward commands are refused at their
      * commit); when it does not, the claim is never made underneath a step.
      *
-     * <p>The timeout runner takes the runner's step lock and nothing else from it; the decider, the
-     * store, the bus and the saga type are still this builder's. {@link #build()} refuses a runner
-     * of another saga type or over a store that keeps other rows: its steps are not the ones this
-     * runner's claims race with. The parameter is a {@code SagaRunner<?>} because that check is
-     * made on the runner's saga type at {@code build()}, and an application often holds its runner
-     * as a {@code SagaRunner<?>} bean.
+     * <p>The timeout runner takes the runner's step lock, its lease and its slots from it; the
+     * decider, the store, the bus and the saga type are still this builder's. Its claims share the
+     * runner's slots with the runner's steps: steps and claims of the saga type together stay
+     * within the runner's budgeted steps ({@link SagaRunner#parallelism()} per bound subscription),
+     * except the claim of a saga whose own step is in flight, made without a slot when none frees
+     * within its claim wait (see the class documentation), and the claims of one query run in
+     * parallel up to that limit. {@link #build()} refuses a runner of another saga type or over a
+     * store that keeps other rows: its steps are not the ones this runner's claims race with. The
+     * parameter is a {@code SagaRunner<?>} because that check is made on the runner's saga type at
+     * {@code build()}, and an application often holds its runner as a {@code SagaRunner<?>} bean.
      *
      * <p>This or {@link #stepLock} is required: {@link #build()} refuses a builder that names
      * neither. This is the wiring to use wherever a {@code SagaRunner} of the saga type runs in the
@@ -1161,9 +1707,10 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
      * <p>A lock of the timeout runner's own, {@code stepLock(new SagaStepLock())}, is the explicit
      * way to say that nothing shares it: for a process that runs timeout runners and no {@code
      * SagaRunner} of the saga type, and for an application that wants the deadline to win over a
-     * step in flight. Such a runner claims underneath a delivery that is dispatching, as a timeout
-     * runner on another node does, and the delivery's forward fence refuses its next forward
-     * command.
+     * step in flight. A runner built this way has no slots to share and acts on one saga at a time,
+     * on its poll thread. Such a runner claims underneath a delivery that is dispatching, as a
+     * timeout runner on another node does, and the delivery's forward fence refuses its next
+     * forward command.
      */
     public Builder<S> stepLock(SagaStepLock stepLock) {
       this.stepLock = Objects.requireNonNull(stepLock, "stepLock is required");
@@ -1176,6 +1723,15 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
      */
     Builder<S> anchorGrace(Duration anchorGrace) {
       this.anchorGrace = Objects.requireNonNull(anchorGrace, "anchorGrace is required");
+      return this;
+    }
+
+    /**
+     * Overrides the monotonic time the drain budget is measured on; for tests. Production uses
+     * {@link System#nanoTime()}.
+     */
+    Builder<S> drainTicker(LongSupplier drainTicker) {
+      this.drainTicker = Objects.requireNonNull(drainTicker, "drainTicker is required");
       return this;
     }
 
@@ -1288,7 +1844,20 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
           sagaRunner,
           claimWait,
           anchorGrace,
-          tracing);
+          tracing,
+          drainTicker);
+    }
+  }
+
+  /**
+   * {@link #DRAIN_BUDGET_POLL_INTERVALS} times {@code pollInterval} in nanoseconds, or {@link
+   * Long#MAX_VALUE} for an interval so long that the product does not fit.
+   */
+  private static long drainBudgetNanos(Duration pollInterval) {
+    try {
+      return pollInterval.multipliedBy(DRAIN_BUDGET_POLL_INTERVALS).toNanos();
+    } catch (ArithmeticException _) {
+      return Long.MAX_VALUE;
     }
   }
 }

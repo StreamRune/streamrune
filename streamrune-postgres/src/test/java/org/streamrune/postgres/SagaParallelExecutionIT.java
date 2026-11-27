@@ -261,6 +261,56 @@ class SagaParallelExecutionIT {
   }
 
   /**
+   * Twenty sagas past their deadline, the compensation of the first one held until every other saga
+   * has reached its terminal status (at most thirty seconds): the timeout runner claims the sagas
+   * of its query in parallel on the runner's slots, so one slow compensation delays no other claim.
+   * Every saga ends compensated; none is both compensated and advanced.
+   */
+  @Test
+  void aSlowCompensationDelaysNoOtherDeadlineClaim() throws Exception {
+    List<String> sagas = sagaIds(20);
+    nodes.compensationCommands = 2;
+    sagas.forEach(id -> nodes.append(new Started(id)));
+    HikariConfig config = new HikariConfig();
+    config.setDataSource(source);
+    config.setPoolName("par-exec-slow-compensation-pool");
+    config.setMaximumPoolSize(16);
+    try (HikariDataSource pool = new HikariDataSource(config)) {
+      Node node = nodes.node(Options.defaults().withSource(pool).withParallelism(4));
+      runToQuiescence(nodes, node);
+      List<String> others = sagas.subList(1, sagas.size());
+      AtomicBoolean held = new AtomicBoolean();
+      AtomicBoolean othersEndedWhileHeld = new AtomicBoolean();
+      node.crash.beforeCall =
+          (method, sagaId) -> {
+            if (method.equals("Undo")
+                && sagaId.equals(sagas.getFirst())
+                && held.compareAndSet(false, true)) {
+              long until = System.nanoTime() + GATE_LIMIT.toNanos();
+              while (System.nanoTime() < until) {
+                if (allTerminal(others)) {
+                  othersEndedWhileHeld.set(true);
+                  return;
+                }
+                sleep(Duration.ofMillis(10));
+              }
+            }
+          };
+
+      nodes.timeOut(node);
+
+      assertThat(held).as("the first saga's compensation was held").isTrue();
+      assertThat(othersEndedWhileHeld)
+          .as("every other saga ended while the first one's compensation was held")
+          .isTrue();
+      for (String id : sagas) {
+        assertThat(nodes.row(id).orElseThrow().status()).as(id).isEqualTo(SagaStatus.COMPENSATED);
+      }
+      assertThat(nodes.lateForwardCommands()).isEmpty();
+    }
+  }
+
+  /**
    * A pool of four connections shared by the stores and the advisory locker, eight steps at once
    * and a connection timeout of 250 ms: steps fail on a connection they cannot get, which stops
    * their page, and the page is delivered again; each delivery finishes some steps, which the next

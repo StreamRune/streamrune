@@ -87,7 +87,7 @@ class DeadLetterRetryReaderBehindTest {
 
     for (int poll = 1; poll <= 6; poll++) {
       clock.advance(Duration.ofMinutes(1));
-      runner.processBatch();
+      runner.pollCycle();
       DeadLetterQueue.DeadLetterEntry entry = queue.find(id).orElseThrow();
       assertThat(entry.dlqAttempts()).as("attempts after poll %d", poll).isZero();
       assertThat(entry.lastAttemptAt())
@@ -106,7 +106,7 @@ class DeadLetterRetryReaderBehindTest {
     var runner = runner(bus, policy(1, true));
 
     for (int poll = 1; poll <= 5; poll++) {
-      runner.processBatch();
+      runner.pollCycle();
     }
 
     assertThat(deadLetterQueue.find(id))
@@ -122,11 +122,11 @@ class DeadLetterRetryReaderBehindTest {
     var runner = runner(bus, policy(5, true));
 
     for (int poll = 1; poll <= 5; poll++) {
-      runner.processBatch();
+      runner.pollCycle();
       assertThat(deadLetterQueue.find(id)).as("the entry after poll %d", poll).isPresent();
     }
 
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(deadLetterQueue.find(id)).as("replayed and discarded").isEmpty();
     assertThat(bus.replays()).isEqualTo(6);
@@ -170,7 +170,7 @@ class DeadLetterRetryReaderBehindTest {
     clock.advance(Duration.ofSeconds(1));
     var bus = new BehindForOneAggregateBus("S");
 
-    runner(bus, policy(5, false), queue, clock, 10).processBatch();
+    runner(bus, policy(5, false), queue, clock, 10).pollCycle();
 
     assertThat(queue.find(fresh))
         .as("the entry behind ten replays behind the stored schema is replayed in the same poll")
@@ -209,13 +209,13 @@ class DeadLetterRetryReaderBehindTest {
     var runner = runner(bus, backoffPolicy(), queue, clock, 2);
 
     clock.advance(Duration.ofMinutes(1));
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(queue.find(healthy)).as("the first page is full of entries behind").isPresent();
     assertThat(bus.refused()).isEqualTo(20);
 
     clock.advance(Duration.ofSeconds(1));
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(queue.find(healthy)).as("replayed on the next poll").isEmpty();
     assertThat(bus.executed()).isEqualTo(1);
@@ -244,7 +244,7 @@ class DeadLetterRetryReaderBehindTest {
     var bus = new BehindForOneAggregateBus("S");
     var runner = runner(bus, policy(5, false), queue, clock, 2);
 
-    var poll = logDuring(runner::processBatch);
+    var poll = logDuring(runner::pollCycle);
 
     assertThat(bus.refused()).as("the row read beyond the page is not replayed").isEqualTo(20);
     assertThat(messagesAt(poll, Level.WARN)).as("one WARN line for the poll").hasSize(1);
@@ -257,7 +257,7 @@ class DeadLetterRetryReaderBehindTest {
 
     var notFull = new InMemoryDeadLetterQueue(clock);
     publishKeyedEntry(notFull, "cmd-not-full", new ReserveStock("S", "o-x"));
-    var small = logDuring(runner(bus, policy(5, false), notFull, clock, 2)::processBatch);
+    var small = logDuring(runner(bus, policy(5, false), notFull, clock, 2)::pollCycle);
 
     assertThat(messagesAt(small, Level.WARN)).isEmpty();
     assertThat(messagesAt(small, Level.INFO))
@@ -279,7 +279,7 @@ class DeadLetterRetryReaderBehindTest {
     }
     var bus = new BehindForOneAggregateBus("S");
 
-    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::processBatch);
+    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::pollCycle);
 
     assertThat(bus.refused()).isEqualTo(20);
     assertThat(messagesAt(poll, Level.WARN)).isEmpty();
@@ -304,10 +304,12 @@ class DeadLetterRetryReaderBehindTest {
     }
     var bus = new BehindForOneAggregateBus("S");
 
-    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::processBatch);
+    var poll = logDuring(runner(bus, policy(5, false), queue, clock, 2)::pollCycle);
 
-    assertThat(bus.executed()).as("the batch is full").isEqualTo(2);
-    assertThat(bus.refused()).isEqualTo(1);
+    assertThat(bus.executed())
+        .as("each batch is full and replays, so the cycle drains every healthy entry")
+        .isEqualTo(25);
+    assertThat(bus.refused()).as("the entry behind is replayed once per cycle").isEqualTo(1);
     assertThat(messagesAt(poll, Level.WARN)).isEmpty();
     assertThat(messagesAt(poll, Level.INFO).stream().filter(l -> l.contains("stored schema")))
         .singleElement()
@@ -350,7 +352,7 @@ class DeadLetterRetryReaderBehindTest {
             .registerCommand(ReserveStock.class)
             .build();
 
-    var poll = logDuring(runner::processBatch);
+    var poll = logDuring(runner::pollCycle);
 
     assertThat(bus.refused()).as("the poll stops at the next entry").isEqualTo(5);
     assertThat(messagesAt(poll, Level.INFO))
@@ -375,14 +377,14 @@ class DeadLetterRetryReaderBehindTest {
     faults.failOnce("updateAttempts");
     clock.advance(Duration.ofSeconds(5));
 
-    assertThatThrownBy(runner::processBatch).isInstanceOf(InjectedFaultException.class);
+    assertThatThrownBy(runner::pollCycle).isInstanceOf(InjectedFaultException.class);
 
     DeadLetterQueue.DeadLetterEntry untouched = store.find(id).orElseThrow();
     assertThat(untouched.dlqAttempts()).isZero();
     assertThat(untouched.lastAttemptAt()).as("the store was not reached").isNull();
 
     clock.advance(Duration.ofSeconds(5));
-    runner.processBatch();
+    runner.pollCycle();
 
     DeadLetterQueue.DeadLetterEntry replayed = store.find(id).orElseThrow();
     assertThat(bus.replays()).isEqualTo(2);
@@ -407,22 +409,22 @@ class DeadLetterRetryReaderBehindTest {
     faults.crashAfter("updateAttempts");
     clock.advance(Duration.ofMinutes(1));
 
-    assertThatThrownBy(runner::processBatch).isInstanceOf(InjectedFaultException.class);
+    assertThatThrownBy(runner::pollCycle).isInstanceOf(InjectedFaultException.class);
 
     Instant crashedAt = clock.instant();
     assertThat(store.find(id).orElseThrow().lastAttemptAt()).isEqualTo(crashedAt);
 
     clock.advance(Duration.ofSeconds(1));
-    runner.processBatch();
+    runner.pollCycle();
     assertThat(bus.replays()).as("not due within its backoff").isEqualTo(1);
 
     clock.advance(Duration.ofMinutes(1));
-    runner.processBatch();
+    runner.pollCycle();
     assertThat(bus.replays()).isEqualTo(2);
     assertThat(store.find(id).orElseThrow().dlqAttempts()).isZero();
 
     clock.advance(Duration.ofMinutes(1));
-    runner.processBatch();
+    runner.pollCycle();
     assertThat(store.find(id)).as("replayed on a replica that reads the version").isEmpty();
     assertThat(bus.executed()).isEqualTo(1);
   }
@@ -434,7 +436,7 @@ class DeadLetterRetryReaderBehindTest {
     publishKeyedEntry("cmd-counted-2");
     var runner = runner(bus, policy(5, false));
 
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(
             metrics.count(
@@ -467,7 +469,7 @@ class DeadLetterRetryReaderBehindTest {
     publishKeyedEntry("cmd-logged-3");
     var runner = runner(bus, policy(5, false));
 
-    List<String> info = infoLinesDuring(runner::processBatch);
+    List<String> info = infoLinesDuring(runner::pollCycle);
 
     assertThat(info).as("one line for the poll").hasSize(1);
     assertThat(info.getFirst())
@@ -502,8 +504,7 @@ class DeadLetterRetryReaderBehindTest {
           }
         };
 
-    List<String> info =
-        infoLinesDuring(runner(bus, policy(5, false), queue, clock, 10)::processBatch);
+    List<String> info = infoLinesDuring(runner(bus, policy(5, false), queue, clock, 10)::pollCycle);
 
     assertThat(info)
         .singleElement()
@@ -540,7 +541,7 @@ class DeadLetterRetryReaderBehindTest {
             .registerCommand(ReleaseStock.class)
             .build();
 
-    List<String> info = infoLinesDuring(runner::processBatch);
+    List<String> info = infoLinesDuring(runner::pollCycle);
 
     assertThat(info)
         .singleElement()
@@ -614,12 +615,12 @@ class DeadLetterRetryReaderBehindTest {
     assertThat(CommandFailureClassification.isReaderBehindStoredSchema(clientSaw)).isTrue();
     var runner = runner(bus, policy(5, false));
     for (int poll = 1; poll <= 5; poll++) {
-      runner.processBatch();
+      runner.pollCycle();
     }
     assertThat(deadLetterQueue.find(entry.commandId()).orElseThrow().dlqAttempts()).isZero();
 
     store.withUpcasters(List.of(stockReservedAtVersionTwo())); // the replica is upgraded
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(deadLetterQueue.find(entry.commandId())).isEmpty();
     assertThat(

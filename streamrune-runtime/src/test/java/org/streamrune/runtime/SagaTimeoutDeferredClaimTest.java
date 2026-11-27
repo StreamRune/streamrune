@@ -160,7 +160,11 @@ class SagaTimeoutDeferredClaimTest {
           .isNotNull();
       assertThat(p.storedOrder("3")).containsExactly("Reserved", "Released");
       assertThat(p.storedOrder("1")).isEmpty();
-      assertThat(p.sagaStore.timeoutQueryLimits).containsExactly(2, 4);
+      assertThat(p.sagaStore.timeoutQueryLimits)
+          .as(
+              "the batch reads past the saga in a step; being full it drains once more, finds only"
+                  + " sagas the cycle has seen, and the cycle ends")
+          .containsExactly(2, 4, 4);
       assertThat(p.storedOrder("5").size() + p.storedOrder("6").size())
           .as("the re-picks answer from the inbox; nothing of theirs is stored twice")
           .isEqualTo(releasesBefore);

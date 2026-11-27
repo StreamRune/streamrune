@@ -294,6 +294,15 @@ public final class SagaStepLock {
         });
   }
 
+  /**
+   * Whether a thread holds the saga's lock at this moment — a step of it, or a claim, is in flight
+   * in this process. A snapshot: the answer can change as soon as it is given.
+   */
+  boolean heldNow(SagaType sagaType, SagaId sagaId) {
+    Entry entry = entries.get(new Key(sagaType, sagaId));
+    return entry != null && entry.lock.isLocked();
+  }
+
   /** How many sagas have a thread that holds their lock or waits for it at this moment. */
   int sagasInFlight() {
     return entries.size();

@@ -747,7 +747,7 @@ class ListenerContinuationTest {
             .pollInterval(Duration.ofMinutes(1))
             .registerCommand(Capture.class)
             .build()) {
-      replay.processBatch();
+      replay.pollCycle();
     }
   }
 
