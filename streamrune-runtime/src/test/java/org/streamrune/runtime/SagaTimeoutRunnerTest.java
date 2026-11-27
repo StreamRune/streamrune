@@ -146,7 +146,7 @@ class SagaTimeoutRunnerTest {
             .build();
 
     // Process batch — saga was saved "just now" so cutoff must be in future
-    runner.processBatch(Instant.now().plusSeconds(600));
+    runner.pollCycle(Instant.now().plusSeconds(600));
 
     // Compensation command dispatched
     assertEquals(1, bus.dispatched.size());
@@ -216,7 +216,7 @@ class SagaTimeoutRunnerTest {
             .sagaType(SagaType.fromClass(OrderState.class))
             .build();
 
-    runner.processBatch(Instant.now().plusSeconds(600));
+    runner.pollCycle(Instant.now().plusSeconds(600));
 
     // No compensation for terminal saga
     assertTrue(bus.dispatched.isEmpty());
@@ -237,7 +237,7 @@ class SagaTimeoutRunnerTest {
             .sagaType(SagaType.fromClass(OrderState.class))
             .build();
 
-    runner.processBatch(Instant.now().plusSeconds(600));
+    runner.pollCycle(Instant.now().plusSeconds(600));
     assertTrue(bus.dispatched.isEmpty());
   }
 
@@ -281,7 +281,7 @@ class SagaTimeoutRunnerTest {
             .build();
 
     // Should not throw
-    assertDoesNotThrow(() -> runner.processBatch(Instant.now().plusSeconds(600)));
+    assertDoesNotThrow(() -> runner.pollCycle(Instant.now().plusSeconds(600)));
   }
 
   /**
@@ -834,7 +834,7 @@ class SagaTimeoutRunnerTest {
             .metrics(metrics)
             .build();
 
-    runner.processBatch(Instant.now().plusSeconds(600)); // all three are timed out
+    runner.pollCycle(Instant.now().plusSeconds(600)); // all three are timed out
 
     assertEquals(
         3L,
@@ -1452,7 +1452,7 @@ class SagaTimeoutRunnerTest {
             .sagaType(SagaType.fromClass(OrderState.class))
             .build();
 
-    runner.processBatch(Instant.now().plusSeconds(600));
+    runner.pollCycle(Instant.now().plusSeconds(600));
 
     assertEquals(1, bus.dispatched.size(), "the compensation was dispatched (and vetoed)");
     var loaded =

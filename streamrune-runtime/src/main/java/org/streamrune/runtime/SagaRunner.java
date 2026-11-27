@@ -179,6 +179,14 @@ import org.streamrune.core.types.SubscriptionName;
  * repeat; a command that committed answers with its recorded result on any rerun. See {@link
  * #asEventListener()}.
  *
+ * <p><b>Shared slots.</b> Each step takes one of the runner's slots before its saga's step lock and
+ * gives it back when it ends; the deadline claims of the {@link SagaTimeoutRunner} built from this
+ * runner take the same slots. Steps and deadline claims of the saga type together never exceed the
+ * runner's budgeted steps, {@link #parallelism()} per bound subscription, which is what the
+ * integrations' connection budget counts. Steps and claims get slots in arrival order. A page
+ * delivered on a thread that already holds a slot of the runner — a claim's compensation delivered
+ * on the appending thread — runs its items on that thread, one after the other, under that slot.
+ *
  * <p><b>Concurrency:</b> Saga writes are CAS-protected ({@link SagaStore#createGenesisPending},
  * {@link SagaStore#applyEvent}, {@link SagaStore#claimCompensating}, {@link SagaStore#update},
  * {@link SagaStore#markFaulted}) — concurrent writers cannot silently lose updates. Start-event
@@ -408,6 +416,12 @@ public final class SagaRunner<S extends SagaState> {
   /** The meters and the WARN of a page at a parallelism above 1. */
   private final SagaPageAccounting pageAccounting;
 
+  /**
+   * The slots the steps of this runner's pages share with the deadline claims of the timeout runner
+   * built from it ({@link #budgetedSteps()} at most at once); see {@link SagaSlots}.
+   */
+  private final SagaSlots slots = new SagaSlots(this::budgetedSteps);
+
   private SagaRunner(Builder<S> builder) {
     this.builderParallelism = builder.parallelism;
     this.orchestrator = builder.orchestrator;
@@ -461,10 +475,32 @@ public final class SagaRunner<S extends SagaState> {
   /**
    * The parallelism the next page uses: how many of its steps run at once. Read once per page.
    *
+   * <p>The steps of every page of this runner and the deadline claims of the {@link
+   * SagaTimeoutRunner} built from it ({@link SagaTimeoutRunner.Builder#sagaRunner}) share one set
+   * of slots: together they never exceed the runner's budgeted steps, this parallelism per bound
+   * subscription (one page per subscription built with {@code sagaRunner(runner)}, at least one),
+   * read at each acquire. That is the number the connection budget of the integrations counts, so a
+   * claim never adds a connection the budget does not hold. A step and a claim queue for a slot in
+   * arrival order; a slot is taken before the saga's step lock.
+   *
    * @return between 1 and {@value #MAX_PARALLELISM}
    */
   public int parallelism() {
     return snapshot.value();
+  }
+
+  /**
+   * The most steps and deadline claims of this runner in flight at once: the parallelism per bound
+   * subscription, as of now.
+   */
+  int budgetedSteps() {
+    SagaParallelismSnapshot now = snapshot;
+    return now.value() * now.concurrentPages();
+  }
+
+  /** The slots shared by this runner's steps and its timeout runner's claims. */
+  SagaSlots slots() {
+    return slots;
   }
 
   /**
@@ -491,6 +527,7 @@ public final class SagaRunner<S extends SagaState> {
       snapshot = resolveParallelism(candidate, parallelismSettings);
       bindCounts.put(name.value(), 1);
     }
+    slots.limitChanged();
   }
 
   /**
@@ -520,6 +557,7 @@ public final class SagaRunner<S extends SagaState> {
       snapshot = resolveParallelism(candidate, parallelismSettings);
       bindCounts.remove(name.value());
     }
+    slots.limitChanged();
   }
 
   /**
@@ -539,6 +577,7 @@ public final class SagaRunner<S extends SagaState> {
       parallelismSettings = settings;
       snapshot = resolved;
     }
+    slots.limitChanged();
   }
 
   /** Where the parallelism the next page uses came from. */
@@ -781,9 +820,12 @@ public final class SagaRunner<S extends SagaState> {
    *       the runner has a tracing ({@link Builder#tracing}); a runner without one carries no trace
    *       context to a worker, so the spans of the commands a parallel step dispatches are roots
    *       there, not children of the delivery's span. A page with one saga, or a parallelism of 1,
-   *       runs on the delivering thread. A poison event is quarantined by {@link #recordPoison} on
-   *       the thread of its step and its saga's part of the page goes on. A step that loses the
-   *       compare-and-swap of its saga row is run again in place, up to three attempts in all.
+   *       runs on the delivering thread, and so does a page delivered on a thread that holds one of
+   *       the runner's slots. Each step takes a slot first, shared with the timeout runner's
+   *       deadline claims ({@link #parallelism()}), and then its saga's step lock. A poison event
+   *       is quarantined by {@link #recordPoison} on the thread of its step and its saga's part of
+   *       the page goes on. A step that loses the compare-and-swap of its saga row is run again in
+   *       place, up to three attempts in all.
    * </ol>
    *
    * <p>A step that fails otherwise — a retry-later failure of a command, a store failure, a
@@ -826,7 +868,10 @@ public final class SagaRunner<S extends SagaState> {
   /** One page: routed on this thread, then stepped as {@link #asEventListener()} describes. */
   private void deliverPage(List<EventEnvelope> events) {
     warnIfDeliveringWithoutAnAnchor();
-    int p = snapshot.value();
+    // A page delivered on a thread that holds a slot of this runner — a claim whose compensation
+    // is delivered on the appending thread, a delivery nested in a step — runs on that thread
+    // under that slot: workers would queue for slots while this thread holds one and waits.
+    int p = slots.heldByCurrentThread() ? 1 : snapshot.value();
     if (p == 1) {
       List<SagaWorkItem> items = route(events);
       // SagaStore (load/create/CAS) failures are NOT SagaPoisonException: they leave onEvents, the
@@ -921,12 +966,32 @@ public final class SagaRunner<S extends SagaState> {
     return items;
   }
 
-  /** The step of one work item, on whichever thread the page executor runs it. */
+  /**
+   * The step of one work item, on whichever thread the page executor runs it. It takes one of the
+   * runner's slots first ({@link SagaSlots}), then the saga's step lock inside {@link #deliver},
+   * and gives the slot back when the step ends.
+   *
+   * @throws SagaStepLockException when the thread is interrupted while it waits for a slot (its
+   *     interrupt status stays set); nothing was read, and the event is delivered again
+   */
   private void deliverItem(SagaWorkItem item) {
+    SagaSlots.Slot slot;
     try {
-      deliverTraced(item.target(), item.event());
-    } catch (SagaPoisonException poison) {
-      quarantinePoisonAndWarn(poison, item.event());
+      slot = slots.acquire();
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new SagaStepLockException(
+          "Interrupted while a step of saga "
+              + LogSanitizer.sanitizeForLog(item.sagaId().value())
+              + " waited for a slot; this delivery read nothing and dispatched nothing",
+          interrupted);
+    }
+    try (slot) {
+      try {
+        deliverTraced(item.target(), item.event());
+      } catch (SagaPoisonException poison) {
+        quarantinePoisonAndWarn(poison, item.event());
+      }
     }
   }
 

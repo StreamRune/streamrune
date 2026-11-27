@@ -183,12 +183,12 @@ class SagaTimeoutRunnerTerminalizationTest {
   // ======================================================================
 
   /**
-   * Primary assertion: after processBatch the saga must have a terminal status in the store, and
+   * Primary assertion: after pollCycle the saga must have a terminal status in the store, and
    * findTimedOut must not return it again (no compensation storm).
    */
   @Test
   void timeoutCompensation_persistsTerminalStatus_andSagaIsNotRePicked() {
-    runner.processBatch(FAR_FUTURE_CUTOFF);
+    runner.pollCycle(FAR_FUTURE_CUTOFF);
 
     var loaded =
         sagaStore
@@ -208,7 +208,7 @@ class SagaTimeoutRunnerTerminalizationTest {
    */
   @Test
   void timeoutCompensation_allSucceed_isCOMPENSATED() {
-    runner.processBatch(FAR_FUTURE_CUTOFF);
+    runner.pollCycle(FAR_FUTURE_CUTOFF);
 
     var loaded =
         sagaStore
@@ -231,7 +231,7 @@ class SagaTimeoutRunnerTerminalizationTest {
   void timeoutCompensation_compensationFails_isFAILED_andNotRePicked() {
     bus.failAll();
 
-    runner.processBatch(FAR_FUTURE_CUTOFF);
+    runner.pollCycle(FAR_FUTURE_CUTOFF);
 
     var loaded =
         sagaStore
@@ -265,7 +265,7 @@ class SagaTimeoutRunnerTerminalizationTest {
         1L);
 
     // Call processTimedOutSaga directly — this is the method that contains the guard.
-    // findTimedOut would filter this saga out, so processBatch would never reach the guard.
+    // findTimedOut would filter this saga out, so pollCycle would never reach the guard.
     bus.executed.clear();
     runner.processTimedOutSaga(sagaId);
 
