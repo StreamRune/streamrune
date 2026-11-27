@@ -266,7 +266,10 @@ class SagaRowsTest {
   void storedRow_corruptStatusThrowsIllegalArgument() throws SQLException {
     insertFullRow("order-1", "NOT_A_STATUS");
 
-    assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+
+    assertThat(e).hasMessageContaining("NOT_A_STATUS");
   }
 
   @Test
@@ -274,7 +277,35 @@ class SagaRowsTest {
     insertFullRow("order-1", "FAULTED");
     exec("UPDATE saga_state SET pre_fault_status = 'BOGUS'");
 
-    assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+
+    assertThat(e).hasMessageContaining("BOGUS");
+  }
+
+  @Test
+  void storedRow_blankCauseFailsWithTheEventIdMessage() throws SQLException {
+    insertFullRow("order-1", "COMPENSATING");
+    exec("UPDATE saga_state SET episode_cause_event_id = ''");
+
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+
+    assertThat(e).hasMessage("eventId is required");
+  }
+
+  @Test
+  void storedRow_aRowCorruptInSeveralColumnsFailsOnItsStatusFirst() throws SQLException {
+    // Both backends decode the status before the cause and the cause before the pre-fault status,
+    // so a row corrupt in all three fails the same way on either: on its status.
+    insertFullRow("order-1", "NOT_A_STATUS");
+    exec("UPDATE saga_state SET episode_cause_event_id = '', pre_fault_status = 'BOGUS'");
+
+    IllegalArgumentException e =
+        assertThrows(IllegalArgumentException.class, () -> readStoredRow(new MicrosCodec()));
+
+    assertThat(e).hasMessageContaining("NOT_A_STATUS").hasMessageNotContaining("BOGUS");
+    assertThat(e.getMessage()).isNotEqualTo("eventId is required");
   }
 
   @Test
@@ -343,7 +374,7 @@ class SagaRowsTest {
 
     RowFacts facts =
         readOne(
-            "SELECT status, dead_letter_pending, last_applied_offset FROM" + " saga_state",
+            "SELECT status, dead_letter_pending, last_applied_offset FROM saga_state",
             rs -> SagaRows.rowFacts(rs, new MicrosCodec()));
 
     assertThat(facts).isEqualTo(new RowFacts(SagaStatus.FAULTED, true, 41L));
