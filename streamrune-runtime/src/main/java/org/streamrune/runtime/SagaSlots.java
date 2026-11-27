@@ -44,8 +44,8 @@ import java.util.function.IntSupplier;
  * of waits passes through the slots.
  *
  * <p><b>A timed acquire.</b> {@link #tryAcquire} waits in the same queue for at most a bound and
- * gives up holding nothing. The timeout runner uses it for the claim of a saga it has to wait for,
- * whose own step may be the holder of the slot it waits for.
+ * gives up holding nothing. The timeout runner's claims use it, bounded by the claim wait: a slot
+ * held by a step that does not return then delays a claim by one claim wait, not for ever.
  */
 final class SagaSlots {
 

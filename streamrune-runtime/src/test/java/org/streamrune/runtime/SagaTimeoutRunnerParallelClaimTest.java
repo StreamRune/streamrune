@@ -442,4 +442,47 @@ class SagaTimeoutRunnerParallelClaimTest {
       hung.returnAtLast();
     }
   }
+
+  /**
+   * The runner's only slot is held by a step that does not return. Another saga past its deadline
+   * is not claimed without a slot: its claim waits one claim wait and goes to the next poll. The
+   * hung saga's claim, past the threshold, waits one shared claim wait and is made underneath the
+   * step without a slot. Once the step has ended, a later poll claims the other saga.
+   */
+  @Test
+  void whileAHungStepHoldsTheOnlySlot_anotherSagasClaimGoesToTheNextPoll_andTheHungSagaIsClaimed() {
+    Duration bound = Duration.ofMillis(500);
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
+      parallelism(p, 1);
+      open(p, "2"); // before the step that holds the only slot
+      var hung = new HungSteps(p, "1");
+      p.clock.advance(TIMEOUT);
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        p.timeoutRunner.pollOnce();
+      }
+      assertThat(p.row("2").episodeVersion())
+          .as("postponed, never claimed without a slot")
+          .isNull();
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("2"))).isZero();
+
+      long start = System.nanoTime();
+      p.timeoutRunner.pollOnce();
+      Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+      assertThat(took)
+          .as("one claim wait for the other saga, then one shared wait for the hung saga")
+          .isGreaterThanOrEqualTo(bound.multipliedBy(2))
+          .isLessThan(bound.multipliedBy(4));
+      assertThat(p.row("1").episodeVersion()).as("claimed underneath the hung step").isNotNull();
+      assertThat(p.row("2").episodeVersion()).isNull();
+      assertThat(p.timeoutRunner.claimsDeferredPastTheWait()).isZero();
+
+      hung.returnAtLast();
+      p.timeoutRunner.pollOnce();
+
+      assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.row("2").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.runner.slots().inUse()).isZero();
+    }
+  }
 }

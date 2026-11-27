@@ -171,11 +171,13 @@ import org.streamrune.core.types.SagaType;
  * goes on without a slot (an INFO line), so a step that does not return delays its saga's deadline
  * by the polls that passed it over and one claim wait, and no more. The budgeted steps can thus be
  * exceeded only while steps hang, by at most the number of sagas claimed past a hung step at once.
- * A claim whose saga has a step in flight, and that would only ask for the step lock once, is
- * passed over before it takes a slot. A runner built with {@link Builder#stepLock} has no runner to
- * share slots with and acts on one saga at a time, on the poll thread; so does every runner whose
- * limit is 1. Two workers never act on one saga in a poll: a page's keys are distinct, and a saga
- * read once in a cycle is not acted on again in it.
+ * Every other claim waits for a slot for at most the claim wait as well: while every slot is held
+ * by steps, it is postponed to the next poll, with nothing read or written, and the poll goes on to
+ * the next saga. A claim whose saga has a step in flight, and that would only ask for the step lock
+ * once, is passed over before it takes a slot. A runner built with {@link Builder#stepLock} has no
+ * runner to share slots with and acts on one saga at a time, on the poll thread; so does every
+ * runner whose limit is 1. Two workers never act on one saga in a poll: a page's keys are distinct,
+ * and a saga read once in a cycle is not acted on again in it.
  *
  * <p><b>A cycle drains while batches come back full.</b> After a batch whose last query returned as
  * many ids as it asked for and that acted on at least one saga it had not seen in the cycle, the
@@ -833,7 +835,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       switch (outcome) {
         case ACTED -> acted++;
         case DEFERRED -> deferred++;
-        case FAILED, NOT_RUN -> {
+        case FAILED, POSTPONED, NOT_RUN -> {
           // neither progress nor a saga passed over
         }
       }
@@ -852,6 +854,8 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
     DEFERRED,
     /** Processing the saga failed; logged. */
     FAILED,
+    /** No slot freed within the claim wait: nothing was read or written; the next poll tries. */
+    POSTPONED,
     /** The runner stopped before it acted on the saga. */
     NOT_RUN
   }
@@ -868,10 +872,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * the claim wait — every slot held, as by steps that do not return — the claim goes on without a
    * slot, logged at INFO, so a step that does not return still delays the saga's deadline by the
    * polls that passed it over and one claim wait, and no more. Such a claim exceeds the runner's
-   * budgeted steps by one while it runs. Every other claim waits for its slot without a bound, in
-   * arrival order — except one whose saga has a step in flight at that moment: it would ask for the
-   * step lock once and be passed over, so it is passed over at once, without a slot, and nothing is
-   * read for it.
+   * budgeted steps by one while it runs. Every other claim waits for its slot in arrival order for
+   * at most the claim wait too; when none frees it is postponed to the next poll, with nothing read
+   * and nothing written, and logged at DEBUG — never made without a slot. A claim whose saga has a
+   * step in flight at that moment, and that would ask for the step lock once, is passed over at
+   * once, without a slot, and nothing is read for it.
    */
   private ClaimOutcome actInASlot(SagaId sagaId) {
     Thread self = Thread.currentThread();
@@ -896,10 +901,20 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
       SagaSlots.Slot slot;
       try {
-        slot = waitsForTheStep ? slots.tryAcquire(claimWait) : slots.acquire();
+        slot = slots.tryAcquire(claimWait);
       } catch (InterruptedException interrupted) {
         self.interrupt();
         return ClaimOutcome.NOT_RUN;
+      }
+      if (slot == null && !waitsForTheStep) {
+        // Every slot stayed held for the whole claim wait — steps that hold them, maybe steps that
+        // do not return. The claim is not made without a slot: the next poll tries again.
+        LOG.debug(
+            "No slot of the runner freed within the claim wait of {} for the timeout claim of saga"
+                + " {}; it is tried again on the next poll",
+            claimWait,
+            LogSanitizer.sanitizeForLog(sagaId.value()));
+        return ClaimOutcome.POSTPONED;
       }
       if (slot == null) {
         int passedOver = deferredClaims.getOrDefault(sagaId, 0);
