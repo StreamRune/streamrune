@@ -42,6 +42,10 @@ import java.util.function.IntSupplier;
  * holders that run, or that wait for a lock whose holder is a slot holder too, or a path that takes
  * no slot (a replay feed, an operator's call, a sweeper resume) and never waits for one: no cycle
  * of waits passes through the slots.
+ *
+ * <p><b>A timed acquire.</b> {@link #tryAcquire} waits in the same queue for at most a bound and
+ * gives up holding nothing. The timeout runner uses it for the claim of a saga it has to wait for,
+ * whose own step may be the holder of the slot it waits for.
  */
 final class SagaSlots {
 
@@ -98,6 +102,22 @@ final class SagaSlots {
    *     its interrupt status set; nothing is held
    */
   Slot acquire() throws InterruptedException {
+    return acquire(-1L);
+  }
+
+  /**
+   * Takes a slot as {@link #acquire()} does, waiting at most {@code timeout} for one.
+   *
+   * @return the slot, or {@code null} when no slot was free within {@code timeout}; a timed-out
+   *     waiter leaves the queue and holds nothing
+   * @throws InterruptedException as {@link #acquire()}
+   */
+  Slot tryAcquire(java.time.Duration timeout) throws InterruptedException {
+    return acquire(Math.max(0L, timeout.toNanos()));
+  }
+
+  /** The acquire; {@code timeoutNanos} below zero waits without a bound. */
+  private Slot acquire(long timeoutNanos) throws InterruptedException {
     int[] held = depth.get();
     if (held[0] > 0) {
       held[0]++;
@@ -110,9 +130,18 @@ final class SagaSlots {
     lock.lock();
     try {
       waiting.addLast(ticket);
+      long left = timeoutNanos;
       try {
         while (waiting.peekFirst() != ticket || inUse >= currentLimit()) {
-          changed.await();
+          if (timeoutNanos < 0) {
+            changed.await();
+          } else if (left <= 0) {
+            waiting.remove(ticket);
+            changed.signalAll(); // the thread behind this one may be first now
+            return null;
+          } else {
+            left = changed.awaitNanos(left);
+          }
         }
       } catch (InterruptedException interrupted) {
         waiting.remove(ticket);

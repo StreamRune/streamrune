@@ -226,6 +226,31 @@ class SagaSlotsTest {
   }
 
   @Test
+  void aTimedAcquire_givesUpAfterItsBound_holdingNothing_andTheNextInLineGoesAhead()
+      throws Exception {
+    var slots = new SagaSlots(() -> 1);
+    var order = new CopyOnWriteArrayList<String>();
+    var release = new CountDownLatch(1);
+    var holding = holder(slots, release, order, "holder");
+    awaitUntil("held", () -> order.contains("holder"));
+
+    long start = System.nanoTime();
+    assertThat(slots.tryAcquire(java.time.Duration.ofMillis(200))).isNull();
+    assertThat(System.nanoTime() - start)
+        .isGreaterThanOrEqualTo(TimeUnit.MILLISECONDS.toNanos(200));
+    assertThat(slots.waiting()).isZero();
+    assertThat(slots.heldByCurrentThread()).isFalse();
+
+    release.countDown();
+    holding.get(20, TimeUnit.SECONDS);
+    try (SagaSlots.Slot slot = slots.tryAcquire(java.time.Duration.ofSeconds(5))) {
+      assertThat(slot).isNotNull();
+      assertThat(slots.inUse()).isEqualTo(1);
+    }
+    assertThat(slots.inUse()).isZero();
+  }
+
+  @Test
   void anInterruptedThread_takesAFreeSlotNobodyWaitsFor_andKeepsItsStatus() throws Exception {
     var slots = new SagaSlots(() -> 1);
     Thread.currentThread().interrupt();

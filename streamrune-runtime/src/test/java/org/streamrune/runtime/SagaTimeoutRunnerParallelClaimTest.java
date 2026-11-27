@@ -356,4 +356,90 @@ class SagaTimeoutRunnerParallelClaimTest {
       }
     }
   }
+
+  /** Runs {@code body} and returns the INFO lines the timeout runner logged meanwhile. */
+  private static List<String> timeoutInfoDuring(Runnable body) {
+    var log =
+        (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SagaTimeoutRunner.class);
+    var appender =
+        new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    var before = log.getLevel();
+    log.setLevel(ch.qos.logback.classic.Level.INFO);
+    appender.start();
+    log.addAppender(appender);
+    try {
+      body.run();
+    } finally {
+      log.detachAppender(appender);
+      log.setLevel(before);
+    }
+    return appender.list.stream()
+        .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.INFO)
+        .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+        .toList();
+  }
+
+  /**
+   * A saga whose step holds the runner's only slot and does not return: the first polls pass its
+   * claim over without waiting for a slot; the poll that waits for it waits for a slot and for the
+   * step lock within one claim wait, and claims without a slot when none frees.
+   */
+  @Test
+  void aClaimToWaitFor_thatGetsNoSlotWithinItsWait_isMadeWithoutASlot_underneathTheStep() {
+    Duration bound = Duration.ofSeconds(1);
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), bound)) {
+      parallelism(p, 1);
+      var hung = new HungSteps(p, "1");
+      p.clock.advance(TIMEOUT);
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        long start = System.nanoTime();
+        p.timeoutRunner.pollOnce();
+        assertThat(Duration.ofNanos(System.nanoTime() - start))
+            .as("a claim that asks once is passed over without waiting for the step's slot")
+            .isLessThan(bound);
+      }
+      assertThat(p.timeoutRunner.deferralsOf(SagaStepLockFixture.sagaOf("1")))
+          .isEqualTo(SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING);
+
+      long start = System.nanoTime();
+      List<String> info = timeoutInfoDuring(p.timeoutRunner::pollOnce);
+      Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+      assertThat(took).isGreaterThanOrEqualTo(bound);
+      assertThat(took)
+          .as("the slot and the step lock share one claim wait")
+          .isLessThan(bound.multipliedBy(2));
+      assertThat(info).anySatisfy(line -> assertThat(line).contains("goes on without a slot"));
+      assertThat(p.row("1").episodeVersion()).as("claimed underneath the step").isNotNull();
+      assertThat(p.timeoutRunner.claimsDeferredPastTheWait()).isZero();
+      assertThat(p.runner.slots().inUse()).as("only the step's slot").isEqualTo(1);
+      hung.returnAtLast();
+      assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(p.storedOrder("1"))
+          .as("the step's forward command is refused at its commit")
+          .containsExactly("Released", "Refunded");
+    }
+  }
+
+  @Test
+  void withTheFenceOff_aClaimToWaitForThatGetsNoSlot_isDeferredPastTheWait() {
+    Duration bound = Duration.ofSeconds(1);
+    try (var p = new SagaStepLockFixture(new SagaStepLock(), bound, false)) {
+      parallelism(p, 1);
+      var hung = new HungSteps(p, "1");
+      p.clock.advance(TIMEOUT);
+      for (int poll = 0; poll < SagaTimeoutRunner.DEFERRALS_BEFORE_WAITING; poll++) {
+        p.timeoutRunner.pollOnce();
+      }
+
+      long start = System.nanoTime();
+      p.timeoutRunner.pollOnce();
+      Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+      assertThat(took).isGreaterThanOrEqualTo(bound).isLessThan(bound.multipliedBy(2));
+      assertThat(p.timeoutRunner.claimsDeferredPastTheWait()).isEqualTo(1);
+      assertThat(p.row("1").episodeVersion()).as("never claimed underneath a step").isNull();
+      hung.returnAtLast();
+    }
+  }
 }

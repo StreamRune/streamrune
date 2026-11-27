@@ -165,11 +165,17 @@ import org.streamrune.core.types.SagaType;
  * acquire — and the connection budget the integrations compute for the runner's steps also holds
  * the claims. A slot is always taken before the saga's step lock, never while one is held; a claim
  * that waits its bound for a step in flight holds its slot, and the step it waits for holds a slot
- * of its own. One slow compensation therefore delays no other saga's claim while a slot is free. A
- * runner built with {@link Builder#stepLock} has no runner to share slots with and acts on one saga
- * at a time, on the poll thread; so does every runner whose limit is 1. Two workers never act on
- * one saga in a poll: a page's keys are distinct, and a saga read once in a cycle is not acted on
- * again in it.
+ * of its own. One slow compensation therefore delays no other saga's claim while a slot is free.
+ * The claim of a saga the poll has to wait for waits for its slot and its step lock within one
+ * claim wait: when no slot frees within it — every slot held, as by steps that do not return — it
+ * goes on without a slot (an INFO line), so a step that does not return delays its saga's deadline
+ * by the polls that passed it over and one claim wait, and no more. The budgeted steps can thus be
+ * exceeded only while steps hang, by at most the number of sagas claimed past a hung step at once.
+ * A claim whose saga has a step in flight, and that would only ask for the step lock once, is
+ * passed over before it takes a slot. A runner built with {@link Builder#stepLock} has no runner to
+ * share slots with and acts on one saga at a time, on the poll thread; so does every runner whose
+ * limit is 1. Two workers never act on one saga in a poll: a page's keys are distinct, and a saga
+ * read once in a cycle is not acted on again in it.
  *
  * <p><b>A cycle drains while batches come back full.</b> After a batch whose last query returned as
  * many ids as it asked for and that acted on at least one saga it had not seen in the cycle, the
@@ -855,6 +861,17 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * the saga's step lock — never the other way round, so a claim never waits for a slot while it
    * holds a step lock. A runner built with {@link Builder#stepLock} has no slots and acts at once.
    * The thread is registered for {@link #close()} to interrupt while it runs.
+   *
+   * <p>A saga the poll has to wait for ({@value #DEFERRALS_BEFORE_WAITING} polls in a row passed it
+   * over) has one claim wait for its slot and its step lock together: it waits for a slot for at
+   * most the claim wait, and for the step lock for what is left of it. When no slot frees within
+   * the claim wait — every slot held, as by steps that do not return — the claim goes on without a
+   * slot, logged at INFO, so a step that does not return still delays the saga's deadline by the
+   * polls that passed it over and one claim wait, and no more. Such a claim exceeds the runner's
+   * budgeted steps by one while it runs. Every other claim waits for its slot without a bound, in
+   * arrival order — except one whose saga has a step in flight at that moment: it would ask for the
+   * step lock once and be passed over, so it is passed over at once, without a slot, and nothing is
+   * read for it.
    */
   private ClaimOutcome actInASlot(SagaId sagaId) {
     Thread self = Thread.currentThread();
@@ -865,18 +882,39 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       if (stopRequested()) {
         return ClaimOutcome.NOT_RUN;
       }
+      long claimDeadline = System.nanoTime() + claimWait.toNanos();
       if (slots == null) {
-        return timeOutOne(sagaId);
+        return timeOutOne(sagaId, claimDeadline);
+      }
+      boolean waitsForTheStep = deferredClaims.getOrDefault(sagaId, 0) >= DEFERRALS_BEFORE_WAITING;
+      if (!waitsForTheStep && stepLock.heldNow(sagaType, sagaId)) {
+        // A step of the saga holds its lock: the claim, which would ask for the lock once, is
+        // passed over now, before it takes a slot that a step could use — and without waiting for
+        // a slot that the step in flight may hold itself.
+        claimDeferred(sagaId, Duration.ZERO);
+        return ClaimOutcome.DEFERRED;
       }
       SagaSlots.Slot slot;
       try {
-        slot = slots.acquire();
+        slot = waitsForTheStep ? slots.tryAcquire(claimWait) : slots.acquire();
       } catch (InterruptedException interrupted) {
         self.interrupt();
         return ClaimOutcome.NOT_RUN;
       }
+      if (slot == null) {
+        int passedOver = deferredClaims.getOrDefault(sagaId, 0);
+        LOG.info(
+            "Saga {} is past its deadline and a step of it has been in flight in this process for"
+                + " {} polls; no slot of its runner freed within the claim wait of {}, so its claim"
+                + " goes on without a slot and exceeds the runner's budgeted steps by one while it"
+                + " runs",
+            LogSanitizer.sanitizeForLog(sagaId.value()),
+            passedOver,
+            claimWait);
+        return timeOutOne(sagaId, claimDeadline);
+      }
       try (slot) {
-        return timeOutOne(sagaId);
+        return timeOutOne(sagaId, claimDeadline);
       }
     } finally {
       claimThreads.remove(self);
@@ -901,7 +939,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *     this process: nothing was written, and the saga holds no slot of the batch
    */
   boolean processTimedOutSaga(SagaId sagaId) {
-    return timeOutOne(sagaId) == ClaimOutcome.DEFERRED;
+    return timeOutOne(sagaId, System.nanoTime() + claimWait.toNanos()) == ClaimOutcome.DEFERRED;
   }
 
   /**
@@ -929,8 +967,11 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    * </ul>
    *
    * <p>A failure is caught and logged here, so one failing saga never stops the others of its page.
+   *
+   * @param claimDeadline the {@link System#nanoTime()} at which the claim wait of a saga the poll
+   *     has to wait for ends; what is left of it bounds the wait for the step lock
    */
-  private ClaimOutcome timeOutOne(SagaId sagaId) {
+  private ClaimOutcome timeOutOne(SagaId sagaId, long claimDeadline) {
     try {
       // Type-scoped load so a row owned by a different saga type (a cross-type SagaId collision)
       // reads as "no saga for this type" — never deserialized, routed, or compensated from —
@@ -942,7 +983,9 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       if (selected.isEmpty() || selected.get().status().isHalted()) {
         return ClaimOutcome.ACTED;
       }
-      return timeOut(sagaId, selected.get()) ? ClaimOutcome.DEFERRED : ClaimOutcome.ACTED;
+      return timeOut(sagaId, selected.get(), claimDeadline)
+          ? ClaimOutcome.DEFERRED
+          : ClaimOutcome.ACTED;
     } catch (Exception e) {
       LOG.warn(
           "Failed to process timed-out saga: {}", LogSanitizer.sanitizeForLog(sagaId.value()), e);
@@ -956,7 +999,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *
    * @return {@code true} when the claim was deferred
    */
-  private boolean timeOut(SagaId sagaId, LoadedSaga<S> selected) {
+  private boolean timeOut(SagaId sagaId, LoadedSaga<S> selected, long claimDeadline) {
     SagaTimeoutException cause =
         new SagaTimeoutException(sagaId, decider.timeout().orElse(Duration.ZERO));
     if (selected.status() == SagaStatus.COMPENSATING) {
@@ -972,7 +1015,7 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       }
       return false;
     }
-    return claimAtTheDeadline(sagaId, cause);
+    return claimAtTheDeadline(sagaId, cause, claimDeadline);
   }
 
   /**
@@ -1022,11 +1065,18 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
    *       since the first read: the lock is released and the episode is resumed like a re-pick.
    * </ul>
    *
+   * <p>The wait for the step is what is left of the claim wait once the claim had its slot: the
+   * slot and the step lock share one claim wait ({@link #actInASlot}).
+   *
+   * @param claimDeadline the {@link System#nanoTime()} at which the claim wait ends
    * @return {@code true} when the claim was deferred
    */
-  private boolean claimAtTheDeadline(SagaId sagaId, SagaTimeoutException cause) {
+  private boolean claimAtTheDeadline(
+      SagaId sagaId, SagaTimeoutException cause, long claimDeadline) {
     int passedOver = deferredClaims.getOrDefault(sagaId, 0);
-    Duration wait = passedOver >= DEFERRALS_BEFORE_WAITING ? claimWait : Duration.ZERO;
+    boolean waits = passedOver >= DEFERRALS_BEFORE_WAITING;
+    Duration wait =
+        waits ? Duration.ofNanos(Math.max(0L, claimDeadline - System.nanoTime())) : Duration.ZERO;
     SagaStepLock.Hold claimHold;
     try {
       claimHold = stepLock.tryEnterClaim(sagaType, sagaId, wait);
@@ -1038,8 +1088,8 @@ public final class SagaTimeoutRunner<S extends SagaState> implements AutoCloseab
       return false;
     }
     if (claimHold == null) {
-      if (wait.isZero() || boundRunner == null || !boundRunner.forwardFence()) {
-        claimDeferred(sagaId, wait);
+      if (!waits || boundRunner == null || !boundRunner.forwardFence()) {
+        claimDeferred(sagaId, waits ? claimWait : Duration.ZERO);
         return true;
       }
       TraceScope scope = startTimeoutSpan(sagaId);
