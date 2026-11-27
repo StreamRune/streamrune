@@ -65,19 +65,9 @@ class SqliteTestDialect implements JdbcCryptoDialect {
     }
   }
 
+  /** The one tombstone statement: the first forget's instant and evidence stay. */
   @Override
-  public void insertTombstone(Connection conn, String storedSubjectId) throws SQLException {
-    tombstone(conn, storedSubjectId, null);
-  }
-
-  @Override
-  public void insertTombstoneWithEvidence(
-      Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull) throws SQLException {
-    tombstone(conn, storedSubjectId, keyCreatedAtOrNull);
-  }
-
-  /** The store's tombstone: the first forget's instant and evidence stay. */
-  private void tombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
+  public void insertTombstone(Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
       throws SQLException {
     try (PreparedStatement ps =
         conn.prepareStatement(
@@ -90,18 +80,6 @@ class SqliteTestDialect implements JdbcCryptoDialect {
       } else {
         ps.setLong(3, toMicros(keyCreatedAtOrNull));
       }
-      ps.executeUpdate();
-    }
-  }
-
-  @Override
-  public void insertEraseTombstone(Connection conn, String storedSubjectId) throws SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement(
-            "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
-                + " ON CONFLICT (subject_id) DO NOTHING")) {
-      ps.setString(1, storedSubjectId);
-      ps.setLong(2, toMicros(clock.instant()));
       ps.executeUpdate();
     }
   }

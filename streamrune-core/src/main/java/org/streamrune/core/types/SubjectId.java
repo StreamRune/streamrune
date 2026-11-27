@@ -33,10 +33,10 @@ public record SubjectId(@JsonValue String value) {
    * <p>A subject id may itself be personal data (an email address or username), so the raw {@link
    * #value()} must never land verbatim in a durable or logged string — otherwise the erasure flow
    * itself re-materializes the PII it was meant to remove. This is the <em>same</em> digest the
-   * crypto engines store at rest ({@code PostgresCryptoEngine.storedSubjectId}, {@code
-   * FileSystemCryptoEngine} and {@code VaultCryptoEngine} key names), so a redacted id in a log or
-   * DLQ row still correlates to the subject's stored key and tombstone rows without exposing the
-   * identifier.
+   * crypto engines store at rest ({@code JdbcSubjectKeyStore.storedSubjectId} of the PostgreSQL and
+   * SQLite engines, the {@code FileSystemCryptoEngine} and {@code VaultCryptoEngine} key names), so
+   * a redacted id in a log or DLQ row still correlates to the subject's stored key and tombstone
+   * rows without exposing the identifier.
    *
    * <p>{@link #toString()} is intentionally left returning the raw value: internal key derivation
    * and existing callers depend on it. Redaction is applied only at the sites that persist or log,

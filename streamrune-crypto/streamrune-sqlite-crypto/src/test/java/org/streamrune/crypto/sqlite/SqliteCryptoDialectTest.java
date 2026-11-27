@@ -97,12 +97,12 @@ class SqliteCryptoDialectTest {
   }
 
   @Test
-  void insertTombstoneWithEvidence_stampsTheClocksMicros_andKeepsTheFirstRow() throws Exception {
+  void insertTombstone_stampsTheClocksMicros_andKeepsTheFirstRow() throws Exception {
     Instant evidence = Instant.parse("2026-03-04T05:06:07.000008Z");
     try (Connection c = dataSource.getConnection()) {
-      dialect.insertTombstoneWithEvidence(c, "evidence", evidence);
+      dialect.insertTombstone(c, "evidence", evidence);
       new SqliteCryptoDialect(Clock.fixed(NOW.plusSeconds(60), ZoneOffset.UTC))
-          .insertTombstoneWithEvidence(c, "evidence", evidence.plusSeconds(86_400));
+          .insertTombstone(c, "evidence", evidence.plusSeconds(86_400));
       assertEquals(Optional.of(evidence), readInstant(c, "evidence", "key_created_at"));
       assertEquals(Optional.of(NOW), readInstant(c, "evidence", "forgotten_at"));
     }
@@ -115,30 +115,27 @@ class SqliteCryptoDialectTest {
   @Test
   void aNullEvidence_readsBackEmpty() throws Exception {
     try (Connection c = dataSource.getConnection()) {
-      dialect.insertTombstoneWithEvidence(c, "no-evidence", null);
+      dialect.insertTombstone(c, "no-evidence", null);
       assertEquals(Optional.empty(), readInstant(c, "no-evidence", "key_created_at"));
       assertEquals(Optional.of(NOW), readInstant(c, "no-evidence", "forgotten_at"));
     }
   }
 
   @Test
-  void tombstoneInserts_stampTheClock_writeNoEvidence_andLeaveAnExistingTombstoneAsItIs()
-      throws Exception {
+  void insertTombstone_leavesAnExistingTombstoneAsItIs() throws Exception {
     Instant evidence = Instant.parse("2026-01-02T03:04:05Z");
     try (Connection c = dataSource.getConnection()) {
-      dialect.insertTombstone(c, "plain-tombstone");
-      dialect.insertTombstone(c, "plain-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "plain-tombstone", "key_created_at"));
+      dialect.insertTombstone(c, "plain-tombstone", null);
+      new SqliteCryptoDialect(Clock.fixed(NOW.plusSeconds(60), ZoneOffset.UTC))
+          .insertTombstone(c, "plain-tombstone", evidence);
+      assertEquals(
+          Optional.empty(),
+          readInstant(c, "plain-tombstone", "key_created_at"),
+          "a tombstone without evidence never gains some");
       assertEquals(Optional.of(NOW), readInstant(c, "plain-tombstone", "forgotten_at"));
 
-      dialect.insertEraseTombstone(c, "erase-tombstone");
-      dialect.insertEraseTombstone(c, "erase-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "erase-tombstone", "key_created_at"));
-      assertEquals(Optional.of(NOW), readInstant(c, "erase-tombstone", "forgotten_at"));
-
-      dialect.insertTombstoneWithEvidence(c, "evidence-first", evidence);
-      dialect.insertTombstone(c, "evidence-first");
-      dialect.insertEraseTombstone(c, "evidence-first");
+      dialect.insertTombstone(c, "evidence-first", evidence);
+      dialect.insertTombstone(c, "evidence-first", null);
       assertEquals(Optional.of(evidence), readInstant(c, "evidence-first", "key_created_at"));
     }
   }

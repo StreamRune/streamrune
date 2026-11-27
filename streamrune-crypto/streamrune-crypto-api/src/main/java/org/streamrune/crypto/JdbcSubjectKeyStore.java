@@ -1,6 +1,7 @@
 package org.streamrune.crypto;
 
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -119,7 +120,7 @@ public final class JdbcSubjectKeyStore {
       MessageDigest md = MessageDigest.getInstance("SHA-256");
       return HexFormat.of()
           .formatHex(md.digest(subjectId.value().getBytes(StandardCharsets.UTF_8)));
-    } catch (Exception e) {
+    } catch (GeneralSecurityException e) {
       throw new CryptoOperationException(
           "SHA-256 hashing failed for subject: " + subjectId.redacted(), e);
     }
@@ -173,9 +174,9 @@ public final class JdbcSubjectKeyStore {
 
   /**
    * Erases the subject's key. Under the subject lock it records the generation of the key it
-   * destroys, deletes the key and tombstones the subject, all in the caller's transaction, so the
-   * three commit together or not at all. A subject without a key is only tombstoned; a rerun
-   * changes nothing.
+   * destroys, deletes the key and tombstones the subject without erased-key evidence, all in the
+   * caller's transaction, so the three commit together or not at all. A subject without a key is
+   * only tombstoned; a rerun changes nothing.
    *
    * @param c the caller's connection, inside its transaction (autoCommit off on PostgreSQL)
    * @param s the subject
@@ -193,7 +194,7 @@ public final class JdbcSubjectKeyStore {
       ps.setString(1, subject);
       ps.executeUpdate();
     }
-    forgotten.forgetForErase(c, subject);
+    forgotten.forget(c, subject, null);
   }
 
   /**
@@ -311,7 +312,7 @@ public final class JdbcSubjectKeyStore {
       KeyGenerator generator = KeyGenerator.getInstance("AES");
       generator.init(256);
       key = generator.generateKey();
-    } catch (Exception e) {
+    } catch (GeneralSecurityException e) {
       throw new CryptoOperationException("Key generation failed for subject: " + s.redacted(), e);
     }
     int version = nextKeyVersion(c, s, subject);

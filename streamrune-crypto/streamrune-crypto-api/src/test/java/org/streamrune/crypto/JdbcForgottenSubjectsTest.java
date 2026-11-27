@@ -2,7 +2,6 @@ package org.streamrune.crypto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -65,39 +64,27 @@ class JdbcForgottenSubjectsTest {
   }
 
   @Test
-  void forgetWithoutEvidence_tombstonesWithTheClockInstantAndNoEvidence() throws Exception {
-    run(
-        c -> {
-          forgotten.forget(c, SUBJECT);
-          return null;
-        });
-    assertEquals(List.of("insertTombstone"), calls);
-    assertTrue(db.inWriteBoolean(c -> forgotten.isForgotten(c, SUBJECT)));
-    assertEquals(Optional.of(FIRST), db.inWriteInstant(c -> forgotten.forgottenAt(c, SUBJECT)));
-    assertEquals(Optional.empty(), db.inWriteInstant(c -> forgotten.keyCreatedAt(c, SUBJECT)));
-  }
-
-  @Test
   void forgetWithEvidence_roundTripsThroughReadInstant() throws Exception {
     run(
         c -> {
           forgotten.forget(c, SUBJECT, EVIDENCE);
           return null;
         });
-    assertEquals(List.of("insertTombstoneWithEvidence"), calls);
+    assertEquals(List.of("insertTombstone"), calls);
     assertEquals(Optional.of(EVIDENCE), db.inWriteInstant(c -> forgotten.keyCreatedAt(c, SUBJECT)));
     assertEquals(Optional.of(FIRST), db.inWriteInstant(c -> forgotten.forgottenAt(c, SUBJECT)));
   }
 
   @Test
-  void forgetWithNullEvidence_recordsNoEvidence() throws Exception {
+  void forgetWithNullEvidence_tombstonesWithTheClockInstantAndNoEvidence() throws Exception {
     run(
         c -> {
           forgotten.forget(c, SUBJECT, null);
           return null;
         });
-    assertEquals(List.of("insertTombstoneWithEvidence"), calls);
+    assertEquals(List.of("insertTombstone"), calls);
     assertTrue(db.inWriteBoolean(c -> forgotten.isForgotten(c, SUBJECT)));
+    assertEquals(Optional.of(FIRST), db.inWriteInstant(c -> forgotten.forgottenAt(c, SUBJECT)));
     assertEquals(Optional.empty(), db.inWriteInstant(c -> forgotten.keyCreatedAt(c, SUBJECT)));
   }
 
@@ -112,8 +99,7 @@ class JdbcForgottenSubjectsTest {
     run(
         c -> {
           later.forget(c, SUBJECT, LATER);
-          later.forget(c, SUBJECT);
-          later.forgetForErase(c, SUBJECT);
+          later.forget(c, SUBJECT, null);
           return null;
         });
     assertEquals(Optional.of(FIRST), db.inWriteInstant(c -> forgotten.forgottenAt(c, SUBJECT)));
@@ -125,7 +111,7 @@ class JdbcForgottenSubjectsTest {
   void aTombstoneWithoutEvidenceNeverGainsSome() throws Exception {
     run(
         c -> {
-          forgotten.forget(c, SUBJECT);
+          forgotten.forget(c, SUBJECT, null);
           forgotten.forget(c, SUBJECT, EVIDENCE);
           return null;
         });
@@ -133,26 +119,11 @@ class JdbcForgottenSubjectsTest {
   }
 
   @Test
-  void forgetForErase_tombstonesThroughTheEraseStatement() throws Exception {
-    run(
-        c -> {
-          forgotten.forgetForErase(c, SUBJECT);
-          return null;
-        });
-    assertEquals(List.of("insertEraseTombstone"), calls);
-    assertTrue(db.inWriteBoolean(c -> forgotten.isForgotten(c, SUBJECT)));
-    assertEquals(Optional.of(FIRST), db.inWriteInstant(c -> forgotten.forgottenAt(c, SUBJECT)));
-    assertNull(
-        db.selectLong(
-            "SELECT key_created_at FROM forgotten_subjects WHERE subject_id = ?", SUBJECT));
-  }
-
-  @Test
   void reinstateDeletesTheTombstone() throws Exception {
     run(
         c -> {
           forgotten.forget(c, SUBJECT, EVIDENCE);
-          forgotten.forget(c, "other");
+          forgotten.forget(c, "other", null);
           return null;
         });
     run(
@@ -179,7 +150,7 @@ class JdbcForgottenSubjectsTest {
         new JdbcForgottenSubjects(
             new SqliteTestDialect(Clock.fixed(FIRST, ZoneOffset.UTC)) {
               @Override
-              public void insertTombstoneWithEvidence(
+              public void insertTombstone(
                   Connection conn, String storedSubjectId, Instant keyCreatedAtOrNull)
                   throws SQLException {
                 throw boom;

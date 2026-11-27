@@ -82,7 +82,7 @@ A failed fsync fails the call loudly: a mint or first use whose fsync failed ret
 ## Requirements
 
 - Java 25
-- Depends on `streamrune-core`
+- Depends on `streamrune-core` and `streamrune-crypto-api` (implementation scope: the shared cipher and the v1 wire format)
 
 ## Installation
 

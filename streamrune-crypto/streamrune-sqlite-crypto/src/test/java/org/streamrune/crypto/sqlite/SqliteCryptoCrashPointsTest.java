@@ -267,8 +267,8 @@ class SqliteCryptoCrashPointsTest {
         + " ON CONFLICT (subject_id) DO UPDATE SET max_erased_version ="
         + " max(erased_key_generations.max_erased_version, excluded.max_erased_version)",
     "DELETE FROM encryption_keys WHERE subject_id = ?",
-    "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
-        + " ON CONFLICT (subject_id) DO NOTHING"
+    "INSERT INTO forgotten_subjects (subject_id, forgotten_at, key_created_at)"
+        + " VALUES (?, ?, ?) ON CONFLICT (subject_id) DO NOTHING"
   };
 
   private static byte[] keyBytes(DataSource source) throws Exception {

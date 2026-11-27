@@ -13,8 +13,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.streamrune.testsupport.PostgresTestImage;
 import org.testcontainers.junit.jupiter.Container;
@@ -55,18 +57,21 @@ class PostgresCryptoDialectIntegrationTest {
   }
 
   @Test
+  @Timeout(value = 30, unit = TimeUnit.SECONDS)
   void lockSubject_blocksASecondTransactionOnTheSameSubject_untilTheFirstEnds() throws Exception {
     try (Connection holder = dataSource.getConnection();
         Connection waiter = dataSource.getConnection()) {
+      // Every lock statement of the waiter gives up after 200 ms instead of blocking the test for
+      // ever. The timeout is set for the session while autoCommit is still on, so the rollbacks
+      // below do not clear it (a SET LOCAL would end with the first rollback). SQLState 55P03
+      // (lock_not_available) proves the first lock statement waited on the holder's lock.
+      try (var stmt = waiter.createStatement()) {
+        stmt.execute("SET lock_timeout = '200ms'");
+      }
       holder.setAutoCommit(false);
       waiter.setAutoCommit(false);
       DIALECT.lockSubject(holder, "lock-subject");
 
-      // The waiter gives up after 200 ms instead of blocking the test for ever: SQLState 55P03
-      // (lock_not_available) proves its lock statement waited on the holder's lock.
-      try (var stmt = waiter.createStatement()) {
-        stmt.execute("SET LOCAL lock_timeout = '200ms'");
-      }
       SQLException blocked =
           assertThrows(SQLException.class, () -> DIALECT.lockSubject(waiter, "lock-subject"));
       assertEquals("55P03", blocked.getSQLState(), blocked.getMessage());
@@ -120,13 +125,12 @@ class PostgresCryptoDialectIntegrationTest {
   }
 
   @Test
-  void insertTombstoneWithEvidence_roundTripsThroughReadInstant_andKeepsTheFirstEvidence()
-      throws Exception {
+  void insertTombstone_roundTripsThroughReadInstant_andKeepsTheFirstEvidence() throws Exception {
     // timestamptz stores microseconds.
     Instant evidence = Instant.parse("2026-03-04T05:06:07.123456Z");
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstoneWithEvidence(c, "evidence", evidence);
-      DIALECT.insertTombstoneWithEvidence(c, "evidence", evidence.plus(1, ChronoUnit.DAYS));
+      DIALECT.insertTombstone(c, "evidence", evidence);
+      DIALECT.insertTombstone(c, "evidence", evidence.plus(1, ChronoUnit.DAYS));
       assertEquals(Optional.of(evidence), readInstant(c, "evidence", "key_created_at"));
       assertTrue(readInstant(c, "evidence", "forgotten_at").isPresent());
     }
@@ -135,26 +139,25 @@ class PostgresCryptoDialectIntegrationTest {
   @Test
   void aNullInstant_readsBackEmpty() throws Exception {
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstoneWithEvidence(c, "no-evidence", null);
+      DIALECT.insertTombstone(c, "no-evidence", null);
       assertEquals(Optional.empty(), readInstant(c, "no-evidence", "key_created_at"));
     }
   }
 
   @Test
-  void tombstoneInserts_writeNoEvidence_andLeaveAnExistingTombstoneAsItIs() throws Exception {
+  void insertTombstone_leavesAnExistingTombstoneAsItIs() throws Exception {
     Instant evidence = Instant.parse("2026-01-02T03:04:05Z");
     try (Connection c = dataSource.getConnection()) {
-      DIALECT.insertTombstone(c, "plain-tombstone");
-      DIALECT.insertTombstone(c, "plain-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "plain-tombstone", "key_created_at"));
+      DIALECT.insertTombstone(c, "plain-tombstone", null);
+      DIALECT.insertTombstone(c, "plain-tombstone", null);
+      DIALECT.insertTombstone(c, "plain-tombstone", evidence);
+      assertEquals(
+          Optional.empty(),
+          readInstant(c, "plain-tombstone", "key_created_at"),
+          "a tombstone without evidence never gains some");
 
-      DIALECT.insertEraseTombstone(c, "erase-tombstone");
-      DIALECT.insertEraseTombstone(c, "erase-tombstone");
-      assertEquals(Optional.empty(), readInstant(c, "erase-tombstone", "key_created_at"));
-
-      DIALECT.insertTombstoneWithEvidence(c, "evidence-first", evidence);
-      DIALECT.insertTombstone(c, "evidence-first");
-      DIALECT.insertEraseTombstone(c, "evidence-first");
+      DIALECT.insertTombstone(c, "evidence-first", evidence);
+      DIALECT.insertTombstone(c, "evidence-first", null);
       assertEquals(Optional.of(evidence), readInstant(c, "evidence-first", "key_created_at"));
     }
   }

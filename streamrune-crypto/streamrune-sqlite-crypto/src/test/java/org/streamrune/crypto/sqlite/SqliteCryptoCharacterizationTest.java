@@ -110,8 +110,8 @@ class SqliteCryptoCharacterizationTest {
           + " excluded.max_erased_version)";
   private static final String DELETE_KEY = "DELETE FROM encryption_keys WHERE subject_id = ?";
   private static final String INSERT_TOMBSTONE =
-      "INSERT INTO forgotten_subjects (subject_id, forgotten_at) VALUES (?, ?)"
-          + " ON CONFLICT (subject_id) DO NOTHING";
+      "INSERT INTO forgotten_subjects (subject_id, forgotten_at, key_created_at)"
+          + " VALUES (?, ?, ?) ON CONFLICT (subject_id) DO NOTHING";
   private static final String DELETE_TOMBSTONE =
       "DELETE FROM forgotten_subjects WHERE subject_id = ?";
 
