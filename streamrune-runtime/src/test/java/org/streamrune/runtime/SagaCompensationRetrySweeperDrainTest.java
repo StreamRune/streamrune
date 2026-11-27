@@ -274,4 +274,32 @@ class SagaCompensationRetrySweeperDrainTest {
       assertThat(inStatus(p, 3, SagaStatus.COMPENSATING)).isEqualTo(2);
     }
   }
+
+  @Test
+  void aSweeperFollowingTheRunnersLease_thatLosesItDuringTheDrain_startsNoFurtherBatch() {
+    var leadership = new RecordingLeadership();
+    String lease = "saga:" + TYPE.value();
+    leadership.grant(lease);
+    try (var p = new SagaStepLockFixture(leadership, Duration.ZERO)) {
+      SubscriptionLease.Anchor anchor = p.runner.lease().anchor();
+      assertThat(anchor.lead(Duration.ZERO)).isTrue();
+      stuckEpisodes(p, 3);
+      p.refund.failure = null;
+      var store = new CountingStore(p.sagaStore);
+      var sweeper = sweeper(p, store, 1).build();
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (command instanceof Refund refund && refund.orderId().equals("1")) {
+              leadership.revoke(lease);
+            }
+          };
+
+      sweeper.sweepOnce();
+
+      assertThat(p.row("1").status()).isEqualTo(SagaStatus.COMPENSATED);
+      assertThat(store.queries).containsExactly(1);
+      assertThat(inStatus(p, 3, SagaStatus.COMPENSATING)).isEqualTo(2);
+      anchor.close();
+    }
+  }
 }

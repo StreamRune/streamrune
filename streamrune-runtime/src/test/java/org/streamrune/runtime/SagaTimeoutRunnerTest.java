@@ -124,7 +124,7 @@ class SagaTimeoutRunnerTest {
   }
 
   @Test
-  void processBatchCompensatesTimedOutSaga() {
+  void pollCycleCompensatesTimedOutSaga() {
     var store = new InMemorySagaStore();
     var bus = new CapturingCommandBus();
     var decider = new TimeoutDecider();
@@ -196,7 +196,7 @@ class SagaTimeoutRunnerTest {
   }
 
   @Test
-  void processBatchSkipsTerminalSagas() {
+  void pollCycleSkipsTerminalSagas() {
     var store = new InMemorySagaStore();
     var bus = new CapturingCommandBus();
     var decider = new TimeoutDecider();
@@ -223,7 +223,7 @@ class SagaTimeoutRunnerTest {
   }
 
   @Test
-  void processBatchHandlesEmptyStore() {
+  void pollCycleHandlesEmptyStore() {
     var store = new InMemorySagaStore();
     var bus = new CapturingCommandBus();
     var decider = new TimeoutDecider();

@@ -78,7 +78,7 @@ class DeadLetterRetryRunnerTest {
     commandBus = mock(CommandBus.class);
     objectMapper = new ObjectMapper();
     // Zero initial delay: entries are due immediately, so tests not about backoff scheduling
-    // can call processBatch() right after publishing.
+    // can call pollCycle() right after publishing.
     policy =
         new DeadLetterRetryPolicy(
             3, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC);
@@ -557,7 +557,7 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatch_samplesCommandDlqDepthAndDegradationEachCycle() {
+  void pollCycle_samplesCommandDlqDepthAndDegradationEachCycle() {
     // The runner samples the command DLQ depth gauge (streamrune.dlq.pending) and its own
     // degradation gauge every cycle, BEFORE the leadership gate, so operators can alert on a
     // growing
@@ -565,7 +565,7 @@ class DeadLetterRetryRunnerTest {
     var metrics = new RecordingStreamRuneMetrics();
     publishTestEntry("cmd-1");
     publishTestEntry("cmd-2");
-    // Not due for retry, so processBatch does not execute anything — but the depth is still
+    // Not due for retry, so pollCycle does not execute anything — but the depth is still
     // sampled.
     when(commandBus.supportsIdempotentExecution()).thenReturn(true);
 
@@ -3073,8 +3073,8 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatchStopsWhenLeadershipIsLostMidBatch() {
-    // The gate at the top of processBatch() only checks ONCE per batch and discards the acquired
+  void pollCycleStopsWhenLeadershipIsLostMidBatch() {
+    // The gate at the top of pollCycle() only checks ONCE per cycle and discards the acquired
     // lease. A batch that outlives this replica's lease TTL (e.g. paused by GC) must not keep
     // processing entries after a fresh leader has taken over — it must re-check per entry and stop
     // the moment it is no longer the leader.
@@ -3266,10 +3266,10 @@ class DeadLetterRetryRunnerTest {
   }
 
   @Test
-  void processBatch_survivesThrowingDegradationGauge_andStillRetriesEntries() {
+  void pollCycle_survivesThrowingDegradationGauge_andStillRetriesEntries() {
     // sampleObservability() called recordDlqRetryDegradation BARE while its sibling
     // recordDlqBacklog a few lines below was try/caught. Because the sample runs FIRST in every
-    // processBatch(), a metrics backend that throws aborted EVERY poll cycle before the leadership
+    // pollCycle(), a metrics backend that throws aborted EVERY poll cycle before the leadership
     // gate: the runner stayed isRunning()=true with its consecutive-failure counter climbing, yet
     // never retried a single dead-lettered command again.
     publishTestEntry("cmd-1");

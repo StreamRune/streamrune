@@ -187,7 +187,7 @@ class DlqReplayAuthzE2EIT extends E2ETestBase {
         .policy(
             new DeadLetterRetryPolicy(
                 5, Duration.ZERO, 2.0, false, DeadLetterRetryPolicy.UnkeyedReplay.AUTOMATIC))
-        // Short poll interval: the real background loop cycles fast under test (processBatch is
+        // Short poll interval: the real background loop cycles fast under test (pollCycle is
         // package-private, so the replay is driven through the actual start()/loop path, not poked
         // directly — this is the production code path end to end).
         .pollInterval(Duration.ofMillis(50))
