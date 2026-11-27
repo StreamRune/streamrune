@@ -487,8 +487,9 @@ wrapped in `new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolde
 `StreamRuneLifecycle` observes `StartupEvent` and starts whichever of these beans exist:
 `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga
 dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner`. On
-`ShutdownEvent` it closes them in reverse order, closes the subscription leadership and closes the
-`VirtualThreadCommandBus` if it was created. Do not
+`ShutdownEvent`, after the application's own observers of it (see "The framework stops after your
+observers" below), it closes them in reverse order, closes the subscription leadership and closes
+the `VirtualThreadCommandBus` if it was created. Do not
 inject the runner types directly — ask `StreamRuneLifecycle` for the running instances.
 
 **A refused start stops them too.** Quarkus fires no `ShutdownEvent` after a failed start, for
@@ -501,12 +502,29 @@ pool is still open and resign their leases. In production the process exits eith
 mode and in a test JVM nothing the framework started outlives the failed start, and a live reload
 does not start a second set.
 
+**The framework stops after your observers.** CDI notifies the observers of one event in ascending
+`@Priority`, and an observer that sets none has `Interceptor.Priority.APPLICATION + 500`. The
+framework's observers of `ShutdownEvent` and of `@BeforeDestroyed(ApplicationScoped.class)` run
+later, in two steps:
+
+| Priority | What stops |
+|---|---|
+| `Interceptor.Priority.LIBRARY_AFTER + 400` | The saga compensation-retry sweepers and the SSE event feed |
+| `Interceptor.Priority.LIBRARY_AFTER + 500` | `StreamRuneLifecycle`: its runners in reverse order, then the subscription leadership (the renew heartbeat stops and the held leases are resigned) and the `VirtualThreadCommandBus` |
+
+A subscription, a saga runner or a `SagaTimeoutRunner` that your observer stops at the default
+priority, or at any value below `Interceptor.Priority.LIBRARY_AFTER + 400`, therefore still holds
+its lease and can still dispatch commands until its last batch ends: no batch loses its lease
+midway, on a normal shutdown and after a refused start alike. An observer at a higher value runs
+after the leadership and the bus closed.
+
 **Stop what you start on `StartupEvent` the same way.** A subscription, a `SagaTimeoutRunner` or a
 runner the application builds in a `StartupEvent` observer and stops on `ShutdownEvent` outlives a
 refused start in dev mode and in a test JVM, and keeps using the closed container. Stop it as well
 from an observer of `@BeforeDestroyed(ApplicationScoped.class)` on an `@ApplicationScoped` bean
-(with `notifyObserver = Reception.IF_EXISTS`), as the framework does, and make the stop idempotent,
-since after a normal shutdown it runs after the `ShutdownEvent`. A `@PreDestroy` method is only a
+(with `notifyObserver = Reception.IF_EXISTS`), as the framework does, at the default priority or a
+lower value, and make the stop idempotent, since after a normal shutdown it runs after the
+`ShutdownEvent`. A `@PreDestroy` method is only a
 fallback: Arc destroys the application-scoped beans in no fixed order, so it may run after the
 `DataSource` closed (the lease's resign then fails and the lease lingers until its TTL), and a
 `@Singleton` bean's runs after every application-scoped bean is gone, in an order unspecified

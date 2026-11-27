@@ -308,6 +308,14 @@ Changed
   metrics and the tracing are resolved at startup instead of at the first use of a store. On
   PostgreSQL no database is touched. Micronaut checks the stores in a startup listener after its
   validators; Spring creates the bean with the other singletons.
+- **Quarkus stops the framework after the application.** The framework's observers of
+  `ShutdownEvent` and of `@BeforeDestroyed(ApplicationScoped.class)`, which also stop the
+  framework's threads when the container shuts down after a refused start, run at
+  `Interceptor.Priority.LIBRARY_AFTER + 400` (the saga compensation-retry sweepers and the SSE event
+  feed) and `+ 500` (`StreamRuneLifecycle`: its runners, then the subscription leadership and the
+  command bus), after the application's observers at the default priority. A subscription or a saga
+  runner the application stops on either event keeps its lease and the command bus until its last
+  batch ends.
 - **Spring health reads the head through the `EventStore` bean.** `StreamRuneHealthIndicator` reports
   `eventStore.lastGlobalOffset` from `EventStore.lastGlobalOffset()`, as the Quarkus and Micronaut
   checks do, instead of querying `event_stream` itself, so the detail is the same on every backend.

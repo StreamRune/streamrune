@@ -196,7 +196,7 @@ class QuarkusRefusedStartTest {
     }
   }
 
-  private static SmallRyeConfig config(Map<String, String> values) {
+  static SmallRyeConfig config(Map<String, String> values) {
     var all = new HashMap<>(values);
     all.put("streamrune.sse.enabled", "true");
     return new SmallRyeConfigBuilder()
@@ -208,7 +208,7 @@ class QuarkusRefusedStartTest {
         .build();
   }
 
-  private static List<Class<?>> beans(Class<?>... extra) {
+  static List<Class<?>> beans(Class<?>... extra) {
     var beans =
         new ArrayList<Class<?>>(
             List.of(
@@ -288,7 +288,7 @@ class QuarkusRefusedStartTest {
   }
 
   /** The framework threads the fixture starts, by name. */
-  private static final List<String> ALL_FRAMEWORK_THREADS =
+  static final List<String> ALL_FRAMEWORK_THREADS =
       List.of(
           RelayComponentNames.INBOX_RETENTION_SWEEPER,
           RelayComponentNames.SAGA_DEAD_LETTER_RETENTION_SWEEPER,
@@ -340,7 +340,7 @@ class QuarkusRefusedStartTest {
     assertThat(alive.values()).as("framework threads still running").isEmpty();
   }
 
-  private static Map<Long, String> alive(Map<Long, String> threads) throws IOException {
+  static Map<Long, String> alive(Map<Long, String> threads) throws IOException {
     Map<Long, String> now = virtualThreads();
     Map<Long, String> alive = new HashMap<>();
     threads.forEach(
@@ -356,8 +356,8 @@ class QuarkusRefusedStartTest {
    * The virtual threads alive now that were not alive {@code before} and carry one of {@code
    * names}: the threads this test's container started, whatever else the test JVM runs.
    */
-  private static Map<Long, String> frameworkThreadsSince(
-      Map<Long, String> before, List<String> names) throws IOException {
+  static Map<Long, String> frameworkThreadsSince(Map<Long, String> before, List<String> names)
+      throws IOException {
     Map<Long, String> started = new HashMap<>(virtualThreads());
     started.keySet().removeAll(before.keySet());
     started.values().retainAll(names);
@@ -400,7 +400,7 @@ class QuarkusRefusedStartTest {
   }
 
   /** The virtual threads alive now, by thread id, from a JVM thread dump. */
-  private static Map<Long, String> virtualThreads() throws IOException {
+  static Map<Long, String> virtualThreads() throws IOException {
     Path file = Files.createTempFile("streamrune-threads", ".json");
     JsonNode dump;
     try {
