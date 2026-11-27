@@ -13,6 +13,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.Closeable;
+import java.lang.classfile.ClassFile;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
+import java.lang.invoke.MethodHandles;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -29,6 +33,7 @@ import org.streamrune.core.CommandInbox;
 import org.streamrune.core.DomainEvent;
 import org.streamrune.core.EventEnvelope;
 import org.streamrune.core.EventMetadata;
+import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStore.AppendResult;
 import org.streamrune.core.EventStore.IdempotentAppendResult;
 import org.streamrune.core.EventStoreException;
@@ -226,7 +231,7 @@ class EventAppendSupportTest {
                 envelope(STREAM, 1, metadata("e-1", SpanLink.NONE)), 1, () -> 1, JsonGuard.NONE);
 
     assertThat(row.payloadJson()).isEqualTo("{\"name\":\"n\"}");
-    JsonGuard.NONE.check("\\u0000", "anything");
+    JsonGuard.NONE.check("\u0000", "anything");
   }
 
   @Test
@@ -282,6 +287,14 @@ class EventAppendSupportTest {
     assertThat(result).isEqualTo("done");
     var appended = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
     assertThat(appended.kind).isEqualTo(SpanKind.INTERNAL);
+    assertThat(appended.attributes())
+        .containsOnlyKeys(
+            TraceAttributes.STREAM_ID,
+            TraceAttributes.AGGREGATE_TYPE,
+            TraceAttributes.EVENT_COUNT,
+            TraceAttributes.EXPECTED_VERSION,
+            TraceAttributes.OUTBOX_ENTRY_COUNT,
+            TraceAttributes.APPEND_OUTCOME);
     assertThat(appended.attribute(TraceAttributes.STREAM_ID)).isEqualTo(SHOWN);
     assertThat(appended.attribute(TraceAttributes.AGGREGATE_TYPE)).isEqualTo("Account");
     assertThat(appended.attribute(TraceAttributes.EVENT_COUNT)).isEqualTo(2L);
@@ -342,7 +355,13 @@ class EventAppendSupportTest {
                 support.tracedAppend(
                     STREAM, 1, new Version(0), 0, () -> thrower(broken), r -> "")));
     var failed = tracing.only(TraceAttributes.EVENT_STORE_APPEND);
-    assertThat(failed.attribute(TraceAttributes.APPEND_OUTCOME)).isNull();
+    assertThat(failed.attributes())
+        .containsOnlyKeys(
+            TraceAttributes.STREAM_ID,
+            TraceAttributes.AGGREGATE_TYPE,
+            TraceAttributes.EVENT_COUNT,
+            TraceAttributes.EXPECTED_VERSION,
+            TraceAttributes.OUTBOX_ENTRY_COUNT);
     assertSame(broken, failed.error);
     assertThat(failed.ok).isFalse();
     assertThat(failed.closed).isTrue();
@@ -793,6 +812,28 @@ class EventAppendSupportTest {
     assertThat(refused).hasMessage("refused snapshot state");
   }
 
+  /**
+   * A state type name longer than the column is refused before the registry is asked, the state is
+   * serialized or the guard runs: each of them would fail too, with another exception.
+   */
+  @Test
+  void serializeSnapshot_checksTheStateTypeNameBeforeAnythingElse() throws Exception {
+    AggregateState state = stateNamed("S".repeat(EventStore.MAX_STATE_TYPE_LENGTH + 1));
+    List<String> serialized = new ArrayList<>();
+    List<String> guarded = new ArrayList<>();
+    EventAppendSupport support =
+        support(new RecordingMapper(serialized, value -> true), REGISTRY, logger());
+
+    var refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> support.serializeSnapshot(state, SHOWN, (json, what) -> guarded.add(what)));
+
+    assertThat(refused).hasMessage("stateType is 256 characters; at most 255").hasNoCause();
+    assertThat(serialized).isEmpty();
+    assertThat(guarded).isEmpty();
+  }
+
   @Test
   void snapshotNotStored_logsInfoOnTheGivenLogger() {
     boolean stored = support().snapshotNotStored(SHOWN, new Version(4), 2);
@@ -889,6 +930,34 @@ class EventAppendSupportTest {
         outboxEntries,
         outboxStoreConfigured,
         OUTBOX_NOT_CONFIGURED);
+  }
+
+  /**
+   * A new state class in this package whose simple name is {@code simpleName}, too long to write as
+   * a class in the source, and an instance of it. The registry does not know it.
+   */
+  private static AggregateState stateNamed(String simpleName) throws ReflectiveOperationException {
+    ClassDesc self = ClassDesc.of(EventAppendSupportTest.class.getPackageName() + "." + simpleName);
+    byte[] bytes =
+        ClassFile.of()
+            .build(
+                self,
+                cb ->
+                    cb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_FINAL)
+                        .withInterfaceSymbols(ClassDesc.of(AggregateState.class.getName()))
+                        .withMethodBody(
+                            ConstantDescs.INIT_NAME,
+                            ConstantDescs.MTD_void,
+                            ClassFile.ACC_PUBLIC,
+                            code ->
+                                code.aload(0)
+                                    .invokespecial(
+                                        ConstantDescs.CD_Object,
+                                        ConstantDescs.INIT_NAME,
+                                        ConstantDescs.MTD_void)
+                                    .return_()));
+    Class<?> type = MethodHandles.lookup().defineClass(bytes);
+    return (AggregateState) type.getDeclaredConstructor().newInstance();
   }
 
   private static <T> T thrower(RuntimeException e) {
