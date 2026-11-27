@@ -121,20 +121,28 @@ public class SseEventFeedLifecycle {
     logger.info("StreamRune: started SseEventFeed");
   }
 
-  public void onStop(@Observes ShutdownEvent event) {
+  // Before the application's own shutdown observers, as the compensation-retry sweepers
+  // (StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY): the feed only publishes to the
+  // endpoint's clients.
+  public void onStop(
+      @Observes @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
+          ShutdownEvent event) {
     stop();
   }
 
   /**
    * Stops the feed when the container shuts down, before it destroys any application-scoped bean:
    * after a failed start Quarkus fires no {@link ShutdownEvent} but still shuts the container down,
-   * see {@link StreamRuneLifecycle#stopBeforeDestroy}. After a {@link ShutdownEvent} there is
-   * nothing left to stop. {@code public} for the same reason as {@link #onStart}.
+   * see {@link StreamRuneLifecycle#stopBeforeDestroy}. Notified at the priority of {@link #onStop}.
+   * After a {@link ShutdownEvent} there is nothing left to stop. {@code public} for the same reason
+   * as {@link #onStart}.
    *
    * @param event the container's before-destroyed event
    */
   public void stopBeforeDestroy(
-      @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
+      @Observes(notifyObserver = Reception.IF_EXISTS)
+          @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY)
+          @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
     stop();
   }

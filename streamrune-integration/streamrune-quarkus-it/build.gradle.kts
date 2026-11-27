@@ -12,8 +12,9 @@ description =
 // the Quarkus plugin augments it and @QuarkusTest starts it the way `quarkusBuild` and
 // `quarkus-run.jar` would, static initialization included. streamrune-quarkus's own tests boot Arc
 // and Quarkus REST piece by piece and cannot see what only a full Quarkus start does: SmallRye's
-// refusal of an unmapped key under the mapping's prefix, and the configuration a bean created during
-// static initialization is given.
+// refusal of an unmapped key under the mapping's prefix, the configuration a bean created during
+// static initialization is given, and the container's shutdown after a start a startup observer
+// refuses (@QuarkusMainTest starts the application as its main method would).
 dependencies {
     testImplementation(enforcedPlatform(libs.quarkus.bom))
     testImplementation(project(":streamrune-integration:streamrune-quarkus"))

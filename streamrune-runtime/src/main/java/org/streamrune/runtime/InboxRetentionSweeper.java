@@ -82,11 +82,7 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
         interval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? interval : MAX_FAILURE_BACKOFF;
     this.pollLoop =
         new ResilientPollLoop(
-            NAME,
-            () -> !Thread.currentThread().isInterrupted(),
-            () -> interval,
-            interval,
-            maxBackoff);
+            NAME, this::isRunningOnItsThread, () -> interval, interval, maxBackoff);
   }
 
   /**
@@ -111,7 +107,21 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
           maxAge);
       return;
     }
-    thread = Thread.ofVirtual().name(NAME).start(this::loop);
+    Thread t = Thread.ofVirtual().name(NAME).unstarted(this::loop);
+    // Assigned before the thread starts: the loop runs only while it is this sweeper's thread.
+    thread = t;
+    t.start();
+  }
+
+  /**
+   * Whether the loop keeps running: on this sweeper's thread until {@link #close()} clears it, and
+   * not interrupted. The thread check stops the loop after a close whose interrupt a store
+   * swallowed (a pool, a driver or a wrapper that catches the interruption and returns normally),
+   * and a thread that outlived its close and a restart does not run beside the new one.
+   */
+  private boolean isRunningOnItsThread() {
+    Thread current = Thread.currentThread();
+    return thread == current && !current.isInterrupted();
   }
 
   private void loop() {
@@ -173,12 +183,15 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
    * this sweeper touches the store any more, with two exceptions: the wait timed out after 30 s or
    * the closing thread was interrupted while it waited (both log a WARN, and the sweep may still be
    * running), or close() ran on the sweep thread itself, from a store calling back, which returns
-   * at once without a WARN while that sweep finishes.
+   * at once without a WARN while that sweep finishes. A second close() that runs while the first
+   * one waits returns at once as well, without waiting for the sweep.
    */
   @Override
   public void close() {
-    RetentionSweeperThreads.stop(thread, NAME, closeJoinTimeoutMs);
+    Thread running = thread;
+    // Cleared before the interrupt: a sweep whose store swallows the interrupt still ends the loop.
     thread = null;
+    RetentionSweeperThreads.stop(running, NAME, closeJoinTimeoutMs);
     started.set(false);
   }
 

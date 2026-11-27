@@ -252,6 +252,38 @@ class SagaCompensationRetrySweeperDrainTest {
   }
 
   @Test
+  void aCloseDuringABatch_reDrivesNoFurtherSagaOfIt_evenWhenTheInterruptIsSwallowed() {
+    try (var p = new SagaStepLockFixture()) {
+      stuckEpisodes(p, 3);
+      p.refund.failure = null;
+      var sweeper = sweeper(p, p.sagaStore, 3).build();
+      var atTheFirstRefund = new CountDownLatch(1);
+      var swallowed = new AtomicBoolean();
+      p.bus.beforeEveryCommand =
+          command -> {
+            if (command instanceof Refund refund && refund.orderId().equals("1")) {
+              atTheFirstRefund.countDown();
+              long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+              while (!Thread.currentThread().isInterrupted() && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+              }
+              // A pool that catches the interruption and carries on clears the status.
+              swallowed.set(Thread.interrupted());
+            }
+          };
+
+      sweeper.start();
+      await(atTheFirstRefund);
+      sweeper.close();
+
+      assertThat(swallowed).isTrue();
+      assertThat(sweeper.isAlive()).isFalse();
+      assertThat(p.row("2").status()).isEqualTo(SagaStatus.COMPENSATING);
+      assertThat(p.row("3").status()).isEqualTo(SagaStatus.COMPENSATING);
+    }
+  }
+
+  @Test
   void aLeaseLostDuringTheDrain_startsNoFurtherBatch() {
     try (var p = new SagaStepLockFixture()) {
       stuckEpisodes(p, 3);

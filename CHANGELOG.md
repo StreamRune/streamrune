@@ -301,13 +301,26 @@ Changed
   dead-letter and saga dead-letter retention sweepers interrupt their thread and wait up to 30
   seconds for a running sweep to return, on PostgreSQL too, so a store closed after its sweeper is
   never written by a sweep that outlived the close. With all four mid-sweep, shutdown can take about
-  two minutes. A sweep that does not end in time logs a WARN.
+  two minutes. A sweep that does not end in time logs a WARN. A sweep whose store swallows the
+  interrupt (a pool or a driver that catches it and returns normally) ends the sweeper's thread
+  when it returns, instead of sleeping out the sweep interval. A saga compensation-retry sweeper
+  checks for a stop before every re-drive of a batch, not only between batches.
 - **Quarkus opens the backend's stores at startup.** With a `DataSource` (every Quarkus application
   with Agroal has one), the `BackendStores` bean is created by a startup observer that runs after
   the startup validators, on PostgreSQL too: the `CryptoEngine` lookup and its ambiguity check, the
   metrics and the tracing are resolved at startup instead of at the first use of a store. On
   PostgreSQL no database is touched. Micronaut checks the stores in a startup listener after its
   validators; Spring creates the bean with the other singletons.
+- **Quarkus stops the framework around the application's stop.** The framework's observers of
+  `ShutdownEvent` and of `@BeforeDestroyed(ApplicationScoped.class)`, which also stop the
+  framework's threads when the container shuts down after a refused start, run in two steps around
+  the application's observers at the default priority: at `Interceptor.Priority.LIBRARY_BEFORE +
+  100` the saga compensation-retry sweepers, which follow the lease of the saga's subscription, and
+  the SSE event feed stop; at `Interceptor.Priority.LIBRARY_AFTER + 500` `StreamRuneLifecycle`
+  stops its runners and then closes the subscription leadership and the command bus. A saga's
+  subscription the application stops on either event keeps its lease and the command bus until its
+  last batch ends, and a sweeper ends the re-drive in flight and starts no other before the
+  subscription gives the lease up.
 - **Spring health reads the head through the `EventStore` bean.** `StreamRuneHealthIndicator` reports
   `eventStore.lastGlobalOffset` from `EventStore.lastGlobalOffset()`, as the Quarkus and Micronaut
   checks do, instead of querying `event_stream` itself, so the detail is the same on every backend.

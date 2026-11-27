@@ -175,6 +175,11 @@ final class ResilientPollLoop {
             failedPollsInARow = 0;
           }
         }
+        // An owner that stopped the loop during the poll ends it here, before the idle sleep: a
+        // poll that swallowed the stop's interrupt would otherwise sleep the whole delay.
+        if (!keepRunning.getAsBoolean()) {
+          return;
+        }
         Thread.sleep(idleDelay.get());
       } catch (InterruptedException _) {
         Thread.currentThread().interrupt();

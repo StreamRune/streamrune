@@ -39,6 +39,17 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * ShutdownEvent}, it does the same when the container shuts down ({@link #stopBeforeDestroy}), with
  * {@link #stopOnDestroy()} as the fallback.
  *
+ * <p><b>Stop order.</b> CDI notifies the observers of one event in ascending priority, and an
+ * observer that sets none has {@code Interceptor.Priority.APPLICATION + 500}. The framework's stop
+ * observers of both events run in two steps around the application's own. At {@link
+ * #STOP_BEFORE_APPLICATION_PRIORITY}, before them, {@link SagaCompensationRetryLifecycle} stops the
+ * compensation-retry sweepers, which follow the lease of the saga's subscription the application
+ * stops, and {@link SseEventFeedLifecycle} stops the SSE event feed, which only publishes to the
+ * {@code SseEventPublisher}. At {@link #STOP_AFTER_APPLICATION_PRIORITY}, after them, this
+ * lifecycle stops its runners and then closes the shared leadership and the command bus. A
+ * subscription the application stops at a lower priority therefore still holds its lease and can
+ * still dispatch through the command bus until its last batch ends.
+ *
  * <p>The runner producers are dependent-scoped optional beans ({@link ProjectionProducer}, {@link
  * StreamRuneProducers}): when a feature is disabled or has no registrations, {@link Instance#get()}
  * yields {@code null} and that component is simply skipped. This bean is the single place that
@@ -49,6 +60,25 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
 public class StreamRuneLifecycle {
 
   private static final Logger logger = LoggerFactory.getLogger(StreamRuneLifecycle.class);
+
+  /**
+   * The priority the compensation-retry sweepers and the SSE event feed stop at, on the shutdown
+   * event and on the before-destroyed event: before the application's observers of those events. A
+   * sweeper of a saga whose subscription holds the lease follows that lease, and the application
+   * stops the subscription in its own observer, which gives the lease up: the sweeper stops first,
+   * ending the re-drive in flight and starting no other, so it does not re-drive a compensation
+   * after the lease is gone. The SSE feed only publishes to the {@code SseEventPublisher} and has
+   * no order to keep against the application.
+   */
+  static final int STOP_BEFORE_APPLICATION_PRIORITY = Interceptor.Priority.LIBRARY_BEFORE + 100;
+
+  /**
+   * The priority this lifecycle stops its runners at, then closes the shared {@link
+   * SubscriptionLeadership} and the {@link VirtualThreadCommandBus}: after the application's
+   * observers of the shutdown event and of the before-destroyed event, which may still use both
+   * while they stop what they started.
+   */
+  static final int STOP_AFTER_APPLICATION_PRIORITY = Interceptor.Priority.LIBRARY_AFTER + 500;
 
   private final Instance<MultiProjectionRunner> multiProjectionRunnerInstance;
   private final Instance<ScheduledProjectionRunner> scheduledProjectionRunnerInstance;
@@ -239,8 +269,9 @@ public class StreamRuneLifecycle {
         leadershipInstance.isUnsatisfied() ? null : LeadershipInstances.resolve(leadershipInstance);
   }
 
-  // public for the same cross-classloader reason as onStart.
-  public void onStop(@Observes ShutdownEvent event) {
+  // After the application's own shutdown observers (see the class javadoc). public for the same
+  // cross-classloader reason as onStart.
+  public void onStop(@Observes @Priority(STOP_AFTER_APPLICATION_PRIORITY) ShutdownEvent event) {
     stop();
   }
 
@@ -254,15 +285,18 @@ public class StreamRuneLifecycle {
    *
    * <p>Arc fires this event before it destroys any application-scoped bean, the application's
    * {@code DataSource} among them, and before the singleton context, where the backend stores close
-   * the leadership: the runners stop while what they use is still open. After a {@link
-   * ShutdownEvent} there is nothing left to stop. Notified only if this bean exists: a start
-   * refused before {@link #onStart} ran started nothing here. {@code public} for the same reason as
-   * {@link #onStart}.
+   * the leadership: the runners stop while what they use is still open. Notified at {@link
+   * #STOP_AFTER_APPLICATION_PRIORITY}, after the application's own before-destroyed observers, as
+   * on the shutdown event. After a {@link ShutdownEvent} there is nothing left to stop. Notified
+   * only if this bean exists: a start refused before {@link #onStart} ran started nothing here.
+   * {@code public} for the same reason as {@link #onStart}.
    *
    * @param event the container's before-destroyed event
    */
   public void stopBeforeDestroy(
-      @Observes(notifyObserver = Reception.IF_EXISTS) @BeforeDestroyed(ApplicationScoped.class)
+      @Observes(notifyObserver = Reception.IF_EXISTS)
+          @Priority(STOP_AFTER_APPLICATION_PRIORITY)
+          @BeforeDestroyed(ApplicationScoped.class)
           Object event) {
     stop();
   }
@@ -303,9 +337,11 @@ public class StreamRuneLifecycle {
     multiProjectionRunner = null;
 
     // Stop the renew heartbeat and resign the held leases AFTER every runner has stopped, so a
-    // runner never loses leadership mid-batch. The shutdown event and the before-destroyed event
-    // both come before the DataSource closes, so the resign still reaches the database (the
-    // @PreDestroy fallback may not).
+    // runner never loses leadership mid-batch: this lifecycle's runners above, the sweepers that
+    // retry compensations before the application's observers, and the application's own
+    // subscriptions in its observers. The shutdown event and the before-destroyed event both come
+    // before the DataSource closes, so the resign still reaches the database (the @PreDestroy
+    // fallback may not).
     closeQuietly(leadership, "SubscriptionLeadership");
     leadership = null;
 

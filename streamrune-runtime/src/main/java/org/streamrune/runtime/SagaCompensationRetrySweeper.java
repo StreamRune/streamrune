@@ -599,10 +599,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
 
   /**
    * One batch: the due sagas the store returns, each re-driven once unless the cycle has seen it
-   * already. Each batch reads the clock again for its cutoff and its give-up instant.
+   * already, until a stop is requested. Each batch reads the clock again for its cutoff and its
+   * give-up instant.
    *
-   * @return whether the cycle may query again at once: the batch came back full and at least one of
-   *     its re-drives ended the saga's episode
+   * @return whether the cycle may query again at once: the batch came back full, no stop was
+   *     requested and at least one of its re-drives ended the saga's episode
    */
   private boolean sweepBatch(Set<SagaId> seen, Set<SagaId> reDrivenThisCycle) {
     Instant now = clock.instant();
@@ -611,6 +612,11 @@ public final class SagaCompensationRetrySweeper<S extends SagaState> implements 
         sagaStore.findCompensating(sagaType, dueCutoff, batchSize);
     boolean ended = false;
     for (SagaStore.CompensatingSaga cs : due) {
+      // Checked before every re-drive, not only between batches: a close() must not wait for the
+      // rest of a batch, and on a virtual thread a connection pool can swallow its interrupt.
+      if (stopRequested()) {
+        return false;
+      }
       if (!seen.add(cs.sagaId())) {
         continue; // re-driven earlier in this cycle and left as it was: not twice in one cycle
       }

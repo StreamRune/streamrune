@@ -487,9 +487,10 @@ wrapped in `new UnboundRequestContextQueryBus(bus, StreamRuneRequestContextHolde
 `StreamRuneLifecycle` observes `StartupEvent` and starts whichever of these beans exist:
 `MultiProjectionRunner`, `ScheduledProjectionRunner`, `OutboxPoller`, the outbox, inbox, saga
 dead-letter and command dead-letter retention sweepers, and `DeadLetterRetryRunner`. On
-`ShutdownEvent` it closes them in reverse order, closes the subscription leadership and closes the
-`VirtualThreadCommandBus` if it was created. Do not
-inject the runner types directly — ask `StreamRuneLifecycle` for the running instances.
+`ShutdownEvent`, after the application's own observers of it (see "Stop order" below), it closes
+them in reverse order, closes the subscription leadership and closes the `VirtualThreadCommandBus`
+if it was created. Do not inject the runner types directly — ask `StreamRuneLifecycle` for the
+running instances.
 
 **A refused start stops them too.** Quarkus fires no `ShutdownEvent` after a failed start, for
 example when a startup check refuses it after the runners started (the saga parallelism check, or
@@ -501,16 +502,42 @@ pool is still open and resign their leases. In production the process exits eith
 mode and in a test JVM nothing the framework started outlives the failed start, and a live reload
 does not start a second set.
 
+**Stop order.** CDI notifies the observers of one event in ascending `@Priority`, and an observer
+that sets none, a method annotated `@io.quarkus.runtime.Shutdown` among them, has
+`Interceptor.Priority.APPLICATION + 500`. The framework's observers of `ShutdownEvent` and of
+`@BeforeDestroyed(ApplicationScoped.class)` run in two steps around yours:
+
+| Priority | What stops |
+|---|---|
+| `Interceptor.Priority.LIBRARY_BEFORE + 100` | The saga compensation-retry sweepers, before your observers: a sweeper of a saga whose subscription holds the lease follows that lease, and stops before your observer stops the subscription and gives the lease up: it ends the re-drive in flight and starts no other. The SSE event feed, which only publishes to the `SseEventPublisher` |
+| `Interceptor.Priority.LIBRARY_AFTER + 500` | `StreamRuneLifecycle`, after your observers: its runners in reverse order, then the subscription leadership (the renew heartbeat stops and the held leases are resigned) and the `VirtualThreadCommandBus` |
+
+Stop what you start in an observer at the default priority or at another value between the two: a
+saga's subscription, or any subscription built with the leadership, then still holds its lease and
+can still dispatch commands through the bus until its last batch ends, on a normal shutdown and
+after a refused start alike. An observer at `Interceptor.Priority.LIBRARY_AFTER + 500` runs before
+or after the framework's, in no fixed order, and one above it after the leadership and the bus
+closed. A `SagaTimeoutRunner` follows the lease of its saga's subscription: stop it before the
+subscription, in the same observer or in one at a lower priority, since two observers of one
+priority run in no fixed order.
+
+The framework's runners keep running while your observers run: the outbox poller still publishes,
+and the projection runners still read and write. Do not close in those observers what the runners
+use, such as the `OutboxPublisher`'s client, a `DataSource` or the client of a crypto engine; close
+it in its disposer or its `@PreDestroy` method, or in an observer above
+`Interceptor.Priority.LIBRARY_AFTER + 500`.
+
 **Stop what you start on `StartupEvent` the same way.** A subscription, a `SagaTimeoutRunner` or a
 runner the application builds in a `StartupEvent` observer and stops on `ShutdownEvent` outlives a
 refused start in dev mode and in a test JVM, and keeps using the closed container. Stop it as well
 from an observer of `@BeforeDestroyed(ApplicationScoped.class)` on an `@ApplicationScoped` bean
-(with `notifyObserver = Reception.IF_EXISTS`), as the framework does, and make the stop idempotent,
-since after a normal shutdown it runs after the `ShutdownEvent`. A `@PreDestroy` method is only a
-fallback: Arc destroys the application-scoped beans in no fixed order, so it may run after the
-`DataSource` closed (the lease's resign then fails and the lease lingers until its TTL), and a
-`@Singleton` bean's runs after every application-scoped bean is gone, in an order unspecified
-against the framework's stores.
+(with `notifyObserver = Reception.IF_EXISTS`), as the framework does, at a priority between the two
+of the table above. Make the stop idempotent, since after a normal shutdown it runs after the
+`ShutdownEvent`, and safe when nothing was started, since a start can be refused before your
+`StartupEvent` observer ran. A `@PreDestroy` method is only a fallback: Arc destroys the
+application-scoped beans in no fixed order, so it may run after the `DataSource` closed (the lease's resign then fails and
+the lease lingers until its TTL), and a `@Singleton` bean's runs after every application-scoped
+bean is gone, in an order unspecified against the framework's stores.
 
 **Your own runner replaces the framework's.** When the application declares its own bean of any of
 these runner types (a plain `@Produces DeadLetterRetryRunner`, say), the framework neither builds
