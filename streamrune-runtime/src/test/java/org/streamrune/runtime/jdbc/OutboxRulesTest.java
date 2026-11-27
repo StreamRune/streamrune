@@ -11,7 +11,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -290,7 +290,8 @@ class OutboxRulesTest {
     // Postgres: getTimestamp(column).toInstant() on SQL NULL.
     NullPointerException pg =
         assertThrows(NullPointerException.class, () -> readRow(pgLikeCodec(), false));
-    assertThat(pg.getMessage()).isNotEqualTo("createdAt is required");
+    assertThat(pg).isExactlyInstanceOf(NullPointerException.class);
+    assertThat(pg.getMessage()).as("the codec's bare NPE, not the entry's refusal").isNull();
     // SQLite: the column reads as null, and the entry refuses it.
     NullPointerException sqlite =
         assertThrows(NullPointerException.class, () -> readRow(outboxRowsCodec(), false));
@@ -303,7 +304,8 @@ class OutboxRulesTest {
 
     NullPointerException pg =
         assertThrows(NullPointerException.class, () -> readRow(pgLikeCodec(), false));
-    assertThat(pg.getMessage()).isNotEqualTo("skippedAt is required");
+    assertThat(pg).isExactlyInstanceOf(NullPointerException.class);
+    assertThat(pg.getMessage()).as("the codec's bare NPE, not the record's refusal").isNull();
     NullPointerException sqlite =
         assertThrows(NullPointerException.class, () -> readRow(outboxRowsCodec(), false));
     assertThat(sqlite).hasMessage("skippedAt is required");
@@ -395,8 +397,12 @@ class OutboxRulesTest {
       if (nullTolerantRequiredRead) {
         return value;
       }
-      Timestamp timestamp = value == null ? null : Timestamp.from(value);
-      return timestamp.toInstant();
+      if (value == null) {
+        // On purpose: pgjdbc's getTimestamp(column) is null for SQL NULL, and the Postgres codec's
+        // toInstant() on it fails with a bare NullPointerException, which this mirrors.
+        throw new NullPointerException();
+      }
+      return value;
     }
 
     @Override
@@ -544,7 +550,7 @@ class OutboxRulesTest {
   private static void setMicros(PreparedStatement ps, int index, Instant instant)
       throws SQLException {
     if (instant == null) {
-      ps.setNull(index, java.sql.Types.BIGINT);
+      ps.setNull(index, Types.BIGINT);
     } else {
       ps.setLong(index, micros(instant));
     }
