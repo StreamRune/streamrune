@@ -299,9 +299,9 @@ class DeadLetterReplaySafetyTest {
 
     // Long after every backoff of the default ladder has elapsed, the scheduled retry runs.
     h.runnerClock.advance(Duration.ofHours(2));
-    h.runner.processBatch();
+    h.runner.pollCycle();
     h.runnerClock.advance(Duration.ofHours(2));
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(150, h.units("p-1"), "the restock is applied once, not twice");
     assertEquals(0, h.onlyEntry().dlqAttempts(), "the entry waits for an operator, untouched");
@@ -314,7 +314,7 @@ class DeadLetterReplaySafetyTest {
     assertDeadLettered(() -> h.bus.execute(restock));
     h.bus.execute(restock);
 
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(
         200,
@@ -378,7 +378,7 @@ class DeadLetterReplaySafetyTest {
     assertDeadLettered(() -> h.bus.execute(restock, key));
 
     h.runnerClock.advance(Duration.ofHours(2));
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(150, h.units("p-1"));
     assertTrue(h.dlq.all().isEmpty(), "the keyed entry was replayed on the schedule");
@@ -397,7 +397,7 @@ class DeadLetterReplaySafetyTest {
     }
     h.publish("keyed-1", new AdjustStock("k-1", 7), Instant.now(), key("k-1"));
 
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(107, h.units("k-1"), "the keyed entry is replayed despite the backlog ahead");
     assertEquals(150, h.dlq.all().size(), "every unkeyed entry still waits for an operator");
@@ -449,7 +449,7 @@ class DeadLetterReplaySafetyTest {
             .build();
     h.publish("unkeyed-1", new AdjustStock("p-1", 50), Instant.now(), null);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     assertEquals(100, h.units("p-1"));
     assertEquals(0, h.onlyEntry().dlqAttempts());
@@ -461,8 +461,8 @@ class DeadLetterReplaySafetyTest {
     // Even a keyed entry: without an inbox its replay would run unkeyed, deduplicated by nothing.
     h.publish("keyed-1", new AdjustStock("p-1", 50), Instant.now(), key("k-1"));
 
-    h.runner.processBatch();
-    h.runner.processBatch();
+    h.runner.pollCycle();
+    h.runner.pollCycle();
 
     assertEquals(100, h.units("p-1"));
     assertEquals(0, h.onlyEntry().dlqAttempts());
@@ -502,7 +502,7 @@ class DeadLetterReplaySafetyTest {
             .registerCommand(AdjustStock.class)
             .build();
 
-    assertDoesNotThrow(runner::processBatch);
+    assertDoesNotThrow(runner::pollCycle);
   }
 
   // ── Keyed: the inbox window ───────────────────────────────────────────────────────────────────
@@ -557,7 +557,7 @@ class DeadLetterReplaySafetyTest {
     h.publish("stale", new AdjustStock("p-1", 50), now.minus(Duration.ofDays(8)), key("k-stale"));
     h.publish("fresh", new AdjustStock("p-2", 50), now.minus(Duration.ofDays(6)), key("k-fresh"));
 
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(100, h.units("p-1"), "the stale entry is not replayed on the schedule");
     assertEquals(150, h.units("p-2"), "the fresh keyed entry is replayed");
@@ -568,7 +568,7 @@ class DeadLetterReplaySafetyTest {
     assertTrue(
         h.metrics.staleBlocked.isEmpty(),
         "the schedule skips it like a not-due entry; it is counted by the gauge, not per cycle");
-    h.runner.processBatch();
+    h.runner.pollCycle();
     assertEquals(1, h.metrics.lastAwaiting(), "the stale entry awaits an operator");
   }
 
@@ -589,7 +589,7 @@ class DeadLetterReplaySafetyTest {
     h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
 
     for (int cycle = 0; cycle < 3; cycle++) {
-      h.runner.processBatch();
+      h.runner.pollCycle();
     }
 
     assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed in the first cycle");
@@ -616,7 +616,7 @@ class DeadLetterReplaySafetyTest {
     h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
 
     for (int cycle = 0; cycle < 3; cycle++) {
-      h.runner.processBatch();
+      h.runner.pollCycle();
     }
 
     assertEquals(150, h.units("f-1"), "the fresh keyed entry is replayed");
@@ -677,7 +677,7 @@ class DeadLetterReplaySafetyTest {
     h.runnerClock.advance(Duration.ofSeconds(1));
     h.publish("fresh", new AdjustStock("f-1", 50), h.runnerClock.instant(), key("k-fresh"));
 
-    runner.processBatch();
+    runner.pollCycle();
 
     assertEquals(150, h.units("f-1"));
     assertEquals(100, h.units("s-0"));
@@ -784,7 +784,7 @@ class DeadLetterReplaySafetyTest {
     // Fresh keyed: replayed on the schedule, never awaiting. Stale keyed: awaiting.
     h.publish("k-stale", new AdjustStock("k-1", 1), now.minus(Duration.ofDays(8)), key("k-s"));
 
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(3, h.metrics.lastAwaiting(), "two unkeyed and one stale keyed entry");
   }
@@ -806,7 +806,7 @@ class DeadLetterReplaySafetyTest {
             .build();
     h.publish("u-1", new AdjustStock("u-1", 1), h.runnerClock.instant(), null);
 
-    runner.processBatch();
+    runner.pollCycle();
 
     assertEquals(0, h.metrics.lastAwaiting(), "everything is replayed on the schedule");
   }
@@ -817,7 +817,7 @@ class DeadLetterReplaySafetyTest {
     h.publish("keyed-1", new AdjustStock("p-1", 1), Instant.now(), key("k-1"));
     h.publish("unkeyed-1", new AdjustStock("p-2", 1), Instant.now(), null);
 
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(2, h.metrics.lastAwaiting());
   }
@@ -866,8 +866,8 @@ class DeadLetterReplaySafetyTest {
             .registerCommand(AdjustStock.class)
             .build();
 
-    assertDoesNotThrow(runner::processBatch);
-    assertDoesNotThrow(runner::processBatch);
+    assertDoesNotThrow(runner::pollCycle);
+    assertDoesNotThrow(runner::pollCycle);
 
     assertEquals(1, counted.get(), "the sample is disabled after the first refusal");
     assertTrue(h.metrics.awaitingOperator.isEmpty());
@@ -918,7 +918,7 @@ class DeadLetterReplaySafetyTest {
         null);
 
     // AUTOMATIC replays it on the schedule whatever its age.
-    h.runner.processBatch();
+    h.runner.pollCycle();
 
     assertEquals(101, h.units("p-1"));
     assertTrue(h.dlq.all().isEmpty());

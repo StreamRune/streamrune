@@ -228,7 +228,7 @@ class DlqReplayKeyedIdempotencyTest {
 
     // (2) The retry runner replays the entry. The fault is gone, so it commits exactly one event —
     // under the ORIGINAL key — and discards the entry.
-    runner.processBatch();
+    runner.pollCycle();
 
     assertEquals(1, streamLength(backing, streamId), "the DLQ replay must commit the event once");
     assertTrue(dlq.all().isEmpty(), "a successful replay must discard the DLQ entry");

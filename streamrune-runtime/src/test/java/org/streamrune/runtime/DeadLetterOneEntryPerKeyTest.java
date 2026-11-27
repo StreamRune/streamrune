@@ -441,7 +441,7 @@ class DeadLetterOneEntryPerKeyTest {
                     DeadLetterRetryPolicy.UnkeyedReplay.OPERATOR_ONLY))
             .registerCommand(CounterCommand.class)
             .build();
-    runner.processBatch();
+    runner.pollCycle();
 
     assertThat(deadLetters.all()).isEmpty();
     var result = bus.execute(new Adjust("c-12", 5), key);

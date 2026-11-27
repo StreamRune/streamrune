@@ -12,6 +12,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
@@ -127,13 +130,24 @@ import org.streamrune.crypto.CryptoShreddingModule;
  * discard-per-policy — so it can never permanently occupy the oldest-first, batch-bounded retry
  * window and starve resolvable entries behind it. Nothing is executed for it.
  *
+ * <p><b>A cycle drains while batches come back full.</b> After a batch that replayed {@code
+ * batchSize} entries, or whose page came back full with an entry queued after it, and in which at
+ * least one replay succeeded, the runner reads the next batch at once instead of waiting {@code
+ * pollInterval}. A partial batch ends the cycle, and so does a batch in which every replay failed,
+ * a stop or an interrupt, a lost lease, and the drain budget of 10 poll intervals plus the batch in
+ * progress, measured on {@link System#nanoTime()}; the first cycle that reaches the budget and
+ * every tenth one after it log an INFO line. An entry replayed earlier in a cycle is not replayed
+ * again in it, however short its backoff. Within a batch the entries are replayed one after the
+ * other. The gauges are sampled once per cycle, at its start, so while a backlog drains they can be
+ * about 11 poll intervals old.
+ *
  * <p>A failure of the whole poll cycle (e.g. the dead letter queue being temporarily unreachable)
  * is logged and retried with capped exponential backoff — it never silently kills the retry thread.
  * {@link #isRunning()} reflects the actual liveness of the polling thread.
  *
  * <p><b>Single-active-consumer.</b> When a {@link SubscriptionLeadership} is configured (via {@link
  * Builder#leadership}), only the instance holding leadership for the fixed consumer name {@code
- * "dead-letter-retry"} polls and retries: {@link #processBatch()} calls {@link
+ * "dead-letter-retry"} polls and retries: {@link #pollCycle()} calls {@link
  * SubscriptionLeadership#tryAcquire} first and returns without reading a single entry when it is
  * not the leader. This closes the multi-replica double-execute hole that the {@link
  * org.streamrune.core.CommandInbox}-keyed replay only covers when an inbox is present: {@code FOR
@@ -267,6 +281,29 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   private final StreamRuneMetrics metrics;
   private final Duration inboxRetentionMaxAge;
   private final ResilientPollLoop pollLoop;
+
+  /**
+   * How many poll intervals one poll cycle may keep draining full batches before it yields to the
+   * schedule. Checked between batches, never inside one, and measured on {@link System#nanoTime()}
+   * whatever clock the builder was given.
+   */
+  static final int DRAIN_BUDGET_POLL_INTERVALS = 10;
+
+  /**
+   * How often, in consecutive cycles that reach their drain budget, the runner logs it at INFO: on
+   * the first such cycle and on every tenth after it; DEBUG otherwise.
+   */
+  private static final int BUDGET_YIELD_LOG_EVERY = 10;
+
+  /** {@link #DRAIN_BUDGET_POLL_INTERVALS} poll intervals in nanoseconds, saturated. */
+  private final long drainBudgetNanos;
+
+  /** The monotonic time the drain budget is measured on: System::nanoTime, or a test's ticker. */
+  private final LongSupplier drainTicker;
+
+  /** Consecutive cycles that ended on the drain budget; reset by one that ended otherwise. */
+  private final AtomicInteger budgetYieldStreak = new AtomicInteger();
+
   private final AtomicBoolean started = new AtomicBoolean(false);
   private final AtomicBoolean keyedReplayUnsupportedWarned = new AtomicBoolean(false);
   private final AtomicBoolean nothingAutomaticWarned = new AtomicBoolean(false);
@@ -299,8 +336,11 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       Clock clock,
       SubscriptionLeadership leadership,
       StreamRuneMetrics metrics,
-      Duration inboxRetentionMaxAge) {
+      Duration inboxRetentionMaxAge,
+      LongSupplier drainTicker) {
     this.deadLetterQueue = deadLetterQueue;
+    this.drainTicker = drainTicker;
+    this.drainBudgetNanos = drainBudgetNanos(pollInterval);
     this.commandBus = commandBus;
     this.objectMapper = objectMapper;
     this.policy = policy;
@@ -504,7 +544,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     try {
       // ResilientPollLoop logs cycle failures and retries with capped exponential backoff; it
       // exits only on close()/interrupt — a transient DLQ error never silently kills the runner.
-      pollLoop.run(this::processBatch);
+      pollLoop.run(this::pollCycle);
     } finally {
       // Keep isRunning() truthful even if the thread exits for any reason other than close().
       running = false;
@@ -516,7 +556,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
    * — bypassing the per-entry backoff window that the scheduled poll honours. The command is
    * re-dispatched through the bus under {@code DLQ_REPLAY} and the entry's original request
    * context, then discarded on success or have its attempt count bumped on failure, exactly like
-   * {@link #processBatch()}. This is a genuine re-execution, not a discard.
+   * {@link #pollCycle()}. This is a genuine re-execution, not a discard.
    *
    * <p>Without {@code force} this call refuses exactly the entries the schedule leaves to an
    * operator, leaving them unchanged: under {@link
@@ -633,8 +673,12 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     return outcome[0];
   }
 
-  /** Package-private for testing — processes one batch of retryable entries. */
-  void processBatch() {
+  /**
+   * Runs one poll cycle synchronously: the gauges, the leadership gate, then batch after batch of
+   * retryable entries while each comes back full and replayed at least one entry ({@link
+   * #processBatch}). Package-private for testing; production code uses {@link #start()}.
+   */
+  void pollCycle() {
     // Sample observability signals every cycle, on EVERY replica and BEFORE the
     // leadership gate — the DLQ depth is a global read-only count and the degradation gauge is this
     // replica's own liveness, so both must update regardless of who leads.
@@ -676,6 +720,41 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       }
       return;
     }
+    long cycleStart = drainTicker.getAsLong();
+    Set<CommandId> seen = new HashSet<>();
+    int batches = 1;
+    boolean budgetReached = false;
+    try {
+      while (processBatch(includeUnkeyed, seen)) {
+        // Between batches: a stop, an interrupt or a lost lease ends the cycle (a local check, not
+        // a new acquisition), and so does the drain budget.
+        if (stopRequested() || leadership.current(CONSUMER_NAME).isEmpty()) {
+          return;
+        }
+        if (drainTicker.getAsLong() - cycleStart >= drainBudgetNanos) {
+          budgetReached = true;
+          reportDrainBudgetReached(batches);
+          return;
+        }
+        batches++;
+      }
+    } finally {
+      if (!budgetReached) {
+        budgetYieldStreak.set(0);
+      }
+    }
+  }
+
+  /**
+   * Reads one page of retryable entries and replays up to {@code batchSize} due ones. Each batch
+   * reads the clock again.
+   *
+   * @param seen the entries replayed earlier in the cycle, skipped here; this batch adds its own
+   * @return whether the cycle may read the next batch at once: the batch was full — it replayed
+   *     {@code batchSize} entries, or its page came back full with an entry queued after it — and
+   *     at least one of its replays succeeded
+   */
+  private boolean processBatch(boolean includeUnkeyed, Set<CommandId> seen) {
     int fetchLimit = overfetchLimit(batchSize);
     Instant now = clock.instant();
     // The store leaves keyed entries past the inbox window out of the page too (the same boundary
@@ -691,6 +770,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     boolean queuedAfterThePage = read.size() > fetchLimit;
     var entries = queuedAfterThePage ? read.subList(0, fetchLimit) : read;
     int processed = 0;
+    int replayed = 0;
     int staleSkipped = 0;
     var readerBehind = new ReaderBehindTally();
     // Whether the loop stopped before the end of the page: the batch is full, or leadership moved.
@@ -729,7 +809,16 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
       if (!isDue(entry, now)) {
         continue;
       }
-      if (processEntry(entry, false, false, null, readerBehind) == RetryOutcome.READER_BEHIND) {
+      if (!seen.add(entry.commandId())) {
+        // Replayed earlier in this cycle and due again at once (a zero or near-zero backoff): not
+        // twice in one cycle, so the drain never walks an entry up its retry ladder back to back.
+        continue;
+      }
+      RetryOutcome outcome = processEntry(entry, false, false, null, readerBehind);
+      if (outcome == RetryOutcome.REPLAYED) {
+        replayed++;
+      }
+      if (outcome == RetryOutcome.READER_BEHIND) {
         // A replay that answers READER_BEHIND takes no slot of the batch: nothing was attempted
         // against the command, and counted, a batch's worth of such entries at the head of the
         // page would hold back the entries behind them in it. The page is over-fetched, so the
@@ -789,6 +878,52 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           inboxRetentionMaxAge,
           staleSkipped == 1 ? "it" : "them");
     }
+    boolean full = (stoppedEarly && processed >= batchSize) || queuedAfterThePage;
+    return full && replayed > 0;
+  }
+
+  /**
+   * Whether a {@link #close()} has asked the runner to stop, or the calling thread is interrupted.
+   * A runner that was never started is not stopping: a cycle a test drives runs to its end.
+   */
+  private boolean stopRequested() {
+    return (started.get() && !running) || Thread.currentThread().isInterrupted();
+  }
+
+  /**
+   * Logs a cycle that drained full batches until its budget: at INFO on the first of a streak of
+   * such cycles and on every {@value #BUDGET_YIELD_LOG_EVERY}th, so a runner that cannot keep up is
+   * visible in the logs as well as in {@code streamrune.dlq.pending}.
+   */
+  private void reportDrainBudgetReached(int batches) {
+    int streak = budgetYieldStreak.incrementAndGet();
+    if (streak == 1 || streak % BUDGET_YIELD_LOG_EVERY == 0) {
+      LOG.info(
+          "DeadLetterRetryRunner is draining a backlog at its full rate: {} consecutive poll"
+              + " cycle(s) reached the drain budget of {} poll intervals ({} full batches this"
+              + " cycle); the gauges are sampled once per cycle",
+          streak,
+          DRAIN_BUDGET_POLL_INTERVALS,
+          batches);
+    } else {
+      LOG.debug(
+          "DeadLetterRetryRunner drained {} full batches and reached its drain budget ({}"
+              + " consecutive cycles); yielding to the schedule",
+          batches,
+          streak);
+    }
+  }
+
+  /**
+   * {@link #DRAIN_BUDGET_POLL_INTERVALS} times {@code pollInterval} in nanoseconds, or {@link
+   * Long#MAX_VALUE} when the product does not fit.
+   */
+  private static long drainBudgetNanos(Duration pollInterval) {
+    try {
+      return pollInterval.multipliedBy(DRAIN_BUDGET_POLL_INTERVALS).toNanos();
+    } catch (ArithmeticException _) {
+      return Long.MAX_VALUE;
+    }
   }
 
   /**
@@ -831,7 +966,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
   /**
    * Reports {@code streamrune.dlq.awaiting_operator}: the entries the schedule will never replay
    * and that are not exhausted. Which entries those are follows the same rules as {@link
-   * #processBatch()}: under {@code OPERATOR_ONLY} every unkeyed entry — and, on a bus without a
+   * #pollCycle()}: under {@code OPERATOR_ONLY} every unkeyed entry — and, on a bus without a
    * command inbox, every keyed one too — and, with an inbox window, every keyed entry first
    * received before {@code now - window} ({@link #isStaleKeyedReplay}). Degrades like the depth
    * gauge: a store without {@link DeadLetterQueue#countAwaitingOperator} disables the sample after
@@ -1136,7 +1271,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
         // the command — for a failure that is not the command's. No attempt is counted.
         // Counted for every such replay; logged per entry at INFO for an operator's retry, and at
         // DEBUG on the schedule, which meets the same entries on every poll of the rollout and
-        // states them in one line per poll (processBatch).
+        // states them in one line per batch (processBatch).
         EventSchemaAheadException behind = schemaAheadCause(e);
         recordMetric(
             "recordDeadLetterReaderBehind",
@@ -1886,6 +2021,7 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
     private SubscriptionLeadership leadership = SubscriptionLeadership.NOOP;
     private StreamRuneMetrics metrics = StreamRuneMetrics.NOOP;
     private Duration inboxRetentionMaxAge;
+    private LongSupplier drainTicker = System::nanoTime;
 
     public Builder deadLetterQueue(DeadLetterQueue deadLetterQueue) {
       this.deadLetterQueue = deadLetterQueue;
@@ -1964,6 +2100,15 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
      */
     public Builder clock(Clock clock) {
       this.clock = clock;
+      return this;
+    }
+
+    /**
+     * Overrides the monotonic time the drain budget is measured on; for tests. Production uses
+     * {@link System#nanoTime()}.
+     */
+    Builder drainTicker(LongSupplier drainTicker) {
+      this.drainTicker = Objects.requireNonNull(drainTicker, "drainTicker is required");
       return this;
     }
 
@@ -2066,7 +2211,8 @@ public final class DeadLetterRetryRunner implements AutoCloseable {
           clock,
           leadership,
           metrics,
-          inboxRetentionMaxAge);
+          inboxRetentionMaxAge,
+          drainTicker);
     }
   }
 }

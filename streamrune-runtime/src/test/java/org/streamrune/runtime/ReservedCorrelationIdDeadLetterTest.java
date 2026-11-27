@@ -289,8 +289,8 @@ class ReservedCorrelationIdDeadLetterTest {
             .pollInterval(Duration.ofMinutes(1))
             .registerCommand(Charge.class)
             .build()) {
-      replay.processBatch();
-      replay.processBatch();
+      replay.pollCycle();
+      replay.pollCycle();
     }
 
     assertThat(eventStore.readGlobalStream(GlobalOffset.initial(), 10)).isEmpty();
