@@ -26,6 +26,7 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-integration/streamrune-integration-api` | What the three integrations share: metrics, request identity, startup validators | no |
 | `streamrune-integration/streamrune-spring`, `streamrune-quarkus`, `streamrune-micronaut` | The three integrations | yes |
 | `streamrune-integration/streamrune-spring-boot-starter` | The Spring Boot starter: dependencies only, no sources | — |
+| `streamrune-integration/streamrune-quarkus-it` | A Quarkus application built and started by the Quarkus Gradle plugin on `streamrune-quarkus`, Quarkus REST and Agroal: what only a full Quarkus start shows (configuration validation, static initialization); not published | yes |
 | `streamrune-integration/streamrune-e2e` | End-to-end crash-recovery and broker suites, not published | yes |
 | `streamrune-integration/streamrune-integration-tck` | What the three integrations' tests share: the wiring contract each of them runs, the configuration oracle and the doc reading of their doc-lint tests; not published | no |
 | `streamrune-outbox/streamrune-kafka-outbox`, `streamrune-rabbitmq-outbox` | Transactional outbox publishers for Kafka and RabbitMQ | yes |
@@ -73,9 +74,9 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   from `PostgresTestImage.NAME` (`gradle/test-support/`), and `verifyPostgresTestImage`, part of
   `check`, fails the build on a test that names an image of its own.
 - **Coverage gate.** `check` fails a module below 0.80 instruction or 0.80 branch coverage
-  (`streamrune-spring-boot-starter` is exempt; `streamrune-e2e` has no main sources). A build that
-  fails after all its tests passed has usually failed this gate; the module's report is
-  `build/reports/jacoco/test/html/index.html`.
+  (`streamrune-spring-boot-starter` is exempt; `streamrune-e2e` and `streamrune-quarkus-it` have
+  no main sources). A build that fails after all its tests passed has usually failed this gate;
+  the module's report is `build/reports/jacoco/test/html/index.html`.
 - **Test summary.** Every test task writes `<module>/build/test-summary.txt` (for a test task not
   named `test`: `test-summary-<task>.txt`): the totals, one line per failure (the test, the first
   line of its exception, joined with the lines after it when it ends in a colon as an AssertJ

@@ -352,11 +352,32 @@ Unreleased changes to crypto erasure on PostgreSQL (Changed):
   used with `validateSchema(false)`, now fails the erasure; the shipped crypto baseline and the DDL
   of the `streamrune-postgres-crypto` README have it.
 
+Unreleased fixes to the Quarkus integration (Fixed):
+
+- **Projection keys in a file or a system property.** `streamrune.projections.<name>.enabled`,
+  `streamrune.projections.<name>.error-strategy` and `streamrune.projections.auto-discovery.enabled`
+  are accepted in `application.properties` and as a `-D` system property, where SmallRye refused
+  them (`SRCFG00050 … does not map to any root`): the configuration mapping declares the keys under
+  `streamrune.projections.` (`StreamRuneQuarkusProperties#projections()`). A key there set anywhere
+  but the process environment or a `.env` file fails the start, naming it, unless it is
+  `auto-discovery.enabled`, or `<name>.enabled` or `<name>.error-strategy` for the name of a
+  `@ProjectionConfig` projection bean (`ProjectionKeysValidator`; off with
+  `quarkus.config.mapping.validate-unknown=false`, like SmallRye's own refusal).
+- **Quarkus REST applications start.** An application with `quarkus-rest` passes its static
+  initialization, which failed with `SRCFG00027: Could not find a mapping for
+  StreamRuneQuarkusProperties`: Quarkus REST creates `StreamRuneRequestFilter` while the
+  application initializes statically, and the filter reads `streamrune.metadata.baggage-allowlist`, the `RequestIdentityPolicy` and the
+  `UserRoleResolver` when the first request arrives, from the runtime configuration — in a native
+  image too, where `streamrune.security.trust-user-id-header` is the running application's setting,
+  not the build's. Its injecting constructor takes `Instance`s of the three.
+
 ### Modules
 
 Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
-aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the two test projects, which are not published:
-`streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites) and
+aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the three test projects, which are not published:
+`streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites),
+`streamrune-integration:streamrune-quarkus-it` (a Quarkus application the Quarkus Gradle plugin
+builds and starts on `streamrune-quarkus`) and
 `streamrune-integration:streamrune-integration-tck` (the wiring contract, the configuration oracle
 and the doc reading that the tests of the three integrations share). The artifact id is the project
 name. Each jar declares a stable JPMS module name (four ship a `module-info.java`, the

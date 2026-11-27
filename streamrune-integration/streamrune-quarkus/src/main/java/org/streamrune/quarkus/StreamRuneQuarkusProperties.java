@@ -130,6 +130,19 @@ public interface StreamRuneQuarkusProperties {
    */
   SubscriptionConfig subscription();
 
+  /**
+   * Every key under {@code streamrune.projections.}, as written after that prefix, to its text:
+   * {@code streamrune.projections.orders.enabled=false} is the entry {@code orders.enabled} with
+   * {@code false}. Declared so that the configuration accepts the keys the projection discovery
+   * reads by name — {@code streamrune.projections.auto-discovery.enabled}, {@code
+   * streamrune.projections.<name>.enabled} and {@code streamrune.projections.<name>.error-strategy}
+   * — from a file or a system property: SmallRye refuses a key under {@code streamrune} that no
+   * member of this mapping declares. The discovery reads the values by those names from the
+   * configuration, not from this map; {@link ProjectionKeysValidator} refuses the start for any
+   * other key here.
+   */
+  Map<String, Optional<String>> projections();
+
   /** GDPR configuration of the produced {@code ForgetSubjectService}, {@code streamrune.gdpr.*}. */
   GdprConfig gdpr();
 

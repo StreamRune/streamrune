@@ -148,6 +148,11 @@ class StreamRuneLifecycleOrderingTest {
     assertTrue(
         identityValidator < lifecycleStart,
         "StreamRuneRequestIdentityValidator must run before StreamRuneLifecycle.onStart");
+    // A projection key the discovery does not read refuses the start before a runner starts.
+    int projectionKeys = priorityOf(ProjectionKeysValidator.class, "validate");
+    assertTrue(
+        projectionKeys < lifecycleStart,
+        "ProjectionKeysValidator must run before StreamRuneLifecycle.onStart");
     // The projection indexes are declared before any runner reads or writes a read model.
     int indexDeclarer = priorityOf(ProjectionIndexDeclarer.class, "declare");
     assertTrue(

@@ -486,7 +486,7 @@ public class ProjectionProducer {
    * Walks the class hierarchy to find {@link ProjectionConfig}, supporting CDI-proxied beans where
    * the annotation may be on a superclass.
    */
-  private static ProjectionConfig findProjectionConfig(Class<?> clazz) {
+  static ProjectionConfig findProjectionConfig(Class<?> clazz) {
     while (clazz != null && clazz != Object.class) {
       ProjectionConfig pc = clazz.getAnnotation(ProjectionConfig.class);
       if (pc != null) {

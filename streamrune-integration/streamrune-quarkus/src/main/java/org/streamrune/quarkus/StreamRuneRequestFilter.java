@@ -138,9 +138,40 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
   private static final RequestIdentityPolicy ANONYMOUS = RequestIdentityPolicy.of(null, false);
 
   private final StreamRuneRequestContextHolder holder;
-  private final Set<String> extraAllowedBaggageKeys;
-  private final RequestIdentityPolicy identityPolicy;
-  private final UserRoleResolver userRoleResolver;
+
+  /**
+   * Reads the {@link Settings} from the runtime configuration and the beans; {@code null} for a
+   * filter built with its settings.
+   */
+  private final Supplier<Settings> settingsReader;
+
+  /** Guards the first read of {@link #settings}. */
+  private final Object settingsLock = new Object();
+
+  /** The settings every request is built with: read once, when the first request arrives. */
+  private volatile Settings settings;
+
+  /**
+   * What a request context is built with.
+   *
+   * @param extraAllowedBaggageKeys the OTel baggage keys copied into the context
+   * @param identityPolicy where the request identity and role come from
+   * @param userRoleResolver the role resolver whose authority is captured at the request edge, or
+   *     {@code null}
+   */
+  private record Settings(
+      Set<String> extraAllowedBaggageKeys,
+      RequestIdentityPolicy identityPolicy,
+      UserRoleResolver userRoleResolver) {
+
+    private Settings {
+      if (identityPolicy == null) {
+        throw new IllegalArgumentException("identityPolicy is required");
+      }
+      extraAllowedBaggageKeys =
+          extraAllowedBaggageKeys == null ? Set.of() : extraAllowedBaggageKeys;
+    }
+  }
 
   /**
    * Creates the filter with no allowlisted baggage key. Its identity policy is {@link
@@ -162,6 +193,14 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * application's {@link RequestIdentityPolicy} bean. This is the constructor Quarkus/Arc uses for
    * dependency injection.
    *
+   * <p>Quarkus REST creates its filters while the application initializes statically, before the
+   * runtime configuration exists: there, the configuration holds only the mappings marked
+   * {@code @StaticInitSafe}, and in a native image it is the configuration of the build. So the
+   * constructor reads nothing: the allowlist, the identity policy and the role resolver are looked
+   * up when the first request arrives, from the runtime configuration — {@code
+   * streamrune.security.trust-user-id-header} is the setting of the running application, never the
+   * one the image was built with — and kept for every later request.
+   *
    * @param holder the request-scoped context holder
    * @param properties the bound StreamRune Quarkus properties
    * @param identityPolicy where the request identity and role come from (authenticated principal,
@@ -170,24 +209,26 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
    * @param userRoleResolver the configured role resolver; the caller's authority is captured at the
    *     request edge only when it is resolvable and declares {@link
    *     UserRoleResolver#requiresRequestContext()}
-   * @throws IllegalArgumentException if {@code identityPolicy} is {@code null}
    */
   @Inject
   public StreamRuneRequestFilter(
       StreamRuneRequestContextHolder holder,
-      StreamRuneQuarkusProperties properties,
-      RequestIdentityPolicy identityPolicy,
+      Instance<StreamRuneQuarkusProperties> properties,
+      Instance<RequestIdentityPolicy> identityPolicy,
       Instance<UserRoleResolver> userRoleResolver) {
-    this(
-        holder,
-        Set.copyOf(properties.metadata().baggageAllowlist().orElse(java.util.List.of())),
-        identityPolicy,
-        // The SAME resolver bean the
-        // AnnotationAuthorizationInterceptor is produced with, so the authority captured at the
-        // request edge is byte-identical to the one a synchronous execute would have computed.
-        userRoleResolver != null && userRoleResolver.isResolvable()
-            ? userRoleResolver.get()
-            : null);
+    this.holder = holder;
+    this.settingsReader =
+        () ->
+            new Settings(
+                Set.copyOf(properties.get().metadata().baggageAllowlist().orElse(List.of())),
+                identityPolicy.get(),
+                // The SAME resolver bean the
+                // AnnotationAuthorizationInterceptor is produced with, so the authority captured at
+                // the request edge is byte-identical to the one a synchronous execute would have
+                // computed.
+                userRoleResolver != null && userRoleResolver.isResolvable()
+                    ? userRoleResolver.get()
+                    : null);
   }
 
   StreamRuneRequestFilter(
@@ -195,25 +236,43 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
       Set<String> extraAllowedBaggageKeys,
       RequestIdentityPolicy identityPolicy,
       UserRoleResolver userRoleResolver) {
-    if (identityPolicy == null) {
-      throw new IllegalArgumentException("identityPolicy is required");
-    }
     this.holder = holder;
-    this.extraAllowedBaggageKeys =
-        extraAllowedBaggageKeys == null ? Set.of() : extraAllowedBaggageKeys;
-    this.identityPolicy = identityPolicy;
-    this.userRoleResolver = userRoleResolver;
+    this.settingsReader = null;
+    this.settings = new Settings(extraAllowedBaggageKeys, identityPolicy, userRoleResolver);
+  }
+
+  /**
+   * The settings, read by the first request that needs them. A read that fails is not kept: the
+   * request fails, and the next one reads again.
+   */
+  private Settings settings() {
+    Settings read = settings;
+    if (read == null) {
+      synchronized (settingsLock) {
+        read = settings;
+        if (read == null) {
+          read = settingsReader.get();
+          settings = read;
+        }
+      }
+    }
+    return read;
   }
 
   @Override
   public void filter(ContainerRequestContext requestContext) {
+    Settings current = settings();
+    RequestIdentityPolicy identityPolicy = current.identityPolicy();
+    UserRoleResolver userRoleResolver = current.userRoleResolver();
     UserId userId =
-        resolveUserId(headerValues(requestContext, RequestIdentityPolicy.USER_ID_HEADER));
+        identityPolicy.resolve(
+            headerValues(requestContext, RequestIdentityPolicy.USER_ID_HEADER),
+            StreamRuneRequestFilter::logMismatch);
     // Baggage `role` is the X-User-Role header behind a trusted gateway only, never a
     // client's W3C baggage entry — every value read, like X-User-Id, so a repeated header is none.
     var baggage =
         identityPolicy.applyRole(
-            BaggageAllowlist.filter(readOtelBaggage(), extraAllowedBaggageKeys),
+            BaggageAllowlist.filter(readOtelBaggage(), current.extraAllowedBaggageKeys()),
             headerValues(requestContext, RequestIdentityPolicy.USER_ROLE_HEADER));
     StreamRuneContext.RequestContext ctx;
     try {
@@ -254,14 +313,6 @@ public class StreamRuneRequestFilter implements ContainerRequestFilter {
                     e));
     requestContext.setProperty(CONTEXT_PROPERTY, ctx);
     holder.set(ctx);
-  }
-
-  /**
-   * Resolves the authorization identity for the request through the {@link RequestIdentityPolicy}
-   * (no header identity unless the trusted-gateway mode is explicit).
-   */
-  private UserId resolveUserId(List<String> userIdHeaderValues) {
-    return identityPolicy.resolve(userIdHeaderValues, StreamRuneRequestFilter::logMismatch);
   }
 
   /**

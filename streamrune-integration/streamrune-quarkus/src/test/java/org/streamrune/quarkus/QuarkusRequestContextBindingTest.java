@@ -211,8 +211,8 @@ class QuarkusRequestContextBindingTest {
               List.of(
                   new StreamRuneRequestFilter(
                       arc.container().instance(StreamRuneRequestContextHolder.class).get(),
-                      arc.container().instance(StreamRuneQuarkusProperties.class).get(),
-                      arc.container().instance(RequestIdentityPolicy.class).get(),
+                      arc.container().select(StreamRuneQuarkusProperties.class),
+                      arc.container().select(RequestIdentityPolicy.class),
                       arc.container().select(UserRoleResolver.class))),
               new ArcThreadSetupAction(arc.container().requestContext()));
     } catch (Exception e) {

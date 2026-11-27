@@ -8,6 +8,11 @@ public class org.streamrune.quarkus.CryptoForgetListenHealthRegistrar
 public class org.streamrune.quarkus.ProjectionIndexDeclarer
   public <init>()
 
+public class org.streamrune.quarkus.ProjectionKeysValidator
+  protected <init>()
+  public <init>(org.streamrune.quarkus.StreamRuneQuarkusProperties, jakarta.enterprise.inject.Instance<org.eclipse.microprofile.config.Config>, jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>)
+  public void validate(io.quarkus.runtime.StartupEvent)
+
 public class org.streamrune.quarkus.ProjectionProducer
   public <init>()
   public org.streamrune.runtime.InlineProjectionInterceptor inlineProjectionInterceptor(jakarta.enterprise.inject.Instance<org.streamrune.core.projection.Projection>, org.eclipse.microprofile.config.Config, jakarta.enterprise.inject.Instance<org.streamrune.core.StreamRuneMetrics>, org.streamrune.core.tracing.StreamRuneTracing)
@@ -262,6 +267,7 @@ public interface org.streamrune.quarkus.StreamRuneQuarkusProperties
   public abstract java.time.Duration pollingInterval()
   public abstract java.time.Duration pollingJitter()
   public abstract java.time.Duration retryInitialDelay()
+  public abstract java.util.Map<java.lang.String, java.util.Optional<java.lang.String>> projections()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$DeadLetterConfig deadLetter()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$EventStoreConfig eventStore()
   public abstract org.streamrune.quarkus.StreamRuneQuarkusProperties$GdprConfig gdpr()
@@ -381,7 +387,7 @@ public class org.streamrune.quarkus.StreamRuneRequestContextHolder
 
 public class org.streamrune.quarkus.StreamRuneRequestFilter implements jakarta.ws.rs.container.ContainerRequestFilter
   public <init>(org.streamrune.quarkus.StreamRuneRequestContextHolder)
-  public <init>(org.streamrune.quarkus.StreamRuneRequestContextHolder, org.streamrune.quarkus.StreamRuneQuarkusProperties, org.streamrune.integration.RequestIdentityPolicy, jakarta.enterprise.inject.Instance<org.streamrune.core.UserRoleResolver>)
+  public <init>(org.streamrune.quarkus.StreamRuneRequestContextHolder, jakarta.enterprise.inject.Instance<org.streamrune.quarkus.StreamRuneQuarkusProperties>, jakarta.enterprise.inject.Instance<org.streamrune.integration.RequestIdentityPolicy>, jakarta.enterprise.inject.Instance<org.streamrune.core.UserRoleResolver>)
   public static <T> T callWithContext(org.streamrune.core.StreamRuneContext$RequestContext, java.util.function.Supplier<T>)
   public static final java.lang.String CONTEXT_PROPERTY = "org.streamrune.quarkus.requestContext"
   public static void withContext(org.streamrune.core.StreamRuneContext$RequestContext, java.lang.Runnable)
