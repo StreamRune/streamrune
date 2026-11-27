@@ -697,7 +697,7 @@ public final class RabbitMqOutboxPublisher implements OutboxPublisher {
   @Override
   public FailureKind classifyFailure(Exception failure) {
     // Bounded walk (depth 50) so a self-referential/cyclic cause chain
-    // terminates instead of spinning forever, matching PostgresEventStore.hasCryptoCause.
+    // terminates instead of spinning forever, matching EventReadPath.hasCryptoCause.
     Throwable c = failure;
     for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
       if (c instanceof UnroutableException || c instanceof UnpublishableEntryException) {

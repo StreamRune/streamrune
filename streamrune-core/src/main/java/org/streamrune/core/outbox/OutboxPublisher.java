@@ -159,7 +159,7 @@ public interface OutboxPublisher {
    * not a per-entry broker rejection. Walks the cause chain with both a self-reference guard and a
    * depth bound: the self-cause guard alone only catches a 1-node self-cycle, not a longer cycle
    * (e.g. a -&gt; b -&gt; a), which would otherwise spin forever. Bounded to depth 50, matching
-   * {@code PostgresEventStore.hasCryptoCause}.
+   * {@code EventReadPath.hasCryptoCause}.
    */
   private static boolean isInterruption(Throwable ex) {
     Throwable t = ex;
