@@ -22,9 +22,9 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
-import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.OutboxRules;
 import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
@@ -68,6 +68,10 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * <p>Lease reclaim: a relay that crashes after claiming leaves rows stuck in {@code IN_PROGRESS}.
  * Each {@link #loadPending} call first resets claims older than the configured lease back to {@code
  * PENDING} so another instance can pick them up.
+ *
+ * <p>The argument checks, the strict channel's stream refusal, the trace-link bind, the refusal of
+ * a {@code FAILED} delete and the decoding of the rows read are {@link OutboxRules}'s; this store
+ * keeps its statements, binds, transactions, the database clock and the claim order.
  */
 public final class PostgresOutboxStore implements OutboxStore {
 
@@ -428,12 +432,7 @@ public final class PostgresOutboxStore implements OutboxStore {
     if (dataSource == null) {
       throw new IllegalArgumentException("dataSource is required");
     }
-    if (claimLease == null || claimLease.isZero() || claimLease.isNegative()) {
-      throw new IllegalArgumentException("claimLease must be positive");
-    }
-    if (orderingMode == null) {
-      throw new IllegalArgumentException("orderingMode is required");
-    }
+    OutboxRules.requireOptions(claimLease, orderingMode);
     this.dataSource = dataSource;
     this.claimLease = claimLease;
     this.orderingMode = orderingMode;
@@ -446,26 +445,20 @@ public final class PostgresOutboxStore implements OutboxStore {
     return orderingMode;
   }
 
-  /** A strict channel refuses a null stream before any write, unwrapped. */
-  private void requireStreamIfStrict(OutboxEntry entry) {
-    if (orderingMode == OutboxOrderingMode.STRICT_PER_AGGREGATE && entry.streamId() == null) {
-      throw new OutboxOrderingViolationException(entry.id(), entry.payloadType());
-    }
-  }
-
   @Override
   public void save(OutboxEntry entry) {
     if (entry == null) {
       throw new IllegalArgumentException("entry is required");
     }
-    requireStreamIfStrict(entry); // strict-mode stream check, before the try: surfaces unwrapped
+    // strict-mode stream check, before the try: surfaces unwrapped
+    OutboxRules.requireStreamIfStrict(orderingMode, entry);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(INSERT)) {
       ps.setString(1, entry.id().value());
       ps.setString(2, entry.payload());
       ps.setString(3, entry.payloadType());
       StreamKeys.bind(ps, 4, entry.streamId());
-      bindTraceLink(ps, 6, entry.traceLink());
+      OutboxRules.bindTraceLink(ps, 6, entry.traceLink());
       PostgresTransactions.commitIfManual(conn, "outbox save", c -> ps.executeUpdate());
     } catch (Exception e) {
       throw new EventStoreException(
@@ -496,8 +489,8 @@ public final class PostgresOutboxStore implements OutboxStore {
       return;
     }
     for (OutboxEntry entry : entries) {
-      requireStreamIfStrict(
-          entry); // strict-mode stream check over the whole batch before any addBatch
+      // strict-mode stream check over the whole batch before any addBatch
+      OutboxRules.requireStreamIfStrict(orderingMode, entry);
     }
     try (PreparedStatement ps = conn.prepareStatement(INSERT)) {
       for (OutboxEntry entry : entries) {
@@ -505,7 +498,7 @@ public final class PostgresOutboxStore implements OutboxStore {
         ps.setString(2, entry.payload());
         ps.setString(3, entry.payloadType());
         StreamKeys.bind(ps, 4, entry.streamId());
-        bindTraceLink(ps, 6, entry.traceLink());
+        OutboxRules.bindTraceLink(ps, 6, entry.traceLink());
         ps.addBatch();
       }
       ps.executeBatch();
@@ -524,9 +517,7 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   @Override
   public List<OutboxEntry> loadPending(int limit) {
-    if (limit < 1) {
-      throw new IllegalArgumentException("limit must be >= 1");
-    }
+    OutboxRules.requireClaimLimit(limit);
     try (Connection conn = dataSource.getConnection()) {
       return PostgresTransactions.commitIfManual(
           conn,
@@ -539,7 +530,7 @@ public final class PostgresOutboxStore implements OutboxStore {
               try (ResultSet rs = ps.executeQuery()) {
                 List<OutboxEntry> result = new ArrayList<>();
                 while (rs.next()) {
-                  result.add(mapRow(rs, true));
+                  result.add(OutboxRules.mapRow(rs, PostgresInstantCodec.INSTANCE, true));
                 }
                 return result;
               }
@@ -626,9 +617,7 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean markDelivered(OutboxEntryId id, String claimedBy) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_DELIVERED)) {
       ps.setString(1, id.value());
@@ -645,9 +634,7 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(OutboxEntryId id, int attempts, String error, String claimedBy) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(MARK_FAILED)) {
       ps.setInt(1, attempts);
@@ -671,9 +658,7 @@ public final class PostgresOutboxStore implements OutboxStore {
    */
   @Override
   public void delete(OutboxEntryId id) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection()) {
       try (PreparedStatement ps = conn.prepareStatement(DELETE_NON_FAILED)) {
         ps.setString(1, id.value());
@@ -689,11 +674,7 @@ public final class PostgresOutboxStore implements OutboxStore {
         ps.setString(1, id.value());
         try (ResultSet rs = ps.executeQuery()) {
           if (rs.next()) {
-            throw new IllegalStateException(
-                "outbox entry "
-                    + LogSanitizer.sanitizeForLog(id.value())
-                    + " is FAILED; resolve it with OutboxFailedReplayer.skip or .replay — delete"
-                    + " would release its aggregate with no record");
+            throw OutboxRules.deleteRefusal(id);
           }
         }
       }
@@ -708,9 +689,7 @@ public final class PostgresOutboxStore implements OutboxStore {
   @Override
   public boolean markRetry(
       OutboxEntryId id, int attempts, String error, Duration backoff, String claimedBy) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     if (backoff == null) {
       throw new IllegalArgumentException("backoff is required");
     }
@@ -809,9 +788,7 @@ public final class PostgresOutboxStore implements OutboxStore {
     if (status == null) {
       throw new IllegalArgumentException("status is required");
     }
-    if (limit < 1) {
-      throw new IllegalArgumentException("limit must be >= 1");
-    }
+    OutboxRules.requireClaimLimit(limit);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_STATUS)) {
       ps.setString(1, status.name());
@@ -819,64 +796,13 @@ public final class PostgresOutboxStore implements OutboxStore {
       try (ResultSet rs = ps.executeQuery()) {
         List<OutboxEntry> result = new ArrayList<>();
         while (rs.next()) {
-          result.add(mapRow(rs, false));
+          result.add(OutboxRules.mapRow(rs, PostgresInstantCodec.INSTANCE, false));
         }
         return result;
       }
     } catch (Exception e) {
       throw new EventStoreException("Failed to find outbox entries by status: " + status, e);
     }
-  }
-
-  /**
-   * Binds {@code link} to the {@code trace_id} and {@code span_id} parameters at {@code index} and
-   * {@code index + 1}: both ids when they are valid W3C ids, two {@code NULL}s for {@link
-   * SpanLink#NONE} or ids that are not valid, so the columns hold only ids a tracing library
-   * accepts.
-   */
-  private static void bindTraceLink(PreparedStatement ps, int index, SpanLink link)
-      throws SQLException {
-    boolean valid = link.isPresent() && link.isW3c();
-    ps.setString(index, valid ? link.traceId().value() : null);
-    ps.setString(index + 1, valid ? link.spanId().value() : null);
-  }
-
-  /**
-   * The one row mapper for every outbox SELECT ({@code ENTRY_COLUMNS} and both claim statements'
-   * {@code RETURNING} lists name the same columns). {@code claimed} rows report a {@code null}
-   * {@code processedAt}: a claim leaves the column untouched, and a replayed row still carries the
-   * stamp of its earlier {@code FAILED}, which is not this claim's outcome. The skip audit is read
-   * iff the row is {@code SKIPPED} (enforced by the {@link OutboxEntry} invariant). {@code NULL}
-   * trace columns, or a stored trace id or span id that is not a valid W3C id, read back as {@link
-   * SpanLink#NONE} rather than an exception, so a corrupt value never stops the entry's delivery.
-   */
-  private static OutboxEntry mapRow(ResultSet rs, boolean claimed) throws SQLException {
-    var status = OutboxStatus.valueOf(rs.getString("status"));
-    var processedAtTs = claimed ? null : rs.getTimestamp("processed_at");
-    var nextRetryAtTs = rs.getTimestamp("next_retry_at");
-    OutboxEntry.SkipRecord skip = null;
-    if (status == OutboxStatus.SKIPPED) {
-      skip =
-          new OutboxEntry.SkipRecord(
-              rs.getTimestamp("skipped_at").toInstant(),
-              rs.getString("skipped_by"),
-              rs.getString("skip_reason"));
-    }
-    return new OutboxEntry(
-        OutboxEntryId.of(rs.getString("entry_id")),
-        rs.getString("payload"),
-        rs.getString("payload_type"),
-        // The decode door — the lenient constructors, never the ingress factories — so a stored
-        // stream carrying a control character still reads back.
-        StreamKeys.read(rs),
-        status,
-        rs.getInt("attempts"),
-        rs.getString("last_error"),
-        rs.getTimestamp("created_at").toInstant(),
-        processedAtTs != null ? processedAtTs.toInstant() : null,
-        nextRetryAtTs != null ? nextRetryAtTs.toInstant() : null,
-        skip,
-        SpanLink.ofW3c(rs.getString("trace_id"), rs.getString("span_id")));
   }
 
   @Override
@@ -898,9 +824,7 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean resetFailedToPending(OutboxEntryId id) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(RESET_FAILED_TO_PENDING)) {
       ps.setString(1, id.value());
@@ -917,14 +841,14 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public Optional<OutboxEntry> findById(OutboxEntryId id) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_ID)) {
       ps.setString(1, id.value());
       try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? Optional.of(mapRow(rs, false)) : Optional.empty();
+        return rs.next()
+            ? Optional.of(OutboxRules.mapRow(rs, PostgresInstantCodec.INSTANCE, false))
+            : Optional.empty();
       }
     } catch (Exception e) {
       throw new EventStoreException(
@@ -934,9 +858,7 @@ public final class PostgresOutboxStore implements OutboxStore {
 
   @Override
   public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
+    OutboxRules.requireId(id);
     if (skippedBy == null) {
       throw new IllegalArgumentException("skippedBy is required");
     }
