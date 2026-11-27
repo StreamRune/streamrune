@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link PostgresOutboxStore#isBenignInflightUniqueViolation} walked the cause chain via {@code
  * getCause()} with NO cycle guard at all — a self-referential/cyclic chain would spin forever.
- * Bounded to depth 50, mirroring {@code PostgresEventStore#hasCryptoCause}/{@code
- * isRetryableConflict}. Pure unit test — no PostgreSQL container needed.
+ * Bounded to depth 50, mirroring {@code EventReadPath#hasCryptoCause}/{@code isRetryableConflict}.
+ * Pure unit test — no PostgreSQL container needed.
  */
 class PostgresOutboxStoreCauseChainTest {
 
