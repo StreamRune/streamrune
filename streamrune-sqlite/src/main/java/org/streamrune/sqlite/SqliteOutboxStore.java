@@ -25,8 +25,8 @@ import org.streamrune.core.outbox.OutboxOrderingMode;
 import org.streamrune.core.outbox.OutboxOrderingViolationException;
 import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
-import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.runtime.jdbc.OutboxRules;
 import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
@@ -69,6 +69,10 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * nothing; any other storage failure is an {@link EventStoreException} with the Postgres store's
  * message. A connection handed out in manual-commit mode is refused with {@link
  * IllegalStateException} before anything is written, as every SQLite store refuses it.
+ *
+ * <p>The argument checks, the strict channel's stream refusal, the trace-link bind, the refusal of
+ * a {@code FAILED} delete and the decoding of the rows read are {@link OutboxRules}'s; this store
+ * keeps its statements, binds, write transactions, the JVM clock and the claim order.
  */
 public final class SqliteOutboxStore implements OutboxStore {
 
@@ -284,12 +288,7 @@ public final class SqliteOutboxStore implements OutboxStore {
     if (database == null) {
       throw new IllegalArgumentException("database is required");
     }
-    if (claimLease == null || claimLease.isZero() || claimLease.isNegative()) {
-      throw new IllegalArgumentException("claimLease must be positive");
-    }
-    if (orderingMode == null) {
-      throw new IllegalArgumentException("orderingMode is required");
-    }
+    OutboxRules.requireOptions(claimLease, orderingMode);
     if (clock == null) {
       throw new IllegalArgumentException("clock is required");
     }
@@ -323,13 +322,6 @@ public final class SqliteOutboxStore implements OutboxStore {
     return claimLease;
   }
 
-  /** A strict channel refuses a null stream before any write, unwrapped. */
-  private void requireStreamIfStrict(OutboxEntry entry) {
-    if (orderingMode == OutboxOrderingMode.STRICT_PER_AGGREGATE && entry.streamId() == null) {
-      throw new OutboxOrderingViolationException(entry.id(), entry.payloadType());
-    }
-  }
-
   private long now() {
     return SqliteTimestamps.toMicros(clock.instant());
   }
@@ -339,7 +331,7 @@ public final class SqliteOutboxStore implements OutboxStore {
     if (entry == null) {
       throw new IllegalArgumentException("entry is required");
     }
-    requireStreamIfStrict(entry);
+    OutboxRules.requireStreamIfStrict(orderingMode, entry);
     String shown = shown(entry.id());
     write(
         "outbox save",
@@ -373,7 +365,7 @@ public final class SqliteOutboxStore implements OutboxStore {
       return;
     }
     for (OutboxEntry entry : entries) {
-      requireStreamIfStrict(entry);
+      OutboxRules.requireStreamIfStrict(orderingMode, entry);
     }
     try {
       insert(conn, entries);
@@ -390,7 +382,7 @@ public final class SqliteOutboxStore implements OutboxStore {
         ps.setString(2, entry.payload());
         ps.setString(3, entry.payloadType());
         StreamKeys.bind(ps, 4, entry.streamId());
-        bindTraceLink(ps, 6, entry.traceLink());
+        OutboxRules.bindTraceLink(ps, 6, entry.traceLink());
         ps.setLong(8, createdAt);
         ps.addBatch();
       }
@@ -405,9 +397,7 @@ public final class SqliteOutboxStore implements OutboxStore {
    */
   @Override
   public List<OutboxEntry> loadPending(int limit) {
-    if (limit < 1) {
-      throw new IllegalArgumentException("limit must be >= 1");
-    }
+    OutboxRules.requireClaimLimit(limit);
     return write(
         "outbox claim",
         "outbox claim",
@@ -425,7 +415,10 @@ public final class SqliteOutboxStore implements OutboxStore {
             ps.setString(3, claimedBy);
             try (ResultSet rs = ps.executeQuery()) {
               while (rs.next()) {
-                claimed.add(new ClaimedRow(rs.getLong("seq"), mapRow(rs, true)));
+                claimed.add(
+                    new ClaimedRow(
+                        rs.getLong("seq"),
+                        OutboxRules.mapRow(rs, SqliteInstantCodec.OUTBOX_ROWS, true)));
               }
             }
           }
@@ -439,7 +432,7 @@ public final class SqliteOutboxStore implements OutboxStore {
 
   @Override
   public boolean markDelivered(OutboxEntryId id, String claimedBy) {
-    requireId(id);
+    OutboxRules.requireId(id);
     String shown = shown(id);
     return write(
             "outbox mark delivered",
@@ -458,7 +451,7 @@ public final class SqliteOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(OutboxEntryId id, int attempts, String error, String claimedBy) {
-    requireId(id);
+    OutboxRules.requireId(id);
     String shown = shown(id);
     return write(
             "outbox mark failed",
@@ -487,7 +480,7 @@ public final class SqliteOutboxStore implements OutboxStore {
   @Override
   public boolean markRetry(
       OutboxEntryId id, int attempts, String error, Duration backoff, String claimedBy) {
-    requireId(id);
+    OutboxRules.requireId(id);
     if (backoff == null) {
       throw new IllegalArgumentException("backoff is required");
     }
@@ -591,7 +584,7 @@ public final class SqliteOutboxStore implements OutboxStore {
    */
   @Override
   public void delete(OutboxEntryId id) {
-    requireId(id);
+    OutboxRules.requireId(id);
     String shown = shown(id);
     boolean refused =
         write(
@@ -613,11 +606,7 @@ public final class SqliteOutboxStore implements OutboxStore {
               }
             });
     if (refused) {
-      throw new IllegalStateException(
-          "outbox entry "
-              + shown
-              + " is FAILED; resolve it with OutboxFailedReplayer.skip or .replay — delete would"
-              + " release its aggregate with no record");
+      throw OutboxRules.deleteRefusal(id);
     }
   }
 
@@ -688,9 +677,7 @@ public final class SqliteOutboxStore implements OutboxStore {
     if (status == null) {
       throw new IllegalArgumentException("status is required");
     }
-    if (limit < 1) {
-      throw new IllegalArgumentException("limit must be >= 1");
-    }
+    OutboxRules.requireClaimLimit(limit);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_STATUS)) {
       ps.setString(1, status.name());
@@ -698,7 +685,7 @@ public final class SqliteOutboxStore implements OutboxStore {
       try (ResultSet rs = ps.executeQuery()) {
         List<OutboxEntry> result = new ArrayList<>();
         while (rs.next()) {
-          result.add(mapRow(rs, false));
+          result.add(OutboxRules.mapRow(rs, SqliteInstantCodec.OUTBOX_ROWS, false));
         }
         return result;
       }
@@ -709,12 +696,14 @@ public final class SqliteOutboxStore implements OutboxStore {
 
   @Override
   public Optional<OutboxEntry> findById(OutboxEntryId id) {
-    requireId(id);
+    OutboxRules.requireId(id);
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_ID)) {
       ps.setString(1, id.value());
       try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? Optional.of(mapRow(rs, false)) : Optional.empty();
+        return rs.next()
+            ? Optional.of(OutboxRules.mapRow(rs, SqliteInstantCodec.OUTBOX_ROWS, false))
+            : Optional.empty();
       }
     } catch (Exception e) {
       throw new EventStoreException("Failed to find outbox entry: " + shown(id), e);
@@ -740,7 +729,7 @@ public final class SqliteOutboxStore implements OutboxStore {
 
   @Override
   public boolean resetFailedToPending(OutboxEntryId id) {
-    requireId(id);
+    OutboxRules.requireId(id);
     String shown = shown(id);
     return write(
             "outbox reset failed",
@@ -757,7 +746,7 @@ public final class SqliteOutboxStore implements OutboxStore {
 
   @Override
   public boolean skipFailed(OutboxEntryId id, String skippedBy, String reason) {
-    requireId(id);
+    OutboxRules.requireId(id);
     if (skippedBy == null) {
       throw new IllegalArgumentException("skippedBy is required");
     }
@@ -802,61 +791,8 @@ public final class SqliteOutboxStore implements OutboxStore {
     return SqliteTransactions.write(dataSource, transaction, what, failureMessage, work);
   }
 
-  private static void requireId(OutboxEntryId id) {
-    if (id == null) {
-      throw new IllegalArgumentException("id is required");
-    }
-  }
-
   /** An entry id rendered for a message: caller text, so sanitized. */
   private static String shown(OutboxEntryId id) {
     return LogSanitizer.sanitizeForLog(id.value());
-  }
-
-  /**
-   * Binds {@code link} to {@code trace_id} and {@code span_id} at {@code index} and {@code index +
-   * 1}: both ids when they are valid W3C ids, two {@code NULL}s otherwise, as on Postgres.
-   */
-  private static void bindTraceLink(PreparedStatement ps, int index, SpanLink link)
-      throws SQLException {
-    boolean valid = link.isPresent() && link.isW3c();
-    ps.setString(index, valid ? link.traceId().value() : null);
-    ps.setString(index + 1, valid ? link.spanId().value() : null);
-  }
-
-  /**
-   * The one row mapper of every outbox read, as on Postgres: a {@code claimed} row reports no
-   * {@code processedAt} (a replayed row still carries the stamp of its earlier {@code FAILED}), the
-   * skip audit is read iff the row is {@code SKIPPED}, and a stored trace id or span id that is not
-   * a valid W3C id reads back as {@link SpanLink#NONE}.
-   */
-  private static OutboxEntry mapRow(ResultSet rs, boolean claimed) throws SQLException {
-    var status = OutboxStatus.valueOf(rs.getString("status"));
-    OutboxEntry.SkipRecord skip = null;
-    if (status == OutboxStatus.SKIPPED) {
-      skip =
-          new OutboxEntry.SkipRecord(
-              instantOrNull(rs, "skipped_at"),
-              rs.getString("skipped_by"),
-              rs.getString("skip_reason"));
-    }
-    return new OutboxEntry(
-        OutboxEntryId.of(rs.getString("entry_id")),
-        rs.getString("payload"),
-        rs.getString("payload_type"),
-        StreamKeys.read(rs),
-        status,
-        rs.getInt("attempts"),
-        rs.getString("last_error"),
-        instantOrNull(rs, "created_at"),
-        claimed ? null : instantOrNull(rs, "processed_at"),
-        instantOrNull(rs, "next_retry_at"),
-        skip,
-        SpanLink.ofW3c(rs.getString("trace_id"), rs.getString("span_id")));
-  }
-
-  private static Instant instantOrNull(ResultSet rs, String column) throws SQLException {
-    long micros = rs.getLong(column);
-    return rs.wasNull() ? null : SqliteTimestamps.fromMicros(micros);
   }
 }
