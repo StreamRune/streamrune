@@ -11,7 +11,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.streamrune.core.ConnectionFailureClassifier;
@@ -30,6 +29,7 @@ import org.streamrune.core.types.EventId;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.SagaType;
 import org.streamrune.crypto.CryptoShreddingModule;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * PostgreSQL-backed {@link SagaStore}. Persists saga state as JSONB in the {@code saga_state} table
@@ -445,13 +445,7 @@ public final class PostgresSagaStore implements SagaStore {
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    Objects.requireNonNull(metrics, "metrics is required");
-    var mapper = new ObjectMapper();
-    mapper.registerModule(new JavaTimeModule());
-    if (cryptoEngine != null) {
-      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
-    }
-    return mapper;
+    return StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
   }
 
   /**

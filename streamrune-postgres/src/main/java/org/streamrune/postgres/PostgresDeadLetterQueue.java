@@ -14,6 +14,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.TraceId;
 import org.streamrune.core.types.UserId;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL-backed {@link DeadLetterQueue}. Stores failed commands in a {@code dead_letter_queue}
@@ -177,7 +178,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
       ps.setString(1, request.commandId().value());
       ps.setString(2, request.commandType());
       ps.setString(3, request.commandPayload());
-      PostgresStreamKeys.bind(ps, 4, request.streamId());
+      StreamKeys.bind(ps, 4, request.streamId());
       ps.setString(6, request.errorType());
       ps.setString(7, request.errorMessage());
       ps.setInt(8, request.attempts());
@@ -405,7 +406,7 @@ public final class PostgresDeadLetterQueue implements DeadLetterQueue {
         // The decode door — the lenient constructors, never the ingress factories: a stored
         // stream carrying a control character must still read back, or this row would throw
         // inside every read page that reached it.
-        PostgresStreamKeys.read(rs),
+        StreamKeys.read(rs),
         rs.getString("error_type"),
         rs.getString("error_message"),
         rs.getInt("attempts"),
