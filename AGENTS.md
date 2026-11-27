@@ -163,16 +163,16 @@ Gradle provisions the Java 25 toolchain; running Gradle itself needs JDK 17 or n
   `testApiSurfaceCheck`, part of `check` and `quickCheck`, runs `ApiSurfaceCheckTest.java` beside
   it on compiled fixtures.
 - **Twin backends.** `streamrune-postgres` and `streamrune-sqlite`, and their crypto modules,
-  implement the same stores, and part of their logic exists once per backend: the event read path
-  is mirrored by hand. The stream keys (`StreamKeys`), the object mappers (`StoreObjectMappers`),
-  the cause walker (`Causes`) and the checkpoint fence's decisions (`CheckpointFenceRules`) live once
-  in `org.streamrune.runtime.jdbc`; each backend's fence keeps its own statements and lock, and
-  each backend supplies its `JdbcInstantCodec` for timestamps and flags. The crypto cipher with its self-check and retries (`VerifiedCipher`),
-  the v1 wire format (`AesGcmV1Format`) and the JDBC key store and forgotten-subject SQL
-  (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in `streamrune-crypto-api`; each
-  backend supplies only its `JdbcCryptoDialect`. A change to the logic of a
-  store of one backend is mirrored in its twin of the other backend in the same pull request, in
-  either direction, or the pull request says why the twin needs none. A behaviour both must share
+  implement the same stores; the event read path is still mirrored by hand in each. The stream keys
+  (`StreamKeys`), the object mappers (`StoreObjectMappers`), the cause walker (`Causes`) and the
+  checkpoint fence's decisions (`CheckpointFenceRules`) live once in `org.streamrune.runtime.jdbc`;
+  each backend's fence keeps its own statements and lock, and each backend supplies its
+  `JdbcInstantCodec` for timestamps and flags. The crypto cipher with its self-check and retries
+  (`VerifiedCipher`), the v1 wire format (`AesGcmV1Format`) and the JDBC key store and
+  forgotten-subject SQL (`JdbcSubjectKeyStore`, `JdbcForgottenSubjects`) live once in
+  `streamrune-crypto-api`; each backend supplies only its `JdbcCryptoDialect`. A change to the logic
+  of a store of one backend is mirrored in its twin of the other backend in the same pull request,
+  in either direction, or the pull request says why the twin needs none. A behaviour both must share
   gets a case in the store's contract suite in `streamrune-test`, which runs on both.
 - **Build scripts and the configuration cache.** Code that runs at execution time (`doLast`,
   `onlyIf`, a test listener) captures plain values computed at configuration time, never `project`
