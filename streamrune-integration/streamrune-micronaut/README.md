@@ -126,8 +126,8 @@ streamrune:
 **A refused start.** Some startup checks run after the runners started: the saga parallelism check,
 at `Ordered.LOWEST_PRECEDENCE`, and a `StartupEvent` listener of your own ordered after the
 framework's lifecycles (`getOrder()` above 1100) that throws. Micronaut then leaves the context neither
-running nor stoppable: `ApplicationContext.stop()` and `close()` do nothing on a context that is
-not running, so no `ShutdownEvent` is published, no `@PreDestroy` method runs, and the runners
+running nor stoppable: `ApplicationContext.stop()` and `close()` on a context that is not running
+publish no `ShutdownEvent` and destroy no bean, so no `@PreDestroy` method runs and the runners
 started before the refusal keep running. `Micronaut.run` exits the process on a failed start, so a
 deployed application is not affected. A JVM that lives on is: a test with the `test` environment
 active, where `Micronaut.run` throws `ApplicationStartupException` instead of exiting, or a test

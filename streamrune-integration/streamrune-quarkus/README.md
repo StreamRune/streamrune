@@ -509,7 +509,7 @@ that sets none, a method annotated `@io.quarkus.runtime.Shutdown` among them, ha
 
 | Priority | What stops |
 |---|---|
-| `Interceptor.Priority.LIBRARY_BEFORE + 100` | The saga compensation-retry sweepers, before your observers: a sweeper of a saga whose subscription holds the lease follows that lease, and stops before your observer stops the subscription and gives the lease up. The SSE event feed, which only publishes to the endpoint's clients |
+| `Interceptor.Priority.LIBRARY_BEFORE + 100` | The saga compensation-retry sweepers, before your observers: a sweeper of a saga whose subscription holds the lease follows that lease, and stops before your observer stops the subscription and gives the lease up: it ends the re-drive in flight and starts no other. The SSE event feed, which only publishes to the `SseEventPublisher` |
 | `Interceptor.Priority.LIBRARY_AFTER + 500` | `StreamRuneLifecycle`, after your observers: its runners in reverse order, then the subscription leadership (the renew heartbeat stops and the held leases are resigned) and the `VirtualThreadCommandBus` |
 
 Stop what you start in an observer at the default priority or at another value between the two: a
@@ -532,10 +532,10 @@ runner the application builds in a `StartupEvent` observer and stops on `Shutdow
 refused start in dev mode and in a test JVM, and keeps using the closed container. Stop it as well
 from an observer of `@BeforeDestroyed(ApplicationScoped.class)` on an `@ApplicationScoped` bean
 (with `notifyObserver = Reception.IF_EXISTS`), as the framework does, at a priority between the two
-of the table above. Make the stop idempotent, since after a normal shutdown it runs after the `ShutdownEvent`,
-and safe when nothing was started, since a start can be refused before your `StartupEvent`
-observer ran. A `@PreDestroy` method is only a fallback: Arc destroys the application-scoped beans
-in no fixed order, so it may run after the `DataSource` closed (the lease's resign then fails and
+of the table above. Make the stop idempotent, since after a normal shutdown it runs after the
+`ShutdownEvent`, and safe when nothing was started, since a start can be refused before your
+`StartupEvent` observer ran. A `@PreDestroy` method is only a fallback: Arc destroys the
+application-scoped beans in no fixed order, so it may run after the `DataSource` closed (the lease's resign then fails and
 the lease lingers until its TTL), and a `@Singleton` bean's runs after every application-scoped
 bean is gone, in an order unspecified against the framework's stores.
 

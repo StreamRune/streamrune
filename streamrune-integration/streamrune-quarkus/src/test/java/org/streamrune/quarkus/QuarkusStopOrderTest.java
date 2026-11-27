@@ -35,11 +35,11 @@ import org.streamrune.test.ScriptedSubscriptionLeadership;
  *
  * <p>Each test boots a real Arc container with the framework's three runner owners, a leadership
  * bean and an application bean that takes a lease at startup. The application bean observes each
- * stop event three times: at {@code Interceptor.Priority.APPLICATION}, at the default priority and
- * at {@code Interceptor.Priority.LIBRARY_AFTER + 300}, so the order is proved at both ends of the
- * range the framework leaves the application, whatever CDI does with observers of one priority.
- * Each time it records whether its lease is still held, whether the bus is still open and whether
- * the threads of the sweeper and of the feed have ended.
+ * stop event three times: one step after the framework's first step, at the default priority and
+ * one step before the framework's second step, so the order is proved at both ends of the range the
+ * framework leaves the application, whatever CDI does with observers of one priority. Each time it
+ * records whether its lease is still held, whether the bus is still open and whether the threads of
+ * the sweeper and of the feed have ended.
  */
 class QuarkusStopOrderTest {
 
@@ -79,7 +79,8 @@ class QuarkusStopOrderTest {
     }
 
     public void stopEarly(
-        @Observes @Priority(Interceptor.Priority.APPLICATION) ShutdownEvent event) {
+        @Observes @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY + 1)
+            ShutdownEvent event) {
       record("shutdown, early");
     }
 
@@ -88,13 +89,14 @@ class QuarkusStopOrderTest {
     }
 
     public void stopLate(
-        @Observes @Priority(Interceptor.Priority.LIBRARY_AFTER + 300) ShutdownEvent event) {
+        @Observes @Priority(StreamRuneLifecycle.STOP_AFTER_APPLICATION_PRIORITY - 1)
+            ShutdownEvent event) {
       record("shutdown, late");
     }
 
     public void stopBeforeDestroyEarly(
         @Observes(notifyObserver = Reception.IF_EXISTS)
-            @Priority(Interceptor.Priority.APPLICATION)
+            @Priority(StreamRuneLifecycle.STOP_BEFORE_APPLICATION_PRIORITY + 1)
             @BeforeDestroyed(ApplicationScoped.class)
             Object event) {
       record("before-destroyed, early");
@@ -108,7 +110,7 @@ class QuarkusStopOrderTest {
 
     public void stopBeforeDestroyLate(
         @Observes(notifyObserver = Reception.IF_EXISTS)
-            @Priority(Interceptor.Priority.LIBRARY_AFTER + 300)
+            @Priority(StreamRuneLifecycle.STOP_AFTER_APPLICATION_PRIORITY - 1)
             @BeforeDestroyed(ApplicationScoped.class)
             Object event) {
       record("before-destroyed, late");

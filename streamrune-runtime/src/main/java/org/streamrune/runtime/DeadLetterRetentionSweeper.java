@@ -187,7 +187,8 @@ public final class DeadLetterRetentionSweeper implements RetentionSweeper {
    * this sweeper touches the store any more, with two exceptions: the wait timed out after 30 s or
    * the closing thread was interrupted while it waited (both log a WARN, and the sweep may still be
    * running), or close() ran on the sweep thread itself, from a store calling back, which returns
-   * at once without a WARN while that sweep finishes.
+   * at once without a WARN while that sweep finishes. A second close() that runs while the first
+   * one waits returns at once as well, without waiting for the sweep.
    */
   @Override
   public void close() {

@@ -26,6 +26,7 @@ final class VirtualThreads {
   static boolean isFramework(String name) {
     return name.startsWith("streamrune-")
         || name.startsWith("projection-")
+        || name.startsWith("scheduled-projection-")
         || name.startsWith("saga-")
         || name.endsWith("-retention-sweeper")
         || name.equals("outbox-poller");

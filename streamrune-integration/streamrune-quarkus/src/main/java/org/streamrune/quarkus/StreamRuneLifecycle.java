@@ -44,11 +44,11 @@ import org.streamrune.runtime.VirtualThreadCommandBus;
  * observers of both events run in two steps around the application's own. At {@link
  * #STOP_BEFORE_APPLICATION_PRIORITY}, before them, {@link SagaCompensationRetryLifecycle} stops the
  * compensation-retry sweepers, which follow the lease of the saga's subscription the application
- * stops, and {@link SseEventFeedLifecycle} stops the SSE event feed, which nothing of the
- * application reads. At {@link #STOP_AFTER_APPLICATION_PRIORITY}, after them, this lifecycle stops
- * its runners and then closes the shared leadership and the command bus. A subscription the
- * application stops at a lower priority therefore still holds its lease and can still dispatch
- * through the command bus until its last batch ends.
+ * stops, and {@link SseEventFeedLifecycle} stops the SSE event feed, which only publishes to the
+ * {@code SseEventPublisher}. At {@link #STOP_AFTER_APPLICATION_PRIORITY}, after them, this
+ * lifecycle stops its runners and then closes the shared leadership and the command bus. A
+ * subscription the application stops at a lower priority therefore still holds its lease and can
+ * still dispatch through the command bus until its last batch ends.
  *
  * <p>The runner producers are dependent-scoped optional beans ({@link ProjectionProducer}, {@link
  * StreamRuneProducers}): when a feature is disabled or has no registrations, {@link Instance#get()}
@@ -66,8 +66,9 @@ public class StreamRuneLifecycle {
    * event and on the before-destroyed event: before the application's observers of those events. A
    * sweeper of a saga whose subscription holds the lease follows that lease, and the application
    * stops the subscription in its own observer, which gives the lease up: the sweeper stops first,
-   * so it never re-drives a compensation after the lease is gone. The SSE feed only publishes to
-   * the endpoint's clients and has no order to keep against the application.
+   * ending the re-drive in flight and starting no other, so it does not re-drive a compensation
+   * after the lease is gone. The SSE feed only publishes to the {@code SseEventPublisher} and has
+   * no order to keep against the application.
    */
   static final int STOP_BEFORE_APPLICATION_PRIORITY = Interceptor.Priority.LIBRARY_BEFORE + 100;
 
@@ -336,11 +337,11 @@ public class StreamRuneLifecycle {
     multiProjectionRunner = null;
 
     // Stop the renew heartbeat and resign the held leases AFTER every runner has stopped, so a
-    // runner never loses leadership mid-batch: this lifecycle's runners above, the
-    // compensation-retry
-    // sweepers before the application's observers, and the application's own subscriptions in its
-    // observers. The shutdown event and the before-destroyed event both come before the DataSource
-    // closes, so the resign still reaches the database (the @PreDestroy fallback may not).
+    // runner never loses leadership mid-batch: this lifecycle's runners above, the sweepers that
+    // retry compensations before the application's observers, and the application's own
+    // subscriptions in its observers. The shutdown event and the before-destroyed event both come
+    // before the DataSource closes, so the resign still reaches the database (the @PreDestroy
+    // fallback may not).
     closeQuietly(leadership, "SubscriptionLeadership");
     leadership = null;
 
