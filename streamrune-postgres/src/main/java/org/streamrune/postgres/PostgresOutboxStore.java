@@ -24,6 +24,8 @@ import org.streamrune.core.outbox.OutboxStatus;
 import org.streamrune.core.outbox.OutboxStore;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.types.LogSanitizer;
+import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL-backed {@link OutboxStore}. Persists outbox entries as JSONB in the {@code
@@ -462,7 +464,7 @@ public final class PostgresOutboxStore implements OutboxStore {
       ps.setString(1, entry.id().value());
       ps.setString(2, entry.payload());
       ps.setString(3, entry.payloadType());
-      PostgresStreamKeys.bind(ps, 4, entry.streamId());
+      StreamKeys.bind(ps, 4, entry.streamId());
       bindTraceLink(ps, 6, entry.traceLink());
       PostgresTransactions.commitIfManual(conn, "outbox save", c -> ps.executeUpdate());
     } catch (Exception e) {
@@ -502,7 +504,7 @@ public final class PostgresOutboxStore implements OutboxStore {
         ps.setString(1, entry.id().value());
         ps.setString(2, entry.payload());
         ps.setString(3, entry.payloadType());
-        PostgresStreamKeys.bind(ps, 4, entry.streamId());
+        StreamKeys.bind(ps, 4, entry.streamId());
         bindTraceLink(ps, 6, entry.traceLink());
         ps.addBatch();
       }
@@ -572,20 +574,17 @@ public final class PostgresOutboxStore implements OutboxStore {
    * a 23505 on a different constraint — is NOT swallowed.
    */
   static boolean isBenignInflightUniqueViolation(SQLException e) {
-    // Bounded walk (depth 50) so a self-referential/cyclic cause chain
-    // terminates instead of spinning forever, matching PostgresEventStore.hasCryptoCause /
-    // isRetryableConflict.
-    Throwable t = e;
-    for (int depth = 0; t != null && depth < 50; depth++, t = t.getCause()) {
-      if (t instanceof SQLException sqlEx
-          && SQLSTATE_UNIQUE_VIOLATION.equals(sqlEx.getSQLState())) {
-        String message = sqlEx.getMessage();
-        if (message != null && message.contains(ONE_INFLIGHT_INDEX)) {
-          return true;
-        }
-      }
-    }
-    return false;
+    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
+    return Causes.anyMatch(
+        e,
+        t -> {
+          if (t instanceof SQLException sqlEx
+              && SQLSTATE_UNIQUE_VIOLATION.equals(sqlEx.getSQLState())) {
+            String message = sqlEx.getMessage();
+            return message != null && message.contains(ONE_INFLIGHT_INDEX);
+          }
+          return false;
+        });
   }
 
   private void reclaimExpired(Connection conn) throws java.sql.SQLException {
@@ -869,7 +868,7 @@ public final class PostgresOutboxStore implements OutboxStore {
         rs.getString("payload_type"),
         // The decode door — the lenient constructors, never the ingress factories — so a stored
         // stream carrying a control character still reads back.
-        PostgresStreamKeys.read(rs),
+        StreamKeys.read(rs),
         status,
         rs.getInt("attempts"),
         rs.getString("last_error"),

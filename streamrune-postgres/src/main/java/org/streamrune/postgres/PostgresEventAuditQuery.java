@@ -16,6 +16,7 @@ import org.streamrune.core.PageRequest;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditQuery;
 import org.streamrune.core.types.*;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL implementation of {@link EventAuditQuery}. Uses WITH RECURSIVE CTE for {@link
@@ -141,7 +142,7 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
     Objects.requireNonNull(to, "to is required");
     try (Connection conn = dataSource.getConnection();
         PreparedStatement ps = conn.prepareStatement(FIND_BY_STREAM)) {
-      PostgresStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       ps.setTimestamp(3, Timestamp.from(from));
       ps.setTimestamp(4, Timestamp.from(to));
       return readEntries(ps);
@@ -190,7 +191,7 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
         PAGE_BY_STREAM,
         4,
         (ps, i) -> {
-          PostgresStreamKeys.bind(ps, i, streamId);
+          StreamKeys.bind(ps, i, streamId);
           ps.setTimestamp(i + 2, Timestamp.from(from));
           ps.setTimestamp(i + 3, Timestamp.from(to));
         },
@@ -291,7 +292,7 @@ public final class PostgresEventAuditQuery implements EventAuditQuery {
     return new EventAuditEntry(
         EventId.of(rs.getString("event_id")),
         new EventType(rs.getString("event_type")),
-        PostgresStreamKeys.read(rs),
+        StreamKeys.read(rs),
         new Version(rs.getLong("version")),
         CommandId.of(rs.getString("command_id")),
         CorrelationId.of(rs.getString("correlation_id")),

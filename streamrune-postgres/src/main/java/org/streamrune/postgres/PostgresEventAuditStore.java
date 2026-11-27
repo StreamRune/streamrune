@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.audit.EventAuditStore;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL-backed {@link EventAuditStore}. Appends event audit entries to the {@code
@@ -76,7 +77,7 @@ public final class PostgresEventAuditStore implements EventAuditStore {
       for (EventAuditEntry entry : entries) {
         ps.setString(1, entry.eventId().value());
         ps.setString(2, entry.eventType().value());
-        PostgresStreamKeys.bind(ps, 3, entry.streamId());
+        StreamKeys.bind(ps, 3, entry.streamId());
         ps.setLong(5, entry.version().value());
         ps.setString(6, entry.commandId().value());
         ps.setString(7, entry.correlationId().value());

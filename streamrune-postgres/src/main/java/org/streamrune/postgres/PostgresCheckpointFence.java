@@ -7,8 +7,8 @@ import org.streamrune.core.EventStoreException;
 import org.streamrune.core.projection.ProjectionCommitFencedException;
 import org.streamrune.core.projection.ProjectionEpochRegressionException;
 import org.streamrune.core.types.GlobalOffset;
-import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.runtime.jdbc.CheckpointFenceRules;
 
 /**
  * The checkpoint-row fence over one {@link CheckpointTable}: every read and write of a projection's
@@ -37,8 +37,10 @@ import org.streamrune.core.types.ProjectionName;
  *
  * Each rejection is a {@link ProjectionCommitFencedException} naming its {@link
  * ProjectionCommitFencedException.Guard}; the caller rolls its transaction back, so neither its
- * writes nor the checkpoint move. A {@link #lockForReplay} takes the same lock and checks nothing,
- * so a dead-letter replay and a live batch of one projection never interleave.
+ * writes nor the checkpoint move. The decisions and their messages are {@link
+ * CheckpointFenceRules}'; this class holds the lock, runs the statements and throws where it always
+ * has. A {@link #lockForReplay} takes the same lock and checks nothing, so a dead-letter replay and
+ * a live batch of one projection never interleave.
  *
  * <p><b>Connection discipline.</b> The {@link Connection} methods run on the caller's open
  * transaction (autocommit off) and leave committing, rolling back and restoring autocommit to the
@@ -160,8 +162,8 @@ final class PostgresCheckpointFence {
       Connection c, ProjectionName name, long fencingEpoch, GlobalOffset firstOffsetOfBatch)
       throws SQLException {
     Checkpoint checkpoint = lock(c, name);
-    rejectStaleEpoch(name, fencingEpoch, checkpoint.epoch());
-    rejectOverlappingBatch(name, firstOffsetOfBatch, checkpoint.offset());
+    CheckpointFenceRules.rejectStaleEpoch(name, fencingEpoch, checkpoint.epoch());
+    CheckpointFenceRules.rejectOverlappingBatch(name, firstOffsetOfBatch, checkpoint.offset());
     return checkpoint.offset();
   }
 
@@ -207,15 +209,7 @@ final class PostgresCheckpointFence {
       ps.setLong(3, fencingEpoch);
       int updated = ps.executeUpdate();
       if (updated == 0) {
-        throw new ProjectionCommitFencedException(
-            ProjectionCommitFencedException.Guard.MONOTONIC,
-            "Projection '"
-                + shown(name)
-                + "' offset advance to "
-                + newOffset.value()
-                + " was rejected by the monotonic guard (stored offset already at/past it): the"
-                + " batch is already applied. Rolling back so the read-model write is not committed"
-                + " a second time.");
+        throw CheckpointFenceRules.monotonicRejection(name, newOffset);
       }
     }
   }
@@ -260,13 +254,15 @@ final class PostgresCheckpointFence {
               });
       if (stamped == 0) {
         long stored = readStoredEpoch(conn, name);
-        if (stored > fencingEpoch) {
-          throw new ProjectionEpochRegressionException(name, fencingEpoch, stored);
-        }
+        CheckpointFenceRules.rejectEpochRegression(name, fencingEpoch, stored);
       }
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to stamp fencing epoch " + fencingEpoch + " for projection: " + shown(name), e);
+          "Failed to stamp fencing epoch "
+              + fencingEpoch
+              + " for projection: "
+              + CheckpointFenceRules.shown(name),
+          e);
     }
   }
 
@@ -282,7 +278,7 @@ final class PostgresCheckpointFence {
       return readStoredEpoch(conn, name);
     } catch (SQLException e) {
       throw new EventStoreException(
-          "Failed to read fencing epoch for projection: " + shown(name), e);
+          "Failed to read fencing epoch for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -305,7 +301,8 @@ final class PostgresCheckpointFence {
         return GlobalOffset.initial();
       }
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to read offset for projection: " + shown(name), e);
+      throw new EventStoreException(
+          "Failed to read offset for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -324,7 +321,8 @@ final class PostgresCheckpointFence {
       ps.setString(1, name.value());
       PostgresTransactions.commitIfManual(conn, "projection offset reset", c -> ps.executeUpdate());
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to reset offset for projection: " + shown(name), e);
+      throw new EventStoreException(
+          "Failed to reset offset for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -345,7 +343,8 @@ final class PostgresCheckpointFence {
       ps.setLong(2, offset.value());
       PostgresTransactions.commitIfManual(conn, "projection offset save", c -> ps.executeUpdate());
     } catch (SQLException e) {
-      throw new EventStoreException("Failed to save offset for projection: " + shown(name), e);
+      throw new EventStoreException(
+          "Failed to save offset for projection: " + CheckpointFenceRules.shown(name), e);
     }
   }
 
@@ -370,55 +369,6 @@ final class PostgresCheckpointFence {
     }
   }
 
-  /**
-   * Fences out a commit whose caller epoch is below the epoch stored on the checkpoint row — a
-   * superseded leader whose lease a newer one took over (bumping the epoch). A {@code fencingEpoch}
-   * of {@code 0} is unfenced and always passes, so a single-node deployment commits unfenced.
-   */
-  private static void rejectStaleEpoch(ProjectionName name, long fencingEpoch, long storedEpoch) {
-    if (fencingEpoch != 0L && fencingEpoch < storedEpoch) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.EPOCH_FENCE,
-          "Projection '"
-              + shown(name)
-              + "' commit fenced out: caller epoch "
-              + fencingEpoch
-              + " is below the stored epoch "
-              + storedEpoch
-              + " — a newer leader has taken over the lease. Rolling back the stale leader's write"
-              + " (epoch fencing).");
-    }
-  }
-
-  /**
-   * Rejects a batch whose first event offset is at or before the committed checkpoint — it overlaps
-   * events already applied by another writer (a concurrent/failed-over stale leader or a
-   * redelivery). A forward batch always starts strictly after the checkpoint (the runners read the
-   * global stream from the stored offset); an overlapping start means part of the batch would be
-   * applied a second time. An empty batch ({@code null} first offset) is governed solely by the
-   * monotonic guard on the advance.
-   */
-  private static void rejectOverlappingBatch(
-      ProjectionName name, GlobalOffset firstOffsetOfBatch, long storedOffset) {
-    if (firstOffsetOfBatch == null) {
-      return;
-    }
-    long firstOffset = firstOffsetOfBatch.value();
-    if (firstOffset <= storedOffset) {
-      throw new ProjectionCommitFencedException(
-          ProjectionCommitFencedException.Guard.OVERLAP,
-          "Projection '"
-              + shown(name)
-              + "' batch starting at offset "
-              + firstOffset
-              + " overlaps the committed checkpoint ("
-              + storedOffset
-              + "): those events were already applied by another writer (a concurrent or"
-              + " failed-over stale leader, or a redelivery). Rolling back so the read-model write is"
-              + " not applied a second time.");
-    }
-  }
-
   /** The epoch stored on the row, or {@code 0} when there is none, on {@code conn}. */
   private long readStoredEpoch(Connection conn, ProjectionName name) throws SQLException {
     try (var ps = conn.prepareStatement(epochSql)) {
@@ -427,10 +377,5 @@ final class PostgresCheckpointFence {
         return rs.next() ? rs.getLong("epoch") : 0L;
       }
     }
-  }
-
-  /** A projection name rendered for an exception message: caller text, so sanitized. */
-  private static String shown(ProjectionName name) {
-    return LogSanitizer.sanitizeForLog(name.value());
   }
 }

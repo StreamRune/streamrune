@@ -21,6 +21,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * The SQLite {@link CommandInbox}: the {@code command_inbox} table of a {@link SqliteDatabase},
@@ -121,7 +122,7 @@ public final class SqliteCommandInbox implements CommandInbox {
     try (PreparedStatement ps = conn.prepareStatement(CLAIM)) {
       ps.setString(1, key.value());
       ps.setString(2, commandType);
-      SqliteStreamKeys.bind(ps, 3, streamId);
+      StreamKeys.bind(ps, 3, streamId);
       ps.setLong(5, finalVersion.value());
       ps.setLong(6, SqliteTimestamps.toMicros(clock.instant()));
       return ps.executeUpdate() == 1;
@@ -178,7 +179,7 @@ public final class SqliteCommandInbox implements CommandInbox {
             new InboxResult(
                 key,
                 rs.getString("command_type"),
-                SqliteStreamKeys.read(rs),
+                StreamKeys.read(rs),
                 new Version(rs.getLong("final_version")),
                 offsets,
                 SqliteTimestamps.fromMicros(rs.getLong("processed_at"))));

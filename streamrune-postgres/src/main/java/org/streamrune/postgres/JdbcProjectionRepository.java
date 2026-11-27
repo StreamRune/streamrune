@@ -2,13 +2,11 @@ package org.streamrune.postgres;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +34,7 @@ import org.streamrune.core.projection.ProjectionRepository;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.ProjectionName;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * PostgreSQL-backed {@link ProjectionRepository} with automatic table creation. Tables are created
@@ -196,14 +195,7 @@ public final class JdbcProjectionRepository implements ProjectionRepository, Ato
    */
   public static ObjectMapper createObjectMapper(
       CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    Objects.requireNonNull(metrics, "metrics is required");
-    var mapper = new ObjectMapper();
-    mapper.registerModule(new JavaTimeModule());
-    mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-    if (cryptoEngine != null) {
-      mapper.registerModule(new org.streamrune.crypto.CryptoShreddingModule(cryptoEngine, metrics));
-    }
-    return mapper;
+    return StoreObjectMappers.readModels(cryptoEngine, metrics);
   }
 
   /**

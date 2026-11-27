@@ -35,12 +35,23 @@ dependencies {
     // only — no main artifact gains a logging backend. Quiet defaults in src/test/resources/
     // logback-test.xml.
     testImplementation(libs.logback.classic)
+    // Real JDBC for the tests of the store helpers shared by the Postgres and SQLite backends
+    // (org.streamrune.runtime.jdbc) without Docker: a temp-file SQLite database. Test scope only —
+    // runtime's main artifact gains no driver; its main code depends on java.sql alone.
+    testImplementation(libs.sqlite.jdbc)
 
     // JSR-380 Bean Validation API
     implementation(libs.jakarta.validation.api)
     // Hibernate Validator reference implementation (for tests)
     testImplementation(libs.hibernate.validator)
     testImplementation(libs.jakarta.el) // EL implementation for @Size
+}
+
+// The SQLite driver of the store-helper tests loads its native library through the Foreign
+// Function and Memory API; enabling native access keeps the JVM's restricted-method warnings out
+// of the test output (copied from streamrune-sqlite).
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // The JMH setup — JSON results, the -PbenchCi settings of the nightly benchmark workflow, the

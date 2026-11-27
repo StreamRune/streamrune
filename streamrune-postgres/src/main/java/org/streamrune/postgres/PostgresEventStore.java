@@ -3,7 +3,6 @@ package org.streamrune.postgres;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -67,6 +66,9 @@ import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
+import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL-backed {@link EventStore} using JSONB for event payloads and metadata. Supports
@@ -669,7 +671,7 @@ public final class PostgresEventStore implements EventStore {
 
     return new PostgresEventStore(
         dataSource,
-        createObjectMapper(cryptoEngine, metrics),
+        StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics),
         typeRegistry,
         chain,
         null,
@@ -681,17 +683,10 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * Builds the {@link ObjectMapper} the event store (de)serializes events with: {@link
-   * JavaTimeModule} always registered, plus {@link CryptoShreddingModule} when {@code cryptoEngine}
-   * is non-null so {@code @Encrypted} event fields are ciphertext at rest and decrypt on read.
-   *
-   * <p>The {@code metrics} collector is passed into {@link CryptoShreddingModule} so the redaction
-   * metrics fire on this store's decrypt path (event replay / projection rebuild is where a mass
-   * redaction actually happens). Shared by {@link #create(DataSource, EventTypeRegistry,
-   * CryptoEngine, List, StreamRuneMetrics)} and {@link Builder#build()}, so every production
-   * event-store construction path is metrics-aware. Package-private: the crypto-shredding benchmark
-   * of {@code streamrune-filesystem-crypto} declares its benchmark in this package (its benchmarks
-   * run on the class path) to measure the store's own serialization path.
+   * The {@link ObjectMapper} the event store (de)serializes events with: a test-only delegate to
+   * {@link StoreObjectMappers#eventsAndSagas}, which documents the recipe (production construction
+   * paths call it directly). Package-private: tests of this package and the crypto-shredding
+   * benchmark of {@code streamrune-filesystem-crypto} (declared in this package) call it.
    *
    * @param cryptoEngine the crypto engine to wire in, or {@code null} for a crypto-blind mapper
    * @param metrics the crypto-redaction metrics collector; {@link StreamRuneMetrics#NOOP} for none,
@@ -699,13 +694,7 @@ public final class PostgresEventStore implements EventStore {
    * @return a new {@link ObjectMapper}, independent from any other mapper instance
    */
   static ObjectMapper createObjectMapper(CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
-    Objects.requireNonNull(metrics, "metrics is required");
-    var mapper = new ObjectMapper();
-    mapper.registerModule(new JavaTimeModule());
-    if (cryptoEngine != null) {
-      mapper.registerModule(new CryptoShreddingModule(cryptoEngine, metrics));
-    }
-    return mapper;
+    return StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
   }
 
   /**
@@ -826,7 +815,7 @@ public final class PostgresEventStore implements EventStore {
         // Load snapshot if present, skipping if schema version is incompatible
         try (var ps = conn.prepareStatement(LOAD_SNAPSHOT)) {
           statementTimeout.applyTo(ps);
-          PostgresStreamKeys.bind(ps, 1, streamId);
+          StreamKeys.bind(ps, 1, streamId);
           try (var rs = ps.executeQuery()) {
             boolean rowPresent = rs.next();
             if (rowPresent) {
@@ -895,7 +884,7 @@ public final class PostgresEventStore implements EventStore {
         try (var ps = conn.prepareStatement(LOAD_EVENTS)) {
           statementTimeout.applyTo(ps);
           ps.setFetchSize(LOAD_FETCH_SIZE);
-          PostgresStreamKeys.bind(ps, 1, streamId);
+          StreamKeys.bind(ps, 1, streamId);
           ps.setLong(3, snapshotVersion.value());
           try (var rs = ps.executeQuery()) {
             while (rs.next()) {
@@ -1262,7 +1251,7 @@ public final class PostgresEventStore implements EventStore {
         try (var ps = conn.prepareStatement(LOAD_EVENTS)) {
           statementTimeout.applyTo(ps);
           ps.setFetchSize(LOAD_FETCH_SIZE);
-          PostgresStreamKeys.bind(ps, 1, streamId);
+          StreamKeys.bind(ps, 1, streamId);
           ps.setLong(3, afterVersion.value());
           try (var rs = ps.executeQuery()) {
             while (rs.next()) {
@@ -1353,15 +1342,8 @@ public final class PostgresEventStore implements EventStore {
    * must propagate, never be swallowed as a discardable cache.
    */
   static boolean hasCryptoCause(Throwable t) {
-    // Bounded walk (depth 50) so a self-referential/cyclic cause chain terminates
-    // instead of spinning forever, matching VirtualThreadCommandBus.hasSubjectForgottenCause.
-    Throwable c = t;
-    for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
-      if (c instanceof CryptoOperationException) {
-        return true;
-      }
-    }
-    return false;
+    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
+    return Causes.find(t, CryptoOperationException.class) != null;
   }
 
   /**
@@ -2169,7 +2151,7 @@ public final class PostgresEventStore implements EventStore {
     // any mismatch" half real. The 23505 mapping below stays as defense-in-depth (e.g. a direct SQL
     // writer bypassing this store) — lock order is unchanged (offsets are still reserved first).
     try (var head = conn.prepareStatement(STREAM_HEAD_VERSION)) {
-      PostgresStreamKeys.bind(head, 1, streamId);
+      StreamKeys.bind(head, 1, streamId);
       try (var rs = head.executeQuery()) {
         rs.next();
         long actualHead = rs.getLong(1);
@@ -2192,7 +2174,7 @@ public final class PostgresEventStore implements EventStore {
         long offset = base + i + 1;
         EventRow row = rows.get(i);
         ps.setLong(1, offset);
-        PostgresStreamKeys.bind(ps, 2, streamId);
+        StreamKeys.bind(ps, 2, streamId);
         ps.setLong(4, row.version());
         ps.setString(5, row.eventType());
         ps.setString(6, row.payloadJson());
@@ -2229,15 +2211,8 @@ public final class PostgresEventStore implements EventStore {
    * </ul>
    */
   static boolean isRetryableConflict(SQLException e) {
-    // Bounded walk (depth 50) so a self-referential/cyclic cause chain
-    // terminates instead of spinning forever, matching hasCryptoCause above.
-    Throwable t = e;
-    for (int depth = 0; t != null && depth < 50; depth++, t = t.getCause()) {
-      if (t instanceof SQLException sqlEx && hasRetryableSqlState(sqlEx)) {
-        return true;
-      }
-    }
-    return false;
+    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
+    return Causes.anyMatch(e, t -> t instanceof SQLException sqlEx && hasRetryableSqlState(sqlEx));
   }
 
   /**
@@ -2264,15 +2239,9 @@ public final class PostgresEventStore implements EventStore {
    * not localized even when {@code lc_messages} is.
    */
   static boolean isGlobalOffsetCollision(SQLException e) {
-    // Bounded walk (depth 50) so a self-referential/cyclic cause chain terminates, matching
-    // isRetryableConflict above.
-    Throwable t = e;
-    for (int depth = 0; t != null && depth < 50; depth++, t = t.getCause()) {
-      if (t instanceof SQLException sqlEx && namesEventStreamPrimaryKey(sqlEx)) {
-        return true;
-      }
-    }
-    return false;
+    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
+    return Causes.anyMatch(
+        e, t -> t instanceof SQLException sqlEx && namesEventStreamPrimaryKey(sqlEx));
   }
 
   /** Walks one {@link SQLException}'s {@code getNextException()} chain for the PK 23505. */
@@ -2494,7 +2463,7 @@ public final class PostgresEventStore implements EventStore {
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
       statementTimeout.applyTo(ps);
-      PostgresStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       ps.setLong(3, version.value());
       ps.setString(4, stateType);
       ps.setString(5, stateJson);
@@ -2622,7 +2591,7 @@ public final class PostgresEventStore implements EventStore {
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(READ_STREAM)) {
       statementTimeout.applyTo(ps);
-      PostgresStreamKeys.bind(ps, 1, streamId);
+      StreamKeys.bind(ps, 1, streamId);
       ps.setLong(3, afterVersion.value());
       ps.setInt(4, maxCount);
       rawRows = new ArrayList<>();
@@ -2872,13 +2841,9 @@ public final class PostgresEventStore implements EventStore {
    * must raise {@code CryptoMappingException} for conditions a retry can never fix.
    */
   static boolean hasTransientCryptoCause(Throwable t) {
-    Throwable c = t;
-    for (int depth = 0; c != null && depth < 50; depth++, c = c.getCause()) {
-      if (c instanceof CryptoOperationException && !(c instanceof CryptoMappingException)) {
-        return true;
-      }
-    }
-    return false;
+    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
+    return Causes.anyMatch(
+        t, c -> c instanceof CryptoOperationException && !(c instanceof CryptoMappingException));
   }
 
   /** Builder for PostgresEventStore. */
@@ -3075,7 +3040,7 @@ public final class PostgresEventStore implements EventStore {
       if (checkCrypto) {
         validateCryptoConfig(typeRegistry, cryptoEngine);
       }
-      var mapper = createObjectMapper(cryptoEngine, metrics);
+      var mapper = StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
       UpcasterChain chain = new UpcasterChain(upcasters);
       // Validates the chain here, at build time (fail fast on a misconfigured migration set rather
       // than on the first load).

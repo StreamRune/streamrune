@@ -19,6 +19,7 @@ import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.core.upcasting.UpcasterChain;
 import org.streamrune.runtime.GuardedTracing;
+import org.streamrune.runtime.jdbc.StoreObjectMappers;
 
 /**
  * Factory for {@link SqliteEventStore}: applies and validates the schema on an open {@link
@@ -288,7 +289,7 @@ public final class SqliteEventStoreFactory implements EventStoreFactory {
 
     return new SqliteEventStore(
         database,
-        SqliteEventStore.createObjectMapper(cryptoEngine, metrics),
+        StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics),
         typeRegistry,
         upcasterChain,
         migrationChain,

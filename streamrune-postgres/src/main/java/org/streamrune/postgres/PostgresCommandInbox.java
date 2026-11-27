@@ -16,6 +16,7 @@ import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
+import org.streamrune.runtime.jdbc.StreamKeys;
 
 /**
  * PostgreSQL {@link CommandInbox}. The {@code Connection}-taking methods are called by {@link
@@ -62,7 +63,7 @@ public final class PostgresCommandInbox implements CommandInbox {
     try (PreparedStatement ps = conn.prepareStatement(CLAIM)) {
       ps.setString(1, key.value());
       ps.setString(2, commandType);
-      PostgresStreamKeys.bind(ps, 3, streamId);
+      StreamKeys.bind(ps, 3, streamId);
       ps.setLong(5, finalVersion.value());
       return ps.executeUpdate() == 1;
     }
@@ -101,7 +102,7 @@ public final class PostgresCommandInbox implements CommandInbox {
             new InboxResult(
                 key,
                 rs.getString("command_type"),
-                PostgresStreamKeys.read(rs),
+                StreamKeys.read(rs),
                 new Version(rs.getLong("final_version")),
                 offsets,
                 rs.getTimestamp("processed_at").toInstant()));
