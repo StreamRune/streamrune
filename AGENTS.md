@@ -26,7 +26,7 @@ plain constructors, and the integrations use the same builders. It is one Gradle
 | `streamrune-integration/streamrune-integration-api` | What the three integrations share: metrics, request identity, startup validators | no |
 | `streamrune-integration/streamrune-spring`, `streamrune-quarkus`, `streamrune-micronaut` | The three integrations | yes |
 | `streamrune-integration/streamrune-spring-boot-starter` | The Spring Boot starter: dependencies only, no sources | — |
-| `streamrune-integration/streamrune-quarkus-it` | A Quarkus application built and started by the Quarkus Gradle plugin on `streamrune-quarkus`, Quarkus REST and Agroal: what only a full Quarkus start shows (configuration validation, static initialization); not published | yes |
+| `streamrune-integration/streamrune-quarkus-it` | A Quarkus application built and started by the Quarkus Gradle plugin on `streamrune-quarkus`, Quarkus REST and Agroal: what only a full Quarkus start shows (configuration validation, static initialization, a refused start); not published | yes |
 | `streamrune-integration/streamrune-e2e` | End-to-end crash-recovery and broker suites, not published | yes |
 | `streamrune-integration/streamrune-integration-tck` | What the three integrations' tests share: the wiring contract each of them runs, the configuration oracle and the doc reading of their doc-lint tests; not published | no |
 | `streamrune-outbox/streamrune-kafka-outbox`, `streamrune-rabbitmq-outbox` | Transactional outbox publishers for Kafka and RabbitMQ | yes |
