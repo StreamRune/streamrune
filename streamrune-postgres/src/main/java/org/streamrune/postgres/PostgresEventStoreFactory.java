@@ -17,6 +17,7 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.upcasting.EventUpcaster;
 import org.streamrune.runtime.GuardedTracing;
+import org.streamrune.runtime.jdbc.EventAppendSupport;
 
 /**
  * Factory for {@link PostgresEventStore}: checks the server version, applies and validates the
@@ -345,7 +346,7 @@ public final class PostgresEventStoreFactory implements EventStoreFactory {
     // ObjectMapper when cryptoEngine != null). The same check guards PostgresEventStore.create(...)
     // and PostgresEventStore.builder(); with an engine it still runs, to warn about a
     // property-level Jackson serializer override that would bypass encryption.
-    PostgresEventStore.validateCryptoConfig(typeRegistry, cryptoEngine);
+    EventAppendSupport.validateCryptoConfig(typeRegistry, cryptoEngine);
 
     // PostgreSQL 17 or newer. Refused before the first migration — an unsupported server is
     // never written to — and independent of the schema flags below, which govern the schema, not

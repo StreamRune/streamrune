@@ -10,9 +10,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
-import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,25 +21,19 @@ import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.CommandInbox;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.EventMetadata;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
 import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
-import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaOrigin;
-import org.streamrune.core.tracing.SpanAttributes;
-import org.streamrune.core.tracing.SpanKind;
-import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
-import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -48,9 +41,12 @@ import org.streamrune.core.types.LogSanitizer;
 import org.streamrune.core.types.StreamId;
 import org.streamrune.core.types.Version;
 import org.streamrune.core.upcasting.UpcasterChain;
-import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.EventAppendSupport;
+import org.streamrune.runtime.jdbc.EventAppendSupport.EventRow;
+import org.streamrune.runtime.jdbc.EventAppendSupport.JsonGuard;
+import org.streamrune.runtime.jdbc.EventAppendSupport.SnapshotPayload;
 import org.streamrune.runtime.jdbc.EventReadPath;
 import org.streamrune.runtime.jdbc.EventReadPath.RawEventRow;
 import org.streamrune.runtime.jdbc.EventReadPath.StoredSnapshot;
@@ -97,6 +93,9 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * EventStoreException} that says how to re-seed it, because a retry reserves the same offsets. The
  * read path classifies a stored event it cannot read exactly as {@code PostgresEventStore} does:
  * both take the classification, snapshot decision and deserialization from {@link EventReadPath}.
+ * Both take the append's argument rules, serialization, spans and the mapping of a failed append
+ * from {@link EventAppendSupport}; this store answers which SQLite failure is which, and keeps its
+ * statements and its write transaction.
  *
  * <p><b>Timestamps.</b> The store stamps {@code created_at} of the event and snapshot rows with the
  * application {@link Clock} it was built with, as epoch microseconds; there is no database clock.
@@ -208,8 +207,6 @@ public final class SqliteEventStore implements EventStore {
 
   private final DataSource dataSource;
   private final Path file;
-  private final ObjectMapper objectMapper;
-  private final EventTypeRegistry typeRegistry;
   private final UpcasterChain upcasterChain;
   private final StreamRuneTracing tracing;
   private final boolean traced;
@@ -228,6 +225,13 @@ public final class SqliteEventStore implements EventStore {
    * metrics. Owns this instance's once-per-stream version-gap warning state.
    */
   private final EventReadPath readPath;
+
+  /**
+   * The append side of this instance: argument rules, serialization, the append and snapshot-save
+   * spans, outbox and audit entries and the mapping of a failed append, with its log line under
+   * this store's category.
+   */
+  private final EventAppendSupport support;
 
   /**
    * Package-private: {@link SqliteEventStoreFactory} is the public entry point.
@@ -263,8 +267,8 @@ public final class SqliteEventStore implements EventStore {
       SqliteEventAuditStore eventAuditStore) {
     this.dataSource = Objects.requireNonNull(database, "database is required").dataSource();
     this.file = database.file();
-    this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper is required");
-    this.typeRegistry = Objects.requireNonNull(typeRegistry, "typeRegistry is required");
+    Objects.requireNonNull(objectMapper, "objectMapper is required");
+    Objects.requireNonNull(typeRegistry, "typeRegistry is required");
     this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
     SnapshotMigrationChain migrations =
         Objects.requireNonNull(snapshotMigrations, "snapshotMigrations is required");
@@ -284,24 +288,12 @@ public final class SqliteEventStore implements EventStore {
             this.traced,
             log,
             null);
+    this.support = new EventAppendSupport(objectMapper, typeRegistry, this.tracing, log);
     this.clock = Objects.requireNonNull(clock, "clock is required");
     this.outboxStore = outboxStore;
     this.outboxEventMapper = outboxEventMapper;
     this.commandInbox = commandInbox;
     this.eventAuditStore = eventAuditStore;
-  }
-
-  /**
-   * Refuses a configuration that would persist {@code @Encrypted} components as plaintext, as
-   * {@code PostgresEventStore.validateCryptoConfig} does: without an engine an {@code @Encrypted}
-   * component in a registered type throws {@link IllegalStateException}, and a registry that cannot
-   * list its types throws {@link UnsupportedOperationException}.
-   */
-  static void validateCryptoConfig(EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
-    if (typeRegistry == null) {
-      throw new IllegalArgumentException("typeRegistry is required");
-    }
-    EncryptedTypeGuard.check(typeRegistry, cryptoEngine);
   }
 
   // ── Load ──────────────────────────────────────────────────────────────────────────────────────
@@ -425,7 +417,11 @@ public final class SqliteEventStore implements EventStore {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    return appendWithOutbox(streamId, events, expectedVersion, outboxEntriesOf(events));
+    return appendWithOutbox(
+        streamId,
+        events,
+        expectedVersion,
+        EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper));
   }
 
   /**
@@ -458,7 +454,8 @@ public final class SqliteEventStore implements EventStore {
     List<OutboxEntry> linked =
         outboxEntries == null || outboxEntries.isEmpty() || events == null || events.isEmpty()
             ? outboxEntries
-            : withTraceLink(outboxEntries, traceLinkOf(events.getFirst()));
+            : EventAppendSupport.withTraceLink(
+                outboxEntries, EventAppendSupport.traceLinkOf(events.getFirst()));
     return appendWithOutbox(streamId, events, expectedVersion, linked);
   }
 
@@ -476,82 +473,13 @@ public final class SqliteEventStore implements EventStore {
         || outboxEntries == null) {
       return appendEvents(streamId, events, expectedVersion, outboxEntries, false);
     }
-    return tracedAppend(
+    return support.tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
         outboxEntries.size(),
         () -> appendEvents(streamId, events, expectedVersion, outboxEntries, true),
         result -> "APPENDED");
-  }
-
-  /**
-   * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}. A version
-   * conflict is the outcome {@code CONFLICT}, and a saga's forward command the fence refuses the
-   * outcome {@code FENCED}; neither is an error.
-   */
-  private <R> R tracedAppend(
-      StreamId streamId,
-      int eventCount,
-      Version expectedVersion,
-      int outboxEntryCount,
-      Supplier<R> append,
-      Function<R, String> outcome) {
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_APPEND,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
-                .put(TraceAttributes.EVENT_COUNT, (long) eventCount)
-                .put(TraceAttributes.EXPECTED_VERSION, expectedVersion.value())
-                .put(TraceAttributes.OUTBOX_ENTRY_COUNT, (long) outboxEntryCount)
-                .build());
-    try {
-      R result = append.get();
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, outcome.apply(result));
-      scope.recordSuccess();
-      return result;
-    } catch (OptimisticLockException conflict) {
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
-      throw conflict;
-    } catch (SagaForwardFencedException fenced) {
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "FENCED");
-      throw fenced;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  private List<EventRow> serialize(
-      StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced)
-      throws JsonProcessingException {
-    if (!traced) {
-      return serializeRows(events, expectedVersion);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_APPEND_SERIALIZE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) events.size())
-                .build());
-    try {
-      List<EventRow> rows = serializeRows(events, expectedVersion);
-      scope.recordSuccess();
-      return rows;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
   }
 
   /**
@@ -567,32 +495,23 @@ public final class SqliteEventStore implements EventStore {
       Version expectedVersion,
       List<OutboxEntry> outboxEntries,
       boolean traced) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    Objects.requireNonNull(events, "events is required");
-    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    Objects.requireNonNull(outboxEntries, "outboxEntries is required");
-    if (!outboxEntries.isEmpty() && outboxStore == null) {
-      throw new IllegalStateException(
-          "Outbox entries were passed but no SqliteOutboxStore is configured on this event store."
-              + " Configure a SqliteOutboxStore together with an OutboxEventMapper on the"
-              + " factory.");
-    }
-    if (events.isEmpty()) {
-      // The no-op returns before any transaction opens; entries in hand would be lost silently.
-      if (!outboxEntries.isEmpty()) {
-        throw new IllegalArgumentException(
-            "outboxEntries were passed with an empty events list — outbox entries are persisted"
-                + " atomically with the events of this append and cannot be appended alone. To"
-                + " emit an outbox entry that has no accompanying domain event, persist it"
-                + " directly with OutboxStore.save(entry), one entry per call — that write commits"
-                + " on its own connection and is atomic with nothing else.");
-      }
-      return new AppendResult(List.of(), expectedVersion);
+    Optional<AppendResult> noOp =
+        EventAppendSupport.preamble(
+            streamId,
+            events,
+            expectedVersion,
+            outboxEntries,
+            outboxStore != null,
+            "Outbox entries were passed but no SqliteOutboxStore is configured on this event store."
+                + " Configure a SqliteOutboxStore together with an OutboxEventMapper on the"
+                + " factory.");
+    if (noOp.isPresent()) {
+      return noOp.get();
     }
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion, traced);
+      rows = support.serialize(events.size(), traced, () -> serializeRows(events, expectedVersion));
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }
@@ -619,10 +538,17 @@ public final class SqliteEventStore implements EventStore {
               List.copyOf(offsets), new Version(expectedVersion.value() + events.size()));
       return result;
     } catch (SQLException e) {
+      // Only an append that did not commit is mapped: one that committed and then failed to close
+      // returned its result above.
       if (committed) {
         return result;
       }
-      throw appendFailure(e, shownStream, expectedVersion);
+      RuntimeException mapped =
+          EventAppendSupport.appendConflict(
+              e, SqliteAppendFailures.INSTANCE, shownStream, expectedVersion);
+      throw mapped != null
+          ? mapped
+          : new EventStoreException("Failed to append events to stream: " + shownStream, e);
     }
   }
 
@@ -682,8 +608,9 @@ public final class SqliteEventStore implements EventStore {
     // events.
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     CommandInbox.requireCommandType(commandType);
-    List<OutboxEntry> outboxEntries = outboxEntriesOf(events);
-    return tracedAppend(
+    List<OutboxEntry> outboxEntries =
+        EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper);
+    return support.tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
@@ -702,41 +629,6 @@ public final class SqliteEventStore implements EventStore {
   }
 
   /**
-   * The outbox entries the configured mapper derives from {@code events}, each with the trace link
-   * of the event it was derived from; none without an outbox store.
-   */
-  private List<OutboxEntry> outboxEntriesOf(List<EventEnvelope> events) {
-    return outboxStore != null && outboxEventMapper != null
-        ? events.stream()
-            .flatMap(e -> withTraceLink(outboxEventMapper.toOutbox(e), traceLinkOf(e)).stream())
-            .toList()
-        : List.of();
-  }
-
-  /**
-   * The link to the span of the command that wrote {@code event}: its {@code spanContext}, via
-   * {@link SpanLink#of}; {@link SpanLink#NONE} when the command was not traced.
-   */
-  private static SpanLink traceLinkOf(EventEnvelope event) {
-    return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
-  }
-
-  /** {@code entries}, each with {@code link} as its trace link, replacing any link set before. */
-  private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
-    List<OutboxEntry> linked = null;
-    for (int i = 0; i < entries.size(); i++) {
-      OutboxEntry entry = entries.get(i);
-      if (!entry.traceLink().equals(link)) {
-        if (linked == null) {
-          linked = new ArrayList<>(entries);
-        }
-        linked.set(i, entry.withTraceLink(link));
-      }
-    }
-    return linked == null ? entries : linked;
-  }
-
-  /**
    * Writes the event audit rows of {@code events} on {@code conn}, inside the append's open write
    * transaction; nothing without an event audit store or without events. The stream and the
    * versions are the append's arguments, as the inserted events' are, never the envelope's, so the
@@ -747,24 +639,8 @@ public final class SqliteEventStore implements EventStore {
     if (eventAuditStore == null || events.isEmpty()) {
       return;
     }
-    List<EventAuditEntry> entries = new ArrayList<>(events.size());
-    long version = expectedVersion.value();
-    for (EventEnvelope envelope : events) {
-      version++;
-      EventMetadata metadata = envelope.metadata();
-      entries.add(
-          new EventAuditEntry(
-              metadata.eventId(),
-              envelope.eventType(),
-              streamId,
-              new Version(version),
-              metadata.commandId(),
-              metadata.correlationId(),
-              metadata.causationId(),
-              metadata.userId(),
-              metadata.timestamp()));
-    }
-    eventAuditStore.saveAll(entries, conn);
+    eventAuditStore.saveAll(
+        EventAppendSupport.auditEntries(streamId, events, expectedVersion), conn);
   }
 
   /**
@@ -789,17 +665,16 @@ public final class SqliteEventStore implements EventStore {
       throw new UnsupportedOperationException(
           "This SqliteEventStore was built without a command inbox");
     }
-    Objects.requireNonNull(streamId, "streamId is required");
-    Objects.requireNonNull(events, "events is required");
-    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
-    CommandInbox.requireCommandType(commandType);
+    EventAppendSupport.requireKeyedArguments(
+        streamId, events, expectedVersion, idempotencyKey, commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =
-        mappedOutboxEntries != null ? mappedOutboxEntries : outboxEntriesOf(events);
+        mappedOutboxEntries != null
+            ? mappedOutboxEntries
+            : EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper);
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion, traced);
+      rows = support.serialize(events.size(), traced, () -> serializeRows(events, expectedVersion));
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }
@@ -837,52 +712,19 @@ public final class SqliteEventStore implements EventStore {
         result = new IdempotentAppendResult(List.copyOf(offsets), finalVersion, false);
       }
     } catch (SQLException e) {
+      // Only a keyed append that did not commit is mapped, as for the unkeyed append.
       if (committed) {
         return result;
       }
-      throw keyedAppendFailure(e, shownStream);
+      throw EventAppendSupport.keyedAppendFailure(e, SqliteAppendFailures.INSTANCE, shownStream);
     }
     if (claimLost) {
-      CommandInbox.InboxResult prior =
-          commandInbox
-              .find(idempotencyKey)
-              .orElseThrow(() -> inboxConflictWithoutRow(idempotencyKey));
       // Fails closed unless the recorded row is this command's on this stream (see the interface).
-      prior.requireBoundTo(commandType, streamId);
-      return new IdempotentAppendResult(prior.globalOffsets(), prior.finalVersion(), true);
+      return EventAppendSupport.replayLostClaim(
+          commandInbox, idempotencyKey, commandType, streamId);
     }
     return result;
   }
-
-  /**
-   * The claim-lost dead end: the key was found recorded, yet its row is gone (retention pruned it
-   * in between). A retry claims the key anew.
-   */
-  static EventStoreException inboxConflictWithoutRow(IdempotencyKey idempotencyKey) {
-    return new EventStoreException(
-        "Inbox conflict but no row found for key: "
-            + LogSanitizer.sanitizeForLog(idempotencyKey.value()));
-  }
-
-  /** The exception of a keyed append that did not commit, classified as Postgres classifies it. */
-  private static RuntimeException keyedAppendFailure(SQLException e, String shownStream) {
-    if (isGlobalOffsetCollision(e)) {
-      return new EventStoreException(globalOffsetDesyncMessage(shownStream), e);
-    }
-    if (isRetryableConflict(e)) {
-      return new OptimisticLockException("Concurrent modification of stream: " + shownStream, e);
-    }
-    EventStoreException lockFailure =
-        lockFailure(e, "idempotent append to stream '" + shownStream + "'");
-    if (lockFailure != null) {
-      return lockFailure;
-    }
-    return new EventStoreException("Failed idempotent append to stream: " + shownStream, e);
-  }
-
-  /** One event's serialized row, ready for the insert. */
-  private record EventRow(
-      long version, String eventType, String payloadJson, String metadataJson, int schemaVersion) {}
 
   private List<EventRow> serializeRows(List<EventEnvelope> events, Version expectedVersion)
       throws JsonProcessingException {
@@ -890,13 +732,13 @@ public final class SqliteEventStore implements EventStore {
     long version = expectedVersion.value();
     for (EventEnvelope envelope : events) {
       version++;
+      // The schema version is asked after the payload and the metadata are serialized.
       rows.add(
-          new EventRow(
+          support.serializeRow(
+              envelope,
               version,
-              envelope.eventType().value(),
-              objectMapper.writeValueAsString(envelope.event()),
-              objectMapper.writeValueAsString(envelope.metadata()),
-              upcasterChain.currentVersion(envelope.eventType())));
+              () -> upcasterChain.currentVersion(envelope.eventType()),
+              JsonGuard.NONE));
     }
     return rows;
   }
@@ -930,16 +772,7 @@ public final class SqliteEventStore implements EventStore {
       StreamKeys.bind(head, 1, streamId);
       try (var rs = head.executeQuery()) {
         rs.next();
-        long actualHead = rs.getLong(1);
-        if (actualHead != expectedVersion.value()) {
-          throw new OptimisticLockException(
-              "Version conflict on stream '"
-                  + LogSanitizer.sanitizeForLog(streamId.value())
-                  + "': expected version "
-                  + expectedVersion.value()
-                  + " but actual head is "
-                  + actualHead);
-        }
+        EventAppendSupport.requireExpectedHead(streamId, expectedVersion, rs.getLong(1));
       }
     }
 
@@ -963,32 +796,6 @@ public final class SqliteEventStore implements EventStore {
       insert.executeBatch();
     }
     return offsets;
-  }
-
-  /**
-   * The exception an append that did not commit reports for {@code e}: a collision on {@code
-   * global_offset} is a desynced counter, a unique violation or a stale snapshot a version
-   * conflict, a write lock not granted within {@code busy_timeout} an infrastructure failure that
-   * says so, anything else a plain {@link EventStoreException}.
-   */
-  private static RuntimeException appendFailure(
-      SQLException e, String shownStream, Version expectedVersion) {
-    if (isGlobalOffsetCollision(e)) {
-      return new EventStoreException(globalOffsetDesyncMessage(shownStream), e);
-    }
-    if (isRetryableConflict(e)) {
-      return new OptimisticLockException(
-          "Version conflict on stream '"
-              + shownStream
-              + "' at expected version "
-              + expectedVersion.value(),
-          e);
-    }
-    EventStoreException lockFailure = lockFailure(e, "append to stream '" + shownStream + "'");
-    if (lockFailure != null) {
-      return lockFailure;
-    }
-    return new EventStoreException("Failed to append events to stream: " + shownStream, e);
   }
 
   /**
@@ -1112,7 +919,11 @@ public final class SqliteEventStore implements EventStore {
         + " migration or a stalled write. Retry later, or raise busy_timeout.";
   }
 
-  private static String globalOffsetDesyncMessage(String shownStream) {
+  /**
+   * The message of a collision on {@code global_offset}: it names {@code global_offset_counter} and
+   * the statement that re-seeds it.
+   */
+  static String globalOffsetDesyncMessage(String shownStream) {
     return "global_offset collision while appending to stream '"
         + shownStream
         + "': global_offset_counter.next_value has fallen at or below max(global_offset), so this"
@@ -1146,42 +957,16 @@ public final class SqliteEventStore implements EventStore {
       AggregateState state,
       int snapshotVersion,
       long snapshotPurgeGeneration) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    if (state == null) {
-      throw new IllegalArgumentException("state must not be null");
-    }
-    if (snapshotVersion < 1) {
-      throw new IllegalArgumentException("snapshotVersion must be >= 1");
-    }
-    if (snapshotPurgeGeneration < 0) {
-      throw new IllegalArgumentException(
-          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
-    }
+    EventAppendSupport.requireSnapshotArguments(
+        streamId, state, snapshotVersion, snapshotPurgeGeneration);
     Objects.requireNonNull(version, "version is required");
     if (!traced) {
       return writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
     }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_SAVE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .put(TraceAttributes.STREAM_VERSION, version.value())
-                .build());
-    try {
-      boolean saved =
-          writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
-      scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, saved ? "SAVED" : "SKIPPED");
-      scope.recordSuccess();
-      return saved;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
+    return support.tracedSaveSnapshot(
+        streamId,
+        version,
+        () -> writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration));
   }
 
   private boolean writeSnapshot(
@@ -1191,38 +976,8 @@ public final class SqliteEventStore implements EventStore {
       int snapshotVersion,
       long snapshotPurgeGeneration) {
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
-    String stateType = state.getClass().getSimpleName();
-    EventStore.requireStateType(stateType);
-    Class<?> resolved;
-    try {
-      resolved = typeRegistry.resolveStateType(stateType);
-    } catch (RuntimeException e) {
-      throw new EventStoreException(
-          "Snapshot state type '"
-              + stateType
-              + "' does not resolve in the EventTypeRegistry — register "
-              + state.getClass().getName()
-              + " under its simple name so the snapshot can be rehydrated on load",
-          e);
-    }
-    if (resolved != state.getClass()) {
-      throw new EventStoreException(
-          "Snapshot state type '"
-              + stateType
-              + "' resolves to "
-              + resolved.getName()
-              + " in the EventTypeRegistry, but the state being saved is "
-              + state.getClass().getName()
-              + " — snapshots are stored by simple class name, so two state classes sharing a"
-              + " simple name would rehydrate as the wrong type");
-    }
     // Serialized (and any @Encrypted field encrypted) before a connection is borrowed.
-    String stateJson;
-    try {
-      stateJson = objectMapper.writeValueAsString(state);
-    } catch (JsonProcessingException e) {
-      throw new EventStoreException("Failed to serialize snapshot for stream: " + shownStream, e);
-    }
+    SnapshotPayload snapshot = support.serializeSnapshot(state, shownStream, JsonGuard.NONE);
     long createdAt = SqliteTimestamps.toMicros(clock.instant());
 
     // One statement in autocommit: SQLite runs it as one transaction of its own, which takes the
@@ -1237,8 +992,8 @@ public final class SqliteEventStore implements EventStore {
                 try (var ps = c.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
                   StreamKeys.bind(ps, 1, streamId);
                   ps.setLong(3, version.value());
-                  ps.setString(4, stateType);
-                  ps.setString(5, stateJson);
+                  ps.setString(4, snapshot.stateType());
+                  ps.setString(5, snapshot.stateJson());
                   ps.setLong(6, createdAt);
                   ps.setInt(7, snapshotVersion);
                   ps.setLong(8, snapshotPurgeGeneration);
@@ -1253,15 +1008,7 @@ public final class SqliteEventStore implements EventStore {
       throw new EventStoreException("Failed to save snapshot for stream: " + shownStream, e);
     }
     if (written == 0) {
-      log.info(
-          "Snapshot of stream {} at version {} not stored: its snapshot_store row carries"
-              + " a purge generation other than {}, so a GDPR forget purged the stream's"
-              + " snapshot after the state being saved was loaded; the next command loads and"
-              + " snapshots again",
-          shownStream,
-          version.value(),
-          snapshotPurgeGeneration);
-      return false;
+      return support.snapshotNotStored(shownStream, version, snapshotPurgeGeneration);
     }
     return true;
   }

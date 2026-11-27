@@ -11,9 +11,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
-import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,19 +27,15 @@ import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
-import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.crypto.CryptoEngine;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
 import org.streamrune.core.saga.SagaForwardFencedException;
 import org.streamrune.core.saga.SagaOrigin;
-import org.streamrune.core.tracing.SpanAttributes;
-import org.streamrune.core.tracing.SpanKind;
 import org.streamrune.core.tracing.SpanLink;
 import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
-import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
@@ -53,6 +48,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.EventAppendSupport;
+import org.streamrune.runtime.jdbc.EventAppendSupport.EventRow;
+import org.streamrune.runtime.jdbc.EventAppendSupport.SnapshotPayload;
 import org.streamrune.runtime.jdbc.EventReadPath;
 import org.streamrune.runtime.jdbc.EventReadPath.RawEventRow;
 import org.streamrune.runtime.jdbc.EventReadPath.StoredSnapshot;
@@ -111,6 +109,11 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * along with everything else, so the offsets are reused by the next append instead of leaving a
  * permanent hole — unlike a sequence-backed default, which is consumed before the {@code UNIQUE
  * (aggregate_type, aggregate_id, version)} check can fail the append.
+ *
+ * <p>The mechanics an append shares with the other JDBC event store (its spans, the per-event and
+ * snapshot serialization, the argument rules, the strict head check and the mapping of a failed
+ * append to its exception) live in {@link EventAppendSupport}; the transaction, the statements, the
+ * NUL check of {@code jsonb} and the classification of PostgreSQL's errors stay here.
  *
  * <p>Because the counter's row lock is held until commit and released (and the reservation undone)
  * on rollback, a committed offset N implies every offset below N is already committed — the global
@@ -292,8 +295,6 @@ public final class PostgresEventStore implements EventStore {
   private static final int LOAD_FETCH_SIZE = 500;
 
   private final DataSource dataSource;
-  private final ObjectMapper objectMapper;
-  private final EventTypeRegistry typeRegistry;
   private final UpcasterChain upcasterChain;
   private final PostgresEventAuditStore eventAuditStore;
   private final PostgresOutboxStore outboxStore;
@@ -331,6 +332,13 @@ public final class PostgresEventStore implements EventStore {
    * metrics. Owns this instance's once-per-stream version-gap warning state.
    */
   private final EventReadPath readPath;
+
+  /**
+   * The append support of this instance: the append and snapshot-save spans, event and snapshot
+   * serialization, and the shared argument rules and failure mapping, logging under this store's
+   * category.
+   */
+  private final EventAppendSupport support;
 
   /**
    * Creates a new PostgresEventStore with optional upcasting and audit support.
@@ -541,8 +549,6 @@ public final class PostgresEventStore implements EventStore {
       throw new IllegalArgumentException("typeRegistry is required");
     }
     this.dataSource = dataSource;
-    this.objectMapper = objectMapper;
-    this.typeRegistry = typeRegistry;
     this.upcasterChain = Objects.requireNonNull(upcasterChain, "upcasterChain is required");
     this.eventAuditStore = eventAuditStore;
     this.outboxStore = outboxStore;
@@ -569,6 +575,7 @@ public final class PostgresEventStore implements EventStore {
             this.traced,
             log,
             row -> GlobalOffset.of(row.globalOffset()));
+    this.support = new EventAppendSupport(objectMapper, typeRegistry, this.tracing, log);
   }
 
   /**
@@ -650,7 +657,7 @@ public final class PostgresEventStore implements EventStore {
       CryptoEngine cryptoEngine,
       List<EventUpcaster> upcasters,
       StreamRuneMetrics metrics) {
-    validateCryptoConfig(typeRegistry, cryptoEngine);
+    EventAppendSupport.validateCryptoConfig(typeRegistry, cryptoEngine);
     PostgresServerVersion.requireSupported(dataSource);
 
     UpcasterChain chain = upcasters == null ? UpcasterChain.empty() : new UpcasterChain(upcasters);
@@ -681,35 +688,6 @@ public final class PostgresEventStore implements EventStore {
    */
   static ObjectMapper createObjectMapper(CryptoEngine cryptoEngine, StreamRuneMetrics metrics) {
     return StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
-  }
-
-  /**
-   * Refuses a configuration that would persist {@code @Encrypted} components as plaintext. Shared
-   * by {@link #create(DataSource, EventTypeRegistry, CryptoEngine, List, StreamRuneMetrics)},
-   * {@link Builder#build()} and {@link PostgresEventStoreFactory#create()}, each of which calls it
-   * before it touches the database.
-   *
-   * <p>Without an engine the store's mapper has no crypto module, so every event and state type the
-   * registry lists is scanned and an {@code @Encrypted} component anywhere in them throws. A
-   * registry that cannot list its types cannot be cleared, so its {@link
-   * UnsupportedOperationException} propagates. With an engine the components are encrypted; the
-   * scan then only warns about a property-level Jackson serializer override over an
-   * {@code @Encrypted}-carrying component, and is skipped for a registry that cannot list its
-   * types.
-   *
-   * @param typeRegistry the registry the store resolves types with
-   * @param cryptoEngine the configured engine, or {@code null}
-   * @throws IllegalArgumentException if {@code typeRegistry} is {@code null}
-   * @throws IllegalStateException if {@code cryptoEngine} is {@code null} and a registered type
-   *     carries {@code @Encrypted}
-   * @throws UnsupportedOperationException if {@code cryptoEngine} is {@code null} and the registry
-   *     does not implement {@link EventTypeRegistry#registeredTypes()}
-   */
-  static void validateCryptoConfig(EventTypeRegistry typeRegistry, CryptoEngine cryptoEngine) {
-    if (typeRegistry == null) {
-      throw new IllegalArgumentException("typeRegistry is required");
-    }
-    EncryptedTypeGuard.check(typeRegistry, cryptoEngine);
   }
 
   /**
@@ -916,7 +894,11 @@ public final class PostgresEventStore implements EventStore {
     Objects.requireNonNull(streamId, "streamId is required");
     Objects.requireNonNull(events, "events is required");
     Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    return appendWithOutbox(streamId, events, expectedVersion, outboxEntriesOf(events));
+    return appendWithOutbox(
+        streamId,
+        events,
+        expectedVersion,
+        EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper));
   }
 
   /**
@@ -968,7 +950,8 @@ public final class PostgresEventStore implements EventStore {
     List<OutboxEntry> linked =
         outboxEntries == null || outboxEntries.isEmpty() || events == null || events.isEmpty()
             ? outboxEntries
-            : withTraceLink(outboxEntries, traceLinkOf(events.getFirst()));
+            : EventAppendSupport.withTraceLink(
+                outboxEntries, EventAppendSupport.traceLinkOf(events.getFirst()));
     return appendWithOutbox(streamId, events, expectedVersion, linked);
   }
 
@@ -986,88 +969,13 @@ public final class PostgresEventStore implements EventStore {
         || outboxEntries == null) {
       return appendEvents(streamId, events, expectedVersion, outboxEntries, false);
     }
-    return tracedAppend(
+    return support.tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
         outboxEntries.size(),
         () -> appendEvents(streamId, events, expectedVersion, outboxEntries, true),
         result -> "APPENDED");
-  }
-
-  /**
-   * Runs {@code append} inside the span {@value TraceAttributes#EVENT_STORE_APPEND}. A version
-   * conflict ({@link OptimisticLockException}) is the outcome {@code CONFLICT}, and a saga's
-   * forward command the fence refuses ({@link SagaForwardFencedException}) the outcome {@code
-   * FENCED}; neither is an error.
-   */
-  private <R> R tracedAppend(
-      StreamId streamId,
-      int eventCount,
-      Version expectedVersion,
-      int outboxEntryCount,
-      Supplier<R> append,
-      Function<R, String> outcome) {
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_APPEND,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
-                .put(TraceAttributes.EVENT_COUNT, (long) eventCount)
-                .put(TraceAttributes.EXPECTED_VERSION, expectedVersion.value())
-                .put(TraceAttributes.OUTBOX_ENTRY_COUNT, (long) outboxEntryCount)
-                .build());
-    try {
-      R result = append.get();
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, outcome.apply(result));
-      scope.recordSuccess();
-      return result;
-    } catch (OptimisticLockException conflict) {
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "CONFLICT");
-      throw conflict;
-    } catch (SagaForwardFencedException fenced) {
-      scope.setAttribute(TraceAttributes.APPEND_OUTCOME, "FENCED");
-      throw fenced;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /**
-   * Serializes the events of an append through {@link #serializeRows}, inside the span {@value
-   * TraceAttributes#EVENT_STORE_APPEND_SERIALIZE} when {@code traced}: the append runs inside its
-   * own span.
-   */
-  private List<EventRow> serialize(
-      StreamId streamId, List<EventEnvelope> events, Version expectedVersion, boolean traced)
-      throws JsonProcessingException {
-    if (!traced) {
-      return serializeRows(streamId, events, expectedVersion);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_APPEND_SERIALIZE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) events.size())
-                .build());
-    try {
-      List<EventRow> rows = serializeRows(streamId, events, expectedVersion);
-      scope.recordSuccess();
-      return rows;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
   }
 
   /**
@@ -1081,30 +989,20 @@ public final class PostgresEventStore implements EventStore {
       Version expectedVersion,
       List<OutboxEntry> outboxEntries,
       boolean traced) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    Objects.requireNonNull(events, "events is required");
-    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    Objects.requireNonNull(outboxEntries, "outboxEntries is required");
-    if (!outboxEntries.isEmpty() && outboxStore == null) {
-      throw new IllegalStateException(
-          "Outbox entries were passed but no PostgresOutboxStore is configured on this event"
-              + " store. Configure a PostgresOutboxStore together with an OutboxEventMapper: on the"
-              + " builder or factory, or as the outbox bean pair of an integration");
-    }
-    if (events.isEmpty()) {
-      // The empty-events no-op returns BEFORE any transaction is opened, so
-      // outboxStore.saveAll below is unreachable. Returning success here with entries in hand would
-      // discard them silently — no exception, no log, no DLQ, no metric, and no row to retry later.
-      // Refuse instead: entries commit atomically WITH events, and there is nothing to commit with.
-      if (!outboxEntries.isEmpty()) {
-        throw new IllegalArgumentException(
-            "outboxEntries were passed with an empty events list — outbox entries are persisted"
-                + " atomically with the events of this append and cannot be appended alone. To"
-                + " emit an outbox entry that has no accompanying domain event, persist it"
-                + " directly with OutboxStore.save(entry), one entry per call — that write commits"
-                + " on its own connection and is atomic with nothing else.");
-      }
-      return new AppendResult(List.of(), expectedVersion);
+    // The empty-events no-op returns BEFORE any transaction is opened, so outboxStore.saveAll
+    // below is unreachable; entries passed with no events are refused rather than lost silently.
+    Optional<AppendResult> noOp =
+        EventAppendSupport.preamble(
+            streamId,
+            events,
+            expectedVersion,
+            outboxEntries,
+            outboxStore != null,
+            "Outbox entries were passed but no PostgresOutboxStore is configured on this event"
+                + " store. Configure a PostgresOutboxStore together with an OutboxEventMapper: on the"
+                + " builder or factory, or as the outbox bean pair of an integration");
+    if (noOp.isPresent()) {
+      return noOp.get();
     }
 
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
@@ -1114,7 +1012,9 @@ public final class PostgresEventStore implements EventStore {
     // the pool could otherwise hand to another caller.
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion, traced);
+      rows =
+          support.serialize(
+              events.size(), traced, () -> serializeRows(streamId, events, expectedVersion));
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }
@@ -1173,19 +1073,16 @@ public final class PostgresEventStore implements EventStore {
         return appendResult;
       } catch (SQLException e) {
         // No rollback here — the finally below is the single rollback point (committed == false).
-        // Discriminate BEFORE the retryable mapping. A 23505 naming the
-        // global_offset PRIMARY KEY is a desynced counter, not a version conflict, and no retry can
-        // resolve it — see isGlobalOffsetCollision.
-        if (isGlobalOffsetCollision(e)) {
-          throw new EventStoreException(globalOffsetDesyncMessage(shownStream), e);
-        }
-        if (isRetryableConflict(e)) {
-          throw new OptimisticLockException(
-              "Version conflict on stream '"
-                  + shownStream
-                  + "' at expected version "
-                  + expectedVersion.value(),
-              e);
+        // Only an append that did not commit reaches this catch: a failure after the commit is
+        // post-commit cleanup, handled by the outer catch. The shared mapping discriminates BEFORE
+        // the retryable mapping: a 23505 naming the global_offset PRIMARY KEY is a desynced
+        // counter, not a version conflict, and no retry can resolve it — see
+        // isGlobalOffsetCollision. Any other failure is rethrown for the outer catch's plain wrap.
+        RuntimeException mapped =
+            EventAppendSupport.appendConflict(
+                e, PostgresAppendFailures.INSTANCE, shownStream, expectedVersion);
+        if (mapped != null) {
+          throw mapped;
         }
         throw e;
       } finally {
@@ -1235,14 +1132,12 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * The claim-lost dead end: the key's claim was lost, yet the winning row is gone. The key renders
-   * through {@link LogSanitizer#sanitizeForLog}: it is caller-supplied, and this message is logged
-   * and persisted (the audit row, the dead-letter entry).
+   * The claim-lost dead end's exception: a test-only delegate to {@link
+   * EventAppendSupport#inboxConflictWithoutRow}, which holds the one copy; production code calls it
+   * there.
    */
   static EventStoreException inboxConflictWithoutRow(IdempotencyKey idempotencyKey) {
-    return new EventStoreException(
-        "Inbox conflict but no row found for key: "
-            + LogSanitizer.sanitizeForLog(idempotencyKey.value()));
+    return EventAppendSupport.inboxConflictWithoutRow(idempotencyKey);
   }
 
   /**
@@ -1305,8 +1200,9 @@ public final class PostgresEventStore implements EventStore {
     // events.
     Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
     CommandInbox.requireCommandType(commandType);
-    List<OutboxEntry> outboxEntries = outboxEntriesOf(events);
-    return tracedAppend(
+    List<OutboxEntry> outboxEntries =
+        EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper);
+    return support.tracedAppend(
         streamId,
         events.size(),
         expectedVersion,
@@ -1322,47 +1218,6 @@ public final class PostgresEventStore implements EventStore {
                 outboxEntries,
                 true),
         result -> result.alreadyApplied() ? "DUPLICATE" : "APPENDED");
-  }
-
-  /**
-   * The outbox entries the configured mapper derives from {@code events}; none without one. Each
-   * entry's trace link is the link of the event it was derived from, whatever the mapper set (see
-   * {@link #withTraceLink}).
-   */
-  private List<OutboxEntry> outboxEntriesOf(List<EventEnvelope> events) {
-    return outboxStore != null && outboxEventMapper != null
-        ? events.stream()
-            .flatMap(e -> withTraceLink(outboxEventMapper.toOutbox(e), traceLinkOf(e)).stream())
-            .toList()
-        : List.of();
-  }
-
-  /**
-   * The link to the span of the command that wrote {@code event}: its {@code spanContext}, via
-   * {@link SpanLink#of}; {@link SpanLink#NONE} when the command was not traced.
-   */
-  private static SpanLink traceLinkOf(EventEnvelope event) {
-    return event == null ? SpanLink.NONE : SpanLink.of(event.metadata());
-  }
-
-  /**
-   * {@code entries}, each with {@code link} as its trace link, replacing any link a mapper or a
-   * caller set, so every stored link is the span context of the source event. {@code entries}
-   * itself when every entry already carries {@code link}, the untraced case with no link set.
-   * {@code PostgresOutboxStore} stores a link only when its ids are valid W3C ids.
-   */
-  private static List<OutboxEntry> withTraceLink(List<OutboxEntry> entries, SpanLink link) {
-    List<OutboxEntry> linked = null;
-    for (int i = 0; i < entries.size(); i++) {
-      OutboxEntry entry = entries.get(i);
-      if (!entry.traceLink().equals(link)) {
-        if (linked == null) {
-          linked = new ArrayList<>(entries);
-        }
-        linked.set(i, entry.withTraceLink(link));
-      }
-    }
-    return linked == null ? entries : linked;
   }
 
   /**
@@ -1385,20 +1240,21 @@ public final class PostgresEventStore implements EventStore {
       throw new UnsupportedOperationException(
           "This PostgresEventStore was built without a command inbox");
     }
-    Objects.requireNonNull(streamId, "streamId is required");
-    Objects.requireNonNull(events, "events is required");
-    Objects.requireNonNull(expectedVersion, "expectedVersion is required");
-    Objects.requireNonNull(idempotencyKey, "idempotencyKey is required");
-    CommandInbox.requireCommandType(commandType);
+    EventAppendSupport.requireKeyedArguments(
+        streamId, events, expectedVersion, idempotencyKey, commandType);
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
     List<OutboxEntry> outboxEntries =
-        mappedOutboxEntries != null ? mappedOutboxEntries : outboxEntriesOf(events);
+        mappedOutboxEntries != null
+            ? mappedOutboxEntries
+            : EventAppendSupport.outboxEntriesOf(events, outboxStore != null, outboxEventMapper);
     // Serialize (Jackson, including any @Encrypted field KMS/Vault calls) BEFORE acquiring a
     // pooled connection — see serializeRows — so a slow crypto round trip never holds a connection
     // the pool could otherwise hand to another caller.
     List<EventRow> rows;
     try {
-      rows = serialize(streamId, events, expectedVersion, traced);
+      rows =
+          support.serialize(
+              events.size(), traced, () -> serializeRows(streamId, events, expectedVersion));
     } catch (JsonProcessingException e) {
       throw new EventStoreException("Failed to serialize event for stream: " + shownStream, e);
     }
@@ -1459,15 +1315,11 @@ public final class PostgresEventStore implements EventStore {
         }
       } catch (SQLException e) {
         // No rollback here — the finally below is the single rollback point (committed == false).
-        // The keyed path reaches the same verdict as append() — one guard, both
-        // call sites, so the classification cannot depend on whether the caller passed a key.
-        if (isGlobalOffsetCollision(e)) {
-          throw new EventStoreException(globalOffsetDesyncMessage(shownStream), e);
-        }
-        if (isRetryableConflict(e)) {
-          throw new OptimisticLockException("Concurrent modification of stream: " + shownStream, e);
-        }
-        throw new EventStoreException("Failed idempotent append to stream: " + shownStream, e);
+        // Only a keyed append that did not commit reaches this catch. It reaches the same verdict
+        // as append() — one guard, both call sites, so the classification cannot depend on whether
+        // the caller passed a key.
+        throw EventAppendSupport.keyedAppendFailure(
+            e, PostgresAppendFailures.INSTANCE, shownStream);
       } finally {
         // The SINGLE rollback point for every non-committed exit — the claim-lost
         // branch, SQLException/EventStoreException aborts, and any OTHER Throwable (an Error, or
@@ -1491,22 +1343,14 @@ public final class PostgresEventStore implements EventStore {
     }
     if (claimLost) {
       // The append connection above is already closed/returned to the pool at this point — the
-      // inbox lookback below opens its own connection without holding onto the append one.
-      CommandInbox.InboxResult prior =
-          commandInbox
-              .find(idempotencyKey)
-              .orElseThrow(() -> inboxConflictWithoutRow(idempotencyKey));
-      // Fail closed unless the winning row was recorded by the SAME
-      // command on the SAME stream. Without this the claim loser was handed the winner's offsets
-      // and final version with alreadyApplied=true — a fabricated success for a command whose
-      // events were never appended and never will be (the key is now permanently claimed), carrying
-      // another aggregate's stream metadata back to the caller. The bus's sequential pre-check
-      // rejects these very inputs, so the concurrent path has to reach the same verdict: both call
-      // the one shared guard. IllegalArgumentException (not EventStoreException) on purpose — the
-      // bus classifies it as deterministic (DEFAULT_DLQ_ELIGIBLE excludes it), so a colliding key
-      // is not retried or dead-lettered forever against a conflict that can never resolve.
-      prior.requireBoundTo(commandType, streamId);
-      return new IdempotentAppendResult(prior.globalOffsets(), prior.finalVersion(), true);
+      // inbox lookback opens its own connection without holding onto the append one. It fails
+      // closed unless the winning row was recorded by the SAME command on the SAME stream: without
+      // that the claim loser would be handed the winner's offsets and final version with
+      // alreadyApplied=true, a fabricated success for a command whose events were never appended.
+      // IllegalArgumentException (not EventStoreException) on purpose — the bus classifies it as
+      // deterministic, so a colliding key is not retried or dead-lettered forever.
+      return EventAppendSupport.replayLostClaim(
+          commandInbox, idempotencyKey, commandType, streamId);
     }
     return result;
   }
@@ -1584,10 +1428,6 @@ public final class PostgresEventStore implements EventStore {
     }
   }
 
-  /** One event's pre-serialized row data, ready for the batch insert. */
-  private record EventRow(
-      long version, String eventType, String payloadJson, String metadataJson, int schemaVersion) {}
-
   /**
    * Serializes {@code events} (Jackson, including any {@code @Encrypted} field KMS/Vault calls)
    * into {@link EventRow}s ready for {@link #insertEvents}. Touches no JDBC connection — callers
@@ -1607,14 +1447,14 @@ public final class PostgresEventStore implements EventStore {
     long version = expectedVersion.value();
     for (EventEnvelope envelope : events) {
       version++;
+      // The schema version is asked before the event is serialized, as this store always did.
       int schemaVersion = upcasterChain.currentVersion(envelope.eventType());
-      String payloadJson = objectMapper.writeValueAsString(envelope.event());
-      String metadataJson = objectMapper.writeValueAsString(envelope.metadata());
-      requireNoNulCharacter(payloadJson, "event payload", shownStream);
-      requireNoNulCharacter(metadataJson, "event metadata", shownStream);
       rows.add(
-          new EventRow(
-              version, envelope.eventType().value(), payloadJson, metadataJson, schemaVersion));
+          support.serializeRow(
+              envelope,
+              version,
+              () -> schemaVersion,
+              (json, what) -> requireNoNulCharacter(json, what, shownStream)));
     }
     return rows;
   }
@@ -1639,7 +1479,6 @@ public final class PostgresEventStore implements EventStore {
       // caller-supplied bookkeeping only; see appendWithKey's javadoc.
       return List.of();
     }
-    String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
 
     // (1) Reserve N dense offsets (takes the counter row lock; released at tx end).
     int n = rows.size();
@@ -1671,15 +1510,7 @@ public final class PostgresEventStore implements EventStore {
       try (var rs = head.executeQuery()) {
         rs.next();
         long actualHead = rs.getLong(1);
-        if (actualHead != expectedVersion.value()) {
-          throw new OptimisticLockException(
-              "Version conflict on stream '"
-                  + shownStream
-                  + "': expected version "
-                  + expectedVersion.value()
-                  + " but actual head is "
-                  + actualHead);
-        }
+        EventAppendSupport.requireExpectedHead(streamId, expectedVersion, actualHead);
       }
     }
 
@@ -1789,7 +1620,7 @@ public final class PostgresEventStore implements EventStore {
    * Operator-facing diagnosis for a {@link #isGlobalOffsetCollision} failure: names the desynced
    * counter and the exact remediation, instead of "version conflict on stream X".
    */
-  private static String globalOffsetDesyncMessage(String shownStream) {
+  static String globalOffsetDesyncMessage(String shownStream) {
     return "global_offset collision while appending to stream '"
         + shownStream
         + "': global_offset_sequence.next_value has fallen at or below max(global_offset), so this"
@@ -1830,23 +1661,8 @@ public final class PostgresEventStore implements EventStore {
     if (eventAuditStore == null || events.isEmpty()) {
       return;
     }
-    List<EventAuditEntry> auditEntries = new ArrayList<>();
-    long auditVersion = expectedVersion.value();
-    for (EventEnvelope envelope : events) {
-      auditVersion++;
-      auditEntries.add(
-          new EventAuditEntry(
-              envelope.metadata().eventId(),
-              envelope.eventType(),
-              streamId,
-              new Version(auditVersion),
-              envelope.metadata().commandId(),
-              envelope.metadata().correlationId(),
-              envelope.metadata().causationId(),
-              envelope.metadata().userId(),
-              envelope.metadata().timestamp()));
-    }
-    eventAuditStore.saveAll(auditEntries, conn);
+    eventAuditStore.saveAll(
+        EventAppendSupport.auditEntries(streamId, events, expectedVersion), conn);
   }
 
   /**
@@ -1896,41 +1712,15 @@ public final class PostgresEventStore implements EventStore {
       AggregateState state,
       int snapshotVersion,
       long snapshotPurgeGeneration) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    if (state == null) {
-      throw new IllegalArgumentException("state must not be null");
-    }
-    if (snapshotVersion < 1) {
-      throw new IllegalArgumentException("snapshotVersion must be >= 1");
-    }
-    if (snapshotPurgeGeneration < 0) {
-      throw new IllegalArgumentException(
-          "snapshotPurgeGeneration must not be negative, got " + snapshotPurgeGeneration);
-    }
+    EventAppendSupport.requireSnapshotArguments(
+        streamId, state, snapshotVersion, snapshotPurgeGeneration);
     if (!traced || version == null) {
       return writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
     }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_SAVE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .put(TraceAttributes.STREAM_VERSION, version.value())
-                .build());
-    try {
-      boolean saved =
-          writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration);
-      scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, saved ? "SAVED" : "SKIPPED");
-      scope.recordSuccess();
-      return saved;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
+    return support.tracedSaveSnapshot(
+        streamId,
+        version,
+        () -> writeSnapshot(streamId, version, state, snapshotVersion, snapshotPurgeGeneration));
   }
 
   private boolean writeSnapshot(
@@ -1940,63 +1730,26 @@ public final class PostgresEventStore implements EventStore {
       int snapshotVersion,
       long snapshotPurgeGeneration) {
     String shownStream = LogSanitizer.sanitizeForLog(streamId.value());
-    String stateType = state.getClass().getSimpleName();
-    EventStore.requireStateType(stateType);
-    Class<?> resolved;
-    try {
-      resolved = typeRegistry.resolveStateType(stateType);
-    } catch (RuntimeException e) {
-      throw new EventStoreException(
-          "Snapshot state type '"
-              + stateType
-              + "' does not resolve in the EventTypeRegistry — register "
-              + state.getClass().getName()
-              + " under its simple name so the snapshot can be rehydrated on load",
-          e);
-    }
-    if (resolved != state.getClass()) {
-      throw new EventStoreException(
-          "Snapshot state type '"
-              + stateType
-              + "' resolves to "
-              + resolved.getName()
-              + " in the EventTypeRegistry, but the state being saved is "
-              + state.getClass().getName()
-              + " — snapshots are stored by simple class name, so two state classes sharing a"
-              + " simple name would rehydrate as the wrong type");
-    }
-    // Serialize (Jackson, including any @Encrypted field KMS/Vault calls) BEFORE acquiring a
-    // pooled connection, so a slow crypto round trip never holds a connection the pool could
-    // otherwise hand to another caller.
-    String stateJson;
-    try {
-      stateJson = objectMapper.writeValueAsString(state);
-    } catch (JsonProcessingException e) {
-      throw new EventStoreException("Failed to serialize snapshot for stream: " + shownStream, e);
-    }
-    requireNoNulCharacter(stateJson, "snapshot state", shownStream);
+    // Validate and serialize (Jackson, including any @Encrypted field KMS/Vault calls) BEFORE
+    // acquiring a pooled connection, so a slow crypto round trip never holds a connection the pool
+    // could otherwise hand to another caller.
+    SnapshotPayload snapshot =
+        support.serializeSnapshot(
+            state, shownStream, (json, what) -> requireNoNulCharacter(json, what, shownStream));
 
     try (var conn = dataSource.getConnection();
         var ps = conn.prepareStatement(UPSERT_SNAPSHOT_VERSIONED)) {
       statementTimeout.applyTo(ps);
       StreamKeys.bind(ps, 1, streamId);
       ps.setLong(3, version.value());
-      ps.setString(4, stateType);
-      ps.setString(5, stateJson);
+      ps.setString(4, snapshot.stateType());
+      ps.setString(5, snapshot.stateJson());
       ps.setInt(6, snapshotVersion);
       ps.setLong(7, snapshotPurgeGeneration);
       int written =
           PostgresTransactions.commitIfManual(conn, "snapshot save", c -> ps.executeUpdate());
       if (written == 0) {
-        log.info(
-            "Snapshot of stream {} at version {} not stored: its snapshot_store row carries"
-                + " a purge generation other than {}, so a GDPR forget purged the stream's"
-                + " snapshot after the state being saved was loaded; the next command loads and"
-                + " snapshots again",
-            shownStream,
-            version.value(),
-            snapshotPurgeGeneration);
-        return false;
+        return support.snapshotNotStored(shownStream, version, snapshotPurgeGeneration);
       }
       return true;
     } catch (SQLException e) {
@@ -2334,9 +2087,9 @@ public final class PostgresEventStore implements EventStore {
     }
 
     /**
-     * {@link #build()} for {@link PostgresEventStoreFactory#create()}, which has already run {@link
-     * PostgresEventStore#validateCryptoConfig} before it touched the database; running it again
-     * would only repeat its warnings.
+     * {@link #build()} for {@link PostgresEventStoreFactory#create()}, which has already run the
+     * {@code @Encrypted} check ({@link EventAppendSupport#validateCryptoConfig}) before it touched
+     * the database; running it again would only repeat its warnings.
      */
     PostgresEventStore buildAfterCryptoCheck() {
       return build(false);
@@ -2350,7 +2103,7 @@ public final class PostgresEventStore implements EventStore {
                 + " entries.");
       }
       if (checkCrypto) {
-        validateCryptoConfig(typeRegistry, cryptoEngine);
+        EventAppendSupport.validateCryptoConfig(typeRegistry, cryptoEngine);
       }
       var mapper = StoreObjectMappers.eventsAndSagas(cryptoEngine, metrics);
       UpcasterChain chain = new UpcasterChain(upcasters);
