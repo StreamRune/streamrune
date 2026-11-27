@@ -1,9 +1,7 @@
 package org.streamrune.postgres;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -12,10 +10,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -25,11 +20,7 @@ import org.slf4j.LoggerFactory;
 import org.streamrune.core.AggregateHistory;
 import org.streamrune.core.AggregateState;
 import org.streamrune.core.CommandInbox;
-import org.streamrune.core.DomainEvent;
-import org.streamrune.core.EventDeserializationException;
 import org.streamrune.core.EventEnvelope;
-import org.streamrune.core.EventMetadata;
-import org.streamrune.core.EventSchemaAheadException;
 import org.streamrune.core.EventStore;
 import org.streamrune.core.EventStoreException;
 import org.streamrune.core.EventTypeRegistry;
@@ -37,10 +28,8 @@ import org.streamrune.core.OptimisticLockException;
 import org.streamrune.core.SnapshotMigration;
 import org.streamrune.core.SnapshotMigrationChain;
 import org.streamrune.core.StreamRuneMetrics;
-import org.streamrune.core.UnknownEventTypeException;
 import org.streamrune.core.audit.EventAuditEntry;
 import org.streamrune.core.crypto.CryptoEngine;
-import org.streamrune.core.crypto.CryptoMappingException;
 import org.streamrune.core.crypto.CryptoOperationException;
 import org.streamrune.core.outbox.OutboxEntry;
 import org.streamrune.core.outbox.OutboxEventMapper;
@@ -53,9 +42,6 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.tracing.TraceScope;
 import org.streamrune.core.tracing.TracingArea;
-import org.streamrune.core.types.AggregateId;
-import org.streamrune.core.types.AggregateType;
-import org.streamrune.core.types.EventType;
 import org.streamrune.core.types.GlobalOffset;
 import org.streamrune.core.types.IdempotencyKey;
 import org.streamrune.core.types.LogSanitizer;
@@ -67,6 +53,9 @@ import org.streamrune.crypto.CryptoShreddingModule;
 import org.streamrune.crypto.EncryptedTypeGuard;
 import org.streamrune.runtime.GuardedTracing;
 import org.streamrune.runtime.jdbc.Causes;
+import org.streamrune.runtime.jdbc.EventReadPath;
+import org.streamrune.runtime.jdbc.EventReadPath.RawEventRow;
+import org.streamrune.runtime.jdbc.EventReadPath.StoredSnapshot;
 import org.streamrune.runtime.jdbc.StoreObjectMappers;
 import org.streamrune.runtime.jdbc.StreamKeys;
 
@@ -140,8 +129,8 @@ import org.streamrune.runtime.jdbc.StreamKeys;
  * <p>Read paths ({@link #load}, {@link #readStream}, {@link #readGlobalStream}) apply the same
  * connection-scope discipline as writes, just in reverse: each collects raw column values (see
  * {@code RawEventRow}) while the connection is open, closes it, and only then deserializes —
- * decrypting any {@code @Encrypted} field via {@link #toEnvelope} — so a slow KMS/Vault round trip
- * on the read side can never hold a pooled connection either.
+ * decrypting any {@code @Encrypted} field through {@link EventReadPath} — so a slow KMS/Vault round
+ * trip on the read side can never hold a pooled connection either.
  *
  * <p><b>Connections and the statement bound.</b> Every operation borrows one connection from the
  * {@link DataSource} it was built with and returns it when the operation ends; the store keeps no
@@ -302,8 +291,6 @@ public final class PostgresEventStore implements EventStore {
   // result set before returning the first row, doubling peak memory for long streams.
   private static final int LOAD_FETCH_SIZE = 500;
 
-  private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
-
   private final DataSource dataSource;
   private final ObjectMapper objectMapper;
   private final EventTypeRegistry typeRegistry;
@@ -332,32 +319,18 @@ public final class PostgresEventStore implements EventStore {
   // asserts on the WARN, not on the probe count).
   private final AtomicBoolean legacySnapshotWarned = new AtomicBoolean(false);
 
-  // Streams for which loadEventsAfter's non-contiguity WARN has already
-  // fired once for this instance — see warnIfNonContiguous. Unbounded by design: it names streams
-  // that need an operator's attention, not a routine occurrence, mirroring legacySnapshotWarned's
-  // one-shot-per-instance scoping above.
-  private final Set<String> gapWarnedStreams = ConcurrentHashMap.newKeySet();
-
-  /**
-   * Registered snapshot migrations, applied on load to upgrade a version-mismatched snapshot to the
-   * expected schema version before falling back to discard-and-replay. Empty unless configured via
-   * the builder. Validated once at construction (no duplicate {@code fromVersion}; {@code toVersion
-   * > fromVersion}).
-   */
-  private final SnapshotMigrationChain snapshotMigrations;
-
-  /**
-   * Metrics collector. Used on the load path to record a discarded-and-replayed snapshot; also the
-   * collector threaded into {@link CryptoShreddingModule} via the object mapper on the {@code
-   * create}/{@link Builder} paths. Never null (defaults to {@link StreamRuneMetrics#NOOP}).
-   */
-  private final StreamRuneMetrics metrics;
-
   /** The tracing the event-store spans start through; {@link StreamRuneTracing#NOOP} by default. */
   private final StreamRuneTracing tracing;
 
   /** Whether {@link #tracing} records the event-store area, read once. */
   private final boolean traced;
+
+  /**
+   * The read path of this instance: snapshot decision and migration, event decoding, the load's
+   * history and the contiguity guards, with their spans, logs (under this store's category) and
+   * metrics. Owns this instance's once-per-stream version-gap warning state.
+   */
+  private final EventReadPath readPath;
 
   /**
    * Creates a new PostgresEventStore with optional upcasting and audit support.
@@ -575,14 +548,27 @@ public final class PostgresEventStore implements EventStore {
     this.outboxStore = outboxStore;
     this.outboxEventMapper = outboxEventMapper;
     this.commandInbox = commandInbox;
-    this.snapshotMigrations =
+    SnapshotMigrationChain migrations =
         snapshotMigrations == null ? SnapshotMigrationChain.of(null) : snapshotMigrations;
-    this.metrics = Objects.requireNonNull(metrics, "metrics is required");
+    Objects.requireNonNull(metrics, "metrics is required");
     this.statementTimeout =
         statementTimeout == null ? StatementTimeout.of(StatementTimeout.DEFAULT) : statementTimeout;
     this.tracing =
-        GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), this.metrics);
+        GuardedTracing.of(Objects.requireNonNull(tracing, "tracing is required"), metrics);
     this.traced = this.tracing.enabled(TracingArea.EVENT_STORE);
+    // The global offset is parsed first, before the event type is resolved, as this store always
+    // did.
+    this.readPath =
+        new EventReadPath(
+            objectMapper,
+            typeRegistry,
+            this.upcasterChain,
+            migrations,
+            metrics,
+            this.tracing,
+            this.traced,
+            log,
+            row -> GlobalOffset.of(row.globalOffset()));
   }
 
   /**
@@ -742,43 +728,8 @@ public final class PostgresEventStore implements EventStore {
 
   @Override
   public AggregateHistory load(StreamId streamId, int expectedSnapshotVersion) {
-    Objects.requireNonNull(streamId, "streamId is required");
-    if (expectedSnapshotVersion < EventStore.IGNORE_SNAPSHOT) {
-      throw new IllegalArgumentException(
-          "expectedSnapshotVersion must be >= "
-              + EventStore.IGNORE_SNAPSHOT
-              + " (IGNORE_SNAPSHOT skips reading any snapshot, 0 skips the version check), got "
-              + expectedSnapshotVersion);
-    }
-    if (!traced) {
-      return loadHistory(streamId, expectedSnapshotVersion);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_LOAD,
-            SpanKind.INTERNAL,
-            streamAttributes(streamId));
-    try {
-      AggregateHistory history = loadHistory(streamId, expectedSnapshotVersion);
-      scope.setAttribute(TraceAttributes.EVENT_COUNT, (long) history.events().size());
-      scope.setAttribute(TraceAttributes.SNAPSHOT_USED, history.snapshotState() != null);
-      scope.recordSuccess();
-      return history;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /** The attributes {@code stream.id} and {@code aggregate.type} of a span about one stream. */
-  private static SpanAttributes streamAttributes(StreamId streamId) {
-    return SpanAttributes.builder()
-        .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-        .put(TraceAttributes.AGGREGATE_TYPE, streamId.aggregateType().value())
-        .build();
+    return readPath.load(
+        streamId, expectedSnapshotVersion, () -> loadHistory(streamId, expectedSnapshotVersion));
   }
 
   private AggregateHistory loadHistory(StreamId streamId, int expectedSnapshotVersion) {
@@ -794,17 +745,7 @@ public final class PostgresEventStore implements EventStore {
     // may trigger @Encrypted field KMS/Vault decryption via Jackson's CryptoShreddingModule) only
     // AFTER the connection is released below — see the class javadoc on why decrypt must never
     // run while a pooled connection is held.
-    String snapshotStateJson = null;
-    Class<?> snapshotStateClass = null;
-    Version snapshotVersion = Version.initial();
-    // When set, the loaded snapshot must be migrated from this stored version up to
-    // expectedSnapshotVersion after the connection is released (chain application below).
-    int migrateFromVersion = -1;
-    // The purge generation of the stream's snapshot row, read with the row; 0 when there is none.
-    long purgeGeneration = 0;
-    // Whether the stream has a stored snapshot, usable or not: only then does a traced load start
-    // the snapshot span.
-    boolean snapshotStored = false;
+    StoredSnapshot snapshot;
     List<RawEventRow> rawRows;
 
     try (var conn = dataSource.getConnection()) {
@@ -817,63 +758,12 @@ public final class PostgresEventStore implements EventStore {
           statementTimeout.applyTo(ps);
           StreamKeys.bind(ps, 1, streamId);
           try (var rs = ps.executeQuery()) {
-            boolean rowPresent = rs.next();
-            if (rowPresent) {
-              purgeGeneration = rs.getLong("purge_generation");
-            }
-            // A purged row keeps its purge generation and has no state: there is no snapshot.
-            if (rowPresent && rs.getString("state_type") != null) {
-              snapshotStored = true;
-              int storedSnapshotVersion = rs.getInt("snapshot_version");
-              boolean compatible =
-                  expectedSnapshotVersion == 0 || storedSnapshotVersion == expectedSnapshotVersion;
-              if (compatible) {
-                // Resolve the stored state_type via the NON-throwing resolver: if the state class
-                // was renamed/retired from the registry after this snapshot was written, the
-                // snapshot is undeserializable and must be DISCARDED (full replay), never crash the
-                // load. resolveStateType(...) would throw UnknownEventTypeException here, aborting
-                // load() permanently (the overwriting save needs a successful load first). This
-                // mirrors the version-MISMATCH branch below, InMemoryEventStore, and the
-                // discard-not-crash contract documented on resolveStateTypeOrNull.
-                String stateType = rs.getString("state_type");
-                Class<?> resolved = resolveStateTypeOrNull(stateType);
-                if (resolved != null) {
-                  snapshotVersion = new Version(rs.getLong("version"));
-                  snapshotStateJson = rs.getString("state_payload");
-                  snapshotStateClass = resolved;
-                }
-                // Otherwise retired/renamed type: snapshotStateJson stays null and snapshotVersion
-                // stays Version.initial() → every event replays from the beginning.
-              } else {
-                // Version mismatch. Before discarding, decide (cheaply, still holding the
-                // connection) whether a COMPLETE migration chain can upgrade this snapshot to the
-                // expected version. Two independent requirements:
-                //   (1) the STORED state_type must still resolve to a class in the registry — the
-                //       migrated state's runtime class differs from the stored type, so we must
-                //       deserialize against the OLD (fromVersion) class the registry resolves for
-                //       the stored type. If that type was retired from the registry the snapshot is
-                //       undeserializable → discard (never crash);
-                //   (2) canReach(stored, expected) must hold — a gapped/overshooting chain is
-                //       unmigratable → discard.
-                // Only when BOTH hold do we narrow the event replay to versions after the snapshot;
-                // otherwise snapshotVersion stays Version.initial() and every event replays. The
-                // decision is made here, before LOAD_EVENTS, so a failed migration can never load a
-                // reduced event set. Actual deserialization + chain application run after close.
-                String stateType = rs.getString("state_type");
-                Class<?> oldClass = resolveStateTypeOrNull(stateType);
-                // (expectedSnapshotVersion != 0 holds on this branch: 0 is always compatible.)
-                if (oldClass != null
-                    && snapshotMigrations.canReach(
-                        storedSnapshotVersion, expectedSnapshotVersion)) {
-                  snapshotVersion = new Version(rs.getLong("version"));
-                  snapshotStateJson = rs.getString("state_payload");
-                  snapshotStateClass = oldClass;
-                  migrateFromVersion = storedSnapshotVersion;
-                }
-                // Otherwise unmigratable: snapshotStateJson stays null, snapshotVersion stays
-                // Version.initial() → all events will be loaded from the beginning.
-              }
-            }
+            // Decided here, before LOAD_EVENTS, so a snapshot the load cannot use never narrows
+            // the event read; its deserialization and migration run after the connection closed.
+            snapshot =
+                rs.next()
+                    ? readPath.decideSnapshot(rs, expectedSnapshotVersion)
+                    : StoredSnapshot.NONE;
           }
         }
 
@@ -885,10 +775,10 @@ public final class PostgresEventStore implements EventStore {
           statementTimeout.applyTo(ps);
           ps.setFetchSize(LOAD_FETCH_SIZE);
           StreamKeys.bind(ps, 1, streamId);
-          ps.setLong(3, snapshotVersion.value());
+          ps.setLong(3, snapshot.version().value());
           try (var rs = ps.executeQuery()) {
             while (rs.next()) {
-              rawRows.add(readRawRow(rs));
+              rawRows.add(EventReadPath.readRawRow(rs));
             }
           }
         }
@@ -905,336 +795,14 @@ public final class PostgresEventStore implements EventStore {
       throw new EventStoreException("Failed to load stream: " + streamText(streamId), e);
     }
 
-    // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
-    // toEnvelope() wraps its own IOExceptions in EventStoreException (unchecked), matching the
-    // exception type thrown for the snapshot state below.
-    Object snapshotState =
-        snapshotStored && traced
-            ? resolveSnapshotTraced(
-                streamId,
-                snapshotStateJson,
-                snapshotStateClass,
-                migrateFromVersion,
-                expectedSnapshotVersion,
-                snapshotVersion)
-            : resolveSnapshot(
-                streamId,
-                snapshotStateJson,
-                snapshotStateClass,
-                migrateFromVersion,
-                expectedSnapshotVersion);
-    if (snapshotState == DISCARDED_SNAPSHOT) {
-      // The stored snapshot — a DERIVED CACHE, never the source of truth — was discarded after the
-      // event read, which was narrowed to versions AFTER the snapshot, so RE-READ the whole stream
-      // from the beginning — nulling the state alone would silently drop the pre-snapshot events.
-      List<EventEnvelope> replayEvents = deserialize(readRawEvents(streamId, Version.initial()));
-      Version replayLast =
-          replayEvents.isEmpty() ? Version.initial() : replayEvents.getLast().version();
-      return new AggregateHistory(
-          null, replayEvents, replayLast, Version.initial(), purgeGeneration);
-    }
-    List<EventEnvelope> events = deserialize(rawRows);
-    warnIfNonContiguous(streamId, snapshotVersion, events);
-    Version lastVersion = events.isEmpty() ? snapshotVersion : events.getLast().version();
-    return new AggregateHistory(
-        (AggregateState) snapshotState, events, lastVersion, snapshotVersion, purgeGeneration);
-  }
-
-  /**
-   * {@link #resolveSnapshot} inside the span {@value TraceAttributes#EVENT_STORE_SNAPSHOT_LOAD},
-   * for a stream that has a stored snapshot: its outcome is {@code HIT} when the load starts from
-   * the snapshot and {@code DISCARDED} when the load cannot use it. A stream without one starts no
-   * snapshot span; its load span says {@code snapshot.used = false}.
-   */
-  private Object resolveSnapshotTraced(
-      StreamId streamId,
-      String snapshotStateJson,
-      Class<?> snapshotStateClass,
-      int migrateFromVersion,
-      int expectedSnapshotVersion,
-      Version snapshotVersion) {
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_SNAPSHOT_LOAD,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.STREAM_ID, LogSanitizer.sanitizeForTrace(streamId.value()))
-                .build());
-    try {
-      Object state =
-          resolveSnapshot(
-              streamId,
-              snapshotStateJson,
-              snapshotStateClass,
-              migrateFromVersion,
-              expectedSnapshotVersion);
-      boolean hit = snapshotStateJson != null && state != DISCARDED_SNAPSHOT;
-      scope.setAttribute(TraceAttributes.SNAPSHOT_OUTCOME, hit ? "HIT" : "DISCARDED");
-      scope.setAttribute(TraceAttributes.STREAM_VERSION, hit ? snapshotVersion.value() : 0L);
-      scope.recordSuccess();
-      return state;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /**
-   * The state of the snapshot a load read, deserialized (which may decrypt {@code @Encrypted}
-   * fields) after the connection is released, and migrated to {@code expectedSnapshotVersion} when
-   * {@code migrateFromVersion} is set. {@code null} when the load read no usable snapshot, {@link
-   * #DISCARDED_SNAPSHOT} when the stored snapshot cannot be used and the stream must be replayed
-   * from its start.
-   */
-  private Object resolveSnapshot(
-      StreamId streamId,
-      String snapshotStateJson,
-      Class<?> snapshotStateClass,
-      int migrateFromVersion,
-      int expectedSnapshotVersion) {
-    if (snapshotStateJson == null) {
-      return null;
-    }
-    Object snapshotState;
-    // Deserialize against snapshotStateClass — the STORED state_type's class, which is the OLD
-    // (fromVersion) class when a migration is pending (migrateFromVersion >= 0). Only then do we
-    // chain-migrate it up to the expected version.
-    AggregateState deserialized;
-    try {
-      deserialized = (AggregateState) objectMapper.readValue(snapshotStateJson, snapshotStateClass);
-    } catch (IOException | RuntimeException e) {
-      // The catch is deliberately wider than IOException. Jackson wraps a failing
-      // deserializer into JsonMappingException (an IOException) only for NESTED property
-      // failures; a failure on a ROOT-level property — e.g. CryptoShreddingModule's
-      // Base64.getDecoder().decode() throwing IllegalArgumentException on a corrupt @Encrypted
-      // ciphertext — propagates raw. The raw RuntimeException escaped this catch and wedged the
-      // aggregate permanently, defeating the discard-and-replay guard below that exists for
-      // exactly this case. The crypto fail-closed guard is unchanged: a chain carrying a
-      // CryptoOperationException still propagates (wrapped) instead of being discarded.
-      if (hasCryptoCause(e)) {
-        // Fail-closed contract preserved: a crypto decrypt failure (a transient key-store outage,
-        // corrupt/foreign ciphertext, or a post-forget tombstone the constructor rejected — any
-        // CryptoOperationException) that Jackson WRAPPED into a JsonMappingException on a nested
-        // @Encrypted field must NEVER be treated as a discardable cache. Discarding it would
-        // trust corrupted/undecryptable state; ALWAYS propagate. (A KeyNotFoundException is
-        // not a failure here — CryptoShreddingModule maps it to the [REDACTED] tombstone.)
-        //
-        // WHICH frame propagates mirrors toEnvelope's two-way routing. A bare
-        // CryptoOperationException is engine-raised transient key-store evidence (heals by
-        // itself) → the PLAIN EventStoreException, so the circuit breaker still counts it as
-        // infrastructure. Every other crypto cause is the module's own deterministic
-        // CryptoMappingException — e.g. a record constructor rejecting the post-forget
-        // [REDACTED] tombstone, a population that grows with every GDPR erasure — and re-fails
-        // identically forever, so it gets the typed EventDeserializationException
-        // (DLQ-eligible, breaker-EXCLUDED): client retries against one post-forget aggregate
-        // must never open the bus-global circuit.
-        if (hasTransientCryptoCause(e)) {
-          throw new EventStoreException(
-              "Failed to deserialize snapshot state for stream: " + streamText(streamId), e);
-        }
-        throw new EventDeserializationException(
-            "Failed to deserialize snapshot state for stream: " + streamText(streamId), e);
-      }
-      // A plain Jackson/IO deserialize failure means the stored snapshot — a DERIVED CACHE,
-      // never the source of truth — is unreadable, most often because an aggregate-state field
-      // was renamed/removed WITHOUT bumping the snapshot version. Crashing here wedges the
-      // aggregate permanently (every command load() fails, the bus dead-letters it, replays fail
-      // identically). Instead discard the snapshot and rebuild from events: the caller re-reads
-      // the whole stream from the beginning, because the event read was narrowed to versions AFTER
-      // the snapshot — nulling the state alone would silently drop the pre-snapshot events. Mirrors
-      // the retired-state_type and unmigratable-version discard branches of the load.
-      log.error(
-          "Snapshot for stream {} is undeserializable ({}); discarding the derived snapshot cache"
-              + " and replaying all events from the beginning. This usually means an"
-              + " aggregate-state field was renamed or removed without bumping the snapshot"
-              + " version — bump SnapshotPolicy's snapshotVersion so fresh snapshots are written.",
-          LogSanitizer.sanitizeForLog(streamId.value()),
-          e.toString(),
-          e);
-      recordSnapshotDiscarded("deserialize_failure", streamId);
-      return DISCARDED_SNAPSHOT;
-    }
-    if (migrateFromVersion >= 0) {
-      final int from = migrateFromVersion; // effectively-final capture for the lambda below
-      java.util.Optional<AggregateState> migrated;
-      try {
-        // SnapshotMigrationChain.migrate() can throw — NullPointerException when a
-        // registered step returns null, or IllegalStateException when a step's result does not
-        // match its declared toType() (both are programming errors IN THE STEP, not a chain
-        // configuration gap; see SnapshotMigrationChain's javadoc). Uncaught, either propagated
-        // straight out of load() and wedged the aggregate exactly like the comment above
-        // warns against: every command load() would fail, the bus would dead-letter it, and
-        // replays would fail identically, with no self-heal possible (rewriting the snapshot
-        // needs a successful load() first). A migration step is registered CODE, and a bug in it
-        // makes the stored snapshot exactly as untrustworthy as a field renamed without a
-        // version bump (the deserialize_failure case above) — so it gets the same
-        // discard-and-replay-from-events treatment, with its own metrics reason so an operator
-        // can tell "a migration step is broken" apart from "a field was renamed".
-        migrated = snapshotMigrations.migrate(deserialized, from, expectedSnapshotVersion);
-      } catch (RuntimeException e) {
-        if (hasCryptoCause(e)) {
-          // Fail-closed contract preserved, mirroring the deserialize-path crypto guard above:
-          // a migration step that touches an @Encrypted field and hits a genuine crypto failure
-          // (key-store outage, corrupt/foreign ciphertext) must never be treated as a
-          // discardable cache — discarding would risk silently dropping a GDPR-erased subject's
-          // redaction, and replaying from events would hit the identical failure on the same
-          // encrypted fields anyway, so discarding buys nothing but a lost signal.
-          //
-          // The frame is TYPED with the same two-way routing as
-          // the deserialize path above, instead of rethrowing the step's raw exception. Raw, a
-          // deterministic CryptoMappingException (or a step's own IllegalStateException around
-          // one) classified as generic infrastructure — breaker-eligible — and a step's
-          // top-level IllegalArgumentException would even classify as the CALLER's permanent
-          // rejection and vanish from the DLQ, though the defect lives in stored data. Typing
-          // preserves the full cause chain, so SubjectForgotten/permanent-rejection walks are
-          // unaffected.
-          if (hasTransientCryptoCause(e)) {
-            throw new EventStoreException(
-                "Snapshot migration failed for stream: " + streamText(streamId), e);
-          }
-          throw new EventDeserializationException(
-              "Snapshot migration failed for stream: " + streamText(streamId), e);
-        }
-        log.error(
-            "Snapshot migration for stream {} failed ({}); discarding the derived snapshot"
-                + " cache and replaying all events from the beginning. This means a registered"
-                + " SnapshotMigration step has a bug — inspect the migration chain for the"
-                + " version this stream's snapshot was stored at.",
-            LogSanitizer.sanitizeForLog(streamId.value()),
-            e.toString(),
-            e);
-        recordSnapshotDiscarded("migration_failure", streamId);
-        return DISCARDED_SNAPSHOT;
-      }
-      // canReach(migrateFromVersion, expected) already held inside the connection, so this must
-      // resolve; the guard turns any inconsistency into a clear error instead of silently
-      // returning a narrowed event set with a discarded snapshot (which would drop early
-      // events). This is a DIFFERENT failure mode from the step throwing above — canReach()
-      // and migrate() disagreeing is an internal consistency bug in the chain itself, not a
-      // single step's fault, so it deliberately stays a hard failure rather than discarding.
-      snapshotState =
-          migrated.orElseThrow(
-              () ->
-                  new EventStoreException(
-                      "Snapshot migration chain reported reachable from version "
-                          + from
-                          + " to "
-                          + expectedSnapshotVersion
-                          + " but failed to apply for stream: "
-                          + streamText(streamId)));
-    } else {
-      snapshotState = deserialized;
-    }
-    return snapshotState;
-  }
-
-  /**
-   * What {@link #resolveSnapshot} returns for a stored snapshot the load discards: the whole stream
-   * replays from its start.
-   */
-  private static final Object DISCARDED_SNAPSHOT = new Object();
-
-  /**
-   * Emits the snapshot-discard counter, logging and swallowing any {@link RuntimeException} from
-   * the metrics backend. The self-heal branches exist precisely so an unreadable DERIVED-CACHE
-   * snapshot cannot wedge the aggregate; a metrics backend that throws (a lazy Micrometer
-   * registration against a closed or misconfigured registry) must not re-introduce that wedge
-   * through the observability side channel. Mirrors {@code PgNotificationListener.recordReconnect}.
-   */
-  private void recordSnapshotDiscarded(String reason, StreamId streamId) {
-    try {
-      metrics.recordSnapshotDiscarded(reason);
-    } catch (RuntimeException e) {
-      log.warn(
-          "Metrics recordSnapshotDiscarded({}) failed for stream {}",
-          reason,
-          LogSanitizer.sanitizeForLog(streamId.value()),
-          e);
-    }
-  }
-
-  /**
-   * The events of a load, deserialized from {@code rows} inside the span {@value
-   * TraceAttributes#EVENT_STORE_LOAD_DESERIALIZE} when the event-store area is traced.
-   */
-  private List<EventEnvelope> deserialize(List<RawEventRow> rows) {
-    if (!traced) {
-      return toEnvelopes(rows);
-    }
-    TraceScope scope =
-        tracing.start(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_LOAD_DESERIALIZE,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) rows.size())
-                .put(TraceAttributes.UPCAST_COUNT, upcastCount(rows))
-                .build());
-    try {
-      List<EventEnvelope> events = toEnvelopes(rows);
-      scope.recordSuccess();
-      return events;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
-  }
-
-  /** The number of {@code rows} stored below their type's current schema version. */
-  private long upcastCount(List<RawEventRow> rows) {
-    if (upcasterChain.isEmpty()) {
-      return 0;
-    }
-    long count = 0;
-    for (RawEventRow row : rows) {
-      if (row.schemaVersion() < upcasterChain.currentVersion(new EventType(row.eventType()))) {
-        count++;
-      }
-    }
-    return count;
-  }
-
-  private List<EventEnvelope> toEnvelopes(List<RawEventRow> rows) {
-    return rows.stream().map(this::toEnvelope).toList();
-  }
-
-  /**
-   * The events of a global or stream read, deserialized from {@code rows}; inside the span {@value
-   * TraceAttributes#EVENT_STORE_READ} when the event-store area is traced, the read returned at
-   * least one row and a span is current on this thread, whose child it is. The span starts at
-   * {@code started}, when the read's query started, so it covers the query and the deserialization;
-   * a read that returned no row starts none, and a consumer's poll, with no span current, starts
-   * none either.
-   */
-  private List<EventEnvelope> readEvents(List<RawEventRow> rows, String readKind, Instant started) {
-    if (!traced || rows.isEmpty()) {
-      return toEnvelopes(rows);
-    }
-    TraceScope scope =
-        tracing.startChild(
-            TracingArea.EVENT_STORE,
-            TraceAttributes.EVENT_STORE_READ,
-            SpanKind.INTERNAL,
-            SpanAttributes.builder()
-                .put(TraceAttributes.EVENT_COUNT, (long) rows.size())
-                .put(TraceAttributes.READ_KIND, readKind)
-                .build(),
-            started);
-    try {
-      List<EventEnvelope> events = toEnvelopes(rows);
-      scope.recordSuccess();
-      return events;
-    } catch (Throwable t) {
-      scope.recordError(t);
-      throw t;
-    } finally {
-      scope.close();
-    }
+    // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released. A
+    // discarded snapshot re-reads the whole stream on a connection of its own (readRawEvents).
+    return readPath.assembleHistory(
+        streamId,
+        snapshot,
+        rawRows,
+        expectedSnapshotVersion,
+        after -> readRawEvents(streamId, after));
   }
 
   /**
@@ -1255,7 +823,7 @@ public final class PostgresEventStore implements EventStore {
           ps.setLong(3, afterVersion.value());
           try (var rs = ps.executeQuery()) {
             while (rs.next()) {
-              rows.add(readRawRow(rs));
+              rows.add(EventReadPath.readRawRow(rs));
             }
           }
         }
@@ -1280,10 +848,7 @@ public final class PostgresEventStore implements EventStore {
    */
   private AggregateHistory loadIgnoringSnapshot(StreamId streamId) {
     warnIfLegacySnapshotExists();
-    List<EventEnvelope> events = deserialize(readRawEvents(streamId, Version.initial()));
-    warnIfNonContiguous(streamId, Version.initial(), events);
-    Version version = events.isEmpty() ? Version.initial() : events.getLast().version();
-    return new AggregateHistory(null, events, version, Version.initial());
+    return readPath.historyIgnoringSnapshot(streamId, readRawEvents(streamId, Version.initial()));
   }
 
   /**
@@ -1336,28 +901,12 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * True when {@code t} or any exception in its cause chain is a {@link CryptoOperationException}.
-   * The snapshot-discard fallback uses this to keep the crypto fail-closed contract intact: a
-   * crypto decrypt failure that Jackson wrapped into a {@code JsonMappingException} (IOException)
-   * must propagate, never be swallowed as a discardable cache.
+   * Whether {@code t}'s cause chain holds a {@link CryptoOperationException}: a test-only delegate
+   * to {@link EventReadPath#hasCryptoCause}, which holds the one copy; production code calls it
+   * there.
    */
   static boolean hasCryptoCause(Throwable t) {
-    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
-    return Causes.find(t, CryptoOperationException.class) != null;
-  }
-
-  /**
-   * Resolves the class for a stored snapshot {@code state_type}, returning {@code null} instead of
-   * throwing when the type is not registered. Used only on the migration path: a snapshot written
-   * under a state class that has since been retired from the registry is undeserializable, so it
-   * must be discarded (full replay) rather than crashing the load.
-   */
-  private Class<?> resolveStateTypeOrNull(String stateType) {
-    try {
-      return typeRegistry.resolveStateType(stateType);
-    } catch (UnknownEventTypeException _) {
-      return null;
-    }
+    return EventReadPath.hasCryptoCause(t);
   }
 
   @Override
@@ -2071,39 +1620,6 @@ public final class PostgresEventStore implements EventStore {
   }
 
   /**
-   * Best-effort, one-shot-per-instance-and-stream WARN when a loaded stream's versions are
-   * non-contiguous relative to {@code baseline} (the snapshot version being replayed from, or
-   * {@link Version#initial()} for a full replay) — cheap, since the caller already iterated {@code
-   * events} to build them from the raw rows. {@link #append} / {@link #appendWithKey} cannot create
-   * a gap (the strict {@code expectedVersion} head check), so this is a DIAGNOSTIC for a stream
-   * whose rows were written, deleted or partially restored outside this store. Never renumbers
-   * automatically: reconstructing a gapped stream's intended history is a data-recovery decision
-   * this store cannot infer.
-   */
-  private void warnIfNonContiguous(
-      StreamId streamId, Version baseline, List<EventEnvelope> events) {
-    long expected = baseline.value();
-    for (EventEnvelope event : events) {
-      long actual = event.version().value();
-      if (actual != expected + 1) {
-        if (gapWarnedStreams.add(streamId.value())) {
-          log.warn(
-              "Stream '{}' has non-contiguous versions (expected {} but found {}, right after"
-                  + " version {}) — rows were written, deleted or restored outside this store."
-                  + " This store never renumbers events automatically; reconstructing the intended"
-                  + " history is a data-recovery decision. Logged once per stream per process.",
-              LogSanitizer.sanitizeForLog(streamId.value()),
-              expected + 1,
-              actual,
-              expected);
-        }
-        return;
-      }
-      expected = actual;
-    }
-  }
-
-  /**
    * Batch-inserts pre-serialized {@code rows} into {@code event_stream} with explicitly assigned,
    * dense {@code global_offset} values and returns them in row order. Returns an empty list
    * immediately if {@code rows} is empty.
@@ -2502,7 +2018,7 @@ public final class PostgresEventStore implements EventStore {
    */
   @Override
   public List<EventEnvelope> readGlobalStream(GlobalOffset afterOffset, int maxCount) {
-    requireMaxCount(maxCount);
+    EventReadPath.requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
@@ -2525,29 +2041,20 @@ public final class PostgresEventStore implements EventStore {
       // first row, so a hole splits a page but never wedges the stream. This cannot strand a
       // still-in-flight lower offset, because the serialized append guarantees none exists below a
       // committed one.
-      long expectedNext = -1;
+      var contiguity = readPath.globalContiguity(afterOffset);
       try (var rs = ps.executeQuery()) {
         while (rs.next()) {
-          long offset = rs.getLong("global_offset");
-          if (expectedNext == -1) {
-            expectedNext = offset;
-          } else if (offset != expectedNext) {
-            log.warn(
-                "non-contiguous global_offset observed after {}: expected {}, got {}",
-                afterOffset,
-                expectedNext,
-                offset);
+          if (!contiguity.admits(rs.getLong("global_offset"))) {
             break;
           }
-          rawRows.add(readRawRow(rs));
-          expectedNext++;
+          rawRows.add(EventReadPath.readRawRow(rs));
         }
       }
     } catch (SQLException e) {
       throw new EventStoreException("Failed to read global stream from offset: " + afterOffset, e);
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
-    return readEvents(rawRows, "GLOBAL", started);
+    return readPath.readEvents(rawRows, "GLOBAL", started);
   }
 
   private static final String LAST_GLOBAL_OFFSET =
@@ -2585,7 +2092,7 @@ public final class PostgresEventStore implements EventStore {
   @Override
   public List<EventEnvelope> readStream(StreamId streamId, Version afterVersion, int maxCount) {
     Objects.requireNonNull(streamId, "streamId is required");
-    requireMaxCount(maxCount);
+    EventReadPath.requireMaxCount(maxCount);
     Instant started = traced ? Instant.now() : null;
     List<RawEventRow> rawRows;
     try (var conn = dataSource.getConnection();
@@ -2597,25 +2104,14 @@ public final class PostgresEventStore implements EventStore {
       rawRows = new ArrayList<>();
       try (var rs = ps.executeQuery()) {
         while (rs.next() && rawRows.size() < maxCount) {
-          rawRows.add(readRawRow(rs));
+          rawRows.add(EventReadPath.readRawRow(rs));
         }
       }
     } catch (SQLException e) {
       throw new EventStoreException("Failed to read stream: " + streamText(streamId), e);
     }
     // Deserialize (and decrypt, if any field is @Encrypted) AFTER the connection is released.
-    return readEvents(rawRows, "STREAM", started);
-  }
-
-  /**
-   * Refuses a negative {@code maxCount} with the {@link IllegalArgumentException} the {@link
-   * EventStore} javadoc promises, before the query: the server would refuse {@code LIMIT -1} with
-   * an SQL error.
-   */
-  private static void requireMaxCount(int maxCount) {
-    if (maxCount < 0) {
-      throw new IllegalArgumentException("maxCount must not be negative, got " + maxCount);
-    }
+    return readPath.readEvents(rawRows, "STREAM", started);
   }
 
   /**
@@ -2660,190 +2156,6 @@ public final class PostgresEventStore implements EventStore {
       idx = json.indexOf("\\u0000", idx + 1);
     }
     return false;
-  }
-
-  /**
-   * One event row's raw column values, read from a {@link ResultSet} while the JDBC connection is
-   * still open. Carries no decrypted/deserialized data — {@link #toEnvelope} does that work later,
-   * after the connection has been released, so a slow {@code @Encrypted} field KMS/Vault round trip
-   * inside Jackson's {@code readValue} never holds a pooled connection.
-   */
-  private record RawEventRow(
-      long globalOffset,
-      String aggregateType,
-      String aggregateId,
-      long version,
-      String eventType,
-      String payloadJson,
-      String metadataJson,
-      int schemaVersion) {
-
-    /** The stored stream's {@code type:id} text, sanitized for an exception or log message. */
-    String streamText() {
-      return LogSanitizer.sanitizeForLog(aggregateType + StreamId.SEPARATOR + aggregateId);
-    }
-  }
-
-  /**
-   * Reads one row's raw column values from {@code rs} into a {@link RawEventRow}. Touches no
-   * Jackson deserialization — safe to call while a pooled connection is held.
-   */
-  private static RawEventRow readRawRow(ResultSet rs) throws SQLException {
-    return new RawEventRow(
-        rs.getLong("global_offset"),
-        rs.getString("aggregate_type"),
-        rs.getString("aggregate_id"),
-        rs.getLong("version"),
-        rs.getString("event_type"),
-        rs.getString("payload"),
-        rs.getString("metadata"),
-        rs.getInt("schema_version"));
-  }
-
-  /**
-   * The message of the refusal to read an event stored at a {@code schema_version} above this
-   * reader's: names the type, the stream and both versions, and the two ways it arises.
-   */
-  static String schemaAheadMessage(
-      String eventType, String stream, int storedVersion, int readerVersion) {
-    return "Event type "
-        + eventType
-        + " for stream "
-        + stream
-        + " is stored at schema_version "
-        + storedVersion
-        + " but this event store's upcaster chain only reaches version "
-        + readerVersion
-        + ". A newer writer stamped it: either a replica of a newer release of this application"
-        + " (a rolling deployment that bumps this event's schema is in progress, and this replica"
-        + " reads it once it is upgraded), or an event store wired with upcasters this one lacks."
-        + " Reading it would silently mis-bind the payload, so the read is refused; register the"
-        + " same upcasters on every event store that reads this database.";
-  }
-
-  /**
-   * Deserializes a {@link RawEventRow} into an {@link EventEnvelope} — identical
-   * readValue/convertValue/upcast logic as before, just reading from the record's Strings instead
-   * of a {@link ResultSet}. Touches no JDBC connection: callers invoke this AFTER the connection
-   * that produced the raw row has already been closed, so a slow {@code @Encrypted} field KMS/Vault
-   * decrypt round trip (triggered by {@code objectMapper.readValue} via {@link
-   * CryptoShreddingModule}) never holds a pooled connection.
-   *
-   * @throws EventDeserializationException when the stored row deterministically cannot be bound to
-   *     its typed form — a Jackson parse/bind failure ({@link IOException}), a malformed upcaster
-   *     output (Jackson's unchecked {@code IllegalArgumentException} from {@code convertValue}), a
-   *     user upcaster's own throw, or a deterministic {@link CryptoMappingException} (escaping raw,
-   *     these would look to the caller like its own bad input and every classifier would mis-bin a
-   *     stored-data defect)
-   * @throws EventStoreException (plain) when the chain carries a bare {@link
-   *     CryptoOperationException} — a condition of the key store or the key (an outage, a disabled
-   *     or inaccessible key), not of the stored event, which must keep classifying as an
-   *     infrastructure failure, never as deterministic poison
-   */
-  private EventEnvelope toEnvelope(RawEventRow row) {
-    GlobalOffset globalOffsetObj = GlobalOffset.of(row.globalOffset());
-    EventType eventType = new EventType(row.eventType());
-    int schemaVersion = row.schemaVersion();
-
-    Class<?> eventClass = typeRegistry.resolveEventType(eventType);
-    Object event;
-
-    try {
-      // A reader with no upcasters understands only v1 — the write path stamps schema_version = 1
-      // with the empty chain (see the append path) — and the empty chain reports currentVersion =
-      // 1, so a stored schema_version >= 2 meets the guard below instead of falling through to a
-      // plain readValue that would silently mis-bind a newer-shaped payload.
-      int currentVersion = upcasterChain.currentVersion(eventType);
-      if (schemaVersion > currentVersion) {
-        // A stored version ABOVE the reader's current version means a newer writer stamped it: a
-        // replica of the next release during a rolling deployment, or a store wired with upcasters
-        // this one lacks. Reading on would silently mis-bind a newer-shaped payload to an older
-        // class, or skip an upcast the real chain still owes. Fail closed with the dedicated type:
-        // the refusal is about THIS reader, so it is retry-later (dead-lettered, never counted by
-        // the circuit breaker, never quarantined by a projection) — see EventSchemaAheadException.
-        throw new EventSchemaAheadException(
-            schemaAheadMessage(
-                LogSanitizer.sanitizeForLog(eventType.value()),
-                row.streamText(),
-                schemaVersion,
-                currentVersion),
-            eventType,
-            schemaVersion,
-            currentVersion);
-      }
-      // A store without upcasters binds every row directly, a schema_version below 1 included.
-      if (!upcasterChain.isEmpty() && schemaVersion < currentVersion) {
-        // Deserialize to map, upcast, then bind to the target class. convertValue() binds the
-        // already-parsed map directly — no intermediate JSON string (the write+re-read round-trip
-        // measured ~3.6x slower than convertValue in the upcast hot path).
-        Map<String, Object> rawData = objectMapper.readValue(row.payloadJson(), MAP_TYPE);
-        Map<String, Object> upcasted = upcasterChain.upcast(eventType, rawData, schemaVersion);
-        event = objectMapper.convertValue(upcasted, eventClass);
-      } else {
-        event = objectMapper.readValue(row.payloadJson(), eventClass);
-      }
-
-      EventMetadata metadata = objectMapper.readValue(row.metadataJson(), EventMetadata.class);
-
-      return new EventEnvelope(
-          globalOffsetObj,
-          StreamId.of(new AggregateType(row.aggregateType()), new AggregateId(row.aggregateId())),
-          new Version(row.version()),
-          eventType,
-          (DomainEvent) event,
-          metadata);
-    } catch (IOException | RuntimeException e) {
-      // The catch is deliberately wider than IOException. The upcast branch
-      // runs USER upcaster code bare and binds its output via objectMapper.convertValue, whose
-      // failure mode is an unchecked IllegalArgumentException — both escaped a catch (IOException)
-      // raw. A raw IAE classifies as the CALLER's permanent rejection (excluded from DLQ and
-      // breaker, invisible to the read-poison bound), even though the defect is in the STORED data.
-      if (e instanceof EventStoreException ese) {
-        // Already typed by the store itself (e.g. the fail-closed throw above) — never
-        // double-wrap.
-        throw ese;
-      }
-      if (hasTransientCryptoCause(e)) {
-        // A bare CryptoOperationException is engine-raised evidence about the key store or the key
-        // (a Vault/KMS blip, a disabled key; possibly wrapped by Jackson into a
-        // JsonMappingException on a nested @Encrypted field), not about the stored event: keep it a
-        // PLAIN EventStoreException so read-path classifiers retry instead of terminally halting a
-        // projection (the contract).
-        throw new EventStoreException(
-            "Failed to deserialize event data for stream: " + row.streamText(), e);
-      }
-      throw new EventDeserializationException(
-          "Failed to deserialize event data for stream: " + row.streamText(), e);
-    }
-  }
-
-  /**
-   * True when {@code t}'s chain carries a bare {@link CryptoOperationException} that is NOT the
-   * deterministic {@link CryptoMappingException} subtype — read as engine-raised transient
-   * key-store evidence. {@code CryptoShreddingModule} never wraps engine exceptions (see {@link
-   * CryptoMappingException}'s javadoc), so every bare {@code CryptoOperationException} in a chain
-   * came from a {@link CryptoEngine} backend — and every shipped engine (filesystem, PostgreSQL,
-   * Vault, AWS KMS, and the in-memory test double) raises the deterministic subtype for every
-   * blob-property verdict, whether decided on the data at rest before any backend call (ciphertext
-   * too short, unsupported format, key or envelope version, malformed Vault ciphertext shape, a
-   * local AEAD tag mismatch) or returned BY the backend as a verdict on the blob itself (Vault's
-   * HTTP 400 {@code "invalid ciphertext ..."} family — EXCEPT {@code "version is too new"}, handled
-   * below — and its AEAD failure text if forwarded; KMS's {@code InvalidCiphertextException}), so
-   * for the shipped engines a bare one IS outage-or-policy evidence. Deliberately bare, because an
-   * operator (or, for the case, time/replication) can reverse them: a Vault 400 for a version
-   * refused by the key's {@code min_decryption_version} policy, a Vault 400 for a ciphertext
-   * version newer than THIS node currently knows about ({@code "invalid ciphertext: version is too
-   * new"} — a lagging secondary, a restore from an older snapshot, or key material temporarily
-   * missing, not a verdict on the blob), and every KMS key-state / wrong-key / throttling failure —
-   * the read path blocks and retries until the policy, replication, or configuration is fixed
-   * instead of quarantining healthy blobs. A third-party engine that raises the bare type for a
-   * deterministic condition is classified transient here and retried indefinitely — engine authors
-   * must raise {@code CryptoMappingException} for conditions a retry can never fix.
-   */
-  static boolean hasTransientCryptoCause(Throwable t) {
-    // Bounded walk (Causes.MAX_DEPTH) so a self-referential/cyclic cause chain terminates.
-    return Causes.anyMatch(
-        t, c -> c instanceof CryptoOperationException && !(c instanceof CryptoMappingException));
   }
 
   /** Builder for PostgresEventStore. */
