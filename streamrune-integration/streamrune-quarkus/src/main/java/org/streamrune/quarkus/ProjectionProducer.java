@@ -87,7 +87,7 @@ public class ProjectionProducer {
    */
   static final String FRAMEWORK_SCHEDULED_RUNNER = "streamRuneScheduledProjectionRunner";
 
-  private static boolean autoDiscoveryEnabled(Config config) {
+  static boolean autoDiscoveryEnabled(Config config) {
     return org.streamrune.integration.RelaxedBoolean.parse(
         config
             .getOptionalValue("streamrune.projections.auto-discovery.enabled", String.class)

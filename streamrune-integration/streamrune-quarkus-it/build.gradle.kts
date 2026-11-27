@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.quarkus)
 }
@@ -36,11 +38,12 @@ tasks.withType<JacocoCoverageVerification>().configureEach {
 }
 
 tasks.withType<Test>().configureEach {
+    // A start that hangs fails the task instead of the CI job: JUnit's own timeouts do not cover
+    // the Quarkus start, which runs in the extension's beforeAll callback.
+    timeout.set(Duration.ofMinutes(10))
     // A key set as a system property of the JVM the application starts in, beside the file keys
     // of src/test/resources/application.properties.
     systemProperty("streamrune.projections.legacy-feed.enabled", "false")
     // The application under test starts in the test JVM; JBoss LogManager is the Quarkus logging.
     systemProperty("java.util.logging.manager", "org.jboss.logmanager.LogManager")
-    // A start that hangs fails the test instead of the CI job.
-    systemProperty("junit.jupiter.execution.timeout.default", "5m")
 }

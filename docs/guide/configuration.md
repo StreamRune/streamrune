@@ -51,10 +51,13 @@ names the property and the value:
   refused for one that is not `auto-discovery.enabled`, or `<name>.enabled` or
   `<name>.error-strategy` for the name of a `@ProjectionConfig` projection; as SmallRye does, it
   checks no name set in the process environment or a `.env` file, and none when
-  `quarkus.config.mapping.validate-unknown=false`. Spring and Micronaut ignore a name they do not
-  bind, with two exceptions they refuse, naming the property to set instead: a duration property written with
-  a `-ms` suffix, and the outbox retry multiplier written as `retry-multiplier` instead of
-  `retry-backoff-multiplier`.
+  `quarkus.config.mapping.validate-unknown=false`. The `<name>` is checked against the projection
+  beans of the running application, so write a key for a projection that exists in one profile
+  only under that profile (`%prod.streamrune.projections.<name>.enabled`); while
+  `streamrune.projections.auto-discovery.enabled=false` no `<name>` is checked, because none is
+  read. Spring and Micronaut ignore a name they do not bind, with two exceptions they refuse,
+  naming the property to set instead: a duration property written with a `-ms` suffix, and the
+  outbox retry multiplier written as `retry-multiplier` instead of `retry-backoff-multiplier`.
 
 ## Backend
 

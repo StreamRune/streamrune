@@ -10,8 +10,11 @@ import jakarta.interceptor.Interceptor;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigValue;
 import org.streamrune.core.ProjectionConfig;
@@ -29,9 +32,13 @@ import org.streamrune.core.types.LogSanitizer;
  * discovery reads by name; this check refuses the others — a misspelt {@code enabled}, a name no
  * projection has — as SmallRye refuses any other {@code streamrune.} key no member of the mapping
  * declares, and like SmallRye it is off when {@code quarkus.config.mapping.validate-unknown} (or
- * {@code smallrye.config.mapping.validate-unknown}) is {@code false}. A key whose value comes from
- * the process environment or a {@code .env} file is not checked, as SmallRye checks no such key:
- * the variable {@code STREAMRUNE_PROJECTIONS_ORDER_TOTALS_ERROR_STRATEGY} is the map key {@code
+ * {@code smallrye.config.mapping.validate-unknown}) is {@code false}. A name is checked against the
+ * projection beans of the running application, so a key for a projection that exists in one profile
+ * only belongs under that profile ({@code %prod.streamrune.projections.<name>.enabled}), and no
+ * name is checked while {@code streamrune.projections.auto-discovery.enabled} is {@code false}: the
+ * discovery then reads no {@code <name>} key. A key whose value comes from the process environment
+ * or a {@code .env} file is not checked, as SmallRye checks no such key: the variable {@code
+ * STREAMRUNE_PROJECTIONS_ORDER_TOTALS_ERROR_STRATEGY} is the map key {@code
  * order.totals.error.strategy}, which cannot be told apart from a misspelling. It runs before the
  * runners start.
  */
@@ -86,7 +93,11 @@ public class ProjectionKeysValidator {
     if (properties.projections().isEmpty() || !validatesUnknownKeys(applicationConfig)) {
       return;
     }
-    check(properties.projections().keySet(), applicationConfig, projectionNames());
+    check(
+        properties.projections().keySet(),
+        applicationConfig,
+        // The discovery reads no <name> key while it is off: a name is then not checked.
+        ProjectionProducer.autoDiscoveryEnabled(applicationConfig) ? this::projectionNames : null);
   }
 
   /**
@@ -95,12 +106,13 @@ public class ProjectionKeysValidator {
    *
    * @param keys the keys after the prefix
    * @param config the configuration the keys come from
-   * @param projectionNames the names of the {@link ProjectionConfig} projections
+   * @param projectionNames the names of the {@link ProjectionConfig} projections, looked up only
+   *     when a {@code <name>} key is to be checked; {@code null} checks no name
    * @throws IllegalStateException naming every refused key, when there is one
    */
-  static void check(Collection<String> keys, Config config, Set<String> projectionNames) {
+  static void check(Collection<String> keys, Config config, Supplier<Set<String>> projectionNames) {
     List<String> notRead = new ArrayList<>();
-    List<String> unknownName = new ArrayList<>();
+    Map<String, String> named = new TreeMap<>();
     for (String key : new TreeSet<>(keys)) {
       if (AUTO_DISCOVERY.equals(key) || fromTheEnvironment(config, key)) {
         continue;
@@ -108,9 +120,20 @@ public class ProjectionKeysValidator {
       String name = nameOf(key);
       if (name == null) {
         notRead.add(PREFIX + LogSanitizer.sanitizeForLog(key));
-      } else if (!projectionNames.contains(name)) {
-        unknownName.add(PREFIX + LogSanitizer.sanitizeForLog(key));
+      } else {
+        named.put(key, name);
       }
+    }
+    Set<String> names =
+        named.isEmpty() || projectionNames == null ? Set.of() : projectionNames.get();
+    List<String> unknownName = new ArrayList<>();
+    if (projectionNames != null) {
+      named.forEach(
+          (key, name) -> {
+            if (!names.contains(name)) {
+              unknownName.add(PREFIX + LogSanitizer.sanitizeForLog(key));
+            }
+          });
     }
     List<String> problems = new ArrayList<>();
     if (!notRead.isEmpty()) {
@@ -126,12 +149,11 @@ public class ProjectionKeysValidator {
           String.join(", ", unknownName)
               + (unknownName.size() == 1 ? " names" : " name")
               + " no @ProjectionConfig projection; the projections are "
-              + (projectionNames.isEmpty()
+              + (names.isEmpty()
                   ? "none"
                   : String.join(
                       ", ",
-                      new TreeSet<>(
-                          projectionNames.stream().map(LogSanitizer::sanitizeForLog).toList()))));
+                      new TreeSet<>(names.stream().map(LogSanitizer::sanitizeForLog).toList()))));
     }
     if (!problems.isEmpty()) {
       throw new IllegalStateException(String.join(". ", problems) + ".");
@@ -161,10 +183,15 @@ public class ProjectionKeysValidator {
     return source != null && source.startsWith(EnvConfigSource.NAME);
   }
 
+  /**
+   * Whether SmallRye refuses an unknown key: read as SmallRye reads its switch, with the boolean
+   * converter of the configuration, so {@code off} or {@code no} turn it off as {@code false} does.
+   * Quarkus relocates either name to the other; both are read for a configuration without that
+   * relocation.
+   */
   private static boolean validatesUnknownKeys(Config config) {
     for (String key : VALIDATE_UNKNOWN) {
-      String value = config.getConfigValue(key).getValue();
-      if (value != null && "false".equalsIgnoreCase(value.strip())) {
+      if (!config.getOptionalValue(key, Boolean.class).orElse(true)) {
         return false;
       }
     }

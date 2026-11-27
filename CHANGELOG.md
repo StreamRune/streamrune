@@ -361,21 +361,24 @@ Unreleased fixes to the Quarkus integration (Fixed):
   `streamrune.projections.` (`StreamRuneQuarkusProperties#projections()`). A key there set anywhere
   but the process environment or a `.env` file fails the start, naming it, unless it is
   `auto-discovery.enabled`, or `<name>.enabled` or `<name>.error-strategy` for the name of a
-  `@ProjectionConfig` projection bean (`ProjectionKeysValidator`; off with
+  `@ProjectionConfig` projection bean of the running application (`ProjectionKeysValidator`; no
+  name is checked while auto-discovery is off, and nothing with
   `quarkus.config.mapping.validate-unknown=false`, like SmallRye's own refusal).
 - **Quarkus REST applications start.** An application with `quarkus-rest` passes its static
   initialization, which failed with `SRCFG00027: Could not find a mapping for
   StreamRuneQuarkusProperties`: Quarkus REST creates `StreamRuneRequestFilter` while the
-  application initializes statically, and the filter reads `streamrune.metadata.baggage-allowlist`, the `RequestIdentityPolicy` and the
-  `UserRoleResolver` when the first request arrives, from the runtime configuration — in a native
-  image too, where `streamrune.security.trust-user-id-header` is the running application's setting,
-  not the build's. Its injecting constructor takes `Instance`s of the three.
+  application initializes statically, and the filter reads
+  `streamrune.metadata.baggage-allowlist`, the `RequestIdentityPolicy` and the `UserRoleResolver`
+  when the first request arrives, from the runtime configuration — in a native image too, where
+  `streamrune.security.trust-user-id-header` is the running application's setting, not the
+  build's. Its injecting constructor takes `Instance`s of the three.
 
 ### Modules
 
 Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
-aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the three test projects, which are not published:
-`streamrune-integration:streamrune-e2e` (the end-to-end crash-recovery and broker suites),
+aggregator projects (`streamrune-crypto`, `streamrune-integration`, `streamrune-outbox`) and the
+three test projects, which are not published: `streamrune-integration:streamrune-e2e` (the
+end-to-end crash-recovery and broker suites),
 `streamrune-integration:streamrune-quarkus-it` (a Quarkus application the Quarkus Gradle plugin
 builds and starts on `streamrune-quarkus`) and
 `streamrune-integration:streamrune-integration-tck` (the wiring contract, the configuration oracle

@@ -168,16 +168,65 @@ class ProjectionKeysValidatorTest {
         List.of(
             "quarkus.config.mapping.validate-unknown",
             "smallrye.config.mapping.validate-unknown")) {
-      Map<String, String> file = new HashMap<>();
-      file.put("streamrune.projections.orders.enabeld", "false");
-      file.put(switchKey, "false");
+      // Every spelling the configuration's boolean converter reads as false.
+      for (String off : List.of("false", "off", "no", "0")) {
+        Map<String, String> file = new HashMap<>();
+        file.put("streamrune.projections.orders.enabeld", "false");
+        file.put(switchKey, off);
 
-      assertDoesNotThrow(() -> validate(configOf(file, Map.of()), PROJECTIONS), switchKey);
+        assertDoesNotThrow(
+            () -> validate(configOf(file, Map.of()), PROJECTIONS), switchKey + "=" + off);
+      }
     }
     Map<String, String> on = new HashMap<>();
     on.put("streamrune.projections.orders.enabeld", "false");
     on.put("quarkus.config.mapping.validate-unknown", "true");
     assertThrows(IllegalStateException.class, () -> validate(configOf(on, Map.of()), PROJECTIONS));
+  }
+
+  @Test
+  void whileTheDiscoveryIsOffANameIsNotCheckedAndNoProjectionIsLookedUp() {
+    @SuppressWarnings("unchecked")
+    Instance<Projection> projections = mock(Instance.class);
+    SmallRyeConfig config =
+        configOf(
+            Map.of(
+                "streamrune.projections.auto-discovery.enabled", "false",
+                "streamrune.projections.hand-wired.enabled", "false"),
+            Map.of());
+
+    new ProjectionKeysValidator(
+            config.getConfigMapping(StreamRuneQuarkusProperties.class),
+            configInstance(config),
+            projections)
+        .validate(null);
+
+    verifyNoInteractions(projections);
+    SmallRyeConfig misspelt =
+        configOf(
+            Map.of(
+                "streamrune.projections.auto-discovery.enabled", "false",
+                "streamrune.projections.hand-wired.enabeld", "false"),
+            Map.of());
+    assertThrows(IllegalStateException.class, () -> validate(misspelt, PROJECTIONS));
+  }
+
+  @Test
+  void withoutANameKeyOutsideTheEnvironmentNoProjectionIsLookedUp() {
+    @SuppressWarnings("unchecked")
+    Instance<Projection> projections = mock(Instance.class);
+    SmallRyeConfig config =
+        configOf(
+            Map.of("streamrune.projections.auto-discovery.enabled", "true"),
+            Map.of("STREAMRUNE_PROJECTIONS_ORDERS_ENABLED", "false"));
+
+    new ProjectionKeysValidator(
+            config.getConfigMapping(StreamRuneQuarkusProperties.class),
+            configInstance(config),
+            projections)
+        .validate(null);
+
+    verifyNoInteractions(projections);
   }
 
   @Test

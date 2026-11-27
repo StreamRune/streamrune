@@ -138,8 +138,9 @@ public interface StreamRuneQuarkusProperties {
    * streamrune.projections.<name>.enabled} and {@code streamrune.projections.<name>.error-strategy}
    * — from a file or a system property: SmallRye refuses a key under {@code streamrune} that no
    * member of this mapping declares. The discovery reads the values by those names from the
-   * configuration, not from this map; {@link ProjectionKeysValidator} refuses the start for any
-   * other key here.
+   * configuration, not from this map; {@link ProjectionKeysValidator} refuses the start for another
+   * key here from a file or a system property, unless unknown keys are allowed ({@code
+   * quarkus.config.mapping.validate-unknown=false}).
    */
   Map<String, Optional<String>> projections();
 
