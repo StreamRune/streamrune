@@ -14,6 +14,7 @@ import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLTransientConnectionException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
@@ -143,8 +144,8 @@ public abstract class SagaStoreContract {
         store.loadRowFacts(ID, SagaType.of("contract.OtherType")).isEmpty(),
         "a row of another saga type is not returned");
     assertEquals(
-        new SagaStore.RowFacts(SagaStatus.STARTED, false, null),
-        store.loadRowFacts(ID, TYPE).get());
+        Optional.of(new SagaStore.RowFacts(SagaStatus.STARTED, false, null)),
+        store.loadRowFacts(ID, TYPE));
 
     store.applyEvent(
         ID,
@@ -155,7 +156,8 @@ public abstract class SagaStoreContract {
         SagaStore.AppliedEvent.live(GlobalOffset.of(7L)));
     store.setDeadLetterPending(ID, TYPE, true);
     assertEquals(
-        new SagaStore.RowFacts(SagaStatus.RUNNING, true, 7L), store.loadRowFacts(ID, TYPE).get());
+        Optional.of(new SagaStore.RowFacts(SagaStatus.RUNNING, true, 7L)),
+        store.loadRowFacts(ID, TYPE));
 
     store.markFaulted(ID, TYPE, row().version());
     var facts = store.loadRowFacts(ID, TYPE).orElseThrow();

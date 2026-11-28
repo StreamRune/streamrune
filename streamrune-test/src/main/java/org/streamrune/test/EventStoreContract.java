@@ -616,7 +616,7 @@ public abstract class EventStoreContract {
         worker.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       }
     } finally {
-      pool.shutdownNow();
+      WorkerPools.stop(pool);
     }
   }
 
@@ -841,7 +841,7 @@ public abstract class EventStoreContract {
           "the stream holds the whole batch of the winner and nothing of the others");
       assertEquals(3, global().size());
     } finally {
-      pool.shutdownNow();
+      WorkerPools.stop(pool);
     }
   }
 
@@ -1735,7 +1735,7 @@ public abstract class EventStoreContract {
                 () -> {
                   start.await();
                   for (int i = 0; i < appendsEach; i++) {
-                    writer.append(stream, events(stream, i + 1, 1), new Version(i));
+                    writer.append(stream, events(stream, i + 1L, 1), new Version(i));
                   }
                   return null;
                 }));
@@ -1767,7 +1767,7 @@ public abstract class EventStoreContract {
       }
       assertEquals(all.getLast(), store.lastGlobalOffset().value());
     } finally {
-      pool.shutdownNow();
+      WorkerPools.stop(pool);
     }
   }
 
@@ -2289,7 +2289,7 @@ public abstract class EventStoreContract {
       }
       return outcomes;
     } finally {
-      pool.shutdownNow();
+      WorkerPools.stop(pool);
     }
   }
 

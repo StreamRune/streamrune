@@ -294,10 +294,13 @@ class CommandSpanContextTest {
         run(new InMemoryEventStore(TYPES), "l-disabled", tracing(TracingSettings.disabled()));
 
     assertThat(areaOff)
+        .isNotEmpty()
         .allSatisfy(e -> assertThat(e.metadata().spanContext()).isSameAs(SpanLink.NONE));
     assertThat(noop)
+        .isNotEmpty()
         .allSatisfy(e -> assertThat(e.metadata().spanContext()).isSameAs(SpanLink.NONE));
     assertThat(disabled)
+        .isNotEmpty()
         .allSatisfy(e -> assertThat(e.metadata().spanContext()).isSameAs(SpanLink.NONE));
   }
 

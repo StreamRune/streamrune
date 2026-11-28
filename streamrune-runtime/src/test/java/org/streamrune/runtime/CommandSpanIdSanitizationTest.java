@@ -58,7 +58,7 @@ class CommandSpanIdSanitizationTest {
   @Test
   void controlAndFormatCharacters_areRemoved() {
     // The constructors (the read path) do not bound the charset; only of() does.
-    SpanData span = spanFor(new CommandId("cmd_1\nforged=1"), new AggregateId("ord‮-7\r"));
+    SpanData span = spanFor(new CommandId("cmd_1\nforged=1"), new AggregateId("ord\u202E-7\r"));
 
     assertThat(attribute(span, TraceAttributes.COMMAND_ID)).isEqualTo("cmd_1forged=1");
     assertThat(attribute(span, TraceAttributes.AGGREGATE_ID)).isEqualTo("ord-7");

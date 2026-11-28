@@ -135,6 +135,7 @@ class ReservedCorrelationIdDeadLetterTest {
 
   private static void assertNoEntryIsReserved(List<DeadLetterEntry> entries) {
     assertThat(entries)
+        .isNotEmpty()
         .allSatisfy(
             entry -> {
               if (entry.correlationId() != null) {

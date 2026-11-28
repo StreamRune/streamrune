@@ -20,6 +20,7 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.test.InMemoryDeadLetterQueue;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -540,6 +541,42 @@ class CommandSpanErrorTest {
                       .containsExactly(
                           "a class of the metrics backend is missing",
                           "a class of the metrics backend is missing (duration)"));
+    }
+  }
+
+  @Test
+  void anErrorOfTheMetricsBackendAfterACommittedCommandIsTheOutcome() {
+    org.streamrune.core.StreamRuneMetrics broken =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordCommandDuration(long durationNanos) {
+            throw new NoClassDefFoundError("a class of the metrics backend is missing (duration)");
+          }
+        };
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
+    InMemoryDeadLetterQueue deadLetters = new InMemoryDeadLetterQueue();
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .deadLetterQueue(deadLetters)
+            .objectMapper(new com.fasterxml.jackson.databind.ObjectMapper())
+            .metrics(broken)
+            .build()) {
+      // The bus never swallows an Error, not even after the commit: the caller sees it in place of
+      // the result, and the command is not dead-lettered.
+      assertThatThrownBy(() -> bus.execute(new Switch("l-2", false)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the metrics backend is missing (duration)")
+          .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
+      assertThat(
+              store.readStream(
+                  org.streamrune.core.types.StreamId.of(LAMP, AggregateId.of("l-2")),
+                  org.streamrune.core.types.Version.initial(),
+                  10))
+          .as("the command committed")
+          .hasSize(1);
+      assertThat(deadLetters.all()).as("the command is not dead-lettered").isEmpty();
     }
   }
 

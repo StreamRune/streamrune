@@ -72,14 +72,22 @@ public final class ConfigurationDocs {
    * {@code _}, or a {@code <placeholder>}, optionally ending in {@code .*}. Not preceded by a word
    * character, a dot, a slash, a dash or an at sign, so a package name ({@code
    * org.streamrune.core}), a system property flag ({@code -Dstreamrune.x}) or the domain of an
-   * e-mail address is not a name.
+   * e-mail address is not a name. Its repetitions are possessive: nothing after them can match what
+   * they give back, and a possessive repetition does not take a stack frame per segment, so a name
+   * of any length is read.
    */
   private static final Pattern NAME =
       Pattern.compile(
-          "(?<![\\w.$/@-])streamrune(?:\\.(?:[a-z0-9]+(?:[-_][a-z0-9]+)*|<[a-z-]+>))+(?:\\.\\*)?");
+          "(?<![\\w.$/@-])streamrune(?:\\.(?:[a-z0-9]++(?:[-_][a-z0-9]++)*+|<[a-z-]++>))++"
+              + "(?:\\.\\*)?");
 
-  /** A Java string literal on one line; group 1 is its content. */
-  private static final Pattern STRING_LITERAL = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"");
+  /**
+   * A Java string literal on one line; group 1 is its content. Its repetitions are possessive, as
+   * {@link #NAME}'s are: a run of characters and an escape cannot match the same character, so
+   * nothing given back could let the closing quote match, and a literal of any length is read.
+   */
+  private static final Pattern STRING_LITERAL =
+      Pattern.compile("\"([^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+)\"");
 
   /** A YAML mapping key at the start of a line, with its indentation. */
   private static final Pattern YAML_KEY =

@@ -353,6 +353,35 @@ class ConfigurationDocsTest {
   }
 
   @Test
+  void aNameOfManySegmentsAndHyphensIsReadWithoutExhaustingTheStack() {
+    String name = "streamrune.a" + "-b".repeat(100_000) + ".c".repeat(100_000);
+    var docs = ConfigurationDocs.of(Map.of("guide.md", "A key `" + name + "` is unknown."));
+
+    assertEquals(List.of("guide.md:1: " + name), docs.unknown(ORACLE));
+  }
+
+  @Test
+  void aLongStringLiteralIsReadWithoutExhaustingTheStack(@TempDir Path sources) throws Exception {
+    Path type = sources.resolve("org/example/Wide.java");
+    Files.createDirectories(type.getParent());
+    Files.writeString(
+        type,
+        String.join(
+            "\n",
+            "package org.example;",
+            "class Wide {",
+            "  String a = \""
+                + "x".repeat(100_000)
+                + "\\n".repeat(100_000)
+                + " streamrune.renamed\";",
+            "}"));
+
+    assertEquals(
+        List.of("org/example/Wide.java:3: streamrune.renamed"),
+        ConfigurationDocs.unknownInJavaSources(sources, ORACLE));
+  }
+
+  @Test
   void anUnreadableSourceTreeIsAnError(@TempDir Path empty) {
     Path missing = empty.resolve("no-such-dir");
 

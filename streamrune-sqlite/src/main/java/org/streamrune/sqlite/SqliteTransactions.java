@@ -38,9 +38,11 @@ import org.streamrune.runtime.jdbc.Causes;
  *
  * <p><b>Begin.</b> {@code BEGIN IMMEDIATE} takes SQLite's write lock up front, waiting at most the
  * connection's {@code busy_timeout}, so writers queue for the lock instead of failing later on a
- * read-to-write upgrade. A begin that fails opened nothing, and nothing is undone: in particular, a
+ * read-to-write upgrade. A begin that fails is rolled back, because the driver can throw after the
+ * begin took effect; when it took none, the rollback finds nothing open and counts as done. A begin
+ * refused the write lock ({@code SQLITE_BUSY}) opened nothing and is not followed by a rollback. A
  * begin refused because the connection already has a transaction open (one the application began)
- * neither commits nor rolls back that transaction.
+ * neither commits nor rolls back that transaction: it is not the helper's.
  *
  * <p><b>Rollback.</b> {@link #rollback} runs {@code ROLLBACK}, which does not take the write lock
  * again. When SQLite has already rolled the transaction back by itself (it does so on {@code
@@ -248,7 +250,9 @@ public final class SqliteTransactions {
    * #awaitWriteLock}), then begins ({@link #begin}). The caller runs its statements, calls {@link
    * OpenTransaction#commit()} and closes the returned transaction, in a try-with-resources: closing
    * it without a commit rolls back ({@link #rollback}), and closing it releases the mutex in every
-   * case. A failed wait or begin opened nothing, holds nothing and propagates.
+   * case. A failed wait opened nothing and holds nothing; a failed begin is rolled back unless it
+   * proves the open transaction is not this call's ({@link #undoBegin}), the mutex is released, and
+   * the failure propagates unchanged.
    *
    * @param conn the connection, in autocommit mode
    * @param transaction what the transaction is, for the log record of a failed rollback (a
@@ -260,16 +264,66 @@ public final class SqliteTransactions {
    */
   static OpenTransaction open(Connection conn, String transaction) throws SQLException {
     WriteLock writeLock = awaitWriteLock(conn);
+    OpenTransaction open;
     try {
+      // Built before the begin: nothing is allocated between a begin that succeeded and the
+      // return, so nothing thrown there can leave a transaction open with no one to end it, and a
+      // failure here releases the mutex like a failed begin.
+      open = new OpenTransaction(conn, transaction, writeLock);
       begin(conn);
     } catch (SQLException beginFailure) {
-      writeLock.close();
+      undoBegin(conn, transaction, beginFailure, writeLock);
       throw heldByOwnBatch(beginFailure, writeLock.file());
     } catch (Throwable beginFailure) {
-      writeLock.close();
+      undoBegin(conn, transaction, beginFailure, writeLock);
       throw beginFailure;
     }
-    return new OpenTransaction(conn, transaction, writeLock);
+    return open;
+  }
+
+  /**
+   * Ends what a failed {@link #open} may have begun, then releases the write mutex. The driver can
+   * throw after {@code BEGIN IMMEDIATE} took effect (from its own code after the native step, or
+   * from closing the statement), so the transaction is rolled back first, as {@link
+   * OpenTransaction#close()} rolls back: a pool returns an autocommit connection as it is, and one
+   * left with the transaction open would hold SQLite's write lock, refuse its next begin, and keep
+   * the writes of its next one-statement write from committing. A rollback that finds nothing open
+   * counts as done ({@link #rollback}). Three failures prove that the begin opened nothing and skip
+   * the rollback: SQLite's refusal of the write lock ({@code SQLITE_BUSY} and its extended codes),
+   * after which no transaction is open, so a write that waited out {@code busy_timeout} issues no
+   * statement more; and, where a rollback would end a transaction that is not this call's, the
+   * refusal of a connection in manual-commit mode and SQLite's refusal of a begin inside an open
+   * transaction. An Error of the rollback rides on {@code failure} as suppressed; the mutex is
+   * released in every case.
+   */
+  private static void undoBegin(
+      Connection conn, String transaction, Throwable failure, WriteLock writeLock) {
+    try {
+      if (!beganNothing(failure)) {
+        rollback(conn, transaction);
+      }
+    } catch (Throwable rollbackFailure) {
+      if (rollbackFailure != failure) {
+        failure.addSuppressed(rollbackFailure);
+      }
+    } finally {
+      writeLock.close();
+    }
+  }
+
+  /** Whether {@code failure} of a begin proves that the begin opened nothing of its own. */
+  private static boolean beganNothing(Throwable failure) {
+    return (failure instanceof IllegalStateException
+            && MANUAL_COMMIT_CONNECTION.equals(failure.getMessage()))
+        || (failure instanceof SQLiteException sqlite
+            && (isTransactionWithinTransaction(sqlite) || isLockRefused(sqlite)));
+  }
+
+  /**
+   * Whether {@code e} is SQLite's refusal of the write lock: {@code SQLITE_BUSY} or an extension.
+   */
+  private static boolean isLockRefused(SQLiteException e) {
+    return (e.getResultCode().code & 0xff) == SQLiteErrorCode.SQLITE_BUSY.code;
   }
 
   /**
@@ -461,6 +515,10 @@ public final class SqliteTransactions {
     if (mutex == null) {
       return WriteLock.NONE;
     }
+    // Built before the mutex is asked for: nothing is allocated between the grant and the return,
+    // so nothing thrown there can leave the mutex held with no hold to release it. A hold whose
+    // wait failed is dropped unclosed: it holds nothing.
+    WriteLock hold = new WriteLock(mutex);
     if (!tryLockUninterruptibly(mutex.lock, 0)) {
       long busyTimeoutMillis = busyTimeoutMillis(conn);
       if (!tryLockUninterruptibly(mutex.lock, busyTimeoutMillis)) {
@@ -468,7 +526,7 @@ public final class SqliteTransactions {
             String.format(WRITE_LOCK_TIMEOUT, busyTimeoutMillis), SQLiteErrorCode.SQLITE_BUSY);
       }
     }
-    return new WriteLock(mutex);
+    return hold;
   }
 
   /**
