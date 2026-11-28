@@ -544,6 +544,38 @@ class CommandSpanErrorTest {
   }
 
   @Test
+  void anErrorOfTheMetricsBackendAfterACommittedCommandIsTheOutcome() {
+    org.streamrune.core.StreamRuneMetrics broken =
+        new org.streamrune.core.StreamRuneMetrics() {
+          @Override
+          public void recordCommandDuration(long durationNanos) {
+            throw new NoClassDefFoundError("a class of the metrics backend is missing (duration)");
+          }
+        };
+    InMemoryEventStore store = new InMemoryEventStore(TYPES);
+    try (VirtualThreadCommandBus bus =
+        VirtualThreadCommandBus.builder()
+            .eventStore(store)
+            .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .metrics(broken)
+            .build()) {
+      // The bus never swallows an Error, not even after the commit: the caller sees it in place of
+      // the result, and the command is not dead-lettered.
+      assertThatThrownBy(() -> bus.execute(new Switch("l-2", false)))
+          .isInstanceOf(NoClassDefFoundError.class)
+          .hasMessage("a class of the metrics backend is missing (duration)")
+          .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
+      assertThat(
+              store.readStream(
+                  org.streamrune.core.types.StreamId.of(LAMP, AggregateId.of("l-2")),
+                  org.streamrune.core.types.Version.initial(),
+                  10))
+          .as("the command committed")
+          .hasSize(1);
+    }
+  }
+
+  @Test
   void theWorksErrorAndACallbacksErrorNeverSuppressEachOther() {
     CommandInterceptor throwsItsOwn =
         new CommandInterceptor() {
