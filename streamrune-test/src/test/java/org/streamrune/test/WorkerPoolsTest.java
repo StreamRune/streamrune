@@ -44,6 +44,8 @@ class WorkerPoolsTest {
           // A store call that does not answer the interrupt: it runs to its end regardless.
           long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300);
           while (System.nanoTime() < end) {
+            // Cleared, or park would return at once and spin while the status is set.
+            Thread.interrupted();
             LockSupport.parkNanos(end - System.nanoTime());
           }
         });
@@ -62,6 +64,7 @@ class WorkerPoolsTest {
         () -> {
           started.countDown();
           while (release.getCount() > 0) {
+            Thread.interrupted(); // ignores the interrupt without spinning on it
             LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10));
           }
         });
@@ -87,6 +90,7 @@ class WorkerPoolsTest {
         () -> {
           started.countDown();
           while (release.getCount() > 0) {
+            Thread.interrupted(); // ignores the interrupt without spinning on it
             LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10));
           }
         });
