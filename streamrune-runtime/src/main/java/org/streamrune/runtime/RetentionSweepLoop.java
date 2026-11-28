@@ -24,7 +24,7 @@ final class RetentionSweepLoop {
 
   private final String ownerClassName;
   private final String name;
-  private final Runnable sweep;
+  private final ResilientPollLoop.PollTask sweep;
   private final ResilientPollLoop pollLoop;
   private volatile Thread thread;
   private volatile long closeJoinTimeoutMs = RetentionSweeperThreads.CLOSE_JOIN_TIMEOUT_MS;
@@ -39,7 +39,8 @@ final class RetentionSweepLoop {
    *     the sweeper
    * @param sweep one sweep cycle, run on the loop's thread
    */
-  RetentionSweepLoop(String ownerClassName, String name, Duration interval, Runnable sweep) {
+  RetentionSweepLoop(
+      String ownerClassName, String name, Duration interval, ResilientPollLoop.PollTask sweep) {
     this.ownerClassName = ownerClassName;
     this.name = name;
     this.sweep = sweep;
@@ -86,7 +87,7 @@ final class RetentionSweepLoop {
   }
 
   private void loop() {
-    pollLoop.run(sweep::run);
+    pollLoop.run(sweep);
   }
 
   /** Whether a sweep thread was launched and not yet closed; {@code false} when disabled. */

@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -23,8 +26,18 @@ class RetentionSweepLoopTest {
   private static final Duration LONG = Duration.ofHours(1);
   private static final Duration WAIT = Duration.ofSeconds(5);
 
-  private static RetentionSweepLoop loop(Duration interval, Runnable sweep) {
-    return new RetentionSweepLoop("TestSweeper", "test-retention-sweeper", interval, sweep);
+  /** Every loop a test created; closed after each test so no sweep thread outlives its test. */
+  private final List<RetentionSweepLoop> loops = new ArrayList<>();
+
+  private RetentionSweepLoop loop(Duration interval, ResilientPollLoop.PollTask sweep) {
+    var loop = new RetentionSweepLoop("TestSweeper", "test-retention-sweeper", interval, sweep);
+    loops.add(loop);
+    return loop;
+  }
+
+  @AfterEach
+  void closeEveryLoop() {
+    loops.forEach(RetentionSweepLoop::close);
   }
 
   /** Polls every few milliseconds; a sweep thread's own uncaught error must not fail the wait. */
@@ -99,17 +112,14 @@ class RetentionSweepLoopTest {
               }
             });
     loop.start(true);
-    try {
-      awaitTrue("a failed sweep is counted", () -> loop.consecutiveFailures() > 0);
-      assertThat(loop.isAlive()).as("a RuntimeException never ends the thread").isTrue();
-      failing.set(false);
-      int callsBeforeRecovery = calls.get();
-      awaitTrue(
-          "a returned sweep clears the count",
-          () -> calls.get() > callsBeforeRecovery && loop.consecutiveFailures() == 0);
-    } finally {
-      loop.close();
-    }
+
+    awaitTrue("a failed sweep is counted", () -> loop.consecutiveFailures() > 0);
+    assertThat(loop.isAlive()).as("a RuntimeException never ends the thread").isTrue();
+    failing.set(false);
+    int callsBeforeRecovery = calls.get();
+    awaitTrue(
+        "a returned sweep clears the count",
+        () -> calls.get() > callsBeforeRecovery && loop.consecutiveFailures() == 0);
   }
 
   @Test
@@ -202,31 +212,36 @@ class RetentionSweepLoopTest {
               }
             });
     loop.start(true);
-    assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
-    var firstReturned = new AtomicBoolean();
-    Thread first =
-        Thread.ofVirtual()
-            .start(
-                () -> {
-                  loop.close();
-                  firstReturned.set(true);
-                });
-    awaitTrue(
-        "the first close waits for the sweep",
-        () ->
-            first.getState() == Thread.State.TIMED_WAITING
-                || first.getState() == Thread.State.WAITING);
+    try {
+      assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+      var firstReturned = new AtomicBoolean();
+      Thread first =
+          Thread.ofVirtual()
+              .start(
+                  () -> {
+                    loop.close();
+                    firstReturned.set(true);
+                  });
+      awaitTrue(
+          "the first close waits for the sweep",
+          () ->
+              first.getState() == Thread.State.TIMED_WAITING
+                  || first.getState() == Thread.State.WAITING);
 
-    loop.close();
+      loop.close();
 
-    assertThat(firstReturned).as("the first close still waits for the sweep").isFalse();
-    release.countDown();
-    first.join(WAIT.toMillis());
-    assertThat(firstReturned).isTrue();
+      assertThat(firstReturned).as("the first close still waits for the sweep").isFalse();
+      release.countDown();
+      first.join(WAIT.toMillis());
+      assertThat(firstReturned).isTrue();
+    } finally {
+      // The sweep ignores interrupts until released: release it so the close after this test ends.
+      release.countDown();
+    }
   }
 
   @Test
-  void anIntervalAboveTheBackoffCapIsAcceptedAsTheCap() {
+  void anIntervalLongerThanTheBackoffCapStillConstructsAndStarts() {
     var loop = loop(RetentionSweepLoop.MAX_FAILURE_BACKOFF.multipliedBy(2), () -> {});
 
     assertThat(loop.start(true)).isTrue();
