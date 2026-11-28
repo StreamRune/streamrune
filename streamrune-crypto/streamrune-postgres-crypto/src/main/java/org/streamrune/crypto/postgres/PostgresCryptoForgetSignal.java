@@ -603,7 +603,10 @@ public final class PostgresCryptoForgetSignal implements CryptoForgetSignal {
   }
 
   private static String urlApplicationName(String jdbcUrl) {
-    int query = jdbcUrl == null ? -1 : jdbcUrl.indexOf('?');
+    if (jdbcUrl == null) {
+      return null;
+    }
+    int query = jdbcUrl.indexOf('?');
     if (query < 0) {
       return null;
     }
