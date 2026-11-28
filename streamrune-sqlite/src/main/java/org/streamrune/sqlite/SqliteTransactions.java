@@ -40,8 +40,9 @@ import org.streamrune.runtime.jdbc.Causes;
  * connection's {@code busy_timeout}, so writers queue for the lock instead of failing later on a
  * read-to-write upgrade. A begin that fails is rolled back, because the driver can throw after the
  * begin took effect; when it took none, the rollback finds nothing open and counts as done. A begin
- * refused because the connection already has a transaction open (one the application began) neither
- * commits nor rolls back that transaction: it is not the helper's.
+ * refused the write lock ({@code SQLITE_BUSY}) opened nothing and is not followed by a rollback. A
+ * begin refused because the connection already has a transaction open (one the application began)
+ * neither commits nor rolls back that transaction: it is not the helper's.
  *
  * <p><b>Rollback.</b> {@link #rollback} runs {@code ROLLBACK}, which does not take the write lock
  * again. When SQLite has already rolled the transaction back by itself (it does so on {@code
@@ -287,11 +288,13 @@ public final class SqliteTransactions {
    * OpenTransaction#close()} rolls back: a pool returns an autocommit connection as it is, and one
    * left with the transaction open would hold SQLite's write lock, refuse its next begin, and keep
    * the writes of its next one-statement write from committing. A rollback that finds nothing open
-   * counts as done ({@link #rollback}). Two failures prove that nothing of this call is open and
-   * skip the rollback, which would end a transaction that is not this call's: the refusal of a
-   * connection in manual-commit mode, and SQLite's refusal of a begin inside an open transaction.
-   * An Error of the rollback rides on {@code failure} as suppressed; the mutex is released in every
-   * case.
+   * counts as done ({@link #rollback}). Three failures prove that the begin opened nothing and skip
+   * the rollback: SQLite's refusal of the write lock ({@code SQLITE_BUSY} and its extended codes),
+   * after which no transaction is open, so a write that waited out {@code busy_timeout} issues no
+   * statement more; and, where a rollback would end a transaction that is not this call's, the
+   * refusal of a connection in manual-commit mode and SQLite's refusal of a begin inside an open
+   * transaction. An Error of the rollback rides on {@code failure} as suppressed; the mutex is
+   * released in every case.
    */
   private static void undoBegin(
       Connection conn, String transaction, Throwable failure, WriteLock writeLock) {
@@ -312,7 +315,15 @@ public final class SqliteTransactions {
   private static boolean beganNothing(Throwable failure) {
     return (failure instanceof IllegalStateException
             && MANUAL_COMMIT_CONNECTION.equals(failure.getMessage()))
-        || (failure instanceof SQLiteException sqlite && isTransactionWithinTransaction(sqlite));
+        || (failure instanceof SQLiteException sqlite
+            && (isTransactionWithinTransaction(sqlite) || isLockRefused(sqlite)));
+  }
+
+  /**
+   * Whether {@code e} is SQLite's refusal of the write lock: {@code SQLITE_BUSY} or an extension.
+   */
+  private static boolean isLockRefused(SQLiteException e) {
+    return (e.getResultCode().code & 0xff) == SQLiteErrorCode.SQLITE_BUSY.code;
   }
 
   /**

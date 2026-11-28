@@ -407,8 +407,9 @@ Unreleased fixes to the SQLite backend (Fixed):
   connection does not go back to the pool with the write transaction open, where, until the pool
   retired it, it would hold SQLite's write lock (every other writer failing with `SQLITE_BUSY`),
   refuse its next begin, and keep the writes of a one-statement write on it from ever committing.
-  A begin refused because the connection is in manual-commit mode or already has a transaction
-  open is not followed by a rollback: that transaction is not the store's.
+  A begin refused the write lock (`SQLITE_BUSY`) opened nothing and is not followed by a rollback,
+  nor is one refused because the connection is in manual-commit mode or already has a transaction
+  open: that transaction is not the store's.
 
 ### Modules
 
