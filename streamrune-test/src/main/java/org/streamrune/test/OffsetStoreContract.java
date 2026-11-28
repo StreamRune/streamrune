@@ -195,7 +195,7 @@ public abstract class OffsetStoreContract {
     try {
       List<Future<?>> done = new ArrayList<>();
       for (int t = 0; t < threads; t++) {
-        long first = t + 1;
+        long first = t + 1L;
         done.add(
             pool.submit(
                 () -> {
@@ -221,7 +221,7 @@ public abstract class OffsetStoreContract {
         saves.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       }
     } finally {
-      pool.shutdownNow();
+      WorkerPools.stop(pool);
     }
 
     assertEquals(GlobalOffset.of((long) threads * savesEach), store.getLastOffset(ORDERS));
