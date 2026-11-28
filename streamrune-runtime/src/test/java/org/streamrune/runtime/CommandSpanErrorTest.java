@@ -20,6 +20,7 @@ import org.streamrune.core.tracing.StreamRuneTracing;
 import org.streamrune.core.tracing.TraceAttributes;
 import org.streamrune.core.types.AggregateId;
 import org.streamrune.core.types.AggregateType;
+import org.streamrune.test.InMemoryDeadLetterQueue;
 import org.streamrune.test.InMemoryEventStore;
 
 /**
@@ -553,10 +554,13 @@ class CommandSpanErrorTest {
           }
         };
     InMemoryEventStore store = new InMemoryEventStore(TYPES);
+    InMemoryDeadLetterQueue deadLetters = new InMemoryDeadLetterQueue();
     try (VirtualThreadCommandBus bus =
         VirtualThreadCommandBus.builder()
             .eventStore(store)
             .register(LAMP, Switch.class, c -> AggregateId.of(c.lampId()), new LampDecider())
+            .deadLetterQueue(deadLetters)
+            .objectMapper(new com.fasterxml.jackson.databind.ObjectMapper())
             .metrics(broken)
             .build()) {
       // The bus never swallows an Error, not even after the commit: the caller sees it in place of
@@ -572,6 +576,7 @@ class CommandSpanErrorTest {
                   10))
           .as("the command committed")
           .hasSize(1);
+      assertThat(deadLetters.all()).as("the command is not dead-lettered").isEmpty();
     }
   }
 
