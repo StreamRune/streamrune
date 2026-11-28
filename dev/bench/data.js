@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795774080755,
+  "lastUpdate": 1795857814774,
   "repoUrl": "https://github.com/StreamRune/streamrune",
   "entries": {
     "StreamRune JMH": [
@@ -2340,6 +2340,214 @@ window.BENCHMARK_DATA = {
           {
             "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
             "value": 66.99334135657736,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Martin Bednář",
+            "username": "xxBedy",
+            "email": "martin.bednar@streamrune.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "491d2d6441f2fce71b539e333db77ae6f8cdf43e",
+          "message": "fix: Sonar wave 1 — real bugs fixed, false positives triaged (#167)\n\n* fix(test-kit): await the contract suites' worker pools when a test ends\n\nThe concurrent cases of EventStoreContract and OffsetStoreContract\nstopped their worker pools with shutdownNow alone, which interrupts the\nworkers but does not wait for them: after a failed or timed-out case a\nworker could still be inside a store call while the next case, or the\nstore's teardown, ran. WorkerPools.stop interrupts the workers and waits\nup to ten seconds for them to end; it never throws, so it does not\nreplace the failure of the case it ends, and it leaves behind a worker\nwhose store call hangs rather than hanging the suite.\n\nSagaStoreContract compares the row facts as an Optional, so an absent\nrow fails the assertion instead of throwing NoSuchElementException, and\ntwo offsets computed from int counters are computed in long arithmetic.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* fix(integration-tck): read long names and string literals without a stack overflow\n\nThe configuration doc-lint patterns repeated groups greedily, and Java\nmatches such a repetition with a stack frame per repetition: a markdown\nname of many segments or hyphens, or a long string literal in a Java\nsource line, ended the doc-lint test in a StackOverflowError. The\nrepetitions are possessive now. Nothing after them could match what they\ngave back, so they match exactly what they matched before.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* refactor(crypto): test the absent JDBC URL on its own in the application-name lookup\n\nurlApplicationName folded a null URL into the \"no query string\" answer\nthrough a sentinel index; it now returns for a null URL first, so the\nnull check and the dereference it guards read in order. Same answers.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* test(runtime,crypto): assertions that cannot pass vacuously; escape the bidi character\n\nThe span-context and reserved-correlation-id checks assert every element\nof a list, which an empty list passes: they assert the list is not empty\nfirst. The v1 format test drops a not-null assertion on a primitive\nconstant, which boxing always passes. The sanitization test writes its\nright-to-left override as a Unicode escape instead of the invisible\ncharacter itself.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* fix(sqlite): build the write-mutex hold and the open transaction before the grant and the begin\n\nawaitWriteLock built the WriteLock after the file's write mutex was\ngranted, and open built the OpenTransaction after BEGIN IMMEDIATE,\noutside its try. An allocation failure in either step left the mutex\nheld with no hold to release it, so every later write of the process to\nthat database file failed with SQLITE_BUSY, and in open it also left the\nwrite transaction open on the pooled connection. Both objects are built\nfirst now, as SagaStepLock builds its hold: nothing is allocated between\nthe grant or the begin and the return, and a failure building the open\ntransaction releases the mutex like a failed begin.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* test(runtime): an Error of the metrics backend after a committed command is the outcome\n\nThe bus never swallows an Error: one thrown while the command duration\nis recorded after a successful, committed command reaches the caller in\nplace of the result, carries nothing suppressed, and the events stay\ncommitted.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* test(test-kit): the interrupt-ignoring workers of WorkerPoolsTest park instead of spinning\n\nLockSupport.parkNanos returns at once while the interrupt status is\nset, so the workers that ignore the interrupt clear it before each park.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* fix(sqlite): roll back a begin the driver fails after it took effect\n\nWhen sqlite-jdbc threw after a store's BEGIN IMMEDIATE took effect (an\nError in its own code after the native step, or a failed statement\nclose), open released the file's write mutex and left the connection as\nit was. A pool returns an autocommit connection untouched, so the\nconnection went back with the write transaction open: it held SQLite's\nwrite lock, so every other writer failed with SQLITE_BUSY; its next\nbegin was refused; and a one-statement write on it ran inside the open\ntransaction and never committed, until the pool retired it.\n\nopen now rolls the transaction back before it releases the mutex, as\nclosing an open transaction does: a rollback that finds nothing open\ncounts as done, and a failed one closes the physical connection. An\nError of the rollback rides on the begin's failure as suppressed, and the\nfailure is rethrown unchanged. A refusal that proves the open\ntransaction is not the store's (a connection in manual-commit mode,\nSQLite's refusal of a begin inside a transaction) is not followed by a\nrollback.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* test(runtime): the metrics Error after a commit leaves the dead-letter queue empty\n\nThe case that pins an Error of the metrics backend after a committed\ncommand as the outcome runs with a dead-letter queue and asserts that it\nstays empty.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n* fix(sqlite): no rollback after a begin refused the write lock\n\nSQLite starts no transaction when BEGIN IMMEDIATE returns SQLITE_BUSY,\nso that refusal, like the manual-commit refusal and the refusal of a\nbegin inside a transaction, proves the begin opened nothing: a write\nthat waited out busy_timeout issues no ROLLBACK after its failed begin,\nand the store characterization tests that pin the statements of a lock\nfailure hold unchanged.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\n\n---------\n\nSigned-off-by: Martin Bednář <martin.bednar@streamrune.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-28T06:00:53Z",
+          "url": "https://github.com/StreamRune/streamrune/commit/491d2d6441f2fce71b539e333db77ae6f8cdf43e"
+        },
+        "date": 1795857814370,
+        "tool": "jmh",
+        "benches": [
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"0\"} )",
+            "value": 184.53996803841795,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 273.4460834720551,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.EventSerializationBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 277.6036735816287,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.OutboxEventMapperBenchmark.mapPublishedEvent",
+            "value": 0.3134352019086407,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"10\"} )",
+            "value": 31.18109518011439,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.ProjectionRunnerBenchmark.processBatch ( {\"batchSize\":\"100\"} )",
+            "value": 289.25326981492304,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.commandBusThroughput",
+            "value": 15.993414841611337,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"1\"} )",
+            "value": 14.17617372508197,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"10\"} )",
+            "value": 54.68065000958457,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreAppend ( {\"batchSize\":\"100\"} )",
+            "value": 378.59901571320376,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"1\"} )",
+            "value": 1.6799274250826293,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"10\"} )",
+            "value": 15.22522972831484,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoad ( {\"batchSize\":\"100\"} )",
+            "value": 154.188909609144,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"1\"} )",
+            "value": 8.663905835845316,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"10\"} )",
+            "value": 8.565202906884164,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.StreamRuneBenchmark.eventStoreLoadWithSnapshot ( {\"batchSize\":\"100\"} )",
+            "value": 8.767507434721429,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"NOOP\"} )",
+            "value": 16.107373884022266,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_OFF\"} )",
+            "value": 19.39551978898091,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.runtime.TracingBenchmark.commandBusThroughput ( {\"tracing\":\"SAMPLER_ON\"} )",
+            "value": 20.332020052946262,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"1\"} )",
+            "value": 1226.3791676419135,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToExistingStream ( {\"batchSize\":\"10\"} )",
+            "value": 1517.8073109903212,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"1\"} )",
+            "value": 1216.4968462392872,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.appendToNewStream ( {\"batchSize\":\"10\"} )",
+            "value": 1512.0780788081127,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"10\"} )",
+            "value": 593.5027456562055,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.load ( {\"streamLength\":\"100\"} )",
+            "value": 1160.58167398685,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"1\"} )",
+            "value": 1251.7835723963549,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.PostgresEventStoreBenchmark.loadWithUpcasting ( {\"upcastSteps\":\"2\"} )",
+            "value": 1252.6575293030387,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 14.597192105972155,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.deserializeDecrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 67.53848419643403,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"1\"} )",
+            "value": 22.641489245539844,
+            "unit": "us/op",
+            "extra": "iterations: 5\nforks: 2\nthreads: 1"
+          },
+          {
+            "name": "org.streamrune.postgres.CryptoShreddingBenchmark.serializeEncrypting ( {\"encryptedFields\":\"5\"} )",
+            "value": 111.2657614447462,
             "unit": "us/op",
             "extra": "iterations: 5\nforks: 2\nthreads: 1"
           }
