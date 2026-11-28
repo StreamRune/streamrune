@@ -3,7 +3,6 @@ package org.streamrune.crypto;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -178,7 +177,6 @@ class AesGcmV1FormatTest {
     assertEquals(FIXTURE_KEY_VERSION, blob[1]);
     AesGcmV1Format.validateHeader(DIGEST, blob, FIXTURE_KEY_VERSION);
     assertEquals(FIXTURE_PLAINTEXT, new String(format.openOnce(key, blob), StandardCharsets.UTF_8));
-    assertNotNull(AesGcmV1Format.MAX_KEY_VERSION);
     assertEquals(127, AesGcmV1Format.MAX_KEY_VERSION);
   }
 }
