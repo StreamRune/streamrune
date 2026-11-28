@@ -398,9 +398,10 @@ class SqliteTransactionsTest {
   }
 
   /**
-   * A failed BEGIN (the application's own transaction is open on the connection) is outside the
-   * helper's try: no ROLLBACK follows it, so the application's transaction is neither rolled back
-   * nor otherwise touched, and the work does not run.
+   * A BEGIN refused because the application's own transaction is open on the connection: that
+   * refusal proves the transaction is not the helper's, so no ROLLBACK follows it, the
+   * application's transaction is neither rolled back nor otherwise touched, and the work does not
+   * run.
    */
   @Test
   void aFailedBeginIsNotFollowedByARollbackOrACommit() throws Exception {
@@ -435,6 +436,141 @@ class SqliteTransactionsTest {
           .isEqualTo(1);
       execute(real, "ROLLBACK");
     }
+  }
+
+  /**
+   * A begin that took effect before the driver threw (an exception, or an Error such as an
+   * out-of-memory error in the driver's own code after the native step) is rolled back before the
+   * write mutex is released: the connection goes back to the pool with no transaction open, and
+   * another connection's write, on another thread, gets the mutex and SQLite's lock at once. The
+   * caller sees the driver's throwable unchanged.
+   */
+  @Test
+  @Timeout(30)
+  void aBeginThatTookEffectBeforeTheDriverThrewIsRolledBack() throws Exception {
+    Path file = dir.resolve("begin-then-throw.db");
+    HikariDataSource pool = pool(file, "");
+    open(pool);
+    execute(pool, "CREATE TABLE scratch (x INTEGER) STRICT");
+
+    for (Throwable injected :
+        List.of(
+            new SQLException("the driver failed after the begin (injected)"),
+            new OutOfMemoryError("the driver ran out of memory after the begin (injected)"))) {
+      try (Connection real = pool.getConnection()) {
+        List<String> statements = new ArrayList<>();
+        Connection conn = throwingAfter(recording(real, statements), "BEGIN IMMEDIATE", injected);
+
+        assertThatThrownBy(
+                () -> SqliteTransactions.inTransaction(conn, "test", c -> execute(c, "SELECT 1")))
+            .isSameAs(injected);
+
+        assertThat(statements).as("%s", injected).containsExactly("BEGIN IMMEDIATE", "ROLLBACK");
+        assertThatThrownBy(() -> execute(real, "ROLLBACK"))
+            .as("no transaction is left open on the connection")
+            .hasMessageContaining("no transaction is active");
+      }
+      assertAnotherThreadWrites(file);
+    }
+  }
+
+  /**
+   * The rollback after such a begin fails too, with an Error: the Error rides on the driver's
+   * throwable as suppressed, the physical connection is closed (SQLite ends the transaction with
+   * it) and the write mutex is still released.
+   */
+  @Test
+  @Timeout(30)
+  void aFailedRollbackAfterABeginThatTookEffectRidesOnTheDriversFailure() throws Exception {
+    Path file = dir.resolve("begin-then-throw-twice.db");
+    HikariDataSource pool = pool(file, "");
+    open(pool);
+    execute(pool, "CREATE TABLE scratch (x INTEGER) STRICT");
+    SQLException injected = new SQLException("the driver failed after the begin (injected)");
+    Error rollbackFailure = new OutOfMemoryError("the rollback ran out of memory (injected)");
+
+    Connection real = pool.getConnection();
+    SQLiteConnection physical = real.unwrap(SQLiteConnection.class);
+    Connection conn =
+        throwingAfter(
+            throwingBefore(real, "ROLLBACK", rollbackFailure), "BEGIN IMMEDIATE", injected);
+
+    assertThatThrownBy(
+            () -> SqliteTransactions.inTransaction(conn, "test", c -> execute(c, "SELECT 1")))
+        .isSameAs(injected)
+        .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(rollbackFailure));
+
+    assertThat(physical.isClosed())
+        .as("the connection that holds the transaction is closed")
+        .isTrue();
+    try {
+      real.close();
+    } catch (SQLException expected) {
+      // returning a wrapper whose physical connection is closed may report it
+    }
+    assertAnotherThreadWrites(file);
+  }
+
+  /** {@code conn}, whose statement running {@code sql} runs it and then throws {@code failure}. */
+  private static Connection throwingAfter(Connection conn, String sql, Throwable failure) {
+    return throwingOn(conn, sql, failure, true);
+  }
+
+  /** {@code conn}, whose statement running {@code sql} throws {@code failure} instead. */
+  private static Connection throwingBefore(Connection conn, String sql, Throwable failure) {
+    return throwingOn(conn, sql, failure, false);
+  }
+
+  private static Connection throwingOn(
+      Connection conn, String sql, Throwable failure, boolean after) {
+    return (Connection)
+        Proxy.newProxyInstance(
+            Connection.class.getClassLoader(),
+            new Class<?>[] {Connection.class},
+            (proxy, method, args) -> {
+              Object result = invokeUnwrapped(conn, method, args);
+              if (!method.getName().equals("createStatement")
+                  || !(result instanceof Statement statement)) {
+                return result;
+              }
+              return Proxy.newProxyInstance(
+                  Statement.class.getClassLoader(),
+                  new Class<?>[] {Statement.class},
+                  (p, m, a) -> {
+                    boolean matches =
+                        m.getName().equals("execute")
+                            && a != null
+                            && a.length == 1
+                            && sql.equals(a[0]);
+                    if (matches && !after) {
+                      throw failure;
+                    }
+                    Object value = invokeUnwrapped(statement, m, a);
+                    if (matches) {
+                      throw failure;
+                    }
+                    return value;
+                  });
+            });
+  }
+
+  /**
+   * A write on another connection, from another thread, gets the file's write mutex and SQLite's
+   * lock at once: neither is held.
+   */
+  private static void assertAnotherThreadWrites(Path file) throws Exception {
+    CompletableFuture<Void> write =
+        CompletableFuture.runAsync(
+            () -> {
+              try (Connection other =
+                  TestDatabases.dataSource(file, "busy_timeout=1").getConnection()) {
+                SqliteTransactions.inTransaction(
+                    other, "test", c -> execute(c, "INSERT INTO scratch VALUES (1)"));
+              } catch (SQLException e) {
+                throw new IllegalStateException(e);
+              }
+            });
+    write.get(10, TimeUnit.SECONDS);
   }
 
   /**

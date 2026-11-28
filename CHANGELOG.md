@@ -398,6 +398,18 @@ Unreleased changes to the PostgreSQL event store (Changed):
   as `EventDeserializationException`, after event-type resolution, as on SQLite (it was a raw
   `IllegalArgumentException`).
 
+Unreleased fixes to the SQLite backend (Fixed):
+
+- **A begin the driver fails after it took effect is rolled back.** When sqlite-jdbc throws after
+  a store's `BEGIN IMMEDIATE` took effect (an out-of-memory error in its own code, a failed
+  statement close), the store rolls the transaction back before it releases the file's write mutex
+  and rethrows the failure unchanged; a failed rollback closes the physical connection. So the
+  connection does not go back to the pool with the write transaction open, where, until the pool
+  retired it, it would hold SQLite's write lock (every other writer failing with `SQLITE_BUSY`),
+  refuse its next begin, and keep the writes of a one-statement write on it from ever committing.
+  A begin refused because the connection is in manual-commit mode or already has a transaction
+  open is not followed by a rollback: that transaction is not the store's.
+
 ### Modules
 
 Eighteen published artifacts, one per Gradle project in `settings.gradle.kts` except the three
