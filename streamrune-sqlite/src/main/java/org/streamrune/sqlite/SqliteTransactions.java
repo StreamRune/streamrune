@@ -260,7 +260,12 @@ public final class SqliteTransactions {
    */
   static OpenTransaction open(Connection conn, String transaction) throws SQLException {
     WriteLock writeLock = awaitWriteLock(conn);
+    OpenTransaction open;
     try {
+      // Built before the begin: nothing is allocated between a begin that succeeded and the
+      // return, so nothing thrown there can leave a transaction open with no one to end it, and a
+      // failure here releases the mutex like a failed begin.
+      open = new OpenTransaction(conn, transaction, writeLock);
       begin(conn);
     } catch (SQLException beginFailure) {
       writeLock.close();
@@ -269,7 +274,7 @@ public final class SqliteTransactions {
       writeLock.close();
       throw beginFailure;
     }
-    return new OpenTransaction(conn, transaction, writeLock);
+    return open;
   }
 
   /**
@@ -461,6 +466,10 @@ public final class SqliteTransactions {
     if (mutex == null) {
       return WriteLock.NONE;
     }
+    // Built before the mutex is asked for: nothing is allocated between the grant and the return,
+    // so nothing thrown there can leave the mutex held with no hold to release it. A hold whose
+    // wait failed is dropped unclosed: it holds nothing.
+    WriteLock hold = new WriteLock(mutex);
     if (!tryLockUninterruptibly(mutex.lock, 0)) {
       long busyTimeoutMillis = busyTimeoutMillis(conn);
       if (!tryLockUninterruptibly(mutex.lock, busyTimeoutMillis)) {
@@ -468,7 +477,7 @@ public final class SqliteTransactions {
             String.format(WRITE_LOCK_TIMEOUT, busyTimeoutMillis), SQLiteErrorCode.SQLITE_BUSY);
       }
     }
-    return new WriteLock(mutex);
+    return hold;
   }
 
   /**
