@@ -4,7 +4,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.streamrune.core.CommandInbox;
@@ -39,16 +38,11 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
   /** Component and thread name; also what {@link #name()} reports. */
   private static final String NAME = RelayComponentNames.INBOX_RETENTION_SWEEPER;
 
-  private static final Duration MAX_FAILURE_BACKOFF = Duration.ofSeconds(60);
-
   private final CommandInbox inbox;
   private final Duration maxAge;
   private final Clock clock;
   private final StreamRuneMetrics metrics;
-  private final ResilientPollLoop pollLoop;
-  private volatile Thread thread;
-  private volatile long closeJoinTimeoutMs = RetentionSweeperThreads.CLOSE_JOIN_TIMEOUT_MS;
-  private final AtomicBoolean started = new AtomicBoolean(false);
+  private final RetentionSweepLoop loop;
 
   /**
    * Creates a retention sweeper.
@@ -78,11 +72,9 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
     this.maxAge = maxAge;
     this.clock = clock;
     this.metrics = metrics;
-    Duration maxBackoff =
-        interval.compareTo(MAX_FAILURE_BACKOFF) > 0 ? interval : MAX_FAILURE_BACKOFF;
-    this.pollLoop =
-        new ResilientPollLoop(
-            NAME, this::isRunningOnItsThread, () -> interval, interval, maxBackoff);
+    this.loop =
+        new RetentionSweepLoop(
+            InboxRetentionSweeper.class.getSimpleName(), NAME, interval, this::sweepOnce);
   }
 
   /**
@@ -96,36 +88,13 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
    */
   @Override
   public void start() {
-    if (!started.compareAndSet(false, true)) {
-      throw new IllegalStateException(
-          "InboxRetentionSweeper already started — call start() exactly once");
-    }
-    if (maxAge.isZero() || maxAge.isNegative()) {
+    boolean retentionEnabled = !maxAge.isZero() && !maxAge.isNegative();
+    if (!loop.start(retentionEnabled)) {
       LOG.info(
           "Command inbox retention is disabled (maxAge={}); deleteProcessedBefore will never be"
               + " called",
           maxAge);
-      return;
     }
-    Thread t = Thread.ofVirtual().name(NAME).unstarted(this::loop);
-    // Assigned before the thread starts: the loop runs only while it is this sweeper's thread.
-    thread = t;
-    t.start();
-  }
-
-  /**
-   * Whether the loop keeps running: on this sweeper's thread until {@link #close()} clears it, and
-   * not interrupted. The thread check stops the loop after a close whose interrupt a store
-   * swallowed (a pool, a driver or a wrapper that catches the interruption and returns normally),
-   * and a thread that outlived its close and a restart does not run beside the new one.
-   */
-  private boolean isRunningOnItsThread() {
-    Thread current = Thread.currentThread();
-    return thread == current && !current.isInterrupted();
-  }
-
-  private void loop() {
-    pollLoop.run(this::sweepOnce);
   }
 
   /** {@inheritDoc} */
@@ -142,20 +111,19 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
    */
   @Override
   public boolean isStarted() {
-    return started.get() && thread != null;
+    return loop.isStarted();
   }
 
   /** {@inheritDoc} */
   @Override
   public boolean isAlive() {
-    Thread t = thread;
-    return t != null && t.isAlive();
+    return loop.isAlive();
   }
 
   /** {@inheritDoc} */
   @Override
   public int consecutiveFailures() {
-    return pollLoop.consecutiveFailures();
+    return loop.consecutiveFailures();
   }
 
   /**
@@ -188,15 +156,11 @@ public final class InboxRetentionSweeper implements RetentionSweeper {
    */
   @Override
   public void close() {
-    Thread running = thread;
-    // Cleared before the interrupt: a sweep whose store swallows the interrupt still ends the loop.
-    thread = null;
-    RetentionSweeperThreads.stop(running, NAME, closeJoinTimeoutMs);
-    started.set(false);
+    loop.close();
   }
 
   /** Lowers the bound on the wait for a sweep in flight; for tests. */
   void closeJoinTimeoutMs(long millis) {
-    this.closeJoinTimeoutMs = millis;
+    loop.closeJoinTimeoutMs(millis);
   }
 }
